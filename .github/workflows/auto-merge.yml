@@ -106,7 +106,7 @@ jobs:
       - name: Check CI status on development
         id: ci
         if: steps.conditions.outputs.should_merge == 'true'
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
             const sha = '${{ steps.conditions.outputs.last_sha }}';
@@ -193,7 +193,7 @@ jobs:
       - name: Create PR testing → main
         id: pr
         if: steps.merge.conclusion == 'success'
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
             // Skip if a PR already exists
