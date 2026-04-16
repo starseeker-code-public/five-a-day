@@ -101,7 +101,7 @@ jobs:
       - name: Install dependencies
         run: uv sync --frozen --no-install-project
 
-      - name: Run tests
+      - name: Run tests (unit + integration)
         working-directory: project
         env:
           DJANGO_SETTINGS_MODULE: project.settings_test
@@ -114,9 +114,39 @@ jobs:
           LOGIN_PASSWORD: ci_test_password
           DJANGO_ALLOWED_HOSTS: localhost,127.0.0.1
         run: |
+          # Tests live in project/tests/unit/ and project/tests/integration/.
+          # Pytest auto-discovers both subdirectories when we point it at tests/.
           uv run python -m pytest tests/ -v --tb=short -n auto \
             --cov=core --cov=students --cov=billing --cov=comms \
             --cov-report=xml --cov-report=term-missing
+
+      # Coverage thresholds:
+      #   < 75% → fail CI (hard floor; same threshold the pre-commit hook enforces)
+      #   < 90% → warning annotation (visible in the PR checks UI, does not fail)
+      #   ≥ 90% → silent pass (current coverage is 96%)
+      - name: Check coverage threshold
+        if: always()
+        working-directory: project
+        run: |
+          if [ ! -f coverage.xml ]; then
+            echo "::error::coverage.xml not found — test step likely failed before coverage could be written"
+            exit 1
+          fi
+          COV=$(python -c "import xml.etree.ElementTree as ET; print(round(float(ET.parse('coverage.xml').getroot().attrib['line-rate']) * 100, 2))")
+          echo "Coverage: ${COV}%"
+          FLOOR=75
+          TARGET=90
+          # awk exits 0 (shell-if fires) when condition is FALSE:
+          #   exit (c >= f) ? 1 : 0  →  exits 0 when c < f  →  error path runs
+          if awk -v c="$COV" -v f="$FLOOR" 'BEGIN { exit (c >= f) ? 1 : 0 }'; then
+            echo "::error::Coverage ${COV}% is below the ${FLOOR}% hard floor — CI fails"
+            exit 1
+          fi
+          if awk -v c="$COV" -v t="$TARGET" 'BEGIN { exit (c >= t) ? 1 : 0 }'; then
+            echo "::warning::Coverage ${COV}% is below the ${TARGET}% target (warning only; CI still passes down to ${FLOOR}%)"
+          else
+            echo "Coverage ${COV}% meets the ${TARGET}% target."
+          fi
 
       - name: Upload coverage to Codecov
         if: always()

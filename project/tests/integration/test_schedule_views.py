@@ -69,3 +69,56 @@ class TestFunFridayView:
         student_ids = {s.id for s in response.context["students"]}
         assert student.id in student_ids
         assert adult_student.id not in student_ids
+
+
+# ============================================================================
+# Extra coverage: save_schedule_slot branches + fun_friday_view attendance
+# ============================================================================
+
+
+class TestSaveScheduleSlotExtra:
+    def test_create_or_update(self, authenticated_client, group):
+        response = authenticated_client.post(
+            reverse("save_schedule_slot"),
+            data=json.dumps({"row": 0, "day": 0, "col": 0, "group_id": group.id}),
+            content_type="application/json",
+        )
+        assert response.status_code == 200
+
+    def test_delete_by_empty_group_id(self, authenticated_client, group):
+        # first create
+        authenticated_client.post(
+            reverse("save_schedule_slot"),
+            data=json.dumps({"row": 1, "day": 1, "col": 1, "group_id": group.id}),
+            content_type="application/json",
+        )
+        # then delete
+        response = authenticated_client.post(
+            reverse("save_schedule_slot"),
+            data=json.dumps({"row": 1, "day": 1, "col": 1, "group_id": None}),
+            content_type="application/json",
+        )
+        assert response.status_code == 200
+
+    def test_invalid_json_returns_400(self, authenticated_client):
+        response = authenticated_client.post(
+            reverse("save_schedule_slot"),
+            data="not-json",
+            content_type="application/json",
+        )
+        assert response.status_code == 400
+
+
+class TestFunFridayViewExtra:
+    def test_renders(self, authenticated_client, student):
+        response = authenticated_client.get(reverse("fun_friday_view"))
+        assert response.status_code == 200
+
+    def test_renders_with_attendance(self, authenticated_client, student):
+        from core.models import FunFridayAttendance
+        from core.views.students import get_last_friday, get_next_friday
+
+        FunFridayAttendance.objects.create(student=student, date=get_next_friday())
+        FunFridayAttendance.objects.create(student=student, date=get_last_friday())
+        response = authenticated_client.get(reverse("fun_friday_view"))
+        assert response.status_code == 200

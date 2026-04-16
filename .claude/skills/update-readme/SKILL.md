@@ -157,6 +157,54 @@ Also refresh the App: core/students/billing/comms summary tables if models, view
 - Total test count must match `grep -r "^def test_" project/tests/ | wc -l`
 - Coverage % must match the current Codecov or local coverage report
 - Per-file test tables: test counts per file must match
+- **Coverage Report subsection** (see section k.1 below)
+
+#### k.1 — Coverage Report subsection (end of Testing section)
+
+At the very end of the Testing section (after the Integration Tests table, before the `---` separator that precedes the Migrations section), maintain a `### Coverage Report` subsection. It contains:
+
+1. **A markdown table** listing every source file that is NOT at 100% coverage — i.e. the files that appear in pytest-cov's `term-missing` output (the 42 fully-covered files that are "skipped due to complete coverage" are omitted). Columns:
+
+   | File | Stmts | Miss | Cover | Missing lines |
+   | --- | --- | --- | --- | --- |
+
+   To get the data, run `make test` inside Docker (or parse the most recent CI output) and copy the coverage table. Every row with `Cover < 100%` gets a row. Files at 100% are excluded (they're listed as "N files skipped due to complete coverage" — mention that count in the paragraph below).
+
+2. **A brief analysis paragraph** immediately after the table. Format:
+
+   ```
+   **N files** have 100% coverage (skipped above). Total coverage: **X%** across Y statements.
+   <health assessment sentence>
+   ```
+
+   The health assessment sentence uses these bands:
+
+   | Coverage | Assessment |
+   | --- | --- |
+   | ≥ 95% | "Coverage is **very good**." |
+   | 90–94% | "Coverage is **good**." |
+   | 85–89% | "Coverage is **acceptable**." |
+   | 80–84% | "Coverage is **bad** — it should be improved before the next release." |
+   | 75–79% | "Coverage is **critical** — it needs immediate attention because pull requests to `main` are blocked below 75%." |
+   | < 75% | "Coverage is **below the hard floor** — CI will fail and pre-commit will reject commits until coverage is restored above 75%." |
+
+   After the assessment, add one sentence noting the enforcement: "Coverage is enforced at three levels: pre-commit hook (≥ 75%), CI hard floor (≥ 75%), and CI warning (< 90%)."
+
+**Example** of the full subsection:
+
+```markdown
+### Coverage Report
+
+| File | Stmts | Miss | Cover | Missing lines |
+| --- | --- | --- | --- | --- |
+| `billing/models.py` | 143 | 7 | 95% | 282-292, 361, 366 |
+| `core/views/app_forms.py` | 615 | 46 | 93% | 51, 138-140, ... |
+| ... | ... | ... | ... | ... |
+
+**42 files** have 100% coverage (skipped above). Total coverage: **96%** across 2809 statements. Coverage is **very good**. Coverage is enforced at three levels: pre-commit hook (≥ 75%), CI hard floor (≥ 75%), and CI warning (< 90%).
+```
+
+**When updating:** replace the entire `### Coverage Report` subsection content (table + paragraph) with fresh data. Never leave stale coverage numbers — if tests changed, the coverage changed.
 
 #### l. Security
 
@@ -395,7 +443,7 @@ Certain facts appear in multiple documents. When they change, update **every** o
 | **Django version (`5.2`)** | README badge, `pyproject.toml` dependency |
 | **PostgreSQL version (`16`)** | README badge, `docker-compose.yml`, `DEPLOYMENT.md` Cloud SQL create command, CI workflow service image |
 | **GCP region (`europe-southwest1`)** | Project Status table, DEPLOYMENT.md (every `gcloud` example) |
-| **Owner/repo (`starseeker-code/five-a-day`)** | README badges (CI, Codecov), GITHUB.md examples |
+| **Owner/repo (`starseeker-code-public/five-a-day`)** | README badges (CI, Codecov), GITHUB.md examples |
 | **Env var inventory** | `settings.py` (`os.getenv(...)`), README Env Variables Reference table, `.env.example`, DEPLOYMENT.md Secret Manager list. Every name that appears in one must appear in every other (modulo internal-only vars that never ship to production). |
 
 If a change appears in one place, **check the others**. A version-bump commit that only updates the badge but not Version History is a broken commit.

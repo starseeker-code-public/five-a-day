@@ -1,5 +1,7 @@
 """Tests for comms.services.email_service — EmailService class."""
 
+from unittest.mock import MagicMock, patch
+
 import pytest
 from django.core import mail
 from django.template import TemplateDoesNotExist
@@ -147,3 +149,104 @@ class TestSendBulkEmails:
         ]
         results = svc.send_bulk_emails("nonexistent_xyz", data, fail_silently=True)
         assert results["failed"] >= 1
+
+
+# ============================================================================
+# Extra coverage: inline images, attachments, bulk emails, failure paths,
+# get_email_config helper
+# ============================================================================
+
+
+class TestEmailServiceExtra:
+    def test_send_email_with_nonexistent_inline_image_skipped(self):
+        """Inline image path that doesn't exist is silently skipped."""
+        from comms.services.email_service import EmailService
+
+        svc = EmailService()
+        with patch("comms.services.email_service.EmailMultiAlternatives") as mock_email:
+            instance = MagicMock()
+            mock_email.return_value = instance
+            instance.send.return_value = 1
+            result = svc.send_email(
+                template_name="happy_birthday",
+                recipients="x@t.com",
+                subject="s",
+                context={"name": "t"},
+                inline_images={"cid": "/no/such/path.png"},
+            )
+        assert result is True
+
+    def test_send_email_with_attachments(self):
+        from comms.services.email_service import EmailService
+
+        svc = EmailService()
+        with patch("comms.services.email_service.EmailMultiAlternatives") as mock_email:
+            instance = MagicMock()
+            mock_email.return_value = instance
+            instance.send.return_value = 1
+            svc.send_email(
+                template_name="happy_birthday",
+                recipients="x@t.com",
+                subject="s",
+                context={"name": "t"},
+                attachments=[("file.pdf", b"data", "application/pdf")],
+            )
+        instance.attach.assert_called()
+
+    def test_send_email_exception_fail_silently(self):
+        from comms.services.email_service import EmailService
+
+        svc = EmailService()
+        with patch(
+            "comms.services.email_service.EmailMultiAlternatives",
+            side_effect=RuntimeError("smtp"),
+        ):
+            result = svc.send_email(
+                template_name="happy_birthday",
+                recipients="x@t.com",
+                subject="s",
+                context={"name": "t"},
+                fail_silently=True,
+            )
+        assert result is False
+
+    def test_send_email_exception_raises_when_not_silent(self):
+        from comms.services.email_service import EmailService
+
+        svc = EmailService()
+        with patch(
+            "comms.services.email_service.EmailMultiAlternatives",
+            side_effect=RuntimeError("smtp"),
+        ):
+            with pytest.raises(RuntimeError):
+                svc.send_email(
+                    template_name="happy_birthday",
+                    recipients="x@t.com",
+                    subject="s",
+                    context={"name": "t"},
+                    fail_silently=False,
+                )
+
+    def test_bulk_emails_mixed_success_failure(self):
+        from comms.services.email_service import EmailService
+
+        svc = EmailService()
+        with patch.object(svc, "send_email", side_effect=[True, False, True]):
+            results = svc.send_bulk_emails(
+                template_name="happy_birthday",
+                emails_data=[
+                    {"recipient": "a@t.com", "subject": "a", "context": {}},
+                    {"recipient": "b@t.com", "subject": "b", "context": {}},
+                    {"recipient": "c@t.com", "subject": "c", "context": {}},
+                ],
+            )
+        assert results == {"sent": 2, "failed": 1}
+
+
+class TestGetEmailConfig:
+    def test_returns_dict(self):
+        from comms.services.email_service import get_email_config
+
+        cfg = get_email_config()
+        assert "host_user" in cfg
+        assert "from_email" in cfg

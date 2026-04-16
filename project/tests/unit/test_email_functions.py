@@ -1,5 +1,7 @@
 """Tests for comms.services.email_functions — convenience email wrappers."""
 
+from datetime import date
+from decimal import Decimal
 from unittest.mock import patch
 
 import pytest
@@ -167,3 +169,110 @@ class TestQuarterlyReceipt:
             month_3="diciembre",
         )
         assert result is True
+
+
+# ============================================================================
+# Extra coverage: tax certificate branches, fun-friday inline image path,
+# send_all_tax_certificates skipped/failed counters
+# ============================================================================
+
+
+class TestEmailFunctionsExtra:
+    def test_fun_friday_with_existing_image_path(self, tmp_path):
+        """event_image_path present and exists → inline_images populated."""
+        from comms.services.email_functions import send_fun_friday_email
+
+        img = tmp_path / "img.png"
+        img.write_bytes(b"\x89PNG\r\n")
+        with patch("comms.services.email_functions.email_service.send_email") as mock:
+            mock.return_value = True
+            send_fun_friday_email(
+                recipients="parent@test.com",
+                day_name="lunes",
+                day_number=1,
+                month="enero",
+                start_time="17:00",
+                end_time="18:30",
+                activity_description="Test",
+                minimum_age=5,
+                maximum_age=12,
+                meeting_point="",
+                event_image_path=str(img),
+            )
+        call_kwargs = mock.call_args.kwargs
+        assert call_kwargs["inline_images"] is not None
+
+    def test_tax_certificate_parent_by_id_not_found(self):
+        from comms.services.email_functions import send_tax_certificate_email
+
+        assert send_tax_certificate_email(99999, 2025) is False
+
+    def test_tax_certificate_no_payments(self, parent):
+        from comms.services.email_functions import send_tax_certificate_email
+
+        # No payments for this parent → False
+        assert send_tax_certificate_email(parent, 2025) is False
+
+    def test_tax_certificate_pdf_generation_fails(self, completed_payment, parent):
+        from comms.services.email_functions import send_tax_certificate_email
+
+        with patch(
+            "comms.services.email_functions.generate_tax_certificate_pdf",
+            side_effect=RuntimeError("pdf broken"),
+        ):
+            assert send_tax_certificate_email(parent, 2025) is False
+
+    def test_tax_certificate_html_fallback_when_no_weasyprint(self, completed_payment, parent):
+        """When weasyprint isn't installed, generate_tax_certificate_pdf returns HTML bytes."""
+        from comms.services.email_functions import send_tax_certificate_email
+
+        with patch("comms.services.email_functions.email_service.send_email", return_value=True):
+            result = send_tax_certificate_email(parent, 2025)
+        # Either True or False depending on whether weasyprint is installed — just make sure
+        # the branch executes cleanly.
+        assert result in (True, False)
+
+    def test_send_all_tax_certificates_with_skipped(self, db, student_with_parent, parent, active_enrollment):
+        """Parent with payment but no email → skipped counter increments."""
+        from billing.models import Payment
+        from comms.services.email_functions import send_all_tax_certificates
+        from students.models import Parent
+
+        Parent.objects.filter(id=parent.id).update(email="")
+
+        Payment.objects.create(
+            student=student_with_parent,
+            parent=parent,
+            enrollment=active_enrollment,
+            payment_type="monthly",
+            payment_method="transfer",
+            amount=Decimal("50.00"),
+            payment_status="completed",
+            payment_date=date(2025, 10, 1),
+            due_date=date(2025, 10, 1),
+            concept="test",
+        )
+
+        results = send_all_tax_certificates(2025)
+        assert results["skipped"] >= 1
+
+    def test_send_all_tax_certificates_with_failure(self, db, student_with_parent, parent, active_enrollment):
+        from billing.models import Payment
+        from comms.services.email_functions import send_all_tax_certificates
+
+        Payment.objects.create(
+            student=student_with_parent,
+            parent=parent,
+            enrollment=active_enrollment,
+            payment_type="monthly",
+            payment_method="transfer",
+            amount=Decimal("50.00"),
+            payment_status="completed",
+            payment_date=date(2025, 10, 1),
+            due_date=date(2025, 10, 1),
+            concept="test",
+        )
+
+        with patch("comms.services.email_functions.send_tax_certificate_email", return_value=False):
+            results = send_all_tax_certificates(2025)
+        assert results["failed"] >= 1

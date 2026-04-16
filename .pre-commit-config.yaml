@@ -21,3 +21,14 @@ repos:
         language: system
         types: [python]
         pass_filenames: false
+
+      # Runs the full pytest suite inside Docker and fails the commit if
+      # coverage drops below 75%. Requires `make up` (containers running).
+      # Pass --no-verify to git commit if you need to bypass (e.g. docker is
+      # down), but CI will still enforce the same threshold.
+      - id: pytest-coverage
+        name: pytest coverage (>= 75%)
+        entry: make test-cov-gate
+        language: system
+        pass_filenames: false
+        stages: [pre-commit]

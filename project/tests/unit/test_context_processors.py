@@ -98,3 +98,30 @@ class TestTodayNotifications:
         ctx = today_notifications(request_obj)
         assert ctx["notifications_today_todos"] == []
         assert ctx["history_count"] == 0
+
+
+# ============================================================================
+# Extra coverage: unauthenticated request early-return path
+# ============================================================================
+
+
+class TestContextProcessorsUnauthed:
+    def test_unauthenticated_returns_empty(self, client):
+        """Unauthenticated request → context processor returns zeros, no queries."""
+        from core.context_processors import today_notifications
+
+        rf = RequestFactory()
+        req = rf.get("/")
+        req.session = {}
+        ctx = today_notifications(req)
+        assert ctx["notifications_count"] == 0
+
+    def test_unauthenticated_no_query(self, client):
+        """Covers the early-return when not authenticated."""
+        from core.context_processors import today_notifications
+
+        rf = RequestFactory()
+        req = rf.get("/")
+        req.session = {"is_authenticated": False}
+        ctx = today_notifications(req)
+        assert ctx["history_count"] == 0

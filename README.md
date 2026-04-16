@@ -9,12 +9,12 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v1.0.8-brightgreen?style=for-the-badge" alt="Version">
+  <img src="https://img.shields.io/badge/version-v1.0.9-brightgreen?style=for-the-badge" alt="Version">
   <img src="https://img.shields.io/badge/python-3.12+-blue?style=for-the-badge" alt="Python">
   <img src="https://img.shields.io/badge/django-5.2-green?style=for-the-badge" alt="Django">
   <img src="https://img.shields.io/badge/postgresql-16-336791?style=for-the-badge" alt="PostgreSQL">
-  <a href="https://github.com/starseeker-code/five-a-day/actions/workflows/ci.yml"><img src="https://github.com/starseeker-code/five-a-day/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
-  <a href="https://codecov.io/gh/starseeker-code/five-a-day"><img src="https://codecov.io/gh/starseeker-code/five-a-day/branch/main/graph/badge.svg" alt="Coverage"></a>
+  <a href="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml"><img src="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
+  <a href="https://codecov.io/gh/starseeker-code-public/five-a-day"><img src="https://codecov.io/gh/starseeker-code-public/five-a-day/branch/main/graph/badge.svg" alt="Coverage"></a>
 </p>
 
 ---
@@ -25,128 +25,157 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 | Environment | Branch | Hosting | CI Status |
 |-------------|--------|---------|-----------|
-| **Production** | `main` | GCP Cloud Run + Cloud SQL (PostgreSQL 16), `europe-southwest1` | [![Production CI](https://github.com/starseeker-code/five-a-day/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/starseeker-code/five-a-day/actions/workflows/ci.yml?query=branch%3Amain) |
-| **Testing (QA)** | `testing` | GCP Compute Engine e2-micro (free tier), Docker Compose | [![Testing CI](https://github.com/starseeker-code/five-a-day/actions/workflows/ci.yml/badge.svg?branch=testing)](https://github.com/starseeker-code/five-a-day/actions/workflows/ci.yml?query=branch%3Atesting) |
-| **Development** | `development` | Local machine via `make up` (Docker Compose) | [![Development CI](https://github.com/starseeker-code/five-a-day/actions/workflows/ci.yml/badge.svg?branch=development)](https://github.com/starseeker-code/five-a-day/actions/workflows/ci.yml?query=branch%3Adevelopment) |
+| **Production** | `main` | [https://example.com/](...) | [![Production CI](https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml?query=branch%3Amain) |
+| **Testing (QA)** | `testing` | [https://example.com/](...) | [![Testing CI](https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml/badge.svg?branch=testing)](https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml?query=branch%3Atesting) |
+| **Development** | `development` | [Local Docker development: http://localhost:8000/](http://localhost:8000/) | [![Development CI](https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml/badge.svg?branch=development)](https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml?query=branch%3Adevelopment) |
 
 | Version | Date | Description |
 |---------|------|-------------|
-| **v1.0.8** | 2026-04-15 | README trim, `docs/` purge, flaky CI test removed |
+| **v1.0.9** | 2026-04-16 | Test suite restructure to unit/integration, 96% coverage, CI gates |
+| v1.0.8 | 2026-04-15 | README trim, `docs/` purge, flaky CI test removed |
 | v1.0.7 | 2026-04-15 | Favicon + social metadata, CI test-suite fixes |
-| v1.0.6 | 2026-04-15 | `update-readme` Claude skill + docs overhaul |
 
 ---
 
 ## Table of Contents
 
-- [Five a Day eVolution](#five-a-day-evolution)
-    - [Project Status](#project-status)
-  - [Table of Contents](#table-of-contents)
-  - [Version History \& Roadmap](#version-history--roadmap)
-    - [Roadmap](#roadmap)
-      - [v1.1 — Waiting List \& Group Capacity](#v11--waiting-list--group-capacity)
-      - [v1.2 — Google Sheets Integration](#v12--google-sheets-integration)
-      - [v1.3 — PDF Invoice Generation](#v13--pdf-invoice-generation)
-      - [v1.4 — Celery + Redis Deployment](#v14--celery--redis-deployment)
-      - [v1.5 — Expense Tracking](#v15--expense-tracking)
-      - [v1.6 — Multi-User Permissions](#v16--multi-user-permissions)
-      - [v1.7 — Advanced Reporting \& Analytics](#v17--advanced-reporting--analytics)
-      - [v1.8 — SMS Notifications (Twilio)](#v18--sms-notifications-twilio)
-      - [v1.9 — Parent Portal](#v19--parent-portal)
-      - [v1.10 — Audit Log \& Security Hardening](#v110--audit-log--security-hardening)
-      - [v1.11 — Stripe Payment Integration](#v111--stripe-payment-integration)
-      - [v1.12 — Mobile Optimization \& PWA](#v112--mobile-optimization--pwa)
-  - [Tech Stack](#tech-stack)
-    - [Backend](#backend)
-    - [Frontend](#frontend)
-    - [Infrastructure \& Deployment](#infrastructure--deployment)
-    - [Python Dependencies](#python-dependencies)
-    - [Developer Tooling](#developer-tooling)
-  - [Database Schema](#database-schema)
-    - [ER Diagram](#er-diagram)
-    - [Key Constraints](#key-constraints)
-  - [Development \& Docker](#development--docker)
-    - [Quick Start](#quick-start)
-    - [.env template](#env-template)
-    - [Make Commands](#make-commands)
-    - [Environment Configuration](#environment-configuration)
-    - [Environment Variables Reference](#environment-variables-reference)
-    - [App Versioning](#app-versioning)
-  - [Project Structure \& Architecture](#project-structure--architecture)
-    - [Architecture Overview](#architecture-overview)
-    - [App Dependency Flow](#app-dependency-flow)
-    - [Directory Layout](#directory-layout)
-    - [App: core](#app-core)
-    - [App: students](#app-students)
-    - [App: billing](#app-billing)
-    - [App: comms](#app-comms)
-    - [Design Decisions](#design-decisions)
-  - [Features by View](#features-by-view)
-    - [Home (Dashboard)](#home-dashboard)
-    - [Students](#students)
-    - [Student Create](#student-create)
-    - [Student Detail \& Update](#student-detail--update)
-    - [Payments](#payments)
-    - [Schedule](#schedule)
-    - [Fun Friday](#fun-friday)
-    - [Apps (Email Tools)](#apps-email-tools)
-    - [Management](#management)
-    - [Database (All Info)](#database-all-info)
-    - [Login](#login)
-  - [Testing](#testing)
-    - [Testing Overview](#testing-overview)
-    - [Model Tests](#model-tests)
-    - [Service Tests](#service-tests)
-    - [View Tests](#view-tests)
-    - [Additional Test Files (v1.0.0+)](#additional-test-files-v100)
-  - [Migrations](#migrations)
-  - [Security](#security)
-    - [Authentication](#authentication)
-    - [Session \& Cookie Configuration](#session--cookie-configuration)
-    - [CSRF Protection](#csrf-protection)
-    - [Transport Security (HTTPS)](#transport-security-https)
-    - [Security Headers](#security-headers)
-    - [Infrastructure \& Deployment](#infrastructure--deployment-1)
-      - [Docker](#docker)
-      - [Google Cloud Run](#google-cloud-run)
-    - [Secrets Management](#secrets-management)
-    - [Email Security](#email-security)
-    - [Data Protection \& Input Validation](#data-protection--input-validation)
-    - [Logging \& Monitoring](#logging--monitoring)
-    - [Future Security Improvements](#future-security-improvements)
-  - [Testing Environment (QA)](#testing-environment-qa)
-    - [What is the testing environment?](#what-is-the-testing-environment)
-    - [How to access it](#how-to-access-it)
-    - [What you can test](#what-you-can-test)
-    - [How to report a problem](#how-to-report-a-problem)
-    - [Error pages you might see](#error-pages-you-might-see)
-    - [For developers: how the QA environment works](#for-developers-how-the-qa-environment-works)
-      - [Access control for `/testing/`](#access-control-for-testing)
-  - [CI/CD \& GitHub Actions](#cicd--github-actions)
-    - [Pipeline Overview](#pipeline-overview)
-    - [Branch Strategy](#branch-strategy)
-    - [Workflows](#workflows)
-    - [Automated Flows](#automated-flows)
-    - [Branch Protection — `main`](#branch-protection--main)
-    - [Branch Protection — `testing`](#branch-protection--testing)
-    - [Public Repository Hardening](#public-repository-hardening)
-    - [Required GitHub Secrets](#required-github-secrets)
-    - [Email Notifications](#email-notifications)
-    - [Dependabot](#dependabot)
-    - [CodeQL Security Scanning](#codeql-security-scanning)
-  - [Contributing](#contributing)
-    - [Development Workflow](#development-workflow)
-    - [Make Commands (Developer Tooling)](#make-commands-developer-tooling)
-    - [Code Conventions](#code-conventions)
-    - [Adding a Feature](#adding-a-feature)
-  - [License](#license)
+- [Project Status](#project-status)
+- [Version History \& Roadmap](#version-history--roadmap)
+  - [Roadmap](#roadmap)
+    - [v1.1 — Waiting List \& Group Capacity](#v11--waiting-list--group-capacity)
+    - [v1.2 — Google Sheets Integration](#v12--google-sheets-integration)
+    - [v1.3 — PDF Invoice Generation](#v13--pdf-invoice-generation)
+    - [v1.4 — Celery + Redis Deployment](#v14--celery--redis-deployment)
+    - [v1.5 — Expense Tracking](#v15--expense-tracking)
+    - [v1.6 — Multi-User Permissions](#v16--multi-user-permissions)
+    - [v1.7 — Advanced Reporting \& Analytics](#v17--advanced-reporting--analytics)
+    - [v1.8 — SMS Notifications (Twilio)](#v18--sms-notifications-twilio)
+    - [v1.9 — Parent Portal](#v19--parent-portal)
+    - [v1.10 — Audit Log \& Security Hardening](#v110--audit-log--security-hardening)
+    - [v1.11 — Stripe Payment Integration](#v111--stripe-payment-integration)
+    - [v1.12 — Mobile Optimization \& PWA](#v112--mobile-optimization--pwa)
+- [Tech Stack](#tech-stack)
+  - [Backend](#backend)
+  - [Frontend](#frontend)
+  - [Infrastructure \& Deployment](#infrastructure--deployment)
+  - [Python Dependencies](#python-dependencies)
+  - [Developer Tooling](#developer-tooling)
+- [Database Schema](#database-schema)
+  - [ER Diagram](#er-diagram)
+  - [Key Constraints](#key-constraints)
+- [Development \& Docker](#development--docker)
+  - [Quick Start](#quick-start)
+  - [.env template](#env-template)
+  - [Make Commands](#make-commands)
+  - [Environment Configuration](#environment-configuration)
+  - [Environment Variables Reference](#environment-variables-reference)
+  - [App Versioning](#app-versioning)
+- [Project Structure \& Architecture](#project-structure--architecture)
+  - [Architecture Overview](#architecture-overview)
+  - [App Dependency Flow](#app-dependency-flow)
+  - [Directory Layout](#directory-layout)
+  - [App: core](#app-core)
+  - [App: students](#app-students)
+  - [App: billing](#app-billing)
+  - [App: comms](#app-comms)
+  - [Design Decisions](#design-decisions)
+- [Features by View](#features-by-view)
+  - [Home (Dashboard)](#home-dashboard)
+  - [Students](#students)
+  - [Student Create](#student-create)
+  - [Student Detail \& Update](#student-detail--update)
+  - [Payments](#payments)
+  - [Schedule](#schedule)
+  - [Fun Friday](#fun-friday)
+  - [Apps (Email Tools)](#apps-email-tools)
+  - [Management](#management)
+  - [Database (All Info)](#database-all-info)
+  - [Login](#login)
+- [Testing](#testing)
+  - [Testing Overview](#testing-overview)
+  - [Unit Tests](#unit-tests)
+  - [Integration Tests](#integration-tests)
+  - [Coverage Report](#coverage-report)
+- [Migrations](#migrations)
+- [Security](#security)
+  - [Authentication](#authentication)
+  - [Session \& Cookie Configuration](#session--cookie-configuration)
+  - [CSRF Protection](#csrf-protection)
+  - [Transport Security (HTTPS)](#transport-security-https)
+  - [Security Headers](#security-headers)
+  - [Infrastructure \& Deployment](#infrastructure--deployment-1)
+    - [Docker](#docker)
+    - [Google Cloud Run](#google-cloud-run)
+  - [Secrets Management](#secrets-management)
+  - [Email Security](#email-security)
+  - [Data Protection \& Input Validation](#data-protection--input-validation)
+  - [Logging \& Monitoring](#logging--monitoring)
+  - [Future Security Improvements](#future-security-improvements)
+- [Testing Environment (QA)](#testing-environment-qa)
+  - [What is the testing environment?](#what-is-the-testing-environment)
+  - [How to access it](#how-to-access-it)
+  - [What you can test](#what-you-can-test)
+  - [How to report a problem](#how-to-report-a-problem)
+  - [Error pages you might see](#error-pages-you-might-see)
+  - [For developers: how the QA environment works](#for-developers-how-the-qa-environment-works)
+    - [Access control for `/testing/`](#access-control-for-testing)
+- [CI/CD \& GitHub Actions](#cicd--github-actions)
+  - [Pipeline Overview](#pipeline-overview)
+  - [Branch Strategy](#branch-strategy)
+  - [Workflows](#workflows)
+  - [Automated Flows](#automated-flows)
+  - [Branch Protection — `main`](#branch-protection--main)
+  - [Branch Protection — `testing`](#branch-protection--testing)
+  - [Public Repository Hardening](#public-repository-hardening)
+  - [Required GitHub Secrets](#required-github-secrets)
+  - [Email Notifications](#email-notifications)
+  - [Dependabot](#dependabot)
+  - [CodeQL Security Scanning](#codeql-security-scanning)
+- [Contributing](#contributing)
+  - [Development Workflow](#development-workflow)
+  - [Make Commands (Developer Tooling)](#make-commands-developer-tooling)
+  - [Code Conventions](#code-conventions)
+  - [Adding a Feature](#adding-a-feature)
+- [License](#license)
 
 ---
 
 ## Version History & Roadmap
 
-<details id="v108" open>
-<summary><strong>v1.0.8 — Lean README, docs/ Purge & Test-Suite Hygiene (current)</strong></summary>
+<details id="v109" open>
+<summary><strong>v1.0.9 — Test Suite Restructure, 96% Coverage & CI Coverage Gates (current)</strong></summary>
+
+**Testing**
+
+- Reorganised flat `project/tests/` into two subdirectories: `unit/` (direct calls, no HTTP stack) and `integration/` (Django test client through middleware)
+- Expanded test suite from ~280 tests to **574 tests** across 30 files — coverage raised from ~70% to **96%**
+- New unit test files: `test_tasks.py`, `test_student_view_internals.py`, `test_decorators.py`, `test_error_handlers.py`, `test_qa_error_middleware.py`, `test_payment_helpers.py`, `test_testing_tools_helpers.py`, expanded `test_email_functions.py`, `test_email_service.py`, `test_context_processors.py`, `test_models.py`, `test_services.py`
+- New integration test files: `test_app_form_views.py`, `test_payment_views.py`, `test_student_views.py`, `test_management_views.py`, `test_testing_tools.py`, `test_auth_oauth.py`, `test_dashboard_views.py`, `test_parent_views.py`, `test_schedule_views.py`, `test_fun_friday_attendance_views.py`, `test_todo_views.py`, `test_support_views.py`
+
+**CI/CD — Coverage enforcement**
+
+- CI coverage step: hard floor ≥ 75% (fails CI), warning annotation < 90% (CI still passes)
+- Pre-commit hook: `pytest-coverage` hook blocks commits when coverage drops below 75%
+- `make test-cov-gate` target added for pre-commit integration
+- Coverage threshold `fail_under = 75` set in `pyproject.toml`
+
+**Dashboard**
+
+- Quote-of-the-day rewritten: in-memory batch cache fetches up to 50 quotes from zenquotes.io per API call; each page load pops one; cookie stores the last served quote as ASCII fallback
+- Thread-safety comment added to `_quotes` module-level list
+
+**Developer tooling**
+
+- `/pc-run` Claude skill: runs pre-commit in a loop, fixes failures, then asks `y` / `X.Y.Z` / `n` for version bumping
+- `update-readme` skill: added Coverage Report subsection generation (§ k.1)
+- Makefile: all em dashes and right-arrow Unicode replaced with ASCII equivalents
+- `comms/tasks.py`: `raise Exception(...)` tightened to `raise RuntimeError(...)` across all four failure paths
+- Mid-file imports with `# noqa: E402` removed from all test files — moved to file-top imports
+
+</details>
+
+<details id="v108">
+<summary><strong>v1.0.8 — Lean README, docs/ Purge & Test-Suite Hygiene</strong></summary>
 
 **README / docs**
 
@@ -713,7 +742,7 @@ erDiagram
 
 ```bash
 # Clone the repository
-git clone https://github.com/starseeker-code/five-a-day.git
+git clone https://github.com/starseeker-code-public/five-a-day.git
 cd five-a-day
 
 # Create the .env file — copy the template below into `.env` and fill in the blanks
@@ -1041,7 +1070,7 @@ five-a-day/
 │   │   ├── urls.py               10 URL patterns
 │   │   └── management/commands/  send_email, test_all_emails
 │   │
-│   ├── tests/                    pytest suite (283 tests, 70 % coverage)
+│   ├── tests/                    pytest suite (574 tests, 96 % coverage) — unit/ + integration/
 │   └── conftest.py               Shared fixtures (models + authenticated_client)
 │
 ├── .github/                      CI/CD — see docs/GITHUB.md
@@ -1066,7 +1095,7 @@ five-a-day/
 ├── Dockerfile                    Multi-stage build (builder + runtime)
 ├── docker-compose.yml            PostgreSQL + Redis + Django + Celery worker + beat
 ├── docker-compose.testing.yml    QA override (Gunicorn, DEBUG=False)
-├── Makefile                      60+ commands (`make help`)
+├── Makefile                      75+ commands (`make help`)
 ├── pyproject.toml                Dependencies (uv-managed) + tool config
 ├── uv.lock                       Reproducible dependency lock
 ├── entrypoint.sh                 Docker entrypoint (migrate, collectstatic, start)
@@ -1275,10 +1304,11 @@ Standalone page with custom styling (does not extend base.html).
 
 | Metric | Value |
 |--------|-------|
-| **Total tests** | 283 |
-| **Test files** | 19 |
-| **Coverage** | 70% (with `--cov-report=term-missing` on every run) |
-| **Runtime** | ~30 seconds (8 parallel workers via pytest-xdist) |
+| **Total tests** | 574 |
+| **Test files** | 32 (17 unit + 15 integration) |
+| **Coverage** | 96% |
+| **Coverage thresholds** | **≥ 90%** (target, no warning) / **75-89%** (CI warning, pre-commit still blocks below 75) / **< 75%** (CI fails, pre-commit rejects the commit) |
+| **Runtime** | ~19 seconds (8 parallel workers via pytest-xdist) |
 | **Database** | PostgreSQL (same as production) — **always use `make test`** |
 | **Framework** | pytest 9 + pytest-django + pytest-cov + pytest-xdist + pytest-randomly |
 | **Type checking** | mypy + django-stubs (pre-commit hook) |
@@ -1290,6 +1320,10 @@ Standalone page with custom styling (does not extend base.html).
 
 ```bash
 make test              # Inside Docker (PostgreSQL, parallel, with coverage)
+make test-unit         # Only unit tests (tests/unit/)
+make test-integration  # Only integration tests (tests/integration/)
+make test-cov-gate     # Same as make test + fails if coverage < 75%
+                       # (invoked by the pytest-coverage pre-commit hook)
 make test-local        # Local against Docker PostgreSQL
 make test-sqlite       # Local with SQLite (no Docker)
 make test-coverage     # Generate HTML coverage report
@@ -1297,77 +1331,88 @@ make test-fast         # Stop on first failure
 make test-k K=payment  # Run tests matching keyword
 ```
 
-### Model Tests
+**Coverage gates at every stage of the pipeline:**
 
-41 tests in `test_models.py` covering model logic, properties, and database constraints.
+| Stage | What enforces it | Behavior |
+| --- | --- | --- |
+| Pre-commit | `pytest-coverage` hook in `.pre-commit-config.yaml` → `make test-cov-gate` | Runs full suite inside Docker; rejects commit if coverage < 75%. Bypass with `git commit --no-verify` if containers are down (CI will still catch it). |
+| CI (GitHub Actions) | `Check coverage threshold` step in `ci.yml` after `Run tests` | Parses `coverage.xml`. **< 75% fails the job** with an `::error::` annotation. **75-89% passes with a `::warning::`** annotation (visible in the PR checks UI). **≥ 90% silent pass.** |
+| Local dev | `pyproject.toml` `[tool.coverage.report].fail_under = 75` | Applies to any tool that reads the coverage config (e.g. `coverage report` standalone). Same 75% floor as the other stages. |
 
-| Group | Count | Coverage |
-|-------|-------|----------|
-| Academic year helpers | 5 | `current_academic_year()` for both semesters, `academic_year_start_date`, `academic_year_end_date` |
-| SiteConfiguration | 4 | Singleton creation, pk=1 enforcement, delete prevention, default values |
-| Student & Parent | 6 | Properties (`full_name`, `age`), string representation, M2M relationship, DNI uniqueness |
-| Student gender | 2 | Default gender value, gender choices |
-| Teacher & Group | 4 | Properties, FK relationship, name uniqueness |
-| Enrollment | 5 | Properties (`is_paid`, `remaining_amount`), string representation, unique active constraint |
-| Cancelled enrollment | 1 | Cancelled enrollment status |
-| Inactive student | 1 | Inactive student exists |
-| Payment | 4 | `is_overdue` detection (past/future/completed), `clean()` auto-sets payment_date |
-| TodoItem & HistoryLog | 5 | `is_overdue`, log creation, 1000-entry cap, debounced logging |
-| FunFridayAttendance | 1 | Unique (student, date) constraint |
-| ScheduleSlot | 3 | Slot creation, unique (row, day, col) constraint, null group |
+Raise `fail_under` in `pyproject.toml` and the `FLOOR` / `TARGET` values in `ci.yml` as coverage grows.
 
-### Service Tests
+Tests split cleanly into two directories, each with a 1:1 file-to-source-module mapping:
 
-26 tests in `test_services.py` covering business logic in the service layer.
+- **[project/tests/unit/](project/tests/unit/)** — direct-call tests. No HTTP stack, no URL resolver, no template rendering. Service-layer, pure-function, Celery-task, model, and helper tests live here. Tests that exercise view-object internals via `RequestFactory` also belong here.
+- **[project/tests/integration/](project/tests/integration/)** — full HTTP-stack tests. Django's test client sends real requests through `SimpleAuthMiddleware` → URL resolver → view → template renderer and back. Uses the `authenticated_client` fixture.
 
-| Group | Count | Coverage |
-|-------|-------|----------|
-| PricingService | 7 | Monthly fees by schedule type, enrollment fees by student type, quarterly price calculation |
-| EnrollmentService | 9 | All enrollment plans (monthly full/part, quarterly), all discount types (sibling, language cheque, both), special pricing, adult enrollment, minimum amount floor (0.01) |
-| EnrollmentService errors | 2 | Missing enrollment type validation, payment statistics |
-| PaymentService | 8 | Monthly/quarterly amount calculations with all discount combos, June bonus, payment completion, academic month/quarter validation |
+Within each file, related tests are grouped into classes. Where a large file absorbed "extra" content or gap-filling edge cases, a `# ===` comment divider marks the section and a separate class name (e.g. `TestEmailServiceExtra`, `TestStudentCreateViewErrors`) keeps the cohesion visible at a glance. Shared fixtures live in [`project/conftest.py`](project/conftest.py); pytest discovers both subdirectories automatically.
 
-### View Tests
-
-65 tests in `test_views.py` covering HTTP responses, AJAX APIs, and user flows.
-
-| Group | Count | Coverage |
-|-------|-------|----------|
-| Authentication | 6 | Unauthenticated redirect, login page, health check, valid/invalid login, logout |
-| Dashboard | 2 | Dashboard, all_info |
-| Student views | 4 | Student list, detail, create page, search API |
-| Parent views | 2 | Parent create page, search API |
-| Payment views | 9 | Payments list, create page, detail, quick-complete (valid + invalid), statistics, CSV export, student-parent validation |
-| Payment CRUD | 5 | Delete, deactivate, update JSON, get details API, search |
-| Todo & History API | 5 | Todo create/complete/empty text, history list + pagination |
-| Management | 6 | Management page, config update, teacher create (+ duplicate), group create, teachers API |
-| Email forms | 10 | Apps page, all 8 form pages load + welcome redirect (parametrized) |
-| Enrollment API | 3 | Modality update (valid + invalid), language cheque endpoint |
-| Error pages | 5 | All 5 error pages render with correct status codes (parametrized) |
-| Schedule | 2 | Schedule page, Fun Friday page |
-| Fun Friday | 4 | Toggle (valid + adult rejected), add attendance, remove attendance |
-| Support | 2 | Missing message validation, no email configuration |
-
-### Additional Test Files (v1.0.0+)
+### Unit Tests
 
 | File | Count | Coverage |
-|------|-------|----------|
-| `test_constants.py` | 9 | Pure functions: `calculate_discount`, `get_monthly_fee_by_schedule`, `get_enrollment_fee` |
-| `test_transactions.py` | 10 | Query helpers: `get_active_students`, `get_payments_for_last_two_school_years`, `get_all_payments_unrestricted` |
-| `test_forms.py` | 9 | `EnrollmentForm` validation + `create_enrollment()` delegation to service layer |
-| `test_exports.py` | 7 | Excel workbook generation: students, enrollments, payments sheets + combined workbook |
-| `test_schedule_views.py` | 8 | Schedule page, save slot (assign + clear + reject GET), Fun Friday (loads, excludes adults) |
-| `test_auth_views.py` | 8 | Login (render, redirect, valid/invalid creds, missing env), logout, OAuth redirect |
-| `test_student_views.py` | 12 | Student list (search, exclude inactive), detail, create (form, success, adult mode, full POST), search |
-| `test_payment_views.py` | 9 | `parse_date_value` (6 formats), payments list, search, quick complete |
-| `test_app_form_views.py` | 27 | All email form GET pages, POST preview (JSON), POST send, test_send without env vars |
-| `test_parent_views.py` | 4 | ParentCreateView: GET, POST (new + existing DNI + invalid) |
-| `test_create_payment_views.py` | 7 | Create payment (form + invalid parent), payment detail, update payment, Excel export |
-| `test_student_forms.py` | 7 | StudentForm + ParentForm validation: dates, DNI, required fields |
-| `test_context_processors.py` | 11 | Context keys, todo filtering, scheduled apps, history count, support email |
-| `test_middleware.py` | 9 | Public/protected paths, session handling |
-| `test_email_service.py` | 12 | EmailService: send, recipients, CC/BCC, attachments, fail_silently, bulk |
-| `test_email_functions.py` | 10 | All convenience email functions: template, subject, context, fail_silently |
+| --- | --- | --- |
+| [`unit/test_models.py`](project/tests/unit/test_models.py) | 48 | Every model across `students`, `billing`, `core` — properties (`full_name`, `age`, `is_overdue`, `remaining_amount`, `is_paid`), `__str__`, unique constraints, FK behavior, academic-year helpers (`current_academic_year`, `academic_year_start_date`, `academic_year_end_date`), SiteConfiguration singleton, HistoryLog cap + debounce |
+| [`unit/test_services.py`](project/tests/unit/test_services.py) | 27 | `PricingService` (all fee + discount combos), `EnrollmentService` (all plans, language cheque, sibling, both, minimum-amount floor, adult enrollment, edge cases), `PaymentService` (monthly + quarterly amounts, June bonus, academic month/quarter validation, payment completion), service error paths |
+| [`unit/test_student_view_internals.py`](project/tests/unit/test_student_view_internals.py) | 25 | `StudentUpdateView` view-object method branches (quarterly, part-time, no enrollment, exception-handling) via `RequestFactory` to sidestep missing template, plus unreferenced helper functions `handle_student_form`, `student_detail`, `update_student` called directly |
+| [`unit/test_tasks.py`](project/tests/unit/test_tasks.py) | 24 | Celery tasks called synchronously with `email_service` mocked: `send_welcome_email_task` (parent + adult-student + missing + failure paths), `send_birthday_email_task`, `send_birthday_emails_task`, `send_payment_reminders`, `send_generic_email_task`, `send_enrollment_confirmation_task` (success + missing + attachments + failure) |
+| [`unit/test_email_service.py`](project/tests/unit/test_email_service.py) | 18 | `EmailService.send_email`: string + list recipients, CC/BCC, attachments, inline images (existing + missing path), `fail_silently` on and off, exception-raises-when-not-silent, `send_bulk_emails` mixed success/failure, `get_email_config` |
+| [`unit/test_email_functions.py`](project/tests/unit/test_email_functions.py) | 17 | All convenience wrappers (`send_birthday_email`, `send_welcome_email`, `send_payment_reminder`, `send_monthly_report`, `send_enrollment_confirmation_email`, `send_quarterly_receipt_email`, `send_fun_friday_email`, `send_vacation_closure_email`, `send_tax_certificate_email`, `send_all_tax_certificates`) plus tax-certificate PDF generation branches |
+| [`unit/test_context_processors.py`](project/tests/unit/test_context_processors.py) | 13 | `today_notifications`: expected keys, todos due today vs other day, scheduled apps on Friday vs Monday, monthly apps excluded on day 15, history count, unauthenticated early-return |
+| [`unit/test_constants.py`](project/tests/unit/test_constants.py) | 13 | Pure functions: `calculate_discount` (flat/percentage/invalid/edge), `get_monthly_fee_by_schedule`, `get_enrollment_fee` |
+| [`unit/test_transactions.py`](project/tests/unit/test_transactions.py) | 10 | Query helpers: `get_active_students`, `get_payments_for_last_two_school_years`, `get_all_payments_unrestricted` — ordering, select_related, school-year filtering |
+| [`unit/test_forms.py`](project/tests/unit/test_forms.py) | 9 | `EnrollmentForm` validation + `create_enrollment()` delegation to `EnrollmentService` (quarterly, monthly full/part, manual amount, sibling checkbox, adult, below-minimum rejection) |
+| [`unit/test_student_forms.py`](project/tests/unit/test_student_forms.py) | 7 | `StudentForm` + `ParentForm` validation: future birth date rejected, DNI minimum length, required fields, both date formats |
+| [`unit/test_exports.py`](project/tests/unit/test_exports.py) | 7 | Excel workbook generation via `openpyxl`: Students, Enrollments, Payments sheets + combined workbook; empty-database edge case |
+| [`unit/test_payment_helpers.py`](project/tests/unit/test_payment_helpers.py) | 7 | `parse_date_value` (6 formats including invalid) + `payment_detail` AJAX helper called directly via `RequestFactory` |
+| [`unit/test_decorators.py`](project/tests/unit/test_decorators.py) | 5 | `@qa_access_required`: allow when `IS_TESTING_ENV + QA_TESTING_USERNAME + session.username` all match, 404 on any missing condition |
+| [`unit/test_error_handlers.py`](project/tests/unit/test_error_handlers.py) | 5 | `handler400`/`handler403`/`handler404`/`handler405`/`handler500` render with correct status codes |
+| [`unit/test_qa_error_middleware.py`](project/tests/unit/test_qa_error_middleware.py) | 5 | `QAErrorEmailMiddleware.process_exception` via `RequestFactory`: pass-through, disabled config, no support email, send success, send failure swallowed |
+| [`unit/test_testing_tools_helpers.py`](project/tests/unit/test_testing_tools_helpers.py) | 2 | `_git_info` helper: success path + non-zero returncode branch with `subprocess.run` mocked |
+
+### Integration Tests
+
+| File | Count | Coverage |
+| --- | --- | --- |
+| [`integration/test_app_form_views.py`](project/tests/integration/test_app_form_views.py) | 97 | Every email form GET page, POST `action=preview` (JSON HTML), `test_send` with/without EMAIL_TEST_* env vars, main send-to-parents for every form (fun_friday, payment_reminder, vacation_closure, tax_certificate, monthly_report, birthday, receipts × 3, newsletter, enrollment/welcome), invalid-date fallbacks, missing-field errors, no-parents-with-email edge cases, per-recipient exception swallowing, welcome_form redirect |
+| [`integration/test_views.py`](project/tests/integration/test_views.py) | 54 | Cross-cutting top-level HTTP coverage: auth flow, dashboard, `all_info`, student/parent list + detail + create + search, payment list + create + detail + CRUD + stats + CSV + validation, todos + history API, management admin, email form pages (parametrized), enrollment API, error pages (parametrized), schedule, Fun Friday, support |
+| [`integration/test_payment_views.py`](project/tests/integration/test_payment_views.py) | 37 | All HTTP payment endpoints: list (search, stats), create (+ invalid parent + unexpected exception), detail-view (+ 404), update (JSON + FormData + all error branches), delete (success + exception 500), deactivate (success + exception 400), quick-complete (success + invalid method + broken JSON), get-details (success + exception), search payments/parents (short query + hits), validate student-parent (all branches), export DB to Excel |
+| [`integration/test_student_views.py`](project/tests/integration/test_student_views.py) | 22 | `StudentListView` (search, exclude inactive, context), `StudentDetailView` (parents visible, 404), `StudentCreateView` (form + adult mode + success + full POST + error paths including invalid parent, existing-parent mode, create_sibling flag, email-task swallow), `search_students` FBV |
+| [`integration/test_testing_tools.py`](project/tests/integration/test_testing_tools.py) | 20 | QA dashboard `/testing/` gated by `@qa_access_required` (via `override_settings`): dashboard renders + git failure handled, `api_seed_database` (success + reset + command error 500 + non-QA 404), `api_create_backlog_task` (all branches + email send/swallow), `api_update_backlog_task` (success + invalid status + 404), `api_toggle_error_email` (on + off + bad JSON) |
+| [`integration/test_management_views.py`](project/tests/integration/test_management_views.py) | 19 | `gestion_view` + `update_site_config` (all fields + bad JSON), `create_teacher` (success + duplicate + missing field + bad JSON), `create_group` (success + missing fields + duplicate + nonexistent teacher + bad JSON), `api_get_teachers`, `update_enrollment_modality` (success + invalid + no enrollment + student not found), `language_cheque_students` |
+| [`integration/test_schedule_views.py`](project/tests/integration/test_schedule_views.py) | 13 | Schedule page (groups + slots in context), `save_schedule_slot` (assign + clear + reject GET + invalid JSON), Fun Friday page (loads, excludes adults, with attendance) |
+| [`integration/test_auth_oauth.py`](project/tests/integration/test_auth_oauth.py) | 13 | OAuth callback flow with `google_auth_oauthlib.flow.Flow` mocked: state missing, state mismatch, `fetch_token` failure, id-token verification failure, email whitelist mismatch, successful session establishment; login view extras (already-auth redirect, missing env, OAuth-available flag); logout clears session |
+| [`integration/test_dashboard_views.py`](project/tests/integration/test_dashboard_views.py) | 11 | `home` view quote-cookie branches (valid cookie, corrupt cookie → API, API failure, API empty, `[AUTH]` placeholder filtered, with pending payments), `all_info` sort variants (default, first_name, last_name, id_asc, payments_sort=student_asc) |
+| [`integration/test_parent_views.py`](project/tests/integration/test_parent_views.py) | 8 | `ParentCreateView`: GET renders, POST new + existing DNI + invalid + exception-triggers-form-invalid |
+| [`integration/test_todo_views.py`](project/tests/integration/test_todo_views.py) | 8 | `create_todo` (missing text + missing date + invalid date + success), `complete_todo`, `history_list` (default + offset + invalid offset) |
+| [`integration/test_middleware.py`](project/tests/integration/test_middleware.py) | 8 | `SimpleAuthMiddleware`: public paths (login, health, static, media, OAuth prefix), protected paths redirect to login, authenticated requests pass |
+| [`integration/test_auth_views.py`](project/tests/integration/test_auth_views.py) | 7 | Login view: render for unauth'd, redirect for authenticated, valid + invalid credentials, logout, OAuth redirect (no creds → login) |
+| [`integration/test_fun_friday_attendance_views.py`](project/tests/integration/test_fun_friday_attendance_views.py) | 6 | `toggle_fun_friday_this_week` (adult rejected + toggle on/off), `add_fun_friday_attendance` (success + invalid), `remove_fun_friday_attendance` (success + invalid) |
+| [`integration/test_support_views.py`](project/tests/integration/test_support_views.py) | 5 | `submit_support_ticket`: success (send_mail called), short message rejected, no support email configured → 500, bad JSON, unexpected exception |
+
+### Coverage Report
+
+| File | Stmts | Miss | Cover | Missing lines |
+| --- | --- | --- | --- | --- |
+| `billing/models.py` | 143 | 7 | 95% | 282-292, 361, 366 |
+| `billing/services/enrollment_service.py` | 69 | 5 | 93% | 97, 107-110, 140 |
+| `billing/services/payment_service.py` | 55 | 3 | 95% | 38, 41, 48 |
+| `comms/services/email_functions.py` | 97 | 5 | 95% | 514-516, 559-560 |
+| `comms/services/email_service.py` | 59 | 6 | 90% | 55, 118-122 |
+| `core/context_processors.py` | 25 | 5 | 80% | 15-16, 22, 33-34 |
+| `core/middleware.py` | 50 | 2 | 96% | 51-52 |
+| `core/models.py` | 91 | 4 | 96% | 48, 61, 147, 167 |
+| `core/transactions.py` | 19 | 1 | 95% | 28 |
+| `core/views/app_forms.py` | 615 | 46 | 93% | 51, 138-140, 152-154, 168-171, 188-189, 211, 267-268, 291-292, 342-344, 375, 527-529, 535, 673, 695, 714, 788, 792, 814, 825, 901, 927, 940, 953, 965, 976, 987, 1098, 1144, 1172-1173, 1201-1202 |
+| `core/views/auth.py` | 103 | 11 | 89% | 65, 69-85, 100, 129 |
+| `core/views/dashboard.py` | 111 | 6 | 95% | 104-111, 152, 168 |
+| `core/views/parents.py` | 26 | 3 | 88% | 24-29 |
+| `core/views/payments.py` | 226 | 4 | 98% | 320-321, 349-350 |
+| `core/views/schedule.py` | 59 | 1 | 98% | 45 |
+| `core/views/students.py` | 298 | 11 | 96% | 53-54, 96, 181-183, 289, 506, 509-511 |
+| `students/models.py` | 88 | 1 | 99% | 135 |
+
+**42 files** have 100% coverage (skipped above). Total coverage: **96%** across 2,809 statements. Coverage is **very good**. Coverage is enforced at three levels: pre-commit hook (≥ 75%), CI hard floor (≥ 75%), and CI warning (< 90%).
 
 ---
 
