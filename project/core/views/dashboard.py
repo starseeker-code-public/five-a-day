@@ -1,5 +1,5 @@
 import calendar as cal_module
-import json
+import logging
 from datetime import date
 from decimal import Decimal
 
@@ -13,46 +13,76 @@ from core.constants import SCHEDULED_APPS
 from core.models import TodoItem
 from students.models import Student
 
-_QUOTE_COOKIE = "inspirational_quotes"
-_QUOTE_COOKIE_TTL = 48 * 60 * 60  # 48 hours in seconds
+logger = logging.getLogger(__name__)
+
+_QUOTE_COOKIE = "last_quote"
+_QUOTE_COOKIE_TTL = 7 * 24 * 60 * 60  # 7 days — long TTL, only a fallback
+_QUOTE_API_URL = (
+    "https://zenquotes.io/api/quotes"  # no trailing slash — the API 301-redirects "/api/quotes/" → "/api/quotes"
+)
+_QUOTE_BATCH_SIZE = 50
+_QUOTE_FALLBACK = "¡Cada día es una nueva oportunidad para inspirar!"
+
+# In-memory quote cache — list of (quote, author) tuples.  Each page load
+# pops one.  When empty, _fetch_quotes() refills it with up to 50 quotes
+# from zenquotes.io in a single HTTP call.  Per-worker (Gunicorn forks),
+# so each process maintains its own list — acceptable given the API is free
+# and the batch size amortises the cost.
+# Thread safety: safe for sync Gunicorn workers (each process has its own
+# list); not safe for async workers or multithreaded servers.
+_quotes: list[tuple[str, str]] = []
+
+
+def _fetch_quotes() -> list[tuple[str, str]]:
+    """Fetch up to 50 quotes from zenquotes.io.
+
+    Returns a list of (quote_text, author) tuples.  The ``[AUTH]`` placeholder
+    that zenquotes returns when rate-limited is filtered out.
+    """
+    try:
+        resp = httpx.get(_QUOTE_API_URL, timeout=5.0, follow_redirects=True)
+        resp.raise_for_status()
+        items = resp.json()
+        batch = [
+            (item["q"], item["a"]) for item in items[:_QUOTE_BATCH_SIZE] if item.get("q") and item["q"] != "[AUTH]"
+        ]
+        if not batch:
+            logger.warning(
+                "zenquotes API returned no usable quotes (got %d items)",
+                len(items) if isinstance(items, list) else 0,
+            )
+        return batch
+    except Exception as e:
+        logger.warning("zenquotes API fetch failed: %s: %s", type(e).__name__, e)
+        return []
 
 
 def _get_quote(request):
     """
     Returns (quote_text, author_or_None, new_cookie_value_or_None).
 
-    Reads two quotes stored in a cookie (48h TTL). Day 0 shows the first quote,
-    day 1+ shows the second. When the cookie is missing or expired, fetches fresh
-    quotes from zenquotes.io. On API failure, falls back to the default subtitle.
-    new_cookie_value is non-None only when the cookie needs to be written.
+    Pops one quote from the in-memory cache.  If empty, fetches a fresh batch
+    of 50.  Falls back to the cookie (stores the last served quote as a plain
+    ``"quote — author"`` string), then to a hardcoded Spanish string.
+
+    Every page load sees a different quote — no day-based logic.
     """
-    raw = request.COOKIES.get(_QUOTE_COOKIE)
-    today = date.today()
+    global _quotes  # noqa: PLW0603
 
-    if raw:
-        try:
-            data = json.loads(raw)
-            quotes = data["quotes"]
-            stored = date.fromisoformat(data["date"])
-            idx = min((today - stored).days, len(quotes) - 1)
-            q = quotes[idx]
-            return q["q"], q["a"], None
-        except (json.JSONDecodeError, KeyError, ValueError, TypeError):
-            pass
+    if not _quotes:
+        _quotes[:] = _fetch_quotes()
 
-    # Cookie missing, corrupt, or expired — fetch from API
-    try:
-        resp = httpx.get("https://zenquotes.io/api/quotes/", timeout=5.0)
-        resp.raise_for_status()
-        items = resp.json()
-        quotes = [{"q": item["q"], "a": item["a"]} for item in items[:2] if item.get("q") and item["q"] != "[AUTH]"]
-        if quotes:
-            cookie_val = json.dumps({"date": today.isoformat(), "quotes": quotes})
-            return quotes[0]["q"], quotes[0]["a"], cookie_val
-    except Exception:
-        pass
+    if _quotes:
+        quote, author = _quotes.pop()
+        cookie_val = f"{quote} - {author}"
+        return quote, author, cookie_val
 
-    return "¡Cada día es una nueva oportunidad para inspirar!", None, None
+    # Cache empty AND API failed — fall back to cookie
+    cookie_val = request.COOKIES.get(_QUOTE_COOKIE)
+    if cookie_val:
+        return cookie_val, None, None
+
+    return _QUOTE_FALLBACK, None, None
 
 
 def home(request):

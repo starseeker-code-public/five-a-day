@@ -1,12 +1,12 @@
 # ============================================================================
-# MAKEFILE — Five a Day eVolution
+# MAKEFILE - Five a Day eVolution
 # ============================================================================
 # Docker and Django shortcuts. Run `make` or `make help` for usage.
 
 .PHONY: help setup build up down restart stop start rebuild dev logs logs-web \
         logs-db ps stats shell bash migrate makemigrations createsuperuser \
         collectstatic check dbshell backup restore reset-db test test-local \
-        test-verbose test-coverage test-models test-services test-views \
+        test-verbose test-coverage test-unit test-integration test-cov-gate test-models test-services test-views \
         clean clean-all health url send-test-email generate-payments \
         testing-up testing-down testing-logs testing-seed testing-reset \
         testing-rebuild testing-shell testing-health \
@@ -19,11 +19,11 @@
 # ============================================================================
 help:
 	@echo ""
-	@echo "  Five a Day — Make Commands"
+	@echo "  Five a Day - Make Commands"
 	@echo "  =========================="
 	@echo ""
 	@echo "  Setup & Build:"
-	@echo "    make setup            Copy .env.example to .env"
+	@echo "    make setup            Create empty .env (fill in from README.md '.env template')"
 	@echo "    make build            Build Docker images"
 	@echo "    make rebuild          Full rebuild (no cache) + start"
 	@echo "    make rebuild-web      Rebuild only the web image"
@@ -68,6 +68,8 @@ help:
 	@echo "    make test-local       Run all tests (local, no Docker)"
 	@echo "    make test-verbose     Run all tests with verbose output"
 	@echo "    make test-coverage    Run tests with coverage report"
+	@echo "    make test-unit        Run only unit tests"
+	@echo "    make test-integration Run only integration tests"
 	@echo "    make test-models      Run only model tests"
 	@echo "    make test-services    Run only service tests"
 	@echo "    make test-views       Run only view tests"
@@ -120,14 +122,14 @@ help:
 # ============================================================================
 setup:
 	@if [ ! -f .env ]; then \
-		cp .env.example .env; \
-		echo "Created .env — edit it with your configuration."; \
+		touch .env; \
+		echo "Created empty .env. Copy the template from README.md (section '.env template') into .env and fill in the blanks."; \
 	else \
 		echo ".env already exists."; \
 	fi
 
 # ============================================================================
-# DOCKER COMPOSE — LIFECYCLE
+# DOCKER COMPOSE - LIFECYCLE
 # ============================================================================
 build:
 	docker compose build
@@ -274,6 +276,14 @@ test:
 	docker compose exec web uv sync --frozen --no-install-project --quiet
 	docker compose exec -e DJANGO_SETTINGS_MODULE=project.settings_test -e TEST_DB_HOST=db web python -m pytest project/tests/ -v --tb=short -n auto --cov=core --cov=students --cov=billing --cov=comms --cov-report=term-missing
 
+# Pre-commit coverage gate: same command as `make test` but fails fast if
+# coverage drops below 75%. Invoked by the pytest-coverage pre-commit hook
+# and safe to run manually. Output is terse (-q) so commit feedback stays
+# readable; full coverage report still prints at the end.
+test-cov-gate:
+	@docker compose exec web uv sync --frozen --no-install-project --quiet
+	@docker compose exec -e DJANGO_SETTINGS_MODULE=project.settings_test -e TEST_DB_HOST=db web python -m pytest project/tests/ -q --tb=line -n auto --cov=core --cov=students --cov=billing --cov=comms --cov-fail-under=75
+
 # Run tests locally against the Docker PostgreSQL (default)
 test-local:
 	cd project && TEST_DB_HOST=localhost python -m pytest tests/ -v --tb=short
@@ -291,15 +301,23 @@ test-coverage:
 	cd project && TEST_DB_HOST=localhost python -m pytest tests/ --cov=core --cov=students --cov=billing --cov=comms --cov-report=term-missing --cov-report=html
 	@echo "HTML report: project/htmlcov/index.html"
 
+# Run only unit tests (direct calls, no HTTP stack)
+test-unit:
+	cd project && TEST_DB_HOST=localhost python -m pytest tests/unit/ -v --tb=short
+
+# Run only integration tests (Django test client through the middleware chain)
+test-integration:
+	cd project && TEST_DB_HOST=localhost python -m pytest tests/integration/ -v --tb=short
+
 # Run specific test modules
 test-models:
-	cd project && TEST_DB_HOST=localhost python -m pytest tests/test_models.py -v --tb=short
+	cd project && TEST_DB_HOST=localhost python -m pytest tests/unit/test_models.py -v --tb=short
 
 test-services:
-	cd project && TEST_DB_HOST=localhost python -m pytest tests/test_services.py -v --tb=short
+	cd project && TEST_DB_HOST=localhost python -m pytest tests/unit/test_services.py -v --tb=short
 
 test-views:
-	cd project && TEST_DB_HOST=localhost python -m pytest tests/test_views.py -v --tb=short
+	cd project && TEST_DB_HOST=localhost python -m pytest tests/integration/test_views.py -v --tb=short
 
 # Stop on first failure
 test-fast:
@@ -346,13 +364,13 @@ clean-all:
 # VERSIONING
 # ============================================================================
 # App version is defined in two places:
-#   1. pyproject.toml → version = "x.y.z"
-#   2. project/settings.py → APP_VERSION fallback = "x.y.z"
+#   1. pyproject.toml -> version = "x.y.z"
+#   2. project/settings.py -> APP_VERSION fallback = "x.y.z"
 # This command updates both at once.
 #
 # Usage: make version x.y.z
 
-# Capture `make version x.y.z` — treat the version number as a goal with an empty recipe
+# Capture `make version x.y.z` - treat the version number as a goal with an empty recipe
 # so Make doesn't complain about a missing target named "x.y.z".
 ifeq ($(firstword $(MAKECMDGOALS)),version)
   _VERSION_ARG := $(wordlist 2,$(words $(MAKECMDGOALS)),$(MAKECMDGOALS))
@@ -363,20 +381,35 @@ endif
 
 version:
 	@CURRENT=$$(grep '^version = ' pyproject.toml | sed 's/version = "\(.*\)"/\1/'); \
+	BADGE=$$(grep -oE 'version-v[0-9]+(\.[0-9]+)*-brightgreen' README.md | head -1 | sed -E 's/version-v(.*)-brightgreen/\1/'); \
 	NEW="$(_VERSION_ARG)"; \
 	if [ -z "$$NEW" ]; then \
 		echo "Usage: make version x.y.z"; \
 		echo ""; \
-		echo "Current version: $$CURRENT"; \
+		echo "Current version:"; \
+		echo "  pyproject.toml:  $$CURRENT"; \
+		echo "  README.md badge: $$BADGE"; \
+		if [ -n "$$BADGE" ] && [ "$$CURRENT" != "$$BADGE" ]; then \
+			echo ""; \
+			echo "  WARNING: pyproject and README badge are out of sync."; \
+		fi; \
 		exit 1; \
 	fi; \
 	read -p "Version $$CURRENT will become the new version $$NEW, are you sure? [y/N] " confirm; \
 	if [ "$$confirm" = "y" ] || [ "$$confirm" = "yes" ]; then \
 		sed -i 's/^version = ".*"/version = "'"$$NEW"'"/' pyproject.toml; \
 		sed -i 's/APP_VERSION = os.getenv("APP_VERSION", ".*")/APP_VERSION = os.getenv("APP_VERSION", "'"$$NEW"'")/' project/project/settings.py; \
+		sed -i -E 's|version-v[0-9]+(\.[0-9]+)*-brightgreen|version-v'"$$NEW"'-brightgreen|' README.md; \
+		uv lock --quiet; \
 		echo "Version updated to $$NEW in:"; \
 		echo "  - pyproject.toml"; \
-		echo "  - project/settings.py"; \
+		echo "  - project/project/settings.py"; \
+		echo "  - README.md (badge URL)"; \
+		echo "  - uv.lock (regenerated via 'uv lock')"; \
+		echo ""; \
+		echo "NOTE: the Recent Versions table, Version History details block, and per-app"; \
+		echo "      READMEs were NOT changed automatically - run the 'update-readme' skill"; \
+		echo "      after staging your work to refresh them."; \
 	else \
 		echo "Cancelled."; \
 	fi
@@ -435,7 +468,7 @@ celery-status:
 	docker compose exec -w /app/project celery_worker celery -A project.celery inspect active
 
 celery-test-task:
-	docker compose exec web python project/manage.py shell -c "from project.celery import debug_task; debug_task.delay(); print('Task queued — check celery-logs')"
+	docker compose exec web python project/manage.py shell -c "from project.celery import debug_task; debug_task.delay(); print('Task queued - check celery-logs')"
 
 # ============================================================================
 # DEVELOPER TOOLING (UV, Ruff, pre-commit)
@@ -469,7 +502,7 @@ coverage-badge:
 	docker compose cp web:/app/.coverage .coverage
 	uv run coverage-badge -o coverage.svg -f
 	@rm -f .coverage
-	@echo "coverage.svg updated — commit it to the repo"
+	@echo "coverage.svg updated - commit it to the repo"
 
 pre-commit-install:
 	uv run --no-project pre-commit install
@@ -485,8 +518,15 @@ pc-run:
 			NEW="$$MAJOR.$$MINOR.$$((PATCH + 1))"; \
 			sed -i 's/^version = ".*"/version = "'"$$NEW"'"/' pyproject.toml; \
 			sed -i 's/APP_VERSION = os.getenv("APP_VERSION", ".*")/APP_VERSION = os.getenv("APP_VERSION", "'"$$NEW"'")/' project/project/settings.py; \
-			echo "Updated version $$CURRENT with new version $$NEW"; \
+			sed -i -E 's|version-v[0-9]+(\.[0-9]+)*-brightgreen|version-v'"$$NEW"'-brightgreen|' README.md; \
+			uv lock --quiet; \
+			echo "Updated version $$CURRENT with new version $$NEW (pyproject.toml, settings.py, README badge, uv.lock)"; \
+			echo "Reminder: Recent Versions + Version History in README were NOT touched - run '/update-readme' skill to refresh them."; \
 		fi; \
+	fi
+	@if [ -n "$$(git status --porcelain uv.lock 2>/dev/null)" ]; then \
+		git add uv.lock; \
+		echo "Staged updated uv.lock"; \
 	fi
 
 # ============================================================================

@@ -1,0 +1,165 @@
+name: CI
+
+on:
+  push:
+    branches: [development, testing, main]
+  pull_request:
+    branches: [testing, main]
+
+# Cancel in-progress runs on the same branch when new commits arrive
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ============================================================
+  # JOB 1: Lint — Ruff (fast, no DB needed)
+  # ============================================================
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --frozen --no-install-project
+
+      - name: Ruff — check
+        run: uv run --no-project ruff check project/
+
+      - name: Ruff — format
+        run: uv run --no-project ruff format --check project/
+
+      - name: Bandit — security linter
+        run: PYTHONUTF8=1 uv run bandit -r project/ -c pyproject.toml
+
+  # ============================================================
+  # JOB 2: Type check — mypy (no DB needed)
+  # ============================================================
+  typecheck:
+    name: Type check
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --frozen --no-install-project
+
+      - name: mypy
+        env:
+          # django-stubs plugin imports project.settings at load time. Our settings.py
+          # raises ValueError when DEBUG=False AND SECRET_KEY is the dev default, so we
+          # set DJANGO_DEBUG=True to bypass that check during static analysis.
+          DJANGO_SETTINGS_MODULE: project.settings
+          DJANGO_DEBUG: "True"
+          DJANGO_SECRET_KEY: mypy-static-analysis-dummy-key
+          PYTHONPATH: project
+        run: uv run mypy project/
+
+  # ============================================================
+  # JOB 3: Tests — pytest against PostgreSQL
+  # ============================================================
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: fiveaday_test
+          POSTGRES_USER: fiveaday_user
+          POSTGRES_PASSWORD: fiveaday_test_pw
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --frozen --no-install-project
+
+      - name: Run tests (unit + integration)
+        working-directory: project
+        env:
+          DJANGO_SETTINGS_MODULE: project.settings_test
+          POSTGRES_DB: fiveaday_test
+          POSTGRES_USER: fiveaday_user
+          POSTGRES_PASSWORD: fiveaday_test_pw
+          TEST_DB_HOST: localhost
+          DJANGO_SECRET_KEY: ci-test-secret-key-not-for-production
+          LOGIN_USERNAME: ci_admin
+          LOGIN_PASSWORD: ci_test_password
+          DJANGO_ALLOWED_HOSTS: localhost,127.0.0.1
+        run: |
+          # Tests live in project/tests/unit/ and project/tests/integration/.
+          # Pytest auto-discovers both subdirectories when we point it at tests/.
+          uv run python -m pytest tests/ -v --tb=short -n auto \
+            --cov=core --cov=students --cov=billing --cov=comms \
+            --cov-report=xml --cov-report=term-missing
+
+      # Coverage thresholds:
+      #   < 75% → fail CI (hard floor; same threshold the pre-commit hook enforces)
+      #   < 90% → warning annotation (visible in the PR checks UI, does not fail)
+      #   ≥ 90% → silent pass (current coverage is 96%)
+      - name: Check coverage threshold
+        if: always()
+        working-directory: project
+        run: |
+          if [ ! -f coverage.xml ]; then
+            echo "::error::coverage.xml not found — test step likely failed before coverage could be written"
+            exit 1
+          fi
+          COV=$(python -c "import xml.etree.ElementTree as ET; print(round(float(ET.parse('coverage.xml').getroot().attrib['line-rate']) * 100, 2))")
+          echo "Coverage: ${COV}%"
+          FLOOR=75
+          TARGET=90
+          # awk exits 0 (shell-if fires) when condition is FALSE:
+          #   exit (c >= f) ? 1 : 0  →  exits 0 when c < f  →  error path runs
+          if awk -v c="$COV" -v f="$FLOOR" 'BEGIN { exit (c >= f) ? 1 : 0 }'; then
+            echo "::error::Coverage ${COV}% is below the ${FLOOR}% hard floor — CI fails"
+            exit 1
+          fi
+          if awk -v c="$COV" -v t="$TARGET" 'BEGIN { exit (c >= t) ? 1 : 0 }'; then
+            echo "::warning::Coverage ${COV}% is below the ${TARGET}% target (warning only; CI still passes down to ${FLOOR}%)"
+          else
+            echo "Coverage ${COV}% meets the ${TARGET}% target."
+          fi
+
+      - name: Upload coverage to Codecov
+        if: always()
+        uses: codecov/codecov-action@v4
+        with:
+          files: project/coverage.xml
+          fail_ci_if_error: false
+          token: ${{ secrets.CODECOV_TOKEN }}
+
+      - name: Upload coverage artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: project/coverage.xml
+          retention-days: 7

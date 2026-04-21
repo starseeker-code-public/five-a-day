@@ -1,6 +1,6 @@
 [project]
 name = "five-a-day"
-version = "1.0.4"
+version = "1.0.9"
 description = "Five a Day management software"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -104,7 +104,11 @@ omit = [
 [tool.coverage.report]
 show_missing = true
 skip_covered = true
-fail_under = 0
+# Hard floor for any tool that reads this config (CI step + pre-commit hook).
+# The pre-commit hook also passes --cov-fail-under=75 explicitly on the
+# command line; CI enforces the 90%-warning / 75%-fail split in a separate
+# step. Raise this as coverage grows.
+fail_under = 75
 exclude_lines = [
     "pragma: no cover",
     "if __name__ == .__main__.",

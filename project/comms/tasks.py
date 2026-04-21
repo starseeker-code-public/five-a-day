@@ -39,8 +39,9 @@ def send_welcome_email_task(self, parent_id: int, student_id: int, enrollment_id
         student_id: ID of the student
         enrollment_id: ID of the enrollment
     """
+    from billing.models import Enrollment
     from comms.services.email_service import email_service
-    from students.models import Enrollment, Parent, Student
+    from students.models import Parent, Student
 
     try:
         student = Student.objects.select_related("group").get(id=student_id)
@@ -79,7 +80,7 @@ def send_welcome_email_task(self, parent_id: int, student_id: int, enrollment_id
             logger.info("Welcome email sent for student_id=%d", student_id)
         else:
             logger.error("Failed to send welcome email for student_id=%d", student_id)
-            raise Exception("Fallo en el envio del email")
+            raise RuntimeError("Fallo en el envio del email")
 
         return {"status": "success", "recipient": recipient_email}
 
@@ -128,7 +129,7 @@ def send_birthday_email_task(self, student_id: int):
         if success:
             logger.info("Birthday email sent for student_id=%d", student_id)
         else:
-            raise Exception("Fallo en el envio del email")
+            raise RuntimeError("Fallo en el envio del email")
 
         return {"status": "success", "recipient": parent.email, "student": student.full_name}
 
@@ -251,7 +252,7 @@ def send_generic_email_task(self, template_name: str, recipient_email: str, subj
         logger.info("Email sent: template=%s", template_name)
         return {"status": "success"}
     else:
-        raise Exception(f"Failed to send email: template={template_name}")
+        raise RuntimeError(f"Failed to send email: template={template_name}")
 
 
 # ============================================================================
@@ -275,8 +276,8 @@ def send_enrollment_confirmation_task(self, enrollment_id: int, attachments_path
     """
     import os
 
+    from billing.models import Enrollment
     from comms.services.email_functions import send_enrollment_confirmation_email
-    from students.models import Enrollment
 
     MONTHS_ES = [
         "enero",
@@ -330,7 +331,7 @@ def send_enrollment_confirmation_task(self, enrollment_id: int, attachments_path
             logger.info("Enrollment confirmation sent for enrollment_id=%d", enrollment_id)
             return {"status": "success", "recipient": parent.email}
         else:
-            raise Exception("Fallo en envio de confirmacion de matricula")
+            raise RuntimeError("Fallo en envio de confirmacion de matricula")
 
     except Enrollment.DoesNotExist:
         logger.error("Enrollment not found: id=%d", enrollment_id)
