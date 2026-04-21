@@ -1,0 +1,93 @@
+{% extends "admin/base_site.html" %}
+{% load i18n log static %}
+
+{% block title %}{% trans 'Panel de administración' %} | {{ block.super }}{% endblock %}
+
+{% block content %}
+<div id="content-main">
+
+    <div class="five-a-day-welcome">
+        <img class="welcome-logo"
+             src="{% static 'images/logo_white_bg.png' %}"
+             alt="Five a Day">
+        <div class="welcome-text">
+            <h2>¡Bienvenido/a al panel de gestión!</h2>
+            <p>
+                Desde aquí puedes gestionar estudiantes, familias, matrículas, pagos,
+                horarios y comunicaciones de Five a Day English Academy.
+                Usa el menú de la izquierda o selecciona una sección de abajo.
+            </p>
+        </div>
+    </div>
+
+    {% if app_list %}
+        {% for app in app_list %}
+        <div class="app-{{ app.app_label }} module{% if app.app_url in request.path|urlencode %} current-app{% endif %}">
+            <table>
+                <caption>
+                    <a href="{{ app.app_url }}" class="section"
+                       title="{% blocktranslate with name=app.verbose_name %}Modelos de la aplicación {{ name }}{% endblocktranslate %}">
+                        {{ app.verbose_name }}
+                    </a>
+                </caption>
+                {% for model in app.models %}
+                <tr class="model-{{ model.object_name|lower }}{% if model.admin_url in request.path|urlencode %} current-model{% endif %}">
+                    {% if model.admin_url %}
+                        <th scope="row"><a href="{{ model.admin_url }}">{{ model.verbose_name_plural|capfirst }}</a></th>
+                    {% else %}
+                        <th scope="row">{{ model.verbose_name_plural|capfirst }}</th>
+                    {% endif %}
+                    <td>
+                        {% if model.add_url %}
+                            <a href="{{ model.add_url }}" class="addlink">{% trans 'Añadir' %}</a>
+                        {% endif %}
+                        {% if model.admin_url %}
+                            {% if model.view_only %}
+                                <a href="{{ model.admin_url }}" class="viewlink">{% trans 'Ver' %}</a>
+                            {% else %}
+                                <a href="{{ model.admin_url }}" class="changelink">{% trans 'Editar' %}</a>
+                            {% endif %}
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </table>
+        </div>
+        {% endfor %}
+    {% else %}
+        <p>{% trans "No tienes permisos para ver o editar nada." %}</p>
+    {% endif %}
+
+</div>
+{% endblock %}
+
+{% block sidebar %}
+<div id="content-related">
+    <div class="module" id="recent-actions-module">
+        <h2>{% trans 'Acciones recientes' %}</h2>
+        <h3>{% trans 'Mis acciones' %}</h3>
+        {% get_admin_log 10 as admin_log for_user user %}
+        {% if not admin_log %}
+            <p>{% trans 'Ninguna disponible' %}</p>
+        {% else %}
+            <ul class="actionlist">
+            {% for entry in admin_log %}
+            <li class="{% if entry.is_addition %}addlink{% endif %}{% if entry.is_change %}changelink{% endif %}{% if entry.is_deletion %}deletelink{% endif %}">
+                {% if entry.is_deletion or not entry.get_admin_url %}
+                    {{ entry.object_repr }}
+                {% else %}
+                    <a href="{{ entry.get_admin_url }}">{{ entry.object_repr }}</a>
+                {% endif %}
+                <br>
+                {% if entry.content_type %}
+                    <span class="mini quiet">{% filter capfirst %}{% blocktranslate with key=entry.content_type.app_labeled_name %}{{ key }}{% endblocktranslate %}{% endfilter %}</span>
+                {% else %}
+                    <span class="mini quiet">{% trans 'Contenido desconocido' %}</span>
+                {% endif %}
+            </li>
+            {% endfor %}
+            </ul>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

@@ -3,8 +3,8 @@ from django.contrib import admin
 from .models import FunFridayAttendance, HistoryLog, ScheduleSlot, TodoItem
 
 admin.site.site_header = "Five a Day eVolution"
-admin.site.site_title = "Five a Day eVolution"
-admin.site.index_title = "Five a Day eVolution - Construyendo un mejor futuro!"
+admin.site.site_title = "Five a Day · Admin"
+admin.site.index_title = "Panel de administración"
 
 
 @admin.register(HistoryLog)

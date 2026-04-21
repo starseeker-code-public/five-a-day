@@ -1,0 +1,24 @@
+{% extends "admin/base.html" %}
+{% load i18n static %}
+
+{% block title %}{{ title }} | Five a Day Admin{% endblock %}
+
+{% block extrastyle %}
+{{ block.super }}
+<link rel="stylesheet" type="text/css" href="{% static 'css/admin_custom.css' %}">
+{% endblock %}
+
+{% block branding %}
+<div id="branding">
+    <h1 id="site-name">
+        <a href="{% url 'admin:index' %}">
+            <img class="admin-logo"
+                 src="{% static 'images/logo_white_bg.png' %}"
+                 alt="Five a Day">
+            Five a Day eVolution
+        </a>
+    </h1>
+</div>
+{% endblock %}
+
+{% block nav-global %}{% endblock %}
