@@ -9,10 +9,6 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v1.0.10-brightgreen?style=for-the-badge" alt="Version">
-  <img src="https://img.shields.io/badge/python-3.12+-blue?style=for-the-badge" alt="Python">
-  <img src="https://img.shields.io/badge/django-5.2-green?style=for-the-badge" alt="Django">
-  <img src="https://img.shields.io/badge/postgresql-16-336791?style=for-the-badge" alt="PostgreSQL">
   <a href="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml"><img src="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
   <a href="https://codecov.io/gh/starseeker-code-public/five-a-day"><img src="https://codecov.io/gh/starseeker-code-public/five-a-day/branch/main/graph/badge.svg" alt="Coverage"></a>
 </p>
@@ -23,127 +19,175 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 ### Project Status
 
+<p align="center">
+  <img src="https://img.shields.io/badge/version-v1.0.11-brightgreen?style=flat-square" alt="Version">
+  &nbsp;|&nbsp;
+  <a href="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml?query=branch%3Amain"><img src="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml/badge.svg?branch=main&style=flat-square" alt="CI main"></a>
+  &nbsp;|&nbsp;
+  <a href="https://codecov.io/gh/starseeker-code-public/five-a-day"><img src="https://codecov.io/gh/starseeker-code-public/five-a-day/branch/main/graph/badge.svg" alt="Coverage"></a>
+  &nbsp;|&nbsp;
+  <a href="https://github.com/starseeker-code-public/five-a-day/actions/workflows/scorecard.yml"><img src="https://img.shields.io/badge/OpenSSF%20Scorecard-monitored-blueviolet?style=flat-square" alt="OSSF Scorecard"></a>
+  &nbsp;|&nbsp;
+  <a href="https://github.com/starseeker-code-public/five-a-day/security/dependabot"><img src="https://img.shields.io/badge/Dependabot-enabled-025E8C?style=flat-square&logo=dependabot" alt="Dependabot"></a>
+</p>
+
+
 | Environment | Branch | Hosting | CI Status |
 |-------------|--------|---------|-----------|
 | **Production** | `main` | [https://example.com/](...) | [![Production CI](https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml?query=branch%3Amain) |
 | **Testing (QA)** | `testing` | [https://example.com/](...) | [![Testing CI](https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml/badge.svg?branch=testing)](https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml?query=branch%3Atesting) |
-| **Development** | `development` | [Local Docker development: http://localhost:8000/](http://localhost:8000/) | [![Development CI](https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml/badge.svg?branch=development)](https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml?query=branch%3Adevelopment) |
+| **Development** | `development` | [Docker in local](http://localhost:8000/) | [![Development CI](https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml/badge.svg?branch=development)](https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml?query=branch%3Adevelopment) |
+
 
 | Version | Date | Description |
 |---------|------|-------------|
-| **v1.0.10** | 2026-04-21 | Branded admin theme, white-bg favicon, social meta |
-| v1.0.9 | 2026-04-16 | Test suite restructure to unit/integration, 96% coverage, CI gates |
-| v1.0.8 | 2026-04-15 | README trim, `docs/` purge, flaky CI test removed |
+| **v1.0.11** | 2026-04-22 | Testing env fixes, CI hardening, static files cleanup |
+| v1.0.10 | 2026-04-21 | Branded admin theme, white-bg favicon, social meta |
+| v1.0.9 | 2026-04-16 | Test suite restructure, 96% coverage, CI gates |
 
 ---
 
 ## Table of Contents
 
-- [Project Status](#project-status)
-- [Version History \& Roadmap](#version-history--roadmap)
-  - [Roadmap](#roadmap)
-    - [v1.1 — Waiting List \& Group Capacity](#v11--waiting-list--group-capacity)
-    - [v1.2 — Google Sheets Integration](#v12--google-sheets-integration)
-    - [v1.3 — PDF Invoice Generation](#v13--pdf-invoice-generation)
-    - [v1.4 — Celery + Redis Deployment](#v14--celery--redis-deployment)
-    - [v1.5 — Expense Tracking](#v15--expense-tracking)
-    - [v1.6 — Multi-User Permissions](#v16--multi-user-permissions)
-    - [v1.7 — Advanced Reporting \& Analytics](#v17--advanced-reporting--analytics)
-    - [v1.8 — SMS Notifications (Twilio)](#v18--sms-notifications-twilio)
-    - [v1.9 — Parent Portal](#v19--parent-portal)
-    - [v1.10 — Audit Log \& Security Hardening](#v110--audit-log--security-hardening)
-    - [v1.11 — Stripe Payment Integration](#v111--stripe-payment-integration)
-    - [v1.12 — Mobile Optimization \& PWA](#v112--mobile-optimization--pwa)
-- [Tech Stack](#tech-stack)
-  - [Backend](#backend)
-  - [Frontend](#frontend)
-  - [Infrastructure \& Deployment](#infrastructure--deployment)
-  - [Python Dependencies](#python-dependencies)
-  - [Developer Tooling](#developer-tooling)
-- [Database Schema](#database-schema)
-  - [ER Diagram](#er-diagram)
-  - [Key Constraints](#key-constraints)
-- [Development \& Docker](#development--docker)
-  - [Quick Start](#quick-start)
-  - [.env template](#env-template)
-  - [Make Commands](#make-commands)
-  - [Environment Configuration](#environment-configuration)
-  - [Environment Variables Reference](#environment-variables-reference)
-  - [App Versioning](#app-versioning)
-- [Project Structure \& Architecture](#project-structure--architecture)
-  - [Architecture Overview](#architecture-overview)
-  - [App Dependency Flow](#app-dependency-flow)
-  - [Directory Layout](#directory-layout)
-  - [App: core](#app-core)
-  - [App: students](#app-students)
-  - [App: billing](#app-billing)
-  - [App: comms](#app-comms)
-  - [Design Decisions](#design-decisions)
-- [Features by View](#features-by-view)
-  - [Home (Dashboard)](#home-dashboard)
-  - [Students](#students)
-  - [Student Create](#student-create)
-  - [Student Detail \& Update](#student-detail--update)
-  - [Payments](#payments)
-  - [Schedule](#schedule)
-  - [Fun Friday](#fun-friday)
-  - [Apps (Email Tools)](#apps-email-tools)
-  - [Management](#management)
-  - [Database (All Info)](#database-all-info)
-  - [Login](#login)
-- [Testing](#testing)
-  - [Testing Overview](#testing-overview)
-  - [Unit Tests](#unit-tests)
-  - [Integration Tests](#integration-tests)
-  - [Coverage Report](#coverage-report)
-- [Migrations](#migrations)
-- [Security](#security)
-  - [Authentication](#authentication)
-  - [Session \& Cookie Configuration](#session--cookie-configuration)
-  - [CSRF Protection](#csrf-protection)
-  - [Transport Security (HTTPS)](#transport-security-https)
-  - [Security Headers](#security-headers)
-  - [Infrastructure \& Deployment](#infrastructure--deployment-1)
-    - [Docker](#docker)
-    - [Google Cloud Run](#google-cloud-run)
-  - [Secrets Management](#secrets-management)
-  - [Email Security](#email-security)
-  - [Data Protection \& Input Validation](#data-protection--input-validation)
-  - [Logging \& Monitoring](#logging--monitoring)
-  - [Future Security Improvements](#future-security-improvements)
-- [Testing Environment (QA)](#testing-environment-qa)
-  - [What is the testing environment?](#what-is-the-testing-environment)
-  - [How to access it](#how-to-access-it)
-  - [What you can test](#what-you-can-test)
-  - [How to report a problem](#how-to-report-a-problem)
-  - [Error pages you might see](#error-pages-you-might-see)
-  - [For developers: how the QA environment works](#for-developers-how-the-qa-environment-works)
-    - [Access control for `/testing/`](#access-control-for-testing)
-- [CI/CD \& GitHub Actions](#cicd--github-actions)
-  - [Pipeline Overview](#pipeline-overview)
-  - [Branch Strategy](#branch-strategy)
-  - [Workflows](#workflows)
-  - [Automated Flows](#automated-flows)
-  - [Branch Protection — `main`](#branch-protection--main)
-  - [Branch Protection — `testing`](#branch-protection--testing)
-  - [Public Repository Hardening](#public-repository-hardening)
-  - [Required GitHub Secrets](#required-github-secrets)
-  - [Email Notifications](#email-notifications)
-  - [Dependabot](#dependabot)
-  - [CodeQL Security Scanning](#codeql-security-scanning)
-- [Contributing](#contributing)
-  - [Development Workflow](#development-workflow)
-  - [Make Commands (Developer Tooling)](#make-commands-developer-tooling)
-  - [Code Conventions](#code-conventions)
-  - [Adding a Feature](#adding-a-feature)
-- [License](#license)
+- [Five a Day eVolution](#five-a-day-evolution)
+    - [Project Status](#project-status)
+  - [Table of Contents](#table-of-contents)
+  - [Version History \& Roadmap](#version-history--roadmap)
+    - [Roadmap](#roadmap)
+      - [v1.1 — Waiting List \& Group Capacity](#v11--waiting-list--group-capacity)
+      - [v1.2 — Google Sheets Integration](#v12--google-sheets-integration)
+      - [v1.3 — PDF Invoice Generation](#v13--pdf-invoice-generation)
+      - [v1.4 — Celery + Redis Deployment](#v14--celery--redis-deployment)
+      - [v1.5 — Expense Tracking](#v15--expense-tracking)
+      - [v1.6 — Multi-User Permissions](#v16--multi-user-permissions)
+      - [v1.7 — Advanced Reporting \& Analytics](#v17--advanced-reporting--analytics)
+      - [v1.8 — SMS Notifications (Twilio)](#v18--sms-notifications-twilio)
+      - [v1.9 — Parent Portal](#v19--parent-portal)
+      - [v1.10 — Audit Log \& Security Hardening](#v110--audit-log--security-hardening)
+      - [v1.11 — Stripe Payment Integration](#v111--stripe-payment-integration)
+      - [v1.12 — Mobile Optimization \& PWA](#v112--mobile-optimization--pwa)
+  - [Tech Stack](#tech-stack)
+    - [Backend](#backend)
+    - [Frontend](#frontend)
+    - [Infrastructure \& Deployment](#infrastructure--deployment)
+    - [Python Dependencies](#python-dependencies)
+    - [Developer Tooling](#developer-tooling)
+  - [Database Schema](#database-schema)
+    - [ER Diagram](#er-diagram)
+    - [Key Constraints](#key-constraints)
+  - [Development \& Docker](#development--docker)
+    - [Quick Start](#quick-start)
+    - [.env template](#env-template)
+    - [Make Commands](#make-commands)
+    - [Environment Configuration](#environment-configuration)
+    - [Environment Variables Reference](#environment-variables-reference)
+    - [App Versioning](#app-versioning)
+  - [Project Structure \& Architecture](#project-structure--architecture)
+    - [Architecture Overview](#architecture-overview)
+    - [App Dependency Flow](#app-dependency-flow)
+    - [Directory Layout](#directory-layout)
+    - [App: core](#app-core)
+    - [App: students](#app-students)
+    - [App: billing](#app-billing)
+    - [App: comms](#app-comms)
+    - [Design Decisions](#design-decisions)
+  - [Features by View](#features-by-view)
+    - [Home (Dashboard)](#home-dashboard)
+    - [Students](#students)
+    - [Student Create](#student-create)
+    - [Student Detail \& Update](#student-detail--update)
+    - [Payments](#payments)
+    - [Schedule](#schedule)
+    - [Fun Friday](#fun-friday)
+    - [Apps (Email Tools)](#apps-email-tools)
+    - [Management](#management)
+    - [Database (All Info)](#database-all-info)
+    - [Login](#login)
+  - [Testing](#testing)
+    - [Testing Overview](#testing-overview)
+    - [Unit Tests](#unit-tests)
+    - [Integration Tests](#integration-tests)
+    - [Coverage Report](#coverage-report)
+  - [Migrations](#migrations)
+  - [Security](#security)
+    - [Authentication](#authentication)
+    - [Session \& Cookie Configuration](#session--cookie-configuration)
+    - [CSRF Protection](#csrf-protection)
+    - [Transport Security (HTTPS)](#transport-security-https)
+    - [Security Headers](#security-headers)
+    - [Infrastructure \& Deployment](#infrastructure--deployment-1)
+      - [Docker](#docker)
+      - [Google Cloud Run](#google-cloud-run)
+    - [Secrets Management](#secrets-management)
+    - [Email Security](#email-security)
+    - [Data Protection \& Input Validation](#data-protection--input-validation)
+    - [Logging \& Monitoring](#logging--monitoring)
+    - [Future Security Improvements](#future-security-improvements)
+  - [Testing Environment (QA)](#testing-environment-qa)
+    - [What is the testing environment?](#what-is-the-testing-environment)
+    - [How to access it](#how-to-access-it)
+    - [What you can test](#what-you-can-test)
+    - [How to report a problem](#how-to-report-a-problem)
+    - [Error pages you might see](#error-pages-you-might-see)
+    - [For developers: how the QA environment works](#for-developers-how-the-qa-environment-works)
+      - [Access control for `/testing/`](#access-control-for-testing)
+  - [CI/CD \& GitHub Actions](#cicd--github-actions)
+    - [Pipeline Overview](#pipeline-overview)
+    - [Branch Strategy](#branch-strategy)
+    - [Workflows](#workflows)
+    - [Automated Flows](#automated-flows)
+    - [Branch Protection — `main`](#branch-protection--main)
+    - [Branch Protection — `testing`](#branch-protection--testing)
+    - [Public Repository Hardening](#public-repository-hardening)
+    - [Required GitHub Secrets](#required-github-secrets)
+    - [Email Notifications](#email-notifications)
+    - [Dependabot](#dependabot)
+    - [CodeQL Security Scanning](#codeql-security-scanning)
+  - [Contributing](#contributing)
+    - [Development Workflow](#development-workflow)
+    - [Make Commands (Developer Tooling)](#make-commands-developer-tooling)
+    - [Code Conventions](#code-conventions)
+    - [Adding a Feature](#adding-a-feature)
+  - [License](#license)
 
 ---
 
 ## Version History & Roadmap
 
-<details id="v1010" open>
-<summary><strong>v1.0.10 — Branded Admin Theme, White-Bg Favicon & Social Meta (current)</strong></summary>
+<details id="v1011" open>
+<summary><strong>v1.0.11 — Testing Environment Fixes, CI Hardening & Static File Cleanup (current)</strong></summary>
+
+**Testing environment**
+
+- `docker-compose.testing.yml`: added explicit `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD` overrides to both `db` and `web` services — the base `docker-compose.yml` uses `.env` credentials while the overlay uses `.env.testing` credentials; without these overrides the `db` container initialised with dev credentials while the `web` container tried to connect with testing credentials
+- `settings.py`: `load_dotenv(override=True)` → `override=False` — Docker `environment:` values now take precedence over the volume-mounted `.env` file; `override=True` was silently overwriting credentials injected by the compose overlay
+- `core/context_processors.py`: added `hasattr(request, "session")` guard before `request.session.get("username")` — prevents `AttributeError` 500 errors in admin views and error-handler requests that bypass `SessionMiddleware`
+
+**Static files**
+
+- `STATICFILES_DIRS = [BASE_DIR / "static"]` removed from `settings.py`; all static assets now live under `project/core/static/` (served via `APP_DIRS=True`) — no separate `STATICFILES_DIRS` needed
+- Moved to `project/core/static/`: `css/admin_custom.css`, `css/email.css`, `images/logo_white_bg.png`
+- Deleted legacy `project/static/` assets: `apple-touch-icon.png`, `favicon-32x32.png`, `favicon.ico`, `images/logo.png`
+
+**CI/CD — new jobs and workflows**
+
+- `ci.yml` lint job: added `pip-audit` CVE scan and Hadolint Dockerfile lint
+- New CI job — **Docker build**: validates `Dockerfile` builds cleanly on every push/PR (with GHA cache)
+- New CI job — **Trivy filesystem scan**: scans Python deps + filesystem for HIGH/CRITICAL CVEs; uploads SARIF to GitHub Security tab
+- New CI job — **Docker publish**: on push to `main`/`testing`, builds and pushes image to GHCR (`ghcr.io/starseeker-code-public/five-a-day:<branch>` + `sha-<sha>`), then runs Trivy image scan
+- `codecov-action` upgraded v4 → v5
+- New `dependabot-auto-merge.yml`: automatically merges Dependabot minor/patch PRs once CI passes
+- New `dependency-review.yml`: blocks PRs that introduce a HIGH/CRITICAL CVE dependency
+- New `scorecard.yml`: OSSF Scorecard supply-chain security grading (weekly + on push to `main`); results published to GitHub Security tab
+
+**Admin**
+
+- `#nav-sidebar` right padding set to `1rem` in `admin_custom.css`
+
+</details>
+
+<details id="v1010">
+<summary><strong>v1.0.10 — Branded Admin Theme, White-Bg Favicon & Social Meta</strong></summary>
 
 **Social sharing & branding**
 
@@ -532,9 +576,9 @@ Progressive Web App support: installable on mobile, offline-capable dashboard, p
 
 | Technology | Version | Purpose |
 |-----------|---------|---------|
-| Python | 3.12+ | Runtime |
-| Django | 5.2.5 | Web framework |
-| PostgreSQL | 16 (Alpine) | Database (production, development, and testing) |
+| [![Python](https://img.shields.io/badge/Python-3.12+-3776ab?style=flat-square&logo=python&logoColor=white)](https://python.org) | 3.12+ | Runtime |
+| [![Django](https://img.shields.io/badge/Django-5.2-092e20?style=flat-square&logo=django&logoColor=white)](https://djangoproject.com) | 5.2.5 | Web framework |
+| [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-336791?style=flat-square&logo=postgresql&logoColor=white)](https://postgresql.org) | 16 (Alpine) | Database (production, development, and testing) |
 | Celery | 5.5.3 | Async task queue (eager mode without Redis, full async with Redis in v1.4) |
 | Celery Beat | (bundled with Celery) | Scheduled task execution (birthday emails, payment generation — v1.4) |
 | Redis | 7 (Alpine) | Message broker for Celery (planned, v1.4) |
@@ -1102,10 +1146,13 @@ five-a-day/
 │
 ├── .github/                      CI/CD — see docs/GITHUB.md
 │   ├── workflows/
-│   │   ├── ci.yml                Lint + typecheck + tests on every push/PR
-│   │   ├── auto-merge.yml        Hourly development → testing merge + PR to main
-│   │   ├── codeql.yml            Weekly Python security scan
-│   │   └── notify-production.yml Email on push to main
+│   │   ├── ci.yml                     Lint + typecheck + tests + Docker build + CVE scan on every push/PR
+│   │   ├── auto-merge.yml             Hourly development → testing merge + PR to main
+│   │   ├── codeql.yml                 Weekly Python security scan
+│   │   ├── notify-production.yml      Email on push to main
+│   │   ├── dependabot-auto-merge.yml  Auto-merge Dependabot minor/patch PRs
+│   │   ├── dependency-review.yml      Block PRs introducing HIGH/CRITICAL CVEs
+│   │   └── scorecard.yml              OSSF Scorecard supply-chain security (weekly)
 │   ├── dependabot.yml            Weekly dependency updates
 │   └── CODEOWNERS                Auto-request reviews from owner accounts
 │
@@ -1122,7 +1169,7 @@ five-a-day/
 ├── Dockerfile                    Multi-stage build (builder + runtime)
 ├── docker-compose.yml            PostgreSQL + Redis + Django + Celery worker + beat
 ├── docker-compose.testing.yml    QA override (Gunicorn, DEBUG=False)
-├── Makefile                      75+ commands (`make help`)
+├── Makefile                      45+ commands (`make help`)
 ├── pyproject.toml                Dependencies (uv-managed) + tool config
 ├── uv.lock                       Reproducible dependency lock
 ├── entrypoint.sh                 Docker entrypoint (migrate, collectstatic, start)
@@ -1817,10 +1864,13 @@ Feature branches off `development` are welcome for non-trivial work, but the exp
 
 | Workflow | File | Triggers | Purpose |
 |----------|------|----------|---------|
-| **CI** | [`ci.yml`](.github/workflows/ci.yml) | Push to `development`/`testing`/`main`; PRs to `testing`/`main` | Three parallel jobs — **Lint** (Ruff + Bandit), **Type check** (mypy), **Tests** (pytest + PostgreSQL 16 service container + Codecov upload) |
+| **CI** | [`ci.yml`](.github/workflows/ci.yml) | Push to `development`/`testing`/`main`; PRs to `testing`/`main` | Six jobs — **Lint** (Ruff + Bandit + pip-audit + Hadolint), **Type check** (mypy), **Tests** (pytest + PostgreSQL 16 + Codecov), **Docker build** (validates Dockerfile), **Trivy** (filesystem CVE scan → Security tab), **Docker publish** (GHCR push + image scan, on `main`/`testing` only) |
 | **Auto-merge** | [`auto-merge.yml`](.github/workflows/auto-merge.yml) | Hourly cron + manual dispatch | Merges `development` → `testing` when conditions pass, creates PR to `main`, emails owners |
 | **CodeQL** | [`codeql.yml`](.github/workflows/codeql.yml) | Push to `main`/`testing`/`development`; PRs to `main`; Monday 04:30 UTC | Python static security analysis (OWASP Top 10, Django-specific queries) |
 | **Notify production** | [`notify-production.yml`](.github/workflows/notify-production.yml) | Push to `main` | Emails `hellofiveaday@gmail.com` with commit info and `gcloud` deploy instructions |
+| **Dependabot auto-merge** | [`dependabot-auto-merge.yml`](.github/workflows/dependabot-auto-merge.yml) | Pull request (Dependabot only) | Enables auto-merge for minor/patch Dependabot PRs once CI passes |
+| **Dependency review** | [`dependency-review.yml`](.github/workflows/dependency-review.yml) | Pull request | Blocks PRs that introduce a HIGH/CRITICAL CVE dependency |
+| **OSSF Scorecard** | [`scorecard.yml`](.github/workflows/scorecard.yml) | Push to `main`; weekly Monday 06:00 UTC; branch protection rule changes | Grades supply-chain security posture; uploads SARIF to GitHub Security tab |
 | **Dependabot** | [`dependabot.yml`](.github/dependabot.yml) | Weekly (Mondays 08:00 Madrid) | Grouped Python and GitHub Actions updates targeting `development` |
 
 Concurrent CI runs on the same branch cancel each other automatically — new pushes always produce a fresh run.
@@ -1911,6 +1961,8 @@ Because this repository is **public**, extra care is taken to prevent accidental
 | **GitHub Secret Scanning** | Settings → Code security | Free for public repos — detects committed secrets across history |
 | **Push Protection** | Settings → Code security | Free for public repos — blocks pushes that contain secrets before they land |
 | **CodeQL** | `codeql.yml` + Settings → Code security | Free for public repos — weekly security analysis |
+| **OSSF Scorecard** | `scorecard.yml` + Settings → Code security | Free for public repos — weekly supply-chain security grading (branch protection, dependency pinning, CI, secret scanning) |
+| **Dependency review** | `dependency-review.yml` | Blocks PRs that introduce a new HIGH/CRITICAL CVE dependency — catches supply-chain attacks before they merge |
 | **Dependabot alerts + security updates** | Settings → Code security | Free for public repos — fixes known CVEs in dependencies |
 | **Require 2FA for all contributors** | Organization settings (if in an org) | Prevents compromised account pushes |
 | **Restrict fork PRs from running CI with secrets** | Settings → Actions → Fork PR workflows: require approval for first-time contributors | Prevents secret exfiltration via malicious PRs from forks |

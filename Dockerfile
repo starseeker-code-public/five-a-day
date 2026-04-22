@@ -12,6 +12,7 @@ ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1
 
 # Install system deps needed to compile Python packages
+# hadolint ignore=DL3008
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     postgresql-client \
@@ -42,6 +43,7 @@ ENV PYTHONUNBUFFERED=1 \
     PATH="/app/.venv/bin:$PATH"
 
 # Install only runtime system deps
+# hadolint ignore=DL3008
 RUN apt-get update && apt-get install -y --no-install-recommends \
     postgresql-client \
     libpq-dev \

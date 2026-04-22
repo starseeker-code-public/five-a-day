@@ -37,6 +37,7 @@ def today_notifications(request):
     show_testing_tools = (
         settings.IS_TESTING_ENV
         and settings.QA_TESTING_USERNAME
+        and hasattr(request, "session")
         and request.session.get("username") == settings.QA_TESTING_USERNAME
     )
 

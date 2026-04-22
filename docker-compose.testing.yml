@@ -12,10 +12,17 @@
 services:
 
   db:
-    # Override: use a separate volume so QA data never touches dev data
+    # Override: use a separate volume so QA data never touches dev data,
+    # and use dedicated testing credentials that match .env.testing.
     volumes:
       - testing_postgres_data:/var/lib/postgresql/data/pgdata
       - ./backups:/backups
+    environment:
+      POSTGRES_DB: fiveaday_testing
+      POSTGRES_USER: fiveaday_tester
+      POSTGRES_PASSWORD: 'TestingQA2026!SecurePassword'
+    healthcheck:
+      test: ["CMD-SHELL", "PGPASSWORD=TestingQA2026!SecurePassword psql -h 127.0.0.1 -U fiveaday_tester -d fiveaday_testing -c '\\q'"]
 
   web:
     # Use the QA-specific env file instead of the default .env
@@ -34,8 +41,11 @@ services:
         project.wsgi:application
 
     environment:
-      # Ensure the entrypoint collects static files
       DJANGO_ENV: testing
+      POSTGRES_DB: fiveaday_testing
+      POSTGRES_USER: fiveaday_tester
+      POSTGRES_PASSWORD: 'TestingQA2026!SecurePassword'
+      POSTGRES_HOST: db
 
 volumes:
   testing_postgres_data:

@@ -5,7 +5,7 @@ from urllib.parse import urlparse
 import dj_database_url
 from dotenv import load_dotenv
 
-load_dotenv(Path(__file__).resolve().parent.parent.parent / ".env", override=True)
+load_dotenv(Path(__file__).resolve().parent.parent.parent / ".env", override=False)
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -15,7 +15,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # NOTA: Usa `make version x.y.z` para actualizar ambos sitios a la vez:
 #   - pyproject.toml (campo version)
 #   - README.md (badge y tabla de versiones — gestionado por la skill update-readme)
-APP_VERSION = os.getenv("APP_VERSION", "1.0.10")
+APP_VERSION = os.getenv("APP_VERSION", "1.0.11")
 
 # ============================================================================
 # SECURITY SETTINGS
@@ -275,7 +275,6 @@ LOGGING = {
 # ============================================================================
 STATIC_URL = "/static/"
 STATIC_ROOT = BASE_DIR.parent / "staticfiles"
-STATICFILES_DIRS = [BASE_DIR / "static"]
 
 # Configuración de WhiteNoise para producción
 STORAGES = {
