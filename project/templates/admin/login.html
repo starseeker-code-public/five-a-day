@@ -1,0 +1,67 @@
+{% extends "admin/base_site.html" %}
+{% load i18n static %}
+
+{% block extrastyle %}
+{{ block.super }}
+<link rel="stylesheet" type="text/css" href="{% static 'admin/css/login.css' %}">
+{% endblock %}
+
+{% block bodyclass %}login{% endblock %}
+
+{% block usertools %}{% endblock %}
+{% block nav-sidebar %}{% endblock %}
+{% block breadcrumbs %}{% endblock %}
+{% block content_title %}{% endblock %}
+
+{% block content %}
+<div id="content-main">
+    <div class="login-brand">
+        <img src="{% static 'images/logo_white_bg.png' %}" alt="Five a Day">
+        <h1>Five a Day eVolution</h1>
+        <p class="login-subtitle">Gestión Académica · Albacete</p>
+    </div>
+
+    {% if user.is_authenticated %}
+    <p class="errornote">
+        {% blocktranslate trimmed %}
+            Has iniciado sesión como {{ username }}, pero no tienes permiso para acceder a esta página.
+            ¿Deseas entrar con una cuenta diferente?
+        {% endblocktranslate %}
+    </p>
+    {% endif %}
+
+    {% if form.errors and not form.non_field_errors %}
+    <p class="errornote">
+        {% if form.errors.items|length == 1 %}
+            {% trans "Por favor, corrige el error." %}
+        {% else %}
+            {% trans "Por favor, corrige los errores." %}
+        {% endif %}
+    </p>
+    {% endif %}
+
+    {% if form.non_field_errors %}
+        {% for error in form.non_field_errors %}
+        <p class="errornote">{{ error }}</p>
+        {% endfor %}
+    {% endif %}
+
+    <form action="{{ app_path }}" method="post" id="login-form">
+        {% csrf_token %}
+        <div class="form-row">
+            {{ form.username.errors }}
+            <label for="{{ form.username.id_for_label }}">{% trans 'Usuario' %}</label>
+            {{ form.username }}
+        </div>
+        <div class="form-row">
+            {{ form.password.errors }}
+            <label for="{{ form.password.id_for_label }}">{% trans 'Contraseña' %}</label>
+            {{ form.password }}
+            <input type="hidden" name="next" value="{{ next }}">
+        </div>
+        <div class="submit-row">
+            <input type="submit" value="{% trans 'Entrar' %}">
+        </div>
+    </form>
+</div>
+{% endblock %}

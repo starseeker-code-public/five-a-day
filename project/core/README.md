@@ -51,18 +51,34 @@ Student, payment, management, and email app routes live in `students/urls.py`, `
 
 All templates live in `core/templates/`:
 
-- `base.html` — main layout (sidebar, header, support modal, Tailwind CDN config). Also carries the site-wide `<head>` metadata: favicon + apple-touch-icon, `theme-color` (violet `#6d28d9`), meta description/author, full Open Graph set, and Twitter Card tags. Every content field is wrapped in a Django block (`meta_description`, `og_title`, `og_description`, `og_image`, `twitter_title`, `twitter_description`, `twitter_image`) so per-page templates can tailor link previews.
+- `base.html` — main layout (sidebar, header, support modal, Tailwind CDN config). Site-wide `<head>` metadata: `favicon.ico` + `favicon-32x32.png` + `apple-touch-icon.png` (all sourced from `logo_white_bg.png`), `theme-color` (#6d28d9), meta description/author, full Open Graph set (including `og:image:secure_url` for Facebook HTTPS), Twitter Card (including `twitter:image:alt`), and a Schema.org JSON-LD block (`WebApplication` / `EducationalOrganization`) for Google previews, Gmail, and Google Chat. Every OG/Twitter content field is wrapped in an overridable Django block so per-page templates can tailor link previews.
 - `home.html`, `login.html`, `schedule.html`, `fun_friday.html`, etc.
 - `payments/` — payment list, create, detail
 - `apps/` — email form views + `_email_preview.html` partial
 - `emails/` — 12 HTML email templates extending `emails/base_email.html` (all named in English: `enrollment_child.html`, `payment_reminder.html`, etc.)
 - `400.html` through `500.html` — error pages
 
+## Admin Template Overrides
+
+Project-level admin templates live in `project/templates/admin/` (added to `TEMPLATES.DIRS` so they take priority over Django's defaults):
+
+| Template | Purpose |
+| -------- | ------- |
+| `base_site.html` | Violet gradient header with `logo_white_bg.png`; loads `admin_custom.css` on every admin page |
+| `login.html` | Card-style login page with logo, "Gestión Académica · Albacete" subtitle, Spanish field labels |
+| `index.html` | Dashboard welcome banner + Spanish Add/Edit/View/Recent-actions labels |
+
+The matching CSS (`project/static/css/admin_custom.css`) overrides all Django admin CSS variables to the app's violet/purple palette, switches the font to Trebuchet MS, and styles the login card and welcome banner.
+
 ## Static Files
 
-- `favicon.ico` — multi-resolution (16/32/48/64/128/256) icon generated from `images/logo.png`; referenced from `base.html` as both `rel="icon"` and `rel="shortcut icon"`
-- `images/logo.png` — 500×500 PNG; reused as `apple-touch-icon` and Open Graph image
+- `favicon.ico` — multi-size ICO (16/32/48/64px) generated from `images/logo_white_bg.png`
+- `favicon-32x32.png` — 32×32 PNG favicon for modern browsers
+- `apple-touch-icon.png` — 180×180 PNG for iOS/Safari home-screen icon
+- `images/logo_white_bg.png` — 500×500 PNG with white background; used for favicon, apple-touch-icon, Open Graph, and Twitter Card
+- `images/logo.png` — 500×500 PNG original (transparent background)
 - `css/app.css` — sidebar transitions, Material Symbols icon font settings
+- `css/admin_custom.css` — Django admin theme override (CSS variables, login card, welcome banner)
 - `js/base.js` — notification/history dropdowns (loaded on every page)
 - `js/support.js` — support ticket modal
 - `js/home.js`, `js/students.js`, `js/payments.js`, etc. — per-page modules

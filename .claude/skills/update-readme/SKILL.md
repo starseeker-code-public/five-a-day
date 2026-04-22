@@ -482,6 +482,7 @@ After saving all docs, report in under 25 lines:
 - **Stale references removed** — e.g. "Removed 4 remaining `render.yaml` mentions in Security and ToC"
 - **Anything you noticed but did NOT change** — sections that look stale but weren't in scope (surface these for the user to decide)
 - **Files NOT touched and why** — if only `docs/CELERY.md` was in scope for the staged diff, say so explicitly
+- **A commit messagge with a super brief description of all changes** - e.g. "Created inspirational quote generator, cleaned legacy render config files and prepared everything for googl e cloud migration and updated versioning and precommit make commands"
 
 ---
 

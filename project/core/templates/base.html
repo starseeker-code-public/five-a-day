@@ -13,24 +13,53 @@
 
     <!-- Favicon & app icons -->
     <link rel="icon" type="image/x-icon" href="{% static 'favicon.ico' %}">
-    <link rel="shortcut icon" type="image/x-icon" href="{% static 'favicon.ico' %}">
-    <link rel="apple-touch-icon" href="{% static 'images/logo.png' %}">
+    <link rel="icon" type="image/png" sizes="32x32" href="{% static 'favicon-32x32.png' %}">
+    <link rel="apple-touch-icon" sizes="180x180" href="{% static 'apple-touch-icon.png' %}">
 
-    <!-- Open Graph (Facebook, WhatsApp, Slack, LinkedIn, …) -->
+    <!-- Open Graph — Facebook, Instagram (via FB), WhatsApp, Telegram, LinkedIn, Discord, Slack … -->
     <meta property="og:type" content="website">
     <meta property="og:site_name" content="Five a Day eVolution">
     <meta property="og:title" content="{% block og_title %}Five a Day eVolution{% endblock %}">
     <meta property="og:description" content="{% block og_description %}Sistema de gestión académica de Five a Day English Academy (Albacete): estudiantes, matrículas, pagos, horarios y comunicaciones.{% endblock %}">
-    <meta property="og:image" content="{% block og_image %}{{ request.scheme }}://{{ request.get_host }}{% static 'images/logo.png' %}{% endblock %}">
+    <meta property="og:image" content="{% block og_image %}{{ request.scheme }}://{{ request.get_host }}{% static 'images/logo_white_bg.png' %}{% endblock %}">
+    <meta property="og:image:secure_url" content="{% block og_image_secure %}https://{{ request.get_host }}{% static 'images/logo_white_bg.png' %}{% endblock %}">
+    <meta property="og:image:type" content="image/png">
+    <meta property="og:image:width" content="500">
+    <meta property="og:image:height" content="500">
     <meta property="og:image:alt" content="Logo de Five a Day English Academy">
     <meta property="og:url" content="{{ request.scheme }}://{{ request.get_host }}{{ request.path }}">
     <meta property="og:locale" content="es_ES">
 
-    <!-- Twitter Card -->
+    <!-- Twitter / X Card -->
     <meta name="twitter:card" content="summary">
     <meta name="twitter:title" content="{% block twitter_title %}Five a Day eVolution{% endblock %}">
     <meta name="twitter:description" content="{% block twitter_description %}Sistema de gestión académica de Five a Day English Academy.{% endblock %}">
-    <meta name="twitter:image" content="{% block twitter_image %}{{ request.scheme }}://{{ request.get_host }}{% static 'images/logo.png' %}{% endblock %}">
+    <meta name="twitter:image" content="{% block twitter_image %}{{ request.scheme }}://{{ request.get_host }}{% static 'images/logo_white_bg.png' %}{% endblock %}">
+    <meta name="twitter:image:alt" content="Logo de Five a Day English Academy">
+
+    <!-- Schema.org / JSON-LD — Google, Google Chat, Gmail link previews -->
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "WebApplication",
+      "name": "Five a Day eVolution",
+      "description": "Sistema de gestión académica de Five a Day English Academy (Albacete, España): estudiantes, matrículas, pagos, horarios y comunicaciones.",
+      "url": "{{ request.scheme }}://{{ request.get_host }}",
+      "image": "{{ request.scheme }}://{{ request.get_host }}{% static 'images/logo_white_bg.png' %}",
+      "applicationCategory": "EducationApplication",
+      "operatingSystem": "Web",
+      "inLanguage": "es-ES",
+      "provider": {
+        "@type": "EducationalOrganization",
+        "name": "Five a Day English Academy",
+        "address": {
+          "@type": "PostalAddress",
+          "addressLocality": "Albacete",
+          "addressCountry": "ES"
+        }
+      }
+    }
+    </script>
 
     <!-- Tailwind CSS (CDN) -->
     <script src="https://cdn.tailwindcss.com"></script>
