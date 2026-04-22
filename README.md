@@ -1,7 +1,7 @@
 # Five a Day eVolution
 
 <p align="center">
-  <img src="project/static/images/logo.png" alt="Five a Day Logo" width="320">
+  <img src="project/static/images/logo_white_bg.png" alt="Five a Day Logo" width="320">
   <br>
   <em>Student Management System for Five a Day English Academy</em>
   <br>
@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v1.0.9-brightgreen?style=for-the-badge" alt="Version">
+  <img src="https://img.shields.io/badge/version-v1.0.10-brightgreen?style=for-the-badge" alt="Version">
   <img src="https://img.shields.io/badge/python-3.12+-blue?style=for-the-badge" alt="Python">
   <img src="https://img.shields.io/badge/django-5.2-green?style=for-the-badge" alt="Django">
   <img src="https://img.shields.io/badge/postgresql-16-336791?style=for-the-badge" alt="PostgreSQL">
@@ -31,9 +31,9 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 | Version | Date | Description |
 |---------|------|-------------|
-| **v1.0.9** | 2026-04-16 | Test suite restructure to unit/integration, 96% coverage, CI gates |
+| **v1.0.10** | 2026-04-21 | Branded admin theme, white-bg favicon, social meta |
+| v1.0.9 | 2026-04-16 | Test suite restructure to unit/integration, 96% coverage, CI gates |
 | v1.0.8 | 2026-04-15 | README trim, `docs/` purge, flaky CI test removed |
-| v1.0.7 | 2026-04-15 | Favicon + social metadata, CI test-suite fixes |
 
 ---
 
@@ -142,8 +142,35 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 ## Version History & Roadmap
 
-<details id="v109" open>
-<summary><strong>v1.0.9 — Test Suite Restructure, 96% Coverage & CI Coverage Gates (current)</strong></summary>
+<details id="v1010" open>
+<summary><strong>v1.0.10 — Branded Admin Theme, White-Bg Favicon & Social Meta (current)</strong></summary>
+
+**Social sharing & branding**
+
+- Logo changed to `logo_white_bg.png` across README, `base.html` favicon, apple-touch-icon, Open Graph, and Twitter Card — white background improves rendering in light-themed link preview cards
+- Favicon regenerated from `logo_white_bg.png`: multi-size ICO (16/32/48/64px), `favicon-32x32.png`, and `apple-touch-icon.png` (180×180) — dropped in both `project/static/` and `project/core/static/`
+- `og:image:secure_url` added alongside `og:image` for Facebook's HTTPS-explicit crawler
+- `twitter:image:alt` added to Twitter Card block
+- Schema.org JSON-LD block added to `base.html` (`@type: WebApplication`, provider as `EducationalOrganization`) — covers Google Search previews, Gmail, and Google Chat link unfurling
+
+**Django admin — Five a Day theme**
+
+- `project/templates/admin/` created; `TEMPLATES.DIRS` now points to `project/templates/` so project-level overrides take priority over Django's built-ins
+- `admin/base_site.html` — violet gradient header (`#4c1d95` → `#7c3aed`) with `logo_white_bg.png`, loads `admin_custom.css` on every admin page
+- `admin/login.html` — card-style login page: logo, "Gestión Académica · Albacete" subtitle, Spanish field labels (Usuario / Contraseña / Entrar)
+- `admin/index.html` — welcome banner with logo + Spanish action labels (Añadir / Editar / Ver / Acciones recientes)
+- `project/static/css/admin_custom.css` — full CSS-variable override of Django admin (violet/purple palette, Trebuchet MS font, styled login card, fieldset headers, welcome banner)
+- `core/admin.py` — `site_title` → "Five a Day · Admin", `index_title` → "Panel de administración"
+
+**Dependencies (Dependabot)**
+
+- `gunicorn` upgraded 22.0.0 → 23.0.0 (constraint widened `<23` → `<24`)
+- `pandas` upgraded 2.3.3 → 3.0.2 (constraint widened `<3` → `<4`)
+
+</details>
+
+<details id="v109">
+<summary><strong>v1.0.9 — Test Suite Restructure, 96% Coverage & CI Coverage Gates</strong></summary>
 
 **Testing**
 
@@ -511,7 +538,7 @@ Progressive Web App support: installable on mobile, offline-capable dashboard, p
 | Celery | 5.5.3 | Async task queue (eager mode without Redis, full async with Redis in v1.4) |
 | Celery Beat | (bundled with Celery) | Scheduled task execution (birthday emails, payment generation — v1.4) |
 | Redis | 7 (Alpine) | Message broker for Celery (planned, v1.4) |
-| Gunicorn | 21.2.0 | Production WSGI server |
+| Gunicorn | 23.0.0 | Production WSGI server |
 | WhiteNoise | 6.11.0 | Static file serving in production |
 
 ### Frontend
