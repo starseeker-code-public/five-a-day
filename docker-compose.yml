@@ -74,6 +74,13 @@ services:
       CELERY_RESULT_BACKEND: redis://redis:6379/0
       POSTGRES_HOST: db
 
+    # Live-mount source code so template/CSS/Python changes are visible
+    # without a full rebuild. The anonymous .venv volume keeps the
+    # container's installed packages isolated from the host.
+    volumes:
+      - .:/app
+      - /app/.venv
+
     # Wait for PostgreSQL + Redis before starting
     depends_on:
       db:
@@ -122,6 +129,9 @@ services:
       CELERY_BROKER_URL: redis://redis:6379/0
       CELERY_RESULT_BACKEND: redis://redis:6379/0
       POSTGRES_HOST: db
+    volumes:
+      - .:/app
+      - /app/.venv
     working_dir: /app/project
     command: celery -A project.celery worker -l info -Q celery,emails --concurrency=2
     depends_on:
@@ -149,6 +159,9 @@ services:
       CELERY_BROKER_URL: redis://redis:6379/0
       CELERY_RESULT_BACKEND: redis://redis:6379/0
       POSTGRES_HOST: db
+    volumes:
+      - .:/app
+      - /app/.venv
     working_dir: /app/project
     command: celery -A project.celery beat -l info --pidfile=/tmp/celerybeat.pid --schedule=/tmp/celerybeat-schedule
     depends_on:
