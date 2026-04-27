@@ -207,7 +207,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Trivy — scan Python dependencies and filesystem
-        uses: aquasecurity/trivy-action@v0.35.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: fs
           scan-ref: .
@@ -261,7 +261,7 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Trivy — scan Docker image for OS-level CVEs
-        uses: aquasecurity/trivy-action@v0.35.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: ghcr.io/${{ github.repository }}:${{ github.ref_name }}
           format: sarif
