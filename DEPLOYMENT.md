@@ -98,11 +98,19 @@ git clone https://github.com/YOUR_ORG/five-a-day.git
 cd five-a-day
 # Create .env.testing and populate it using the template in README.md (section ".env template")
 touch .env.testing
+# Symlink so settings.py's base load_dotenv(.env) finds the same file
+ln -sf .env.testing .env
 docker compose --env-file .env.testing up -d
 ```
 
 Because docker-compose uses `restart: unless-stopped`, all containers come back automatically after a
 VM reboot — no manual intervention needed.
+
+**Teacher seeding (testing/production only)** — `entrypoint.sh` runs `manage.py seed_teachers` on container start when `DJANGO_ENV` is `testing` or `production`. The command reads numbered `TEACHER_SEED_<N>_*` env vars (see [README → .env template](../README.md#env-template)) and idempotently creates Teacher rows + linked `auth.User` accounts so teachers can log in with email + password.
+
+Keep these vars in either `.env.testing` directly (simplest) or a sibling `.env.testing_users` overlay file — `settings.py` loads `.env.testing_users` with `override=True` when `DJANGO_ENV=testing`. Both filenames are matched by the `.env*` gitignore so neither is ever committed.
+
+Watch the logs after `docker compose up -d` for `✅ Teacher created/updated: ...` lines confirming the seeds landed. Gmail SMTP (`EMAIL_HOST_USER` + `EMAIL_SECRET`) must work in this environment: any seed block that omits `TEACHER_SEED_<N>_PASSWORD` requires the teacher to activate via the password-reset email.
 
 #### 5. Routine updates
 
@@ -221,7 +229,15 @@ echo -n "your-gmail@gmail.com"      | gcloud secrets create EMAIL_HOST_USER     
 echo -n "your-gmail-app-password"   | gcloud secrets create EMAIL_SECRET          --data-file=-
 echo -n "your-google-client-id"     | gcloud secrets create GOOGLE_CLIENT_ID      --data-file=-
 echo -n "your-google-client-secret" | gcloud secrets create GOOGLE_CLIENT_SECRET  --data-file=-
-echo -n "your-login-password"       | gcloud secrets create LOGIN_PASSWORD        --data-file=-
+
+# Teacher seeds — one block per teacher who should be able to log in.
+# Anything not matching ^TEACHER_SEED_<N>_(FIRST_NAME|LAST_NAME|EMAIL|PHONE|ADMIN|PASSWORD)$ is ignored.
+# Omit ..._PASSWORD to make the teacher activate via /password-reset/ instead of receiving an initial password.
+echo -n "Joaquin"                   | gcloud secrets create TEACHER_SEED_1_FIRST_NAME --data-file=-
+echo -n "Hernandez"                 | gcloud secrets create TEACHER_SEED_1_LAST_NAME  --data-file=-
+echo -n "owner@example.com"         | gcloud secrets create TEACHER_SEED_1_EMAIL      --data-file=-
+echo -n "True"                      | gcloud secrets create TEACHER_SEED_1_ADMIN      --data-file=-
+echo -n "your-initial-password"     | gcloud secrets create TEACHER_SEED_1_PASSWORD   --data-file=-
 ```
 
 ### Build & Deploy
@@ -251,16 +267,21 @@ gcloud run deploy fiveaday \
   --set-env-vars="DJANGO_DEBUG=False" \
   --set-env-vars="DJANGO_ALLOWED_HOSTS=fiveaday-XXXXX-ew.a.run.app" \
   --set-env-vars="DATABASE_URL=postgres://fiveaday_user:PASSWORD@/fiveaday_db?host=/cloudsql/$PROJECT_ID:$REGION:fiveaday-db" \
-  --set-env-vars="LOGIN_USERNAME=fiveaday" \
   --set-env-vars="CELERY_TASK_ALWAYS_EAGER=True" \
   --set-env-vars="GOOGLE_REDIRECT_URI=https://fiveaday-XXXXX-ew.a.run.app/auth/google/callback/" \
+  --set-env-vars="TEACHER_SEED_1_ADMIN=True" \
   --set-secrets="DJANGO_SECRET_KEY=DJANGO_SECRET_KEY:latest" \
   --set-secrets="EMAIL_HOST_USER=EMAIL_HOST_USER:latest" \
   --set-secrets="EMAIL_SECRET=EMAIL_SECRET:latest" \
   --set-secrets="GOOGLE_CLIENT_ID=GOOGLE_CLIENT_ID:latest" \
   --set-secrets="GOOGLE_CLIENT_SECRET=GOOGLE_CLIENT_SECRET:latest" \
-  --set-secrets="LOGIN_PASSWORD=LOGIN_PASSWORD:latest"
+  --set-secrets="TEACHER_SEED_1_FIRST_NAME=TEACHER_SEED_1_FIRST_NAME:latest" \
+  --set-secrets="TEACHER_SEED_1_LAST_NAME=TEACHER_SEED_1_LAST_NAME:latest" \
+  --set-secrets="TEACHER_SEED_1_EMAIL=TEACHER_SEED_1_EMAIL:latest" \
+  --set-secrets="TEACHER_SEED_1_PASSWORD=TEACHER_SEED_1_PASSWORD:latest"
 ```
+
+> `LOGIN_USERNAME` / `LOGIN_PASSWORD` are dev-only basic-auth credentials. In testing and production, login goes through `auth.User` (Teacher email + hashed password) — set Teachers up via `TEACHER_SEED_*` instead. `SimpleAuthMiddleware` is still in the stack: it enforces session auth in every environment and adds a non-admin Teacher whitelist in testing/production.
 
 After the first deploy, note the Cloud Run URL (e.g., `https://fiveaday-abc123-ew.a.run.app`) and
 update:
@@ -270,7 +291,7 @@ update:
 
 ### Run migrations
 
-Required on first deploy and after any model change:
+Required on first deploy and after any model change. The v1.0.12 release introduced `students.0003_teacher_user` (adds `Teacher.user` OneToOneField, nullable so existing rows survive); subsequent deploys need a migrate run only when new migrations land.
 
 ```bash
 gcloud run jobs create fiveaday-migrate \

@@ -113,6 +113,23 @@ case "$FIRST_ARG" in
 esac
 
 # ============================================================================
+# Seed Teachers (testing + production only)
+# ============================================================================
+# In testing/production the login flow uses Teacher email + password. This
+# step reads TEACHER_SEED_<N>_* env vars and idempotently creates the matching
+# Teacher rows + linked auth.User accounts. No-op in development (dev uses
+# env-var basic-auth, not Teacher login).
+case "$FIRST_ARG" in
+    celery) ;;  # skip
+    *)
+        if [ "$DJANGO_ENV" = "testing" ] || [ "$DJANGO_ENV" = "production" ] || [ "$IS_RENDER" = true ]; then
+            echo "🧑‍🏫 Seeding teachers from TEACHER_SEED_* env vars..."
+            python project/manage.py seed_teachers || echo "⚠️ seed_teachers reported an issue (non-fatal)"
+        fi
+        ;;
+esac
+
+# ============================================================================
 # Start Server
 # ============================================================================
 if [ "$IS_RENDER" = true ]; then

@@ -702,7 +702,7 @@ wheels = [
 
 [[package]]
 name = "five-a-day"
-version = "1.0.11"
+version = "1.0.12"
 source = { editable = "." }
 dependencies = [
     { name = "celery" },

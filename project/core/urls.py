@@ -1,6 +1,10 @@
 from django.urls import path
 
 from core.views import (
+    BrandedPasswordResetCompleteView,
+    BrandedPasswordResetConfirmView,
+    BrandedPasswordResetDoneView,
+    BrandedPasswordResetView,
     all_info,
     api_create_backlog_task,
     api_seed_database,
@@ -40,6 +44,19 @@ urlpatterns = [
     path("logout/", logout_view, name="logout"),
     path("auth/google/", google_oauth_redirect, name="google_oauth_redirect"),
     path("auth/google/callback/", google_oauth_callback, name="google_oauth_callback"),
+    # Password reset (public — accessible without being logged in)
+    path("password-reset/", BrandedPasswordResetView.as_view(), name="password_reset"),
+    path("password-reset/sent/", BrandedPasswordResetDoneView.as_view(), name="password_reset_done"),
+    path(
+        "password-reset/confirm/<uidb64>/<token>/",
+        BrandedPasswordResetConfirmView.as_view(),
+        name="password_reset_confirm",
+    ),
+    path(
+        "password-reset/complete/",
+        BrandedPasswordResetCompleteView.as_view(),
+        name="password_reset_complete",
+    ),
     # Dashboard
     path("", home, name="home"),
     path("database/", all_info, name="all_info"),

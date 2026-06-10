@@ -114,6 +114,7 @@
                         <span class="material-symbols-outlined mx-auto sidebar-icon">people</span>
                         <span class="hidden sidebar-text">Estudiantes</span>
                     </a>
+                    {% if is_admin_user %}
                     <a href="{% url 'payments_list' %}" class="sidebar-link w-full flex items-center gap-3 px-2 py-3 rounded-md {% if request.resolver_match.url_name == 'payments_list' or request.resolver_match.url_name == 'create_payment' or request.resolver_match.url_name == 'payment_detail_view' or request.resolver_match.url_name == 'update_payment' %}active-sidebar-link bg-primary-200 text-primary-700{% else %}text-neutral-600{% endif %} font-medium hover:bg-primary-100 hover:text-primary-700 transition-all duration-200">
                         <span class="material-symbols-outlined mx-auto sidebar-icon">payment</span>
                         <span class="hidden sidebar-text">Pagos</span>
@@ -126,14 +127,22 @@
                         <span class="material-symbols-outlined mx-auto sidebar-icon">apps</span>
                         <span class="hidden sidebar-text">Aplicaciones</span>
                     </a>
+                    {% else %}
+                    <a href="{% url 'fun_friday_view' %}" class="sidebar-link w-full flex items-center gap-3 px-2 py-3 rounded-md {% if request.resolver_match.url_name == 'fun_friday_view' %}active-sidebar-link bg-primary-200 text-primary-700{% else %}text-neutral-600{% endif %} font-medium hover:bg-primary-100 hover:text-primary-700 transition-all duration-200">
+                        <span class="material-symbols-outlined mx-auto sidebar-icon">celebration</span>
+                        <span class="hidden sidebar-text">Fun Friday</span>
+                    </a>
+                    {% endif %}
                     <a href="{% url 'management' %}" class="sidebar-link w-full flex items-center gap-3 px-2 py-3 rounded-md {% if request.resolver_match.url_name == 'management' %}active-sidebar-link bg-primary-200 text-primary-700{% else %}text-neutral-600{% endif %} font-medium hover:bg-primary-100 hover:text-primary-700 transition-all duration-200">
                         <span class="material-symbols-outlined mx-auto sidebar-icon">settings</span>
                         <span class="hidden sidebar-text">Gestión</span>
                     </a>
+                    {% if is_admin_user %}
                     <a href="{% url 'all_info' %}" class="sidebar-link w-full flex items-center gap-3 px-2 py-3 rounded-md {% if request.resolver_match.url_name == 'all_info' %}active-sidebar-link bg-primary-200 text-primary-700{% else %}text-neutral-600{% endif %} font-medium hover:bg-primary-100 hover:text-primary-700 transition-all duration-200">
                         <span class="material-symbols-outlined mx-auto sidebar-icon">analytics</span>
                         <span class="hidden sidebar-text">Base de Datos</span>
                     </a>
+                    {% endif %}
                     <a href="{% url 'logout' %}" class="sidebar-link w-full flex items-center gap-3 px-2 py-3 rounded-md text-neutral-600 font-medium hover:bg-red-100 hover:text-red-700 transition-all duration-200">
                         <span class="material-symbols-outlined mx-auto sidebar-icon">logout</span>
                         <span class="hidden sidebar-text">Cerrar Sesión</span>

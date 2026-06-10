@@ -5,7 +5,26 @@ from urllib.parse import urlparse
 import dj_database_url
 from dotenv import load_dotenv
 
-load_dotenv(Path(__file__).resolve().parent.parent.parent / ".env", override=False)
+_ENV_ROOT = Path(__file__).resolve().parent.parent.parent
+load_dotenv(_ENV_ROOT / ".env", override=False)
+
+# Environment-specific overlay files — loaded with override=True so their values
+# win over .env (but NOT over Docker-injected process env vars, which are already
+# in os.environ before load_dotenv runs and take precedence by dotenv semantics).
+#
+# - .env.development: strong dev-only basic-auth creds (LOGIN_USERNAME/PASSWORD)
+# - .env.testing_users: seed Teacher credentials (consumed by `manage.py seed_teachers`)
+#
+# Both files are gitignored via `.env*`.
+_env_name = os.getenv("DJANGO_ENV", "development").split()[0].strip()
+if _env_name == "development":
+    _overlay = _ENV_ROOT / ".env.development"
+    if _overlay.exists():
+        load_dotenv(_overlay, override=True)
+elif _env_name == "testing":
+    _overlay = _ENV_ROOT / ".env.testing_users"
+    if _overlay.exists():
+        load_dotenv(_overlay, override=True)
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -15,7 +34,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # NOTA: Usa `make version x.y.z` para actualizar ambos sitios a la vez:
 #   - pyproject.toml (campo version)
 #   - README.md (badge y tabla de versiones — gestionado por la skill update-readme)
-APP_VERSION = os.getenv("APP_VERSION", "1.0.11")
+APP_VERSION = os.getenv("APP_VERSION", "1.0.12")
 
 # ============================================================================
 # SECURITY SETTINGS
@@ -200,6 +219,16 @@ else:
             "NAME": BASE_DIR / "db.sqlite3",
         }
     }
+
+# ============================================================================
+# AUTHENTICATION
+# ============================================================================
+# Django's ModelBackend is the only backend — Teachers authenticate via their
+# linked auth.User (email as username + hashed password). Dev environment and
+# Google OAuth also go through this backend via get_or_create User + login().
+LOGIN_URL = "/login/"
+LOGIN_REDIRECT_URL = "/"
+LOGOUT_REDIRECT_URL = "/login/"
 
 AUTH_PASSWORD_VALIDATORS = [
     {

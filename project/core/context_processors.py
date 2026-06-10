@@ -41,6 +41,17 @@ def today_notifications(request):
         and request.session.get("username") == settings.QA_TESTING_USERNAME
     )
 
+    # Teacher-role flags for template-level gating of admin-only UI.
+    # Anyone who isn't a linked non-admin teacher is treated as admin
+    # (dev basic-auth, OAuth, and admin Teachers all count as admin).
+    user = getattr(request, "user", None)
+    is_non_admin_teacher = False
+    if user is not None and getattr(user, "is_authenticated", False):
+        teacher = getattr(user, "teacher", None)
+        if teacher is not None and not teacher.admin:
+            is_non_admin_teacher = True
+    is_admin_user = not is_non_admin_teacher
+
     return {
         "notifications_today_todos": todos,
         "notifications_today_apps": apps_today,
@@ -48,4 +59,6 @@ def today_notifications(request):
         "history_count": history_count,
         "support_email": getattr(settings, "SUPPORT_EMAIL", ""),
         "show_testing_tools": show_testing_tools,
+        "is_admin_user": is_admin_user,
+        "is_non_admin_teacher": is_non_admin_teacher,
     }
