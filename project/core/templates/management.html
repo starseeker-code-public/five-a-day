@@ -8,9 +8,15 @@
 {% block page_subtitle %}Configura precios, profesores y grupos{% endblock %}
 
 {% block header_actions %}
+{% if is_admin_user %}
 <button id="btn-edit-values" class="header-action-btn bg-primary-500 hover:bg-primary-600 text-white px-6 py-3 rounded-md flex items-center gap-2 transition-all duration-200 transform hover:scale-105 hover:shadow-md text-base leading-none">
     <span class="material-symbols-outlined text-[20px]">edit</span> Cambiar Valores
 </button>
+{% else %}
+<span class="text-sm text-neutral-500 italic flex items-center gap-2 px-4 py-2 bg-neutral-100 rounded-md">
+    <span class="material-symbols-outlined text-[18px]">visibility</span> Modo solo lectura
+</span>
+{% endif %}
 {% endblock %}
 
 {% block content %}
@@ -172,7 +178,8 @@
                     </table>
                 </div>
                 
-                <!-- Botones de acción -->
+                <!-- Botones de acción (admin only — non-admin teachers see this page in view-only mode) -->
+                {% if is_admin_user %}
                 <div style="margin-top:2.5rem;display:flex;flex-wrap:wrap;gap:0.75rem;">
                     <button type="button" id="btn-new-teacher" class="px-6 py-3 bg-primary-500 text-white rounded-md hover:bg-primary-600 transition-colors duration-200 flex items-center gap-2">
                         <span class="material-symbols-outlined">person_add</span>
@@ -183,6 +190,7 @@
                         Nuevo Grupo
                     </button>
                 </div>
+                {% endif %}
             </div>
         </div>
     </div>

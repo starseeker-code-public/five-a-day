@@ -62,6 +62,12 @@ from core.views.management import (
 
 # Parents
 from core.views.parents import ParentCreateView
+from core.views.password_reset import (
+    BrandedPasswordResetCompleteView,
+    BrandedPasswordResetConfirmView,
+    BrandedPasswordResetDoneView,
+    BrandedPasswordResetView,
+)
 
 # Payments
 from core.views.payments import (

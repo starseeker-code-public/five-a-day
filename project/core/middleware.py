@@ -1,14 +1,15 @@
 """
-Middleware — authentication and QA error reporting.
+Middleware — authentication, QA error reporting, and teacher view whitelisting.
 """
 
 import logging
 import traceback
 
 from django.conf import settings
+from django.contrib import messages
 from django.core.mail import send_mail
 from django.shortcuts import redirect
-from django.urls import reverse
+from django.urls import resolve, reverse
 
 logger = logging.getLogger(__name__)
 
@@ -83,32 +84,123 @@ class QAErrorEmailMiddleware:
         return None  # Let Django's default error handling continue
 
 
+# URL name whitelist for non-admin teachers. Any URL name not in this set is
+# blocked. Admin-only write endpoints inside the management page are called out
+# explicitly (the list view itself — `management` — is allowed so non-admins
+# can see it in view-only mode). Keep this list in sync with core/urls.py and
+# the per-app urls.py files.
+NON_ADMIN_ALLOWED_URL_NAMES = frozenset(
+    {
+        # Auth + public
+        "login",
+        "logout",
+        "google_oauth_redirect",
+        "google_oauth_callback",
+        "password_reset",
+        "password_reset_done",
+        "password_reset_confirm",
+        "password_reset_complete",
+        "health_check",
+        # Dashboard
+        "home",
+        # Students (list, detail, create, update — full access per user request)
+        "students_list",
+        "student_create",
+        "student_detail",
+        "student_update",
+        "search_students",
+        # Parents
+        "parent_create",
+        # Fun Friday (attendance view + attendance API)
+        "fun_friday_view",
+        "add_fun_friday_attendance",
+        "remove_fun_friday_attendance",
+        "toggle_fun_friday_this_week",
+        # Management page — view-only. Write endpoints below are NOT in this list:
+        #   update_site_config, create_teacher, create_group,
+        #   update_enrollment_modality  (admin-only writes)
+        "management",
+        "api_get_teachers",
+        "language_cheque_students",
+        # Todos, history, support
+        "create_todo",
+        "complete_todo",
+        "history_list",
+        "submit_support_ticket",
+        # Error test pages (harmless)
+        "test_error_400",
+        "test_error_403",
+        "test_error_404",
+        "test_error_405",
+        "test_error_500",
+    }
+)
+
+
+def _is_non_admin_teacher(request) -> bool:
+    """True iff the request's auth.User is linked to a Teacher with admin=False."""
+    user = getattr(request, "user", None)
+    if user is None or not getattr(user, "is_authenticated", False):
+        return False
+    if user.is_superuser or user.is_staff:
+        return False
+    # Reverse accessor defined in students.Teacher.user's related_name="teacher".
+    teacher = getattr(user, "teacher", None)
+    if teacher is None:
+        return False
+    return not teacher.admin
+
+
 class SimpleAuthMiddleware:
     """
-    Middleware que requiere autenticación para acceder a cualquier vista
-    excepto la página de login y health check
+    Enforces two layers of access control:
+
+    1. Authentication: every non-public URL requires an authenticated session
+       (either via env-var basic-auth in dev, Teacher login in testing/prod, or
+       Google OAuth). Unauthenticated requests are redirected to /login/.
+    2. Authorization: requests made by a non-admin teacher are restricted to
+       the URL-name whitelist above. Blocked routes → 403 (or a redirect to the
+       dashboard with a flash message for non-API routes).
     """
+
+    PUBLIC_PREFIXES = (
+        "/health/",
+        "/static/",
+        "/media/",
+        "/auth/google/",
+        "/password-reset/",
+    )
 
     def __init__(self, get_response):
         self.get_response = get_response
 
     def __call__(self, request):
-        # URLs públicas que no requieren autenticación
         login_url = reverse("login")
-        public_prefixes = [
-            "/health/",  # Health check para Render
-            "/static/",  # Archivos estáticos
-            "/media/",  # Archivos media
-            "/auth/google/",  # Google OAuth flow (includes /callback/)
-        ]
-
-        # Verificar si la URL actual es pública
         path = request.path
-        is_public = path == login_url or any(path.startswith(prefix) for prefix in public_prefixes)
+        is_public = path == login_url or any(path.startswith(prefix) for prefix in self.PUBLIC_PREFIXES)
 
-        # Si no es pública y no está autenticado, redirigir a login
+        # Layer 1: authentication
         if not is_public and not request.session.get("is_authenticated"):
             return redirect("login")
 
-        response = self.get_response(request)
-        return response
+        # Layer 2: non-admin teacher whitelist
+        if not is_public and _is_non_admin_teacher(request):
+            try:
+                url_name = resolve(path).url_name
+            except Exception:
+                url_name = None
+
+            if url_name not in NON_ADMIN_ALLOWED_URL_NAMES:
+                # AJAX / API endpoints: return a plain 403 JSON response so the
+                # frontend sees a real error instead of an HTML redirect body.
+                if path.startswith("/api/"):
+                    from django.http import JsonResponse
+
+                    return JsonResponse(
+                        {"success": False, "error": "No tienes permiso para esta acción."},
+                        status=403,
+                    )
+                messages.error(request, "❌ No tienes permiso para acceder a esa sección.")
+                return redirect("home")
+
+        return self.get_response(request)

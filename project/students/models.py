@@ -1,5 +1,8 @@
+from django.conf import settings
 from django.core.validators import EmailValidator
 from django.db import models
+from django.db.models.signals import post_save
+from django.dispatch import receiver
 
 
 class Teacher(models.Model):
@@ -9,6 +12,14 @@ class Teacher(models.Model):
     phone = models.CharField(max_length=20, blank=True)
     active = models.BooleanField(default=True)
     admin = models.BooleanField(default=False)
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="teacher",
+        help_text="Django auth user — login identity + hashed password for this teacher.",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -25,6 +36,102 @@ class Teacher(models.Model):
     @property
     def full_name(self):
         return f"{self.first_name} {self.last_name}"
+
+    def ensure_user(self, password=None):
+        """
+        Get-or-create the linked auth.User, keeping email/name and staff/superuser
+        flags in sync with this Teacher. If `password` is provided it is set (hashed);
+        otherwise the user gets an unusable password and must use the password-reset
+        flow to activate their account.
+
+        Returns the linked User instance.
+        """
+        from django.contrib.auth import get_user_model
+
+        User = get_user_model()
+
+        if self.user_id:
+            user = self.user
+            dirty = False
+            if user.email != self.email:
+                user.email = self.email
+                user.username = self.email
+                dirty = True
+            if user.first_name != self.first_name:
+                user.first_name = self.first_name
+                dirty = True
+            if user.last_name != self.last_name:
+                user.last_name = self.last_name
+                dirty = True
+            if user.is_staff != self.admin:
+                user.is_staff = self.admin
+                dirty = True
+            if user.is_superuser != self.admin:
+                user.is_superuser = self.admin
+                dirty = True
+            if password is not None:
+                user.set_password(password)
+                dirty = True
+            if dirty:
+                user.save()
+            return user
+
+        # Either link an existing User with this email, or create a new one.
+        user, created = User.objects.get_or_create(
+            username=self.email,
+            defaults={
+                "email": self.email,
+                "first_name": self.first_name,
+                "last_name": self.last_name,
+                "is_staff": self.admin,
+                "is_superuser": self.admin,
+            },
+        )
+        if not created:
+            # Sync fields on the existing user record.
+            user.email = self.email
+            user.first_name = self.first_name
+            user.last_name = self.last_name
+            user.is_staff = self.admin
+            user.is_superuser = self.admin
+
+        if password is not None:
+            user.set_password(password)
+        elif created:
+            user.set_unusable_password()
+        user.save()
+
+        # Link back without retriggering Teacher.save() signals.
+        Teacher.objects.filter(pk=self.pk).update(user=user)
+        self.user = user
+        return user
+
+
+@receiver(post_save, sender=Teacher)
+def _sync_linked_user_flags(sender, instance, **kwargs):
+    """Mirror Teacher.admin / email / name onto the linked auth.User when present."""
+    if not instance.user_id:
+        return
+    user = instance.user
+    dirty = False
+    if user.is_staff != instance.admin:
+        user.is_staff = instance.admin
+        dirty = True
+    if user.is_superuser != instance.admin:
+        user.is_superuser = instance.admin
+        dirty = True
+    if user.email != instance.email:
+        user.email = instance.email
+        user.username = instance.email
+        dirty = True
+    if user.first_name != instance.first_name:
+        user.first_name = instance.first_name
+        dirty = True
+    if user.last_name != instance.last_name:
+        user.last_name = instance.last_name
+        dirty = True
+    if dirty:
+        user.save()
 
 
 class Group(models.Model):

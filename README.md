@@ -1,7 +1,7 @@
 # Five a Day eVolution
 
 <p align="center">
-  <img src="project/static/images/logo_white_bg.png" alt="Five a Day Logo" width="320">
+  <img src="project/core/static/images/logo_white_bg.png" alt="Five a Day Logo" width="320">
   <br>
   <em>Student Management System for Five a Day English Academy</em>
   <br>
@@ -20,7 +20,7 @@ Built to centralize student records, automate billing cycles, and streamline par
 ### Project Status
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v1.0.11-brightgreen?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-v1.0.12-brightgreen?style=flat-square" alt="Version">
   &nbsp;|&nbsp;
   <a href="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml?query=branch%3Amain"><img src="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml/badge.svg?branch=main&style=flat-square" alt="CI main"></a>
   &nbsp;|&nbsp;
@@ -41,9 +41,9 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 | Version | Date | Description |
 |---------|------|-------------|
-| **v1.0.11** | 2026-04-22 | Testing env fixes, CI hardening, static files cleanup |
+| **v1.0.12** | 2026-06-10 | Teacher login + password reset, non-admin whitelist |
+| v1.0.11 | 2026-04-22 | Testing env fixes, CI hardening, static files cleanup |
 | v1.0.10 | 2026-04-21 | Branded admin theme, white-bg favicon, social meta |
-| v1.0.9 | 2026-04-16 | Test suite restructure, 96% coverage, CI gates |
 
 ---
 
@@ -59,7 +59,6 @@ Built to centralize student records, automate billing cycles, and streamline par
       - [v1.3 — PDF Invoice Generation](#v13--pdf-invoice-generation)
       - [v1.4 — Celery + Redis Deployment](#v14--celery--redis-deployment)
       - [v1.5 — Expense Tracking](#v15--expense-tracking)
-      - [v1.6 — Multi-User Permissions](#v16--multi-user-permissions)
       - [v1.7 — Advanced Reporting \& Analytics](#v17--advanced-reporting--analytics)
       - [v1.8 — SMS Notifications (Twilio)](#v18--sms-notifications-twilio)
       - [v1.9 — Parent Portal](#v19--parent-portal)
@@ -103,6 +102,7 @@ Built to centralize student records, automate billing cycles, and streamline par
     - [Management](#management)
     - [Database (All Info)](#database-all-info)
     - [Login](#login)
+    - [Password Reset](#password-reset)
   - [Testing](#testing)
     - [Testing Overview](#testing-overview)
     - [Unit Tests](#unit-tests)
@@ -154,8 +154,56 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 ## Version History & Roadmap
 
-<details id="v1011" open>
-<summary><strong>v1.0.11 — Testing Environment Fixes, CI Hardening & Static File Cleanup (current)</strong></summary>
+<details id="v1012" open>
+<summary><strong>v1.0.12 — Teacher Login, Password Reset & Non-Admin Whitelist (current)</strong></summary>
+
+**Authentication overhaul** (ships roadmap item v1.6)
+
+- `core/views/auth.py`: login view now dispatches by `DJANGO_ENV`. **Development** still compares against `LOGIN_USERNAME`/`LOGIN_PASSWORD` and get-or-creates a matching Django superuser so `/admin/` keeps working. **Testing/production** authenticates against `auth.User` via `django.contrib.auth.authenticate` — Teachers log in with their email + hashed password.
+- Google OAuth callback get-or-creates a Django superuser and links it to an existing Teacher by email so a single OAuth login grants both app and `/admin/` access through the same `ModelBackend`.
+- `_finalize_session_login(...)` unifies session setup across env-var, Teacher, and OAuth paths — every successful login now goes through `django.contrib.auth.login` *and* the legacy `session["is_authenticated"]` flag.
+- Logout calls `django.contrib.auth.logout(...)` and then flushes the session.
+
+**Teacher ↔ auth.User link**
+
+- `students/models.py`: new `Teacher.user` `OneToOneField(auth.User, null=True, on_delete=SET_NULL, related_name="teacher")`. Migration `students.0003_teacher_user` ships the field as nullable so existing rows survive.
+- `Teacher.ensure_user(password=None)` — idempotent helper that get-or-creates the linked user, syncs name/email, mirrors `Teacher.admin` onto `is_staff` + `is_superuser`, and optionally sets a hashed password. Omitting the password leaves the user with `unusable_password` so they must use `/password-reset/`.
+- `post_save` signal on Teacher mirrors `admin` / email / first_name / last_name onto the linked User on every save.
+
+**Authorization (non-admin Teacher whitelist)**
+
+- `core/middleware.py`: `SimpleAuthMiddleware` now does two layers. Layer 1 (authentication) is unchanged; layer 2 (authorization) restricts non-admin Teachers to the `NON_ADMIN_ALLOWED_URL_NAMES` whitelist — admin-only routes redirect to the dashboard with a flash message, or return `{"success": False, "error": ...}` JSON 403 on `/api/*`.
+- Public prefixes list now includes `/password-reset/` so locked-out teachers can still reach the reset flow.
+- `core/context_processors.py`: exposes `is_admin_user` / `is_non_admin_teacher` flags so templates can hide admin-only UI (`base.html` swaps Payments/Apps/Database for Fun Friday in the sidebar; `management.html` becomes read-only).
+
+**Password reset flow**
+
+- New `core/views/password_reset.py`: branded subclasses of Django's built-in `PasswordResetView` / `Done` / `Confirm` / `Complete` plus a `build_reset_link(request, user)` helper.
+- New URL patterns: `/password-reset/`, `/password-reset/sent/`, `/password-reset/confirm/<uidb64>/<token>/`, `/password-reset/complete/`.
+- New branded templates under `project/templates/registration/` (`reset_base.html`, `password_reset_form.html`, `password_reset_done.html`, `password_reset_confirm.html`, `password_reset_complete.html`, plus `password_reset_email.txt` / `password_reset_subject.txt`) and a new HTML email template at `core/templates/emails/password_reset.html`.
+- Login page renders "¿Has olvidado tu contraseña?" link only when `password_reset_available` is true (i.e. non-dev environments).
+
+**Teacher seeding**
+
+- New `core/management/commands/seed_teachers.py`: idempotent Teacher + linked-User creation from `TEACHER_SEED_<N>_*` env vars (numbered from 1, iteration stops at the first missing `FIRST_NAME`). Re-running updates name/phone/admin but never overwrites a password an admin later changed.
+- `entrypoint.sh` invokes `python project/manage.py seed_teachers` on container start when `DJANGO_ENV` is `testing` or `production`. No-op in development.
+
+**Settings**
+
+- `project/project/settings.py`: after the base `.env` load, conditionally loads `.env.development` (`DJANGO_ENV=development`) or `.env.testing_users` (`DJANGO_ENV=testing`) as an overlay with `override=True`. Docker-injected process env vars still win over both. Both filenames are gitignored via `.env*`.
+- Added explicit `LOGIN_URL`, `LOGIN_REDIRECT_URL`, `LOGOUT_REDIRECT_URL` so Django's auth helpers (and the password-reset `success_url` chain) resolve consistently.
+
+**Tests (+49, suite at 623)**
+
+- New `tests/integration/test_password_reset.py` (10): full reset round-trip including email rendering and the public-URL middleware exemption.
+- New `tests/integration/test_teacher_auth_flow.py` (21): dev vs non-dev login dispatcher, OAuth user creation/linking, non-admin Teacher whitelist enforcement, dashboard role gating.
+- New `tests/unit/test_seed_teachers_command.py` (8): creation, idempotent update, password persistence rule, gap-stop iteration.
+- New `tests/unit/test_teacher_user_sync.py` (10): `Teacher.ensure_user()` paths and the `post_save` mirror signal.
+
+</details>
+
+<details id="v1011">
+<summary><strong>v1.0.11 — Testing Environment Fixes, CI Hardening & Static File Cleanup</strong></summary>
 
 **Testing environment**
 
@@ -538,10 +586,6 @@ Full async task processing with Redis broker. Move all email sends to background
 
 Track academy expenses (rent, supplies, salaries) with categories, recurring templates, and monthly totals. Income-vs-expense dashboard widget showing profitability.
 
-#### v1.6 — Multi-User Permissions
-
-Replace SimpleAuthMiddleware with Django's built-in auth. Roles: admin (full access), teacher (read-only students + schedule), assistant (everything except configuration).
-
 #### v1.7 — Advanced Reporting & Analytics
 
 Monthly and yearly financial reports with charts. Student retention analytics. Payment collection rates. Group utilization metrics. Exportable to PDF.
@@ -900,8 +944,13 @@ CELERY_BROKER_URL=redis://redis:6379/0
 CELERY_RESULT_BACKEND=redis://redis:6379/0
 
 # ============================================================================
-# AUTHENTICATION (session-based, until the Django User model is adopted in v1.6)
+# AUTHENTICATION
 # ============================================================================
+# In DEVELOPMENT, login compares against LOGIN_USERNAME / LOGIN_PASSWORD below
+# (and get-or-creates a matching Django superuser so /admin/ keeps working).
+# In TESTING/PRODUCTION, login goes through auth.User — Teachers authenticate
+# with their email + hashed password. Seed those teachers via TEACHER_SEED_*
+# below; the dev creds are ignored.
 LOGIN_USERNAME=fiveaday
 LOGIN_PASSWORD=
 
@@ -913,6 +962,20 @@ LOGIN_PASSWORD=
 GOOGLE_CLIENT_ID=
 GOOGLE_CLIENT_SECRET=
 GOOGLE_REDIRECT_URI=http://localhost:8000/auth/google/callback/
+
+# ============================================================================
+# TEACHER SEEDING (testing / production only — read by `manage.py seed_teachers`)
+# ============================================================================
+# Numbered blocks. N starts at 1, the command stops at the first missing
+# FIRST_NAME. FIRST_NAME / LAST_NAME / EMAIL are required; PHONE / ADMIN /
+# PASSWORD are optional. Omit PASSWORD to make the teacher activate via the
+# password-reset email (Gmail SMTP must work).
+TEACHER_SEED_1_FIRST_NAME=
+TEACHER_SEED_1_LAST_NAME=
+TEACHER_SEED_1_EMAIL=
+TEACHER_SEED_1_PHONE=
+TEACHER_SEED_1_ADMIN=True
+TEACHER_SEED_1_PASSWORD=
 
 # ============================================================================
 # ACADEMY BUSINESS INFO (prefilled in payment-reminder email forms)
@@ -1020,13 +1083,20 @@ The table below describes every variable in the [.env template](#env-template) a
 | `SUPPORT_EMAIL` | Support ticket recipient | No | — |
 | `EMAIL_TEST_1` / `EMAIL_TEST_2` | Test email recipients | No | — |
 | **Auth** | | | |
-| `LOGIN_USERNAME` | Admin username | **Yes** | — (login refused if missing) |
-| `LOGIN_PASSWORD` | Admin password | **Yes** | — (login refused if missing) |
+| `LOGIN_USERNAME` | Dev-only basic-auth username (compared by the login view when `DJANGO_ENV=development`). Ignored in testing/production. | **Yes in dev** | — (login refused if missing) |
+| `LOGIN_PASSWORD` | Dev-only basic-auth password. Ignored in testing/production — Teachers log in via `auth.User` (seed them with `TEACHER_SEED_*`). | **Yes in dev** | — (login refused if missing) |
 | `QA_TESTING_USERNAME` | Extra user allowed to see `/testing/` dashboard | No (QA only) | — |
 | `GOOGLE_CLIENT_ID` | OAuth client ID | For Google login | — |
 | `GOOGLE_CLIENT_SECRET` | OAuth client secret | For Google login | — |
 | `GOOGLE_REDIRECT_URI` | OAuth callback URL | For Google login | auto-detected |
 | `GOOGLE_ALLOWED_EMAIL` | Restrict Google login to one email | No | `EMAIL_HOST_USER` |
+| **Teacher seeding** (read by `manage.py seed_teachers`; runs automatically on container start in testing/production) | | | |
+| `TEACHER_SEED_<N>_FIRST_NAME` | First name for the Nth teacher block (N from 1; iteration stops at first missing FIRST_NAME) | For testing/prod | — |
+| `TEACHER_SEED_<N>_LAST_NAME` | Last name | For testing/prod | — |
+| `TEACHER_SEED_<N>_EMAIL` | Email — used as the Django `User.username` and login credential | For testing/prod | — |
+| `TEACHER_SEED_<N>_PHONE` | Phone | No | — |
+| `TEACHER_SEED_<N>_ADMIN` | `True` / `False` — controls dashboard access tier and mirrors onto `is_staff` + `is_superuser` | No | `False` |
+| `TEACHER_SEED_<N>_PASSWORD` | Initial password. Omit to force activation via `/password-reset/`. Re-running seed never overwrites a password an admin later changed. | No | unusable password |
 | **Celery / Redis** | | | |
 | `CELERY_BROKER_URL` | Redis URL for Celery | No | eager mode (tasks run inline) |
 | `CELERY_RESULT_BACKEND` | Redis URL for results | No | same as broker |
@@ -1107,23 +1177,25 @@ five-a-day/
 │   │
 │   ├── core/                     Dashboard, Auth, Schedule, Utilities
 │   │   ├── models.py             TodoItem, HistoryLog, FunFridayAttendance, ScheduleSlot
-│   │   ├── views/                13 view modules (dashboard, auth, students, parents,
-│   │   │                         payments, management, app_forms, schedule,
-│   │   │                         fun_friday_attendance, todos, support, errors,
-│   │   │                         testing_tools)
+│   │   ├── views/                14 view modules (dashboard, auth, password_reset,
+│   │   │                         students, parents, payments, management, app_forms,
+│   │   │                         schedule, fun_friday_attendance, todos, support,
+│   │   │                         errors, testing_tools)
 │   │   ├── constants.py          DIAS_ES, MESES_ES, SCHEDULED_APPS
-│   │   ├── middleware.py         SimpleAuthMiddleware, QAErrorEmailMiddleware
+│   │   ├── middleware.py         SimpleAuthMiddleware (auth + non-admin teacher whitelist), QAErrorEmailMiddleware
 │   │   ├── decorators.py         qa_access_required (testing env gate)
-│   │   ├── context_processors.py Notifications injected into all templates
+│   │   ├── context_processors.py Notifications + is_admin_user / is_non_admin_teacher flags
 │   │   ├── transactions.py       Optimized queryset builders
-│   │   ├── templates/            ALL HTML templates (base, pages, emails)
-│   │   └── static/               CSS (app.css) + JS (13 modules) + images
+│   │   ├── templates/            ALL HTML templates (base, pages, emails, password_reset email)
+│   │   ├── static/               CSS (app.css) + JS (13 modules) + images
+│   │   └── management/commands/  seed_teachers (idempotent Teacher + auth.User seed)
 │   │
 │   ├── students/                 People Management
-│   │   ├── models.py             Student, Parent, StudentParent, Teacher, Group
+│   │   ├── models.py             Student, Parent, StudentParent, Teacher (with auth.User link), Group
 │   │   ├── forms.py              StudentForm, ParentForm, ParentFormSet
 │   │   ├── admin.py              Custom admin with inlines
-│   │   └── urls.py               12 URL patterns
+│   │   ├── urls.py               12 URL patterns
+│   │   └── migrations/0003_teacher_user.py  Adds Teacher.user OneToOne to auth.User
 │   │
 │   ├── billing/                  Financial Management
 │   │   ├── models.py             SiteConfiguration, EnrollmentType, Enrollment, Payment
@@ -1141,7 +1213,9 @@ five-a-day/
 │   │   ├── urls.py               10 URL patterns
 │   │   └── management/commands/  send_email, test_all_emails
 │   │
-│   ├── tests/                    pytest suite (574 tests, 96 % coverage) — unit/ + integration/
+│   ├── tests/                    pytest suite (623 tests, 96 % coverage) — unit/ + integration/
+│   ├── templates/registration/   Password-reset templates (form, done, confirm, complete + email body)
+│   ├── templates/admin/          Django admin overrides (branded theme)
 │   └── conftest.py               Shared fixtures (models + authenticated_client)
 │
 ├── .github/                      CI/CD — see docs/GITHUB.md
@@ -1173,7 +1247,9 @@ five-a-day/
 ├── pyproject.toml                Dependencies (uv-managed) + tool config
 ├── uv.lock                       Reproducible dependency lock
 ├── entrypoint.sh                 Docker entrypoint (migrate, collectstatic, start)
-├── .env / .env.testing           Gitignored — never committed
+├── .env / .env.testing /         Gitignored env files (`.env*` matches all variants —
+│   .env.development /            `.env.development` and `.env.testing_users` are loaded
+│   .env.testing_users            as overlays by settings.py depending on DJANGO_ENV)
 ├── CLAUDE.md                     AI development context (project rules)
 ├── DEPLOYMENT.md                 GCP deployment guide (all 3 environments)
 └── README.md                     This file
@@ -1186,10 +1262,11 @@ Dashboard, authentication, scheduling, and shared utilities. Owns all views and 
 | Component | Details |
 |-----------|---------|
 | **Models** | TodoItem, HistoryLog (1000-entry cap), FunFridayAttendance, ScheduleSlot |
-| **Views** | 13 modules: auth, dashboard, students, parents, payments, management, app_forms, schedule, fun_friday_attendance, todos, support, errors, testing_tools |
-| **Middleware** | SimpleAuthMiddleware — session-based, protects all routes except /login/, /health/, /static/ |
-| **Templates** | base.html (layout), 15+ page templates, 12 email templates, error pages |
+| **Views** | 14 modules: auth, password_reset, dashboard, students, parents, payments, management, app_forms, schedule, fun_friday_attendance, todos, support, errors, testing_tools |
+| **Middleware** | SimpleAuthMiddleware — two layers: session auth (public allow-list incl. `/password-reset/`) + non-admin teacher URL-name whitelist |
+| **Templates** | base.html (layout), 15+ page templates, 13 email templates, error pages, plus `templates/registration/` for the password-reset flow |
 | **Static** | app.css (sidebar/icons), 13 JS modules, logo |
+| **Commands** | seed_teachers (Teacher + auth.User from env vars), seed_testdata (in billing) |
 
 See [core/README.md](project/core/README.md) for details.
 
@@ -1199,10 +1276,11 @@ People management — the foundation app with no external dependencies.
 
 | Component | Details |
 |-----------|---------|
-| **Models** | Student (with age calc, withdrawal tracking), Parent (DNI unique), Teacher, Group, StudentParent (M2M through) |
+| **Models** | Student (with age calc, withdrawal tracking), Parent (DNI unique), Teacher (with optional `auth.User` link for login), Group, StudentParent (M2M through) |
 | **Forms** | StudentForm (birth_date validation), ParentForm (DNI validation), ParentFormSet |
 | **Admin** | StudentAdmin with StudentParentInline, ParentAdmin with ParentStudentInline |
 | **URLs** | 12 patterns: CRUD + search + fun friday attendance |
+| **Auth integration** | `Teacher.ensure_user(password=...)` get-or-creates the linked Django user; `post_save` signal mirrors admin / email / name onto `auth.User` |
 
 See [students/README.md](project/students/README.md) for details.
 
@@ -1242,7 +1320,7 @@ See [comms/README.md](project/comms/README.md) for details.
 | Views stay in core | Models split across apps, but all views in `core/views/` avoids template/URL fragmentation. Each app's `urls.py` imports from core. |
 | Service layer in billing | Business logic (pricing, discounts, payment generation) extracted from forms/views into testable services. |
 | SiteConfiguration singleton | All pricing editable from UI. Auto-creates with defaults. No hardcoded prices in views. |
-| Session-based auth | SimpleAuthMiddleware with env var credentials. Sufficient for 3-10 users until v1.6. |
+| Two-mode auth | Dev compares against `LOGIN_USERNAME`/`LOGIN_PASSWORD` env vars; testing/production authenticates Teachers via the linked `auth.User`. SimpleAuthMiddleware adds a non-admin Teacher whitelist on top so role-based gating is enforced even on direct URL access. |
 | Tailwind CDN | Zero build tools. All utilities available instantly. Custom violet palette in config block. |
 | PostgreSQL everywhere | Same database engine in development, testing, and production. Avoids SQLite behavioral differences. |
 
@@ -1364,11 +1442,23 @@ Paginated read-only tables of all data.
 
 ### Login
 
-Standalone page with custom styling (does not extend base.html).
+Standalone page with custom styling (does not extend base.html). The login view dispatches by environment:
 
-- **Credentials login** — username/password from `LOGIN_USERNAME` / `LOGIN_PASSWORD` env vars.
-- **Google OAuth** — optional. Button shown if `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` are configured. Validates email matches `GOOGLE_ALLOWED_EMAIL`. Stores Google credentials in session for Gmail/Sheets API access.
-- **Session** — sets `is_authenticated=True` and `username` in Django session. 24-hour expiry.
+- **Development** — credentials checked against `LOGIN_USERNAME` / `LOGIN_PASSWORD` (`.env.development` overlay). A matching Django superuser is get-or-created so `/admin/` works in the same session.
+- **Testing / production** — credentials checked against `auth.User` via `ModelBackend`. Teachers log in with their email + hashed password (seeded by `manage.py seed_teachers` from `TEACHER_SEED_*` env vars). Non-admin Teachers reach a slimmed-down dashboard with the SimpleAuthMiddleware whitelist enforcing URL-level gating.
+- **Google OAuth** — optional. Button shown if `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` are configured. Validates email matches `GOOGLE_ALLOWED_EMAIL`, get-or-creates a Django superuser, links it to an existing Teacher by email if one exists, and stores Google credentials in session for Gmail/Sheets API access. The same login also grants `/admin/`.
+- **"¿Has olvidado tu contraseña?"** — shown in non-dev environments, links into the password-reset flow below.
+- **Session** — every successful login goes through `django.contrib.auth.login(...)` (sets `_auth_user_id`) *and* the legacy `session["is_authenticated"]` flag for the middleware. 24-hour expiry.
+
+### Password Reset
+
+Public flow at `/password-reset/...` that lets a teacher recover access without admin intervention.
+
+- **Request page** (`/password-reset/`) — enter email; if it matches a `auth.User`, an HTML email is sent (template at `core/templates/emails/password_reset.html`) with a signed reset link.
+- **Sent confirmation** (`/password-reset/sent/`) — generic confirmation that does not disclose whether the email existed.
+- **Confirm form** (`/password-reset/confirm/<uidb64>/<token>/`) — new-password form using Django's signed token machinery; rejects expired or replayed links.
+- **Complete page** (`/password-reset/complete/`) — confirms the change and links back to login.
+- All four URLs are listed in `SimpleAuthMiddleware.PUBLIC_PREFIXES` so a locked-out teacher can reach them. Branded templates live under `project/templates/registration/`.
 
 ---
 
@@ -1378,8 +1468,8 @@ Standalone page with custom styling (does not extend base.html).
 
 | Metric | Value |
 |--------|-------|
-| **Total tests** | 574 |
-| **Test files** | 32 (17 unit + 15 integration) |
+| **Total tests** | 623 |
+| **Test files** | 36 (19 unit + 17 integration) |
 | **Coverage** | 96% |
 | **Coverage thresholds** | **≥ 90%** (target, no warning) / **75-89%** (CI warning, pre-commit still blocks below 75) / **< 75%** (CI fails, pre-commit rejects the commit) |
 | **Runtime** | ~19 seconds (8 parallel workers via pytest-xdist) |
@@ -1435,7 +1525,9 @@ Within each file, related tests are grouped into classes. Where a large file abs
 | [`unit/test_context_processors.py`](project/tests/unit/test_context_processors.py) | 13 | `today_notifications`: expected keys, todos due today vs other day, scheduled apps on Friday vs Monday, monthly apps excluded on day 15, history count, unauthenticated early-return |
 | [`unit/test_constants.py`](project/tests/unit/test_constants.py) | 13 | Pure functions: `calculate_discount` (flat/percentage/invalid/edge), `get_monthly_fee_by_schedule`, `get_enrollment_fee` |
 | [`unit/test_transactions.py`](project/tests/unit/test_transactions.py) | 10 | Query helpers: `get_active_students`, `get_payments_for_last_two_school_years`, `get_all_payments_unrestricted` — ordering, select_related, school-year filtering |
+| [`unit/test_teacher_user_sync.py`](project/tests/unit/test_teacher_user_sync.py) | 10 | `Teacher.ensure_user()` (create + link + sync + password) and the `post_save` mirror signal (`admin` → `is_staff`/`is_superuser`, email/name/username sync) |
 | [`unit/test_forms.py`](project/tests/unit/test_forms.py) | 9 | `EnrollmentForm` validation + `create_enrollment()` delegation to `EnrollmentService` (quarterly, monthly full/part, manual amount, sibling checkbox, adult, below-minimum rejection) |
+| [`unit/test_seed_teachers_command.py`](project/tests/unit/test_seed_teachers_command.py) | 8 | `manage.py seed_teachers`: creation, idempotent update, password-persistence rule (no overwrite once a teacher has a usable password), gap-stop iteration, missing-field skip |
 | [`unit/test_student_forms.py`](project/tests/unit/test_student_forms.py) | 7 | `StudentForm` + `ParentForm` validation: future birth date rejected, DNI minimum length, required fields, both date formats |
 | [`unit/test_exports.py`](project/tests/unit/test_exports.py) | 7 | Excel workbook generation via `openpyxl`: Students, Enrollments, Payments sheets + combined workbook; empty-database edge case |
 | [`unit/test_payment_helpers.py`](project/tests/unit/test_payment_helpers.py) | 7 | `parse_date_value` (6 formats including invalid) + `payment_detail` AJAX helper called directly via `RequestFactory` |
@@ -1452,11 +1544,13 @@ Within each file, related tests are grouped into classes. Where a large file abs
 | [`integration/test_views.py`](project/tests/integration/test_views.py) | 54 | Cross-cutting top-level HTTP coverage: auth flow, dashboard, `all_info`, student/parent list + detail + create + search, payment list + create + detail + CRUD + stats + CSV + validation, todos + history API, management admin, email form pages (parametrized), enrollment API, error pages (parametrized), schedule, Fun Friday, support |
 | [`integration/test_payment_views.py`](project/tests/integration/test_payment_views.py) | 37 | All HTTP payment endpoints: list (search, stats), create (+ invalid parent + unexpected exception), detail-view (+ 404), update (JSON + FormData + all error branches), delete (success + exception 500), deactivate (success + exception 400), quick-complete (success + invalid method + broken JSON), get-details (success + exception), search payments/parents (short query + hits), validate student-parent (all branches), export DB to Excel |
 | [`integration/test_student_views.py`](project/tests/integration/test_student_views.py) | 22 | `StudentListView` (search, exclude inactive, context), `StudentDetailView` (parents visible, 404), `StudentCreateView` (form + adult mode + success + full POST + error paths including invalid parent, existing-parent mode, create_sibling flag, email-task swallow), `search_students` FBV |
+| [`integration/test_teacher_auth_flow.py`](project/tests/integration/test_teacher_auth_flow.py) | 21 | Login dispatcher branches (dev env-var vs `auth.User`-backed Teacher login), OAuth user creation/Teacher-linking, `_finalize_session_login` setting both `_auth_user_id` and `is_authenticated`, `SimpleAuthMiddleware` whitelist behaviour for non-admin Teachers (allowed routes, 403 JSON for `/api/*`, dashboard redirect with flash for HTML), template gating (sidebar swap, read-only management) |
 | [`integration/test_testing_tools.py`](project/tests/integration/test_testing_tools.py) | 20 | QA dashboard `/testing/` gated by `@qa_access_required` (via `override_settings`): dashboard renders + git failure handled, `api_seed_database` (success + reset + command error 500 + non-QA 404), `api_create_backlog_task` (all branches + email send/swallow), `api_update_backlog_task` (success + invalid status + 404), `api_toggle_error_email` (on + off + bad JSON) |
 | [`integration/test_management_views.py`](project/tests/integration/test_management_views.py) | 19 | `gestion_view` + `update_site_config` (all fields + bad JSON), `create_teacher` (success + duplicate + missing field + bad JSON), `create_group` (success + missing fields + duplicate + nonexistent teacher + bad JSON), `api_get_teachers`, `update_enrollment_modality` (success + invalid + no enrollment + student not found), `language_cheque_students` |
 | [`integration/test_schedule_views.py`](project/tests/integration/test_schedule_views.py) | 13 | Schedule page (groups + slots in context), `save_schedule_slot` (assign + clear + reject GET + invalid JSON), Fun Friday page (loads, excludes adults, with attendance) |
 | [`integration/test_auth_oauth.py`](project/tests/integration/test_auth_oauth.py) | 13 | OAuth callback flow with `google_auth_oauthlib.flow.Flow` mocked: state missing, state mismatch, `fetch_token` failure, id-token verification failure, email whitelist mismatch, successful session establishment; login view extras (already-auth redirect, missing env, OAuth-available flag); logout clears session |
 | [`integration/test_dashboard_views.py`](project/tests/integration/test_dashboard_views.py) | 11 | `home` view quote-cookie branches (valid cookie, corrupt cookie → API, API failure, API empty, `[AUTH]` placeholder filtered, with pending payments), `all_info` sort variants (default, first_name, last_name, id_asc, payments_sort=student_asc) |
+| [`integration/test_password_reset.py`](project/tests/integration/test_password_reset.py) | 10 | Full password-reset round-trip: request form renders, valid email triggers branded HTML email send, confirm page accepts new password with valid uidb64+token, complete page renders, all four URLs reachable while unauthenticated (`SimpleAuthMiddleware.PUBLIC_PREFIXES` exemption) |
 | [`integration/test_parent_views.py`](project/tests/integration/test_parent_views.py) | 8 | `ParentCreateView`: GET renders, POST new + existing DNI + invalid + exception-triggers-form-invalid |
 | [`integration/test_todo_views.py`](project/tests/integration/test_todo_views.py) | 8 | `create_todo` (missing text + missing date + invalid date + success), `complete_todo`, `history_list` (default + offset + invalid offset) |
 | [`integration/test_middleware.py`](project/tests/integration/test_middleware.py) | 8 | `SimpleAuthMiddleware`: public paths (login, health, static, media, OAuth prefix), protected paths redirect to login, authenticated requests pass |
@@ -1498,10 +1592,12 @@ All migrations were regenerated from scratch during the v1.0.0 multi-app split.
 |-----|-----------|---------|------------|
 | `students` | `0001_initial` | Teacher, Group, Parent, Student, StudentParent | — |
 | `students` | `0002` | Student gender field, StudentParent UniqueConstraint | `students.0001` |
+| `students` | `0003_teacher_user` | Adds `Teacher.user` OneToOneField → `auth.User` (nullable, `on_delete=SET_NULL`) | `students.0002`, `auth` |
 | `billing` | `0001_initial` | SiteConfiguration, EnrollmentType, Enrollment, Payment | `students.0001` |
 | `billing` | `0002` | Enrollment academic_year index | `billing.0001`, `students.0002` |
 | `core` | `0001_initial` | TodoItem, HistoryLog, FunFridayAttendance, ScheduleSlot | `students.0001` |
 | `core` | `0002` | UniqueConstraint for FunFridayAttendance and ScheduleSlot (replaces unique_together) | `core.0001`, `students.0002` |
+| `core` | `0003_qa_backlog_and_config` | QA backlog model and config fields | `core.0002` |
 | `comms` | — | (no models) | — |
 
 ```bash
@@ -1518,19 +1614,26 @@ This section documents every security decision, mechanism, and configuration in 
 
 ### Authentication
 
-**Mechanism**: Custom session-based authentication with two backends — environment credentials and Google OAuth 2.0.
+**Mechanism**: Django `ModelBackend` everywhere, with the login view dispatching by `DJANGO_ENV` and `SimpleAuthMiddleware` enforcing role-based gating on top.
 
 | Component | File | How it works |
 |-----------|------|-------------|
-| Login view | `core/views/auth.py` | Validates username/password against `LOGIN_USERNAME`/`LOGIN_PASSWORD` env vars. Sets `request.session["is_authenticated"] = True`. No hardcoded fallbacks — if env vars are missing, login is refused with an error message. |
-| Google OAuth | `core/views/auth.py` | Full OAuth 2.0 code flow via `google-auth-oauthlib`. State token stored in session and verified on callback. ID token verified server-side via Google's public keys. Only the email matching `GOOGLE_ALLOWED_EMAIL` (or `EMAIL_HOST_USER` / `DJANGO_SUPERUSER_EMAIL`) is authorized. |
-| Auth middleware | `core/middleware.py` | `SimpleAuthMiddleware` protects all routes. Public URLs use exact match for `/login/` and prefix match for `/health/`, `/static/`, `/media/`, `/auth/google/` (covers `/callback/`). All other paths require `session["is_authenticated"]`. |
+| Login view (dev) | `core/views/auth.py` | When `DJANGO_ENV=development`, compares username/password against `LOGIN_USERNAME`/`LOGIN_PASSWORD` env vars and get-or-creates a matching Django superuser so `/admin/` works. No hardcoded fallbacks — if env vars are missing, login is refused. |
+| Login view (testing/prod) | `core/views/auth.py` | Authenticates Teachers against `auth.User` via `django.contrib.auth.authenticate` — email is the username, password is hashed by Django's PBKDF2. Teachers are linked to a User via `Teacher.user` (OneToOne) and seeded from `TEACHER_SEED_<N>_*` env vars by the `seed_teachers` command. |
+| Google OAuth | `core/views/auth.py` | Full OAuth 2.0 code flow via `google-auth-oauthlib`. State token stored in session and verified on callback. ID token verified server-side via Google's public keys. Only the email matching `GOOGLE_ALLOWED_EMAIL` (or `EMAIL_HOST_USER` / `DJANGO_SUPERUSER_EMAIL`) is authorized. Get-or-creates a Django superuser and links it to an existing Teacher by email — the same session also grants `/admin/`. |
+| Session finalisation | `core/views/auth.py::_finalize_session_login` | Every successful login (dev, Teacher, OAuth) calls `django.contrib.auth.login(...)` to set `_auth_user_id` *and* sets the legacy `session["is_authenticated"]` flag used by the middleware. |
+| Auth middleware — Layer 1 | `core/middleware.py` | `SimpleAuthMiddleware` protects all routes. Public URLs use exact match for `/login/` and prefix match for `/health/`, `/static/`, `/media/`, `/auth/google/`, `/password-reset/`. All other paths require `session["is_authenticated"]`. |
+| Auth middleware — Layer 2 | `core/middleware.py::NON_ADMIN_ALLOWED_URL_NAMES` | When the session belongs to a Teacher with `admin=False`, requests are restricted to a URL-name whitelist. Admin-only routes return 403 JSON on `/api/*` or redirect to the dashboard with a flash message on HTML routes. Admin Teachers and OAuth/dev-superuser sessions bypass this layer. |
+| Password reset | `core/views/password_reset.py` | Branded subclasses of Django's built-in views, served at `/password-reset/...`. URLs are in `PUBLIC_PREFIXES` so a locked-out teacher can still reach them. Uses Django's signed token machinery; HTML email rendered from `emails/password_reset.html`. |
 | OAuth credentials | `core/views/auth.py` | Google tokens (access, refresh) are stored in session server-side. `client_secret` is never sent to the frontend. Allowed email check is backend-only. |
 
 **Design decisions**:
-- No Django User model — the system has 3-10 trusted admin users, so session-based auth with env var credentials is simpler and sufficient.
+
+- **Django User model is now in use** — testing and production both authenticate Teachers through `auth.User` (hashed passwords + Django's auth machinery). Dev still uses env-var basic-auth for ergonomic reasons; an underlying superuser is auto-mirrored so the experience matches.
+- **Two-tier role model** — admin Teachers see everything; non-admin Teachers see the dashboard, students, fun friday, and a read-only management page. Role mapping flows from `Teacher.admin` → `auth.User.is_staff`/`is_superuser` via `Teacher.ensure_user` and a `post_save` signal.
 - Google OAuth is optional — if `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET` are not set, the OAuth button is hidden.
 - `OAUTHLIB_INSECURE_TRANSPORT` is only set when `DEBUG=True` (for local HTTP testing).
+- The password-reset email is the only path to activate a Teacher whose seed block omits `..._PASSWORD` — Gmail SMTP must work in any environment that issues real reset links.
 
 ### Session & Cookie Configuration
 
@@ -1607,7 +1710,7 @@ Full deployment walkthrough in [DEPLOYMENT.md](DEPLOYMENT.md). Security-relevant
 
 | Rule | Implementation |
 |------|---------------|
-| No hardcoded credentials | `auth.py` requires `LOGIN_USERNAME`/`LOGIN_PASSWORD` env vars — refuses login if missing |
+| No hardcoded credentials | Dev auth refuses login when `LOGIN_USERNAME`/`LOGIN_PASSWORD` are missing; testing/prod auth refuses any password not matching a hashed `auth.User` record |
 | No secrets in YAML | Production credentials live in GCP Secret Manager, injected into Cloud Run at startup — never in the repo |
 | No secrets in GitHub Actions for deploy | CI uses only non-production Gmail SMTP + Codecov upload token. Production deploy runs manually with the operator's `gcloud` credentials |
 | No secrets in Docker image | `.dockerignore` excludes all `.env*` files |
@@ -1655,7 +1758,7 @@ These are not blockers but would strengthen the system for scale or compliance:
 | **Medium** | Inactivity timeout (30 min idle logout) | 24h session is long for sensitive student data. |
 | **Medium** | Security event audit log (failed logins with IP, CSRF failures) | Currently no visibility into attack attempts. |
 | **Medium** | Permissions-Policy header | Disables camera, microphone, geolocation APIs the app doesn't need. |
-| **Medium** | `Argon2` password hasher (if Django User model is ever adopted) | Stronger than default PBKDF2. |
+| **Medium** | `Argon2` password hasher | Stronger than the default PBKDF2 now used for Teacher passwords. Switch `PASSWORD_HASHERS` once `argon2-cffi` is added to deps. |
 | **Low** | Request ID tracking (`X-Request-ID` middleware) | Enables log correlation across services. |
 | **Low** | `detect-secrets` pre-commit hook | Prevents accidental secret commits in the future. |
 | **Low** | Migrate to OAuth-only (deprecate password login) | Reduces credential attack surface to zero. |
@@ -1679,10 +1782,10 @@ Think of it as a **rehearsal stage**: you can click anything, try any feature, a
 | | |
 |---|---|
 | **Web address** | *(will be provided once deployed on GCP)* |
-| **Username** | See `.env.testing` → `LOGIN_USERNAME` |
-| **Password** | See `.env.testing` → `LOGIN_PASSWORD` |
+| **Username** | Your Teacher email — seeded into the system via `TEACHER_SEED_<N>_EMAIL` |
+| **Password** | The initial password set by the development team (or set yours via the "¿Has olvidado tu contraseña?" link if you weren't given one) |
 
-The login credentials are stored in the `.env.testing` file and are **never committed to the repository**. Ask the development team if you need them.
+Credentials are seeded from `TEACHER_SEED_<N>_*` env vars in `.env.testing` (or `.env.testing_users` as an overlay) and are **never committed to the repository**. Ask the development team if you need them. If you weren't issued a password, use the password-reset link on the login page — you'll receive an email with a one-time activation link.
 
 1. Open the web address in your browser (Chrome, Firefox, Safari, or Edge all work).
 2. You will see a login page. Type the username and password you were given.
@@ -1740,16 +1843,19 @@ The testing environment mirrors production:
 | HTTPS | Via Nginx reverse proxy (local) or Cloud Run (GCP) | See [HTTPS.md](docs/HTTPS.md) for full setup guide |
 | `SECURE_PROXY_SSL_HEADER` | Trusts `X-Forwarded-Proto` from reverse proxy | Enables Django to detect HTTPS behind Nginx/Cloud Run |
 | Database | PostgreSQL 16 (separate volume) | Isolated from the development database |
-| Login | Credentials in `.env.testing` | Dedicated QA credentials, never committed to git |
-| Admin panel | `/admin/` — credentials in `.env.testing` | Django admin for inspecting raw data |
+| Login | Teacher email + password via `auth.User`; seeded by `manage.py seed_teachers` from `TEACHER_SEED_<N>_*` env vars | Same login path as production — exercises the real Teacher auth flow |
+| Password reset | `/password-reset/...` (public, branded templates) | Lets QA teachers without an initial password activate via email |
+| Admin panel | `/admin/` — same Teacher session (admin teachers only) | Django admin for inspecting raw data; non-admin teachers don't see it |
 
 **Configuration files:**
 
 | File | Purpose |
 |------|---------|
 | `.env.testing` | All environment variables for QA (credentials, database, security flags) |
+| `.env.testing_users` | Optional overlay — Teacher seed values (`TEACHER_SEED_<N>_*`); loaded by `settings.py` with `override=True` when `DJANGO_ENV=testing` |
 | `docker-compose.testing.yml` | Docker override that switches to Gunicorn and uses a separate database volume |
 | `seed_testdata` command | Populates the database with realistic fake data |
+| `seed_teachers` command | Idempotently creates Teacher rows + linked `auth.User` accounts from `TEACHER_SEED_*` env vars; runs automatically on container start |
 | `HTTPS.md` | Full guide for HTTPS setup with Docker (Nginx + self-signed cert) and GCP Cloud Run |
 | `/testing/` | In-app QA dashboard with project info, seeding, backlog, and error reporting toggle |
 | `core/decorators.py` | `qa_access_required` decorator — reusable access gate for QA-only views |
@@ -2028,7 +2134,7 @@ make up                        # Start Docker (PostgreSQL + Redis + Django + Cel
 1. Work on `development` (or a short-lived branch off `development`)
 2. Make changes following the conventions below
 3. Run `make pc-run` — Ruff + mypy + bandit all pass, offers to auto-bump the patch version on success, and auto-stages `uv.lock` if regenerated
-4. Run `make test` — all 283 tests must pass (PostgreSQL via Docker, parallel, with coverage)
+4. Run `make test` — all 623 tests must pass (PostgreSQL via Docker, parallel, with coverage)
 5. `git commit` with a message like `v1.0.6 - Short description` (version comes first — conventions match every other commit in the project)
 6. `git push origin development`
 7. CI runs automatically on your push (see [CI/CD](#cicd--github-actions))
