@@ -1,30 +1,16 @@
 import os
 from pathlib import Path
-from urllib.parse import urlparse
 
 import dj_database_url
 from dotenv import load_dotenv
 
+# One env file, one source of truth. To switch environments, rename one of
+# .env.development / .env.testing / .env.production to .env before bringing
+# the stack up. Docker-injected process env vars (compose `environment:` or
+# Cloud Run `--set-env-vars`) already live in os.environ and take precedence
+# over the file by dotenv semantics.
 _ENV_ROOT = Path(__file__).resolve().parent.parent.parent
 load_dotenv(_ENV_ROOT / ".env", override=False)
-
-# Environment-specific overlay files — loaded with override=True so their values
-# win over .env (but NOT over Docker-injected process env vars, which are already
-# in os.environ before load_dotenv runs and take precedence by dotenv semantics).
-#
-# - .env.development: strong dev-only basic-auth creds (LOGIN_USERNAME/PASSWORD)
-# - .env.testing_users: seed Teacher credentials (consumed by `manage.py seed_teachers`)
-#
-# Both files are gitignored via `.env*`.
-_env_name = os.getenv("DJANGO_ENV", "development").split()[0].strip()
-if _env_name == "development":
-    _overlay = _ENV_ROOT / ".env.development"
-    if _overlay.exists():
-        load_dotenv(_overlay, override=True)
-elif _env_name == "testing":
-    _overlay = _ENV_ROOT / ".env.testing_users"
-    if _overlay.exists():
-        load_dotenv(_overlay, override=True)
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -34,7 +20,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # NOTA: Usa `make version x.y.z` para actualizar ambos sitios a la vez:
 #   - pyproject.toml (campo version)
 #   - README.md (badge y tabla de versiones — gestionado por la skill update-readme)
-APP_VERSION = os.getenv("APP_VERSION", "1.0.12")
+APP_VERSION = os.getenv("APP_VERSION", "1.0.13")
 
 # ============================================================================
 # SECURITY SETTINGS
@@ -79,15 +65,9 @@ if not DEBUG:
 # ============================================================================
 # ENVIRONMENT
 # ============================================================================
-# DJANGO_ENV controla el comportamiento del entorno
-# Valores permitidos:
-#   - "development": Modo desarrollo (crea superuser automático, sin collectstatic)
-#   - "production": Modo producción (ejecuta collectstatic, sin superuser auto)
-#   - Cualquier otro valor se trata como "development"
-#
-# Uso en el código:
-#   - entrypoint.sh: Verifica si debe crear superuser automático o collectstatic
-#   - settings.py: Define configuraciones según el entorno (actualmente solo lo almacena)
+# DJANGO_ENV: "development" | "testing" | "production". Any other value is
+# treated as development. Consumed by entrypoint.sh (collectstatic + teacher
+# seeding only run for testing/production) and by the QA testing dashboard.
 ENVIRONMENT = os.getenv("DJANGO_ENV", "development")
 
 # QA testing tools — only enabled when DJANGO_ENV=testing and a QA user is configured
@@ -170,33 +150,23 @@ WSGI_APPLICATION = "project.wsgi.application"
 # ============================================================================
 # DATABASE CONFIGURATION
 # ============================================================================
-# Prioridad:
-# 1. DATABASE_URL (Render, Heroku, etc.)
-# 2. PostgreSQL con variables de entorno individuales
-# 3. SQLite (desarrollo local)
-
-database_url = os.getenv("DATABASE_URL", "").strip()
-parsed_database_url = urlparse(database_url) if database_url else None
-database_url_host = parsed_database_url.hostname if parsed_database_url else ""
-database_url_has_valid_host = bool(
-    database_url_host and ("." in database_url_host or database_url_host in ("localhost", "127.0.0.1"))
-)
-
-if database_url and not database_url_has_valid_host:
-    database_url = ""
-
-if database_url:
-    # Render, Heroku u otro servicio que use DATABASE_URL
+# Two paths, both PostgreSQL:
+#   1. DATABASE_URL  — Cloud Run via the Cloud SQL Unix socket (the URL ends
+#                      with `?host=/cloudsql/PROJECT:REGION:INSTANCE` and has
+#                      no hostname; dj_database_url handles that shape).
+#   2. POSTGRES_*    — Docker (compose injects POSTGRES_HOST=db) or any other
+#                      Postgres reachable by TCP.
+# SQLite is intentionally not a fallback — the project always uses Postgres.
+if database_url := os.getenv("DATABASE_URL", "").strip():
     DATABASES = {
         "default": dj_database_url.config(
-            default=os.getenv("DATABASE_URL"),
+            default=database_url,
             conn_max_age=600,
             conn_health_checks=True,
-            ssl_require=True if not DEBUG else False,
+            ssl_require=not DEBUG,
         )
     }
-elif os.getenv("DATABASE") == "postgres" or os.getenv("POSTGRES_HOST"):
-    # Docker o servidor PostgreSQL local
+else:
     DATABASES = {
         "default": {
             "ENGINE": "django.db.backends.postgresql",
@@ -206,17 +176,7 @@ elif os.getenv("DATABASE") == "postgres" or os.getenv("POSTGRES_HOST"):
             "HOST": os.getenv("POSTGRES_HOST", "localhost"),
             "PORT": os.getenv("POSTGRES_PORT", "5432"),
             "CONN_MAX_AGE": 600,
-            "OPTIONS": {
-                "connect_timeout": 10,
-            },
-        }
-    }
-else:
-    # SQLite para desarrollo local sin Docker
-    DATABASES = {
-        "default": {
-            "ENGINE": "django.db.backends.sqlite3",
-            "NAME": BASE_DIR / "db.sqlite3",
+            "OPTIONS": {"connect_timeout": 10},
         }
     }
 
@@ -334,8 +294,9 @@ DEFAULT_FROM_EMAIL = EMAIL_HOST_USER
 # ============================================================================
 # CELERY CONFIGURATION
 # ============================================================================
-# Sin Redis (plan free de Render), usar eager mode (sincrónico)
-# Las tareas se ejecutan inmediatamente en el mismo proceso
+# Docker dev + testing VM: Redis broker (set by docker-compose.yml).
+# Cloud Run: no broker — tasks run synchronously via CELERY_TASK_ALWAYS_EAGER
+# (set automatically below when CELERY_BROKER_URL is unset).
 CELERY_BROKER_URL = os.getenv("CELERY_BROKER_URL", None)
 CELERY_RESULT_BACKEND = os.getenv("CELERY_RESULT_BACKEND", None)
 
@@ -361,7 +322,7 @@ CELERY_TASK_ROUTES = {
     "comms.tasks.send_*": {"queue": "emails"},
 }
 
-# Modo eager cuando no hay broker (plan free)
+# Eager mode when no broker is configured (Cloud Run, tests, CI).
 if not CELERY_BROKER_URL:
     CELERY_TASK_ALWAYS_EAGER = True
     CELERY_TASK_EAGER_PROPAGATES = True

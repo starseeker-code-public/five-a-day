@@ -113,7 +113,7 @@ class Command(BaseCommand):
             self.stdout.write(
                 self.style.WARNING(
                     "No TEACHER_SEED_1_FIRST_NAME found — nothing to seed. "
-                    "Set TEACHER_SEED_<N>_* env vars (e.g. via .env.testing_users)."
+                    "Set TEACHER_SEED_<N>_* env vars in .env.testing or .env.production."
                 )
             )
         else:
