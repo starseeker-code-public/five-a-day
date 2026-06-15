@@ -8,7 +8,7 @@ authors = [
     { name = "Joaquin Hernandez Martinez", email = "proyecto_noether@outlook.com" },
 ]
 dependencies = [
-    "django>=5.2.5,<6",
+    "django>=5.2.15",
     "pandas>=2.3.1,<4",
     "django-filter>=25.1,<26",
     "djangorestframework>=3.16.1,<4",
@@ -29,6 +29,8 @@ dependencies = [
     "openpyxl>=3.1.5,<4",
     "django-debug-toolbar>=6.0.0",
     "django-extensions>=4.1",
+    "idna>=3.15",
+    "urllib3>=2.7.0",
 ]
 
 [dependency-groups]
@@ -45,6 +47,9 @@ dev = [
     "bandit>=1.8",
     "coverage-badge>=1.1",
     "pip-audit>=2.7",
+    # Transitive via pip-audit → pip-api; pinned to patched range (CVE-2026-3219,
+    # CVE-2026-6357, PYSEC-2026-196 all fixed in 26.1+; 26.1.2 covers all three).
+    "pip>=26.1.2",
 ]
 
 [build-system]
