@@ -10,7 +10,8 @@
         clean clean-all health url generate-payments generate-payments-dry \
         sync lint format pre-commit-install pc-run \
         mypy bandit audit coverage-badge check-deploy \
-        celery-logs celery-restart celery-status celery-test-task
+        celery-logs celery-restart celery-status celery-test-task \
+        connect-testing
 
 # ============================================================================
 # HELP
@@ -96,16 +97,22 @@ help:
 	@echo "    make clean              Remove stopped containers + prune"
 	@echo "    make clean-all          Remove everything including volumes"
 	@echo ""
+	@echo "  Remote:"
+	@echo "    make connect-testing    SSH into the GCP testing VM (auto-login if needed)"
+	@echo ""
 
 # ============================================================================
 # SETUP
 # ============================================================================
 setup:
-	@if [ ! -f .env ]; then \
-		touch .env; \
-		echo "Created empty .env. Copy the template from README.md (section '.env template') into .env and fill in the blanks."; \
-	else \
+	@if [ -f .env ]; then \
 		echo ".env already exists."; \
+	elif [ -f .env.development ]; then \
+		cp .env.development .env; \
+		echo "Copied .env.development → .env. Edit it if needed, then run 'make up'."; \
+	else \
+		touch .env; \
+		echo "Created empty .env. See README.md (section '.env template') for the variable shape, or create .env.development/.env.testing/.env.production and rename one to .env."; \
 	fi
 
 # ============================================================================
@@ -308,10 +315,11 @@ clean-all:
 # ============================================================================
 # VERSIONING
 # ============================================================================
-# App version is defined in three places:
+# App version is defined in four places and `make version x.y.z` updates them all:
 #   1. pyproject.toml  -> version = "x.y.z"
 #   2. settings.py     -> APP_VERSION fallback = "x.y.z"
 #   3. README.md       -> badge URL
+#   4. uv.lock         -> regenerated via `uv lock --quiet`
 # Usage: make version x.y.z
 
 ifeq ($(firstword $(MAKECMDGOALS)),version)
@@ -429,3 +437,18 @@ pc-run:
 # ============================================================================
 check-deploy:
 	docker compose exec web python project/manage.py check --deploy
+
+# ============================================================================
+# REMOTE (gcloud)
+# ============================================================================
+# SSH into the testing VM. Triggers `gcloud auth login` only if no account is
+# currently active; if you're already logged in, it skips straight to SSH.
+connect-testing:
+	@ACTIVE=$$(gcloud auth list --filter=status:ACTIVE --format="value(account)" 2>/dev/null); \
+	if [ -z "$$ACTIVE" ]; then \
+		echo "No active gcloud account. Launching login..."; \
+		gcloud auth login || exit 1; \
+	else \
+		echo "Using gcloud account: $$ACTIVE"; \
+	fi; \
+	gcloud compute ssh --zone "us-east1-c" "fiveaday-testing" --project "five-a-day-evolution"

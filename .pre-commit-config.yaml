@@ -10,7 +10,10 @@ repos:
     hooks:
       - id: mypy
         name: mypy
-        entry: uv run mypy project/
+        # django-stubs imports project.settings at load time. Without these env
+        # vars, settings.py's production secret-key guard raises ValueError and
+        # mypy reports "Error constructing plugin instance" — see CLAUDE.md.
+        entry: bash -c 'DJANGO_SETTINGS_MODULE=project.settings DJANGO_DEBUG=True DJANGO_SECRET_KEY=dummy-secret-key-for-static-analysis PYTHONPATH=project uv run mypy project/'
         language: system
         types: [python]
         pass_filenames: false

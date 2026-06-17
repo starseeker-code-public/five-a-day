@@ -1,157 +1,53 @@
 #!/bin/sh
 # ============================================================================
-# ENTRYPOINT SCRIPT - Docker and Render.com Initialization
+# ENTRYPOINT — Five a Day
 # ============================================================================
-# This script operates in two modes:
-# 1. Local Docker (development): Waits for PostgreSQL, runs migrations, starts runserver
-# 2. Render.com (production): Runs migrations, collectstatic, starts Gunicorn
+# Runs the same boot sequence everywhere (Docker dev, testing VM, Cloud Run).
+# Behaviour is driven entirely by env vars:
+#   - DATABASE_URL set       → Cloud SQL via socket, skip the wait-for-Postgres
+#   - DATABASE_URL unset     → TCP Postgres (Docker), wait until it answers
+#   - DJANGO_ENV != dev      → collectstatic + seed_teachers run
+#   - Always                 → migrate, then exec the Dockerfile CMD (gunicorn)
+# ============================================================================
 
-set -e  # Exit if any command fails
+set -e
 
-# ============================================================================
-# Detect Environment
-# ============================================================================
-IS_RENDER=false
-if [ -n "$RENDER" ] || [ -n "$DATABASE_URL" ]; then
-    IS_RENDER=true
-    echo "=========================================="
-    echo "🚀 Five a Day - Starting on Render.com..."
-    echo "=========================================="
-else
-    echo "==================================="
-    echo "🚀 Five a Day - Initializing..."
-    echo "==================================="
-fi
+mkdir -p /app/logs /app/staticfiles /app/mediafiles
 
-# ============================================================================
-# Create necessary directories (Docker local only)
-# ============================================================================
-if [ "$IS_RENDER" = false ]; then
-    mkdir -p /app/logs /app/staticfiles /app/mediafiles
-fi
-
-# ============================================================================
-# Check critical environment variables on Render
-# ============================================================================
-if [ "$IS_RENDER" = true ]; then
-    if [ -z "$DATABASE_URL" ] && [ -z "$POSTGRES_HOST" ]; then
-        echo "❌ ERROR: No database configuration (DATABASE_URL or POSTGRES_HOST)"
-        exit 1
-    fi
-    
-    if [ "$DJANGO_DEBUG" = "True" ]; then
-        echo "⚠️ WARNING: DEBUG is enabled in production"
-    fi
-fi
-
-# ============================================================================
-# Function: Wait for PostgreSQL to be available (Local Docker only)
-# ============================================================================
-wait_for_postgres() {
-    echo "⏳ Waiting for PostgreSQL..."
-    
-    until PGPASSWORD=$POSTGRES_PASSWORD psql -h "$POSTGRES_HOST" -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c '\q' 2>/dev/null; do
-        echo "   PostgreSQL is unavailable - waiting..."
+# ── Wait for PostgreSQL (TCP / Docker case only) ────────────────────────────
+if [ -z "$DATABASE_URL" ]; then
+    echo "⏳ Waiting for PostgreSQL at ${POSTGRES_HOST:-localhost}:${POSTGRES_PORT:-5432}..."
+    until PGPASSWORD="$POSTGRES_PASSWORD" psql \
+        -h "${POSTGRES_HOST:-localhost}" \
+        -p "${POSTGRES_PORT:-5432}" \
+        -U "$POSTGRES_USER" \
+        -d "$POSTGRES_DB" \
+        -c '\q' 2>/dev/null; do
+        echo "   …still waiting"
         sleep 2
     done
-    
-    echo "✅ PostgreSQL is available!"
-}
-
-# ============================================================================
-# Wait for the database to be ready (Local Docker only)
-# ============================================================================
-if [ "$IS_RENDER" = false ] && [ "$DATABASE" = "postgres" ]; then
-    wait_for_postgres
+    echo "✅ PostgreSQL is available"
 fi
 
-# ============================================================================
-# Run Django Migrations (skip for Celery containers)
-# ============================================================================
-# Check if the command is a Celery command — workers/beat should not run migrations
+# ── Migrations (skip for Celery workers — they should never migrate) ────────
 FIRST_ARG="$1"
 case "$FIRST_ARG" in
     celery)
-        echo "⏭️  Skipping migrations (Celery container)"
+        echo "⏭️  Skipping migrations + collectstatic + seed_teachers (Celery container)"
         ;;
     *)
         echo "📦 Applying database migrations..."
         python project/manage.py migrate --noinput
-        ;;
-esac
 
-# ============================================================================
-# Collect Static Files (skip for Celery containers)
-# ============================================================================
-# On Render: Always (production with WhiteNoise)
-# On Docker: Only if DJANGO_ENV=production or DJANGO_ENV=testing
-case "$FIRST_ARG" in
-    celery) ;;  # skip
-    *)
-        if [ "$IS_RENDER" = true ] || [ "$DJANGO_ENV" = "production" ] || [ "$DJANGO_ENV" = "testing" ]; then
+        if [ "$DJANGO_ENV" = "testing" ] || [ "$DJANGO_ENV" = "production" ]; then
             echo "📁 Collecting static files..."
             python project/manage.py collectstatic --noinput --clear
-        fi
-        ;;
-esac
 
-# ============================================================================
-# Create Superuser if it doesn't exist (skip for Celery containers)
-# ============================================================================
-case "$FIRST_ARG" in
-    celery) ;;  # skip
-    *)
-        if [ "$DJANGO_SUPERUSER_USERNAME" ] && [ "$DJANGO_SUPERUSER_EMAIL" ] && [ "$DJANGO_SUPERUSER_PASSWORD" ]; then
-            echo "👤 Verifying superuser..."
-            python project/manage.py createsuperuser --noinput 2>/dev/null || echo "✅ Superuser already exists."
-        else
-            if [ "$IS_RENDER" = true ]; then
-                echo "⚠️ Superuser variables not configured on Render"
-            fi
-        fi
-        ;;
-esac
-
-# ============================================================================
-# Seed Teachers (testing + production only)
-# ============================================================================
-# In testing/production the login flow uses Teacher email + password. This
-# step reads TEACHER_SEED_<N>_* env vars and idempotently creates the matching
-# Teacher rows + linked auth.User accounts. No-op in development (dev uses
-# env-var basic-auth, not Teacher login).
-case "$FIRST_ARG" in
-    celery) ;;  # skip
-    *)
-        if [ "$DJANGO_ENV" = "testing" ] || [ "$DJANGO_ENV" = "production" ] || [ "$IS_RENDER" = true ]; then
             echo "🧑‍🏫 Seeding teachers from TEACHER_SEED_* env vars..."
-            python project/manage.py seed_teachers || echo "⚠️ seed_teachers reported an issue (non-fatal)"
+            python project/manage.py seed_teachers || echo "⚠️  seed_teachers reported an issue (non-fatal)"
         fi
         ;;
 esac
 
-# ============================================================================
-# Start Server
-# ============================================================================
-if [ "$IS_RENDER" = true ]; then
-    # RENDER: Start Gunicorn
-    echo "=========================================="
-    echo "✨ Initialization complete!"
-    echo "🚀 Starting Gunicorn server..."
-    echo "=========================================="
-    
-    exec gunicorn \
-        --chdir project \
-        --bind 0.0.0.0:${PORT:-8000} \
-        --workers ${WEB_CONCURRENCY:-4} \
-        --timeout 120 \
-        --access-logfile - \
-        --error-logfile - \
-        project.wsgi:application
-else
-    # LOCAL DOCKER: Execute passed command (runserver)
-    echo "==================================="
-    echo "✨ Initialization complete!"
-    echo "==================================="
-    
-    exec "$@"
-fi
+echo "✨ Initialization complete!"
+exec "$@"

@@ -20,7 +20,7 @@ Built to centralize student records, automate billing cycles, and streamline par
 ### Project Status
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v1.0.12-brightgreen?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-v1.0.13-brightgreen?style=flat-square" alt="Version">
   &nbsp;|&nbsp;
   <a href="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml?query=branch%3Amain"><img src="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml/badge.svg?branch=main&style=flat-square" alt="CI main"></a>
   &nbsp;|&nbsp;
@@ -34,16 +34,16 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 | Environment | Branch | Hosting | CI Status |
 |-------------|--------|---------|-----------|
-| **Production** | `main` | [https://example.com/](...) | [![Production CI](https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml?query=branch%3Amain) |
-| **Testing (QA)** | `testing` | [https://example.com/](...) | [![Testing CI](https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml/badge.svg?branch=testing)](https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml?query=branch%3Atesting) |
-| **Development** | `development` | [Docker in local](http://localhost:8000/) | [![Development CI](https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml/badge.svg?branch=development)](https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml?query=branch%3Adevelopment) |
+| **Production** | `main` | Pending — GCP Cloud Run + Cloud SQL (`europe-southwest1`) | [![Production CI](https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml?query=branch%3Amain) |
+| **Testing (QA)** | `testing` | [http://34.26.130.187:8000/](http://34.26.130.187:8000/) — GCP Compute Engine `e2-micro` (always-free tier, Docker Compose) | [![Testing CI](https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml/badge.svg?branch=testing)](https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml?query=branch%3Atesting) |
+| **Development** | `development` | [Local Docker](http://localhost:8000/) via `make up` | [![Development CI](https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml/badge.svg?branch=development)](https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml?query=branch%3Adevelopment) |
 
 
 | Version | Date | Description |
 |---------|------|-------------|
-| **v1.0.12** | 2026-06-10 | Teacher login + password reset, non-admin whitelist |
+| **v1.0.13** | 2026-06-14 | Env-file consolidation, settings simplification, Render removed |
+| v1.0.12 | 2026-06-10 | Teacher login + password reset, non-admin whitelist |
 | v1.0.11 | 2026-04-22 | Testing env fixes, CI hardening, static files cleanup |
-| v1.0.10 | 2026-04-21 | Branded admin theme, white-bg favicon, social meta |
 
 ---
 
@@ -154,8 +154,60 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 ## Version History & Roadmap
 
-<details id="v1012" open>
-<summary><strong>v1.0.12 — Teacher Login, Password Reset & Non-Admin Whitelist (current)</strong></summary>
+<details id="v1013" open>
+<summary><strong>v1.0.13 — Env-File Consolidation, Settings Simplification & Render Removal (current)</strong></summary>
+
+**Env files: 7 → 3, no overlays**
+
+- Deleted stale env files: `.env`, `.env2`, `.env.old`, `.env.final`, `.env.testing_users`. The repo now ships exactly three self-contained env files — `.env.development`, `.env.testing`, `.env.production` — each one fully usable on its own.
+- Workflow: rename the one you want active to `.env` before `docker compose up` (or `make up`). No more "which overlay won" detective work.
+- `.env.production` is a template for **local prod-simulation only**. Real Cloud Run reads env from `--set-env-vars` + Secret Manager — never from a file.
+- `make setup` now intelligently copies `.env.development → .env` if no `.env` exists yet.
+
+**Settings.py simplified**
+
+- Dropped 20 lines of conditional overlay-loading (`.env.development` / `.env.testing_users`). Now a single `load_dotenv(".env")` call.
+- Removed the dead SQLite database fallback — PostgreSQL is the only supported backend.
+- Removed the broken `urlparse` validation that was silently rejecting Cloud Run's socket-style `DATABASE_URL` (e.g. `postgres://user:pass@/db?host=/cloudsql/...`).
+- Dropped all "Render, Heroku" comments and stale Spanish docstrings.
+- Net change: ~50 lines shorter.
+
+**entrypoint.sh rewritten**
+
+- Removed the `IS_RENDER` boolean and every Render-themed log line. The new signal for "skip the postgres TCP wait" is `DATABASE_URL` presence (Cloud SQL via socket).
+- Removed the `createsuperuser` block — admin access is delegated to Teachers with `ADMIN=True` via the `post_save` signal that mirrors `is_staff` + `is_superuser`.
+- Always `exec "$@"` so the Dockerfile CMD (gunicorn) drives the server choice; the dev compose still overrides with `runserver`.
+- ~120 lines shorter, single code path for all environments.
+
+**docker-compose.testing.yml slimmed**
+
+- Removed the redundant `env_file: .env.testing` override (compose reads `.env` now).
+- Removed the duplicated `POSTGRES_DB/USER/PASSWORD` `environment:` blocks on both `db` and `web` — these come from `.env`.
+- Removed the hardcoded password in the DB healthcheck — it now uses `${POSTGRES_PASSWORD}` from `.env`.
+- ~30 lines shorter; only the two genuine differences from base remain (gunicorn command + isolated `testing_postgres_data` volume).
+
+**gcp-cloudrun.yaml deleted**
+
+- The alternative Cloud Run deployment manifest had placeholders and had drifted from `DEPLOYMENT.md`'s direct-`gcloud run deploy` workflow. Deleted to avoid a second source of truth.
+
+**Documentation overhaul**
+
+- Three `CLAUDE.md` gotchas rewritten (`load_dotenv` semantics, the new 3-file layout replacing the overlay system, teacher-seed contract).
+- `README.md` updates: Quick Start uses the rename workflow, `.env template` is now a single superset block with per-section "applies to" notes (removed `DJANGO_SUPERUSER_*` and `ACADEMY_WHATSAPP` rows), Make Commands table fully synced with the actual Makefile (dropped fictitious `make test-sqlite/test-local/test-coverage/test-models/test-services/test-views/test-fast/test-k` targets, added the celery + cleanup blocks), file structure tree updated for the three-file env layout, dev auth description corrected, Configuration files table for QA, App Versioning section now correctly states "four places" (was "two").
+- `DEPLOYMENT.md` testing-VM section no longer references the `.env.testing_users` overlay.
+- `Makefile` versioning comment corrected to four places.
+- `seed_teachers` warning message points to the new env file names.
+
+**Testing VM live**
+
+- Deployed to GCP Compute Engine `e2-micro` (us-east1-c, always-free tier) with a reserved static external IP `34.26.130.187`. Reachable at `http://34.26.130.187:8000/` over plain HTTP. Runs the full Docker Compose stack (db + redis + web + celery_worker + celery_beat) on top of a 2 GB swap file (the e2-micro only has 1 GB RAM).
+- All three seeded teachers (Claudia, Silvia, John Doe) log in successfully; admin Teachers reach `/admin/` via their email + password.
+- GCP billing budget alert set at €0.01 — fires on any non-free-tier spend.
+
+</details>
+
+<details id="v1012">
+<summary><strong>v1.0.12 — Teacher Login, Password Reset & Non-Admin Whitelist</strong></summary>
 
 **Authentication overhaul** (ships roadmap item v1.6)
 
@@ -860,18 +912,17 @@ erDiagram
 git clone https://github.com/starseeker-code-public/five-a-day.git
 cd five-a-day
 
-# Create the .env file — copy the template below into `.env` and fill in the blanks
-touch .env
-```
+# Create the three env files from the template below — all three are
+# gitignored, so they don't exist after clone. You can edit them in place
+# and pick which one is active by renaming it to `.env`:
+#   .env.development   for local Docker dev
+#   .env.testing       for the QA stack (testing VM or local prod-simulation)
+#   .env.production    template for Cloud Run (real prod reads env from
+#                      Secret Manager + --set-env-vars, not this file)
 
-Paste the template from [.env template](#env-template) into your new `.env` file and fill in the empty values.
-
-**Docker (recommended):**
-
-```bash
-make build             # Build images
+# Activate development locally:
+mv .env.development .env
 make up                # Start PostgreSQL + Redis + Django + Celery → http://localhost:8000
-make migrate           # Apply migrations (first time only)
 ```
 
 **Local development (no Docker):**
@@ -883,91 +934,86 @@ python manage.py migrate
 python manage.py runserver
 ```
 
-> **Important**: The `.env` file controls whether the app runs in production or development mode. Before starting, set at minimum:
-> - `DJANGO_ENV=development` — enables development behaviors (auto superuser, no collectstatic)
-> - `DJANGO_DEBUG=true` — enables Django debug mode, detailed error pages
+> **Important** — only ONE file named `.env` is read by `settings.py`. The `.env.*` files in the repo are alternative environments; you switch by renaming. Before starting, the active `.env` must set at minimum:
+>
+> - `DJANGO_ENV` — `development` / `testing` / `production`
+> - `DJANGO_DEBUG` — `True` in development, `False` everywhere else
 > - `POSTGRES_PASSWORD` — required for database connection
 > - `DJANGO_SECRET_KEY` — generate with `python -c 'from django.core.management.utils import get_random_secret_key; print(get_random_secret_key())'`
 
 ### .env template
 
-`.env` is gitignored and never committed. The template below is the authoritative structure — copy it into your new `.env` file, then fill in the empty values with your own secrets. Defaults that are safe to keep as-is are already filled in.
+All `.env*` files are gitignored. The repo ships three of them (`.env.development`, `.env.testing`, `.env.production`) — each is self-contained, and the one you want active is renamed to `.env` before bringing the stack up.
+
+The template below is the **superset** of all keys. Not every key applies to every environment — the comments call out which environment each block is for. Use it as a reference to author your three env files.
 
 ```bash
 # ============================================================================
-# DJANGO SETTINGS
+# DJANGO  (all environments)
 # ============================================================================
-DJANGO_ENV=development          # production | development
-DJANGO_DEBUG=True
-SECURE_SSL_REDIRECT=False
+DJANGO_ENV=development            # development | testing | production
+DJANGO_DEBUG=True                 # True in dev, False everywhere else
 # Generate with: python -c 'from django.core.management.utils import get_random_secret_key; print(get_random_secret_key())'
 DJANGO_SECRET_KEY=
-DJANGO_ALLOWED_HOSTS=localhost,127.0.0.1,0.0.0.0
+DJANGO_ALLOWED_HOSTS=localhost,127.0.0.1
 
 # ============================================================================
-# LOGGING
+# HTTPS & SECURITY  (testing + production only — defaults are correct in dev)
 # ============================================================================
-LOG_LEVEL=INFO
-DJANGO_LOG_LEVEL=INFO
+SECURE_SSL_REDIRECT=False         # True in production (Cloud Run terminates TLS)
+SESSION_COOKIE_SECURE=False       # True in production
+CSRF_COOKIE_SECURE=False          # True in production
+SESSION_COOKIE_SAMESITE=Lax       # Strict in production
+CSRF_COOKIE_HTTPONLY=True
+CSRF_COOKIE_SAMESITE=Lax          # Strict in production
+CSRF_TRUSTED_ORIGINS=             # Comma-separated http(s):// origins for non-localhost hosts
 
 # ============================================================================
-# DATABASE CONFIGURATION
+# DATABASE  (all environments)
 # ============================================================================
-DATABASE=postgres               # sqlite | postgres
+# POSTGRES_HOST + POSTGRES_PORT are injected by docker-compose.yml (POSTGRES_HOST=db).
+# On Cloud Run, use DATABASE_URL with the Unix-socket query instead:
+#   postgres://user:pass@/dbname?host=/cloudsql/PROJECT:REGION:INSTANCE
+DATABASE=postgres
 POSTGRES_DB=fiveaday_db
 POSTGRES_USER=fiveaday_user
-# Generate with: openssl rand -base64 32
-POSTGRES_PASSWORD=
-POSTGRES_HOST=db                # `db` in Docker, `localhost` outside
-POSTGRES_PORT=5432
+POSTGRES_PASSWORD=                # openssl rand -base64 32
+# DATABASE_URL=
 
 # ============================================================================
-# SUPERUSER (auto-created on first boot if all three are set)
+# AUTHENTICATION  (development only — testing/production use Teacher login)
 # ============================================================================
-DJANGO_SUPERUSER_USERNAME=
-DJANGO_SUPERUSER_EMAIL=
-DJANGO_SUPERUSER_PASSWORD=
-
-# ============================================================================
-# EMAIL CONFIGURATION (Gmail SMTP + App Password)
-# ============================================================================
-EMAIL_HOST_USER=                # your-academy@gmail.com
-EMAIL_SECRET=                   # 16-char Gmail App Password
-SUPPORT_EMAIL=                  # where support tickets are sent
-EMAIL_TEST_1=                   # dev test recipient 1
-EMAIL_TEST_2=                   # dev test recipient 2
-
-# ============================================================================
-# CELERY / REDIS
-# ============================================================================
-CELERY_BROKER_URL=redis://redis:6379/0
-CELERY_RESULT_BACKEND=redis://redis:6379/0
-
-# ============================================================================
-# AUTHENTICATION
-# ============================================================================
-# In DEVELOPMENT, login compares against LOGIN_USERNAME / LOGIN_PASSWORD below
-# (and get-or-creates a matching Django superuser so /admin/ keeps working).
-# In TESTING/PRODUCTION, login goes through auth.User — Teachers authenticate
-# with their email + hashed password. Seed those teachers via TEACHER_SEED_*
-# below; the dev creds are ignored.
-LOGIN_USERNAME=fiveaday
+# In development, /login/ matches against these two values directly and
+# get-or-creates a Django superuser with username=LOGIN_USERNAME so /admin/
+# keeps working. Omit both in testing/production: Teachers authenticate via
+# auth.User (email + password) seeded by TEACHER_SEED_* below.
+LOGIN_USERNAME=
 LOGIN_PASSWORD=
 
-# ============================================================================
-# GOOGLE OAUTH
-# ============================================================================
-# Create at https://console.cloud.google.com/ → APIs & Services → Credentials
-# Authorised redirect URI: http://localhost:8000/auth/google/callback/
-GOOGLE_CLIENT_ID=
-GOOGLE_CLIENT_SECRET=
-GOOGLE_REDIRECT_URI=http://localhost:8000/auth/google/callback/
+# QA dashboard — only visible to the user with this username (testing only)
+QA_TESTING_USERNAME=
 
 # ============================================================================
-# TEACHER SEEDING (testing / production only — read by `manage.py seed_teachers`)
+# EMAIL  (all environments — Gmail SMTP + App Password)
 # ============================================================================
-# Numbered blocks. N starts at 1, the command stops at the first missing
-# FIRST_NAME. FIRST_NAME / LAST_NAME / EMAIL are required; PHONE / ADMIN /
+EMAIL_HOST_USER=                  # your-academy@gmail.com
+EMAIL_SECRET=                     # 16-char Gmail App Password
+SUPPORT_EMAIL=                    # where support tickets are sent
+EMAIL_TEST_1=                     # dev/QA test recipient 1
+EMAIL_TEST_2=                     # dev/QA test recipient 2
+
+# ============================================================================
+# GOOGLE OAUTH  (optional — recommended in production)
+# ============================================================================
+GOOGLE_CLIENT_ID=
+GOOGLE_CLIENT_SECRET=
+GOOGLE_REDIRECT_URI=              # http(s)://YOUR_HOST/auth/google/callback/
+
+# ============================================================================
+# TEACHER SEEDING  (testing + production only — read by `manage.py seed_teachers`)
+# ============================================================================
+# Numbered blocks (N starts at 1, iteration stops at the first missing
+# FIRST_NAME). FIRST_NAME / LAST_NAME / EMAIL are required; PHONE / ADMIN /
 # PASSWORD are optional. Omit PASSWORD to make the teacher activate via the
 # password-reset email (Gmail SMTP must work).
 TEACHER_SEED_1_FIRST_NAME=
@@ -978,15 +1024,18 @@ TEACHER_SEED_1_ADMIN=True
 TEACHER_SEED_1_PASSWORD=
 
 # ============================================================================
-# ACADEMY BUSINESS INFO (prefilled in payment-reminder email forms)
+# ACADEMY BUSINESS INFO  (prefilled in payment-reminder email forms)
 # ============================================================================
 ACADEMY_IBAN=
 ACADEMY_IBAN_HOLDER=
 ACADEMY_PHONE=
-ACADEMY_WHATSAPP=
 ```
 
-**Note**: do not include `VERSION=` in your `.env` — it is deprecated. The app version is derived from `pyproject.toml` (and overridable via `APP_VERSION`).
+A few keys are intentionally absent from the template:
+
+- **`APP_VERSION`** — derived from `pyproject.toml`. Setting it as an env var silently overrides the runtime value, so don't.
+- **`POSTGRES_HOST` / `POSTGRES_PORT`** — `docker-compose.yml` injects `POSTGRES_HOST=db` and `5432` is the Postgres default. Only set them if running outside Docker against a non-default Postgres.
+- **`CELERY_BROKER_URL` / `CELERY_RESULT_BACKEND`** — Docker compose injects `redis://redis:6379/0` for the worker/beat containers. On Cloud Run, leaving them unset triggers Celery eager mode automatically.
 
 ### Make Commands
 
@@ -997,46 +1046,53 @@ Run `make` or `make help` for the full list. Key commands:
 | **Lifecycle** | |
 | `make up` | Start all services (detached) |
 | `make down` | Stop and remove containers |
-| `make dev` | Start in foreground (logs visible) |
-| `make rebuild` | Full rebuild (no cache) + start |
+| `make dev` / `make dev BUILD=1` | Start in foreground (logs visible); optionally build first |
+| `make rebuild` / `make rebuild SERVICE=web` | Full rebuild without cache + start |
+| `make restart` / `make stop` / `make start` | Lifecycle for one or all services (`SERVICE=x`) |
+| **Monitoring** | |
+| `make logs` / `make logs SERVICE=web` | Tail logs |
+| `make ps` / `make stats` | Show running services / resource usage |
+| `make health` | Full health check (services + Django + DB + `/health/`) |
+| `make url` | Print access URLs |
 | **Django** | |
-| `make shell` | Django shell in container |
+| `make shell` / `make bash` | Django shell / bash in the web container |
 | `make migrate` | Apply migrations |
 | `make makemigrations` | Create migrations (all 4 apps) |
-| `make check` | Django system checks |
+| `make createsuperuser` | Create Django superuser |
+| `make collectstatic` | Collect static files |
+| `make check` / `make check-deploy` | Django system checks / deployment checklist |
 | **Database** | |
 | `make dbshell` | PostgreSQL shell |
-| `make backup` | Dump DB to backups/ |
-| `make reset-db` | Recreate database (destructive!) |
+| `make backup` | Dump DB to `backups/` |
+| `make restore FILE=backups/X.sql` | Restore from a SQL dump |
+| `make reset-db` | Drop and recreate the database (destructive — y/N prompt) |
 | **Testing** | |
-| `make test` | Run all tests in Docker (PostgreSQL) |
-| `make test-local` | Run tests locally against Docker PostgreSQL |
-| `make test-sqlite` | Run tests with SQLite (no Docker needed) |
-| `make test-coverage` | Tests with HTML coverage report |
-| `make test-models` | Only model tests |
-| `make test-services` | Only service tests |
-| `make test-views` | Only view tests |
-| `make test-fast` | Stop on first failure |
-| `make test-k K=payment` | Run tests matching keyword |
+| `make test` | All tests in Docker against PostgreSQL with coverage |
+| `make test unit` / `make test integration` | Only that suite |
+| `make test coverage` | All tests with HTML coverage report (`htmlcov/`) |
+| `make test K=payment` | Filter by keyword |
+| `make test ARGS='--lf'` | Pass raw pytest flags through |
+| `make test-cov-gate` | Coverage gate — fails if coverage drops below 75% (used by pre-commit) |
+| **Payments** | |
+| `make generate-payments` / `make generate-payments-dry` | Generate the current month / preview only |
+| **Celery** | |
+| `make celery-logs` / `make celery-restart` | Tail or restart worker + beat |
+| `make celery-status` / `make celery-test-task` | Inspect active tasks / queue a debug task |
 | **Versioning** | |
-| `make version 1.1.0` | Update version in `pyproject.toml`, `settings.py`, the README badge, and regenerate `uv.lock` (with y/N confirmation); reminds you to run the `update-readme` skill to refresh Version History |
-| `make version` | Show current version from `pyproject.toml` + README badge; warns if they've drifted |
+| `make version` | Show current pyproject + README badge values, warn on drift |
+| `make version 1.1.0` | Update `pyproject.toml`, `settings.py`, README badge, regenerate `uv.lock` (with y/N confirmation) |
 | **Developer Tooling** | |
-| `make lint` / `make lint-fix` | Run Ruff linter (optionally auto-fix) |
-| `make format` / `make format-check` | Run Ruff formatter |
+| `make sync` | Install all deps (including dev) via uv |
+| `make lint` / `make lint FIX=1` | Run Ruff linter (optionally auto-fix) |
+| `make format` / `make format DRY=1` | Run Ruff formatter (DRY=1 = check only) |
 | `make mypy` | Run mypy type checker |
-| `make bandit` | Run bandit security linter |
-| `make audit` | `pip-audit` — scan deps for CVEs |
-| `make pc-run` | Run pre-commit on all files; on clean pass, offer to auto-bump patch version; auto-stages regenerated `uv.lock` |
+| `make bandit` / `make audit` | Bandit security linter / `pip-audit` for dependency CVEs |
+| `make coverage-badge` | Regenerate `coverage.svg` from the latest test run |
 | `make pre-commit-install` | Install the git pre-commit hook |
-| **Email & Payments** | |
-| `make send-test-email` | Send test birthday email |
-| `make test-all-emails` | List all email templates |
-| `make generate-payments` | Generate current month's payments |
-| `make generate-payments-dry` | Preview without creating |
-| **Health** | |
-| `make health` | Full health check (Django + DB + HTTP) |
-| `make check-deploy` | Django deployment checklist |
+| `make pc-run` | Run pre-commit on all files; on clean pass, offer to auto-bump patch version; auto-stages regenerated `uv.lock` |
+| **Cleanup** | |
+| `make clean` | Remove stopped containers + system prune |
+| `make clean-all` | Remove everything including volumes (y/N prompt) |
 
 ### Environment Configuration
 
@@ -1051,7 +1107,7 @@ The project supports three environments, controlled by `DJANGO_ENV` and `DJANGO_
 
 > **Defaults are production-safe**: `DJANGO_DEBUG` defaults to `false` and `DJANGO_ENV` defaults to `development`. In production, always set `DJANGO_ENV=production` and ensure `DJANGO_SECRET_KEY` is a strong random value.
 
-The database is **always PostgreSQL** — in Docker development, in tests, and in production. Tests run against the same Docker PostgreSQL container to ensure realistic behavior. For quick local test runs without Docker, use `make test-sqlite`.
+The database is **always PostgreSQL** — in Docker development, in tests, and in production. Tests run against the same Docker PostgreSQL container to ensure realistic behavior.
 
 ### Environment Variables Reference
 
@@ -1073,10 +1129,6 @@ The table below describes every variable in the [.env template](#env-template) a
 | `POSTGRES_PASSWORD` | Database password | **Yes** | — |
 | `POSTGRES_HOST` | Database host | No | `db` (Docker) |
 | `POSTGRES_PORT` | Database port | No | `5432` |
-| **Superuser** (auto-created on first boot when all three are set) | | | |
-| `DJANGO_SUPERUSER_USERNAME` | Superuser name | No | — |
-| `DJANGO_SUPERUSER_EMAIL` | Superuser email | No | — |
-| `DJANGO_SUPERUSER_PASSWORD` | Superuser password | No | — |
 | **Email** | | | |
 | `EMAIL_HOST_USER` | Gmail address | For email features | — |
 | `EMAIL_SECRET` | Gmail app password | For email features | — |
@@ -1104,7 +1156,6 @@ The table below describes every variable in the [.env template](#env-template) a
 | `ACADEMY_IBAN` | Bank account for payment reminders | No | — |
 | `ACADEMY_IBAN_HOLDER` | IBAN account holder | No | — |
 | `ACADEMY_PHONE` | Phone for Bizum payments | No | — |
-| `ACADEMY_WHATSAPP` | WhatsApp number for reminders | No | — |
 | **Logging / misc** | | | |
 | `LOG_LEVEL` | App log level | No | `DEBUG` in dev, `INFO` in prod |
 | `DJANGO_LOG_LEVEL` | Django framework log level | No | inherits `LOG_LEVEL` |
@@ -1113,12 +1164,14 @@ The table below describes every variable in the [.env template](#env-template) a
 
 ### App Versioning
 
-The app version is defined in **two places** and should be updated together:
+The app version is defined in **four places** and `make version x.y.z` updates all four together:
 
-1. **`pyproject.toml`** line 3: `version = "x.y.z"` — package metadata
-2. **`project/settings.py`** line 17: `APP_VERSION = os.getenv("APP_VERSION", "x.y.z")` — runtime fallback
+1. **`pyproject.toml`** — `version = "x.y.z"` (package metadata)
+2. **`project/project/settings.py`** — `APP_VERSION = os.getenv("APP_VERSION", "x.y.z")` (runtime fallback)
+3. **`README.md`** — the header version badge URL
+4. **`uv.lock`** — regenerated via `uv lock --quiet` so the lockfile's own `[[package]]` entry stays in sync
 
-Use `make version x.y.z` (positional) to update both at once — it prompts `Version A will become the new version B, are you sure?` before writing. `make pc-run` also auto-bumps the patch digit on successful pre-commit if you answer `y` when asked.
+`make version x.y.z` prompts `Version A will become the new version B, are you sure?` before writing. Running `make version` with no argument prints both the pyproject and README badge values side-by-side and warns if they've drifted. `make pc-run` also auto-bumps the patch digit on successful pre-commit (y/N prompt) and stages the regenerated `uv.lock` automatically.
 
 The version appears in:
 - `/health/` endpoint response
@@ -1247,9 +1300,9 @@ five-a-day/
 ├── pyproject.toml                Dependencies (uv-managed) + tool config
 ├── uv.lock                       Reproducible dependency lock
 ├── entrypoint.sh                 Docker entrypoint (migrate, collectstatic, start)
-├── .env / .env.testing /         Gitignored env files (`.env*` matches all variants —
-│   .env.development /            `.env.development` and `.env.testing_users` are loaded
-│   .env.testing_users            as overlays by settings.py depending on DJANGO_ENV)
+├── .env.development /            Gitignored env files (`.env*` matches all variants).
+│   .env.testing /                One of them is renamed to `.env` before bringing the
+│   .env.production               stack up — that's the file settings.py loads.
 ├── CLAUDE.md                     AI development context (project rules)
 ├── DEPLOYMENT.md                 GCP deployment guide (all 3 environments)
 └── README.md                     This file
@@ -1444,7 +1497,7 @@ Paginated read-only tables of all data.
 
 Standalone page with custom styling (does not extend base.html). The login view dispatches by environment:
 
-- **Development** — credentials checked against `LOGIN_USERNAME` / `LOGIN_PASSWORD` (`.env.development` overlay). A matching Django superuser is get-or-created so `/admin/` works in the same session.
+- **Development** — credentials checked against `LOGIN_USERNAME` / `LOGIN_PASSWORD` from the active `.env`. A matching Django superuser is get-or-created so `/admin/` works in the same session.
 - **Testing / production** — credentials checked against `auth.User` via `ModelBackend`. Teachers log in with their email + hashed password (seeded by `manage.py seed_teachers` from `TEACHER_SEED_*` env vars). Non-admin Teachers reach a slimmed-down dashboard with the SimpleAuthMiddleware whitelist enforcing URL-level gating.
 - **Google OAuth** — optional. Button shown if `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` are configured. Validates email matches `GOOGLE_ALLOWED_EMAIL`, get-or-creates a Django superuser, links it to an existing Teacher by email if one exists, and stores Google credentials in session for Gmail/Sheets API access. The same login also grants `/admin/`.
 - **"¿Has olvidado tu contraseña?"** — shown in non-dev environments, links into the password-reset flow below.
@@ -1785,7 +1838,7 @@ Think of it as a **rehearsal stage**: you can click anything, try any feature, a
 | **Username** | Your Teacher email — seeded into the system via `TEACHER_SEED_<N>_EMAIL` |
 | **Password** | The initial password set by the development team (or set yours via the "¿Has olvidado tu contraseña?" link if you weren't given one) |
 
-Credentials are seeded from `TEACHER_SEED_<N>_*` env vars in `.env.testing` (or `.env.testing_users` as an overlay) and are **never committed to the repository**. Ask the development team if you need them. If you weren't issued a password, use the password-reset link on the login page — you'll receive an email with a one-time activation link.
+Credentials are seeded from `TEACHER_SEED_<N>_*` env vars in `.env.testing` and are **never committed to the repository**. Ask the development team if you need them. If you weren't issued a password, use the password-reset link on the login page — you'll receive an email with a one-time activation link.
 
 1. Open the web address in your browser (Chrome, Firefox, Safari, or Edge all work).
 2. You will see a login page. Type the username and password you were given.
@@ -1851,9 +1904,8 @@ The testing environment mirrors production:
 
 | File | Purpose |
 |------|---------|
-| `.env.testing` | All environment variables for QA (credentials, database, security flags) |
-| `.env.testing_users` | Optional overlay — Teacher seed values (`TEACHER_SEED_<N>_*`); loaded by `settings.py` with `override=True` when `DJANGO_ENV=testing` |
-| `docker-compose.testing.yml` | Docker override that switches to Gunicorn and uses a separate database volume |
+| `.env.testing` | Self-contained env file for QA — Django, database, security flags, Gmail SMTP, and the `TEACHER_SEED_<N>_*` blocks. Rename to `.env` before bringing the stack up. |
+| `docker-compose.testing.yml` | Docker overlay that switches `web` to Gunicorn and isolates `db` into a separate volume (`testing_postgres_data`). |
 | `seed_testdata` command | Populates the database with realistic fake data |
 | `seed_teachers` command | Idempotently creates Teacher rows + linked `auth.User` accounts from `TEACHER_SEED_*` env vars; runs automatically on container start |
 | `HTTPS.md` | Full guide for HTTPS setup with Docker (Nginx + self-signed cert) and GCP Cloud Run |
@@ -1883,23 +1935,26 @@ The QA username is configured in `.env.testing` (never hardcoded) via `QA_TESTIN
 **Running locally (for developers):**
 
 ```bash
-# Start the QA environment
-make testing-up
+# Activate the QA env file
+mv .env.testing .env
+
+# Start the QA stack (Gunicorn + isolated DB volume)
+docker compose -f docker-compose.yml -f docker-compose.testing.yml up -d --build
 
 # Populate with test data (students, parents, payments, etc.)
-make testing-seed
+docker compose exec web python project/manage.py seed_testdata
 
 # Wipe everything and re-seed from scratch
-make testing-reset
+docker compose exec web python project/manage.py seed_testdata --reset
 
 # View logs
-make testing-logs
+docker compose logs -f
 
-# Stop the environment
-make testing-down
+# Stop the stack (keeps the testing_postgres_data volume)
+docker compose -f docker-compose.yml -f docker-compose.testing.yml down
 
-# Full rebuild (after code changes)
-make testing-rebuild
+# Switch back to dev
+mv .env .env.testing && mv .env.development .env
 ```
 
 The `seed_testdata` command creates:
