@@ -20,7 +20,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # NOTA: Usa `make version x.y.z` para actualizar ambos sitios a la vez:
 #   - pyproject.toml (campo version)
 #   - README.md (badge y tabla de versiones — gestionado por la skill update-readme)
-APP_VERSION = os.getenv("APP_VERSION", "1.9.0")
+APP_VERSION = os.getenv("APP_VERSION", "1.10.0")
 
 # ============================================================================
 # SECURITY SETTINGS
@@ -125,6 +125,7 @@ MIDDLEWARE = [
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
     "core.middleware.QAErrorEmailMiddleware",  # QA: email errors to support
     "core.middleware.SimpleAuthMiddleware",  # Middleware de autenticación simple
+    "core.audit_signals.AuditActorMiddleware",  # v1.10: attribute audit rows to the current user
 ]
 
 ROOT_URLCONF = "project.urls"

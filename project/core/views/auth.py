@@ -11,6 +11,8 @@ from django.contrib.auth import logout as _django_logout
 from django.shortcuts import redirect, render
 from django.urls import reverse
 
+from core.rate_limit import rate_limit
+
 if TYPE_CHECKING:
     from django.contrib.auth.models import User
 
@@ -55,6 +57,7 @@ def _finalize_session_login(request, user, display_name: str, *, google: bool = 
         request.session["google_authenticated"] = True
 
 
+@rate_limit("login", limit=5, window_seconds=60)
 def login_view(request):
     """
     Authentication dispatcher.
@@ -64,6 +67,8 @@ def login_view(request):
       mirroring the env username is get-or-created so admin access works.
     - Other environments: credentials compared against auth.User (Teachers log
       in with email + password). Django's ModelBackend does the hashing/check.
+
+    v1.10: rate-limited to 5 POSTs / minute / IP.
     """
     if request.session.get("is_authenticated"):
         return redirect("home")

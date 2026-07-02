@@ -21,6 +21,7 @@ from django.utils import timezone
 from django.views.decorators.http import require_http_methods
 
 from billing.models import Payment
+from core.rate_limit import rate_limit
 from students.models import Parent, ParentSessionToken
 
 logger = logging.getLogger(__name__)
@@ -46,11 +47,14 @@ def _require_parent(request):
 # ── Login flow ──────────────────────────────────────────────────────────────
 
 
+@rate_limit("parent_portal_login", limit=5, window_seconds=60)
 def parent_portal_login(request):
     """
     Step 1 of the magic-link flow. GET renders the email form; POST issues a
     token, emails the link, and shows a "check your inbox" message regardless
     of whether the email exists — enumeration protection.
+
+    v1.10: rate-limited to 5 POSTs / minute / IP.
     """
     if request.method == "POST":
         email = (request.POST.get("email") or "").strip().lower()

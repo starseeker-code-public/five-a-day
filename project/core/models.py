@@ -65,6 +65,11 @@ class TodoItem(models.Model):
         return self.due_date < date.today()
 
 
+# v1.10 — the immutable audit trail lives in a sibling module so this file
+# stays focused on the user-visible core models.
+from core.audit_models import AuditLog  # noqa: E402,F401
+
+
 class HistoryLog(models.Model):
     """Stores up to 1000 history log entries for user actions."""
 
