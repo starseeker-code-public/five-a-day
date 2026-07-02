@@ -20,7 +20,7 @@ Built to centralize student records, automate billing cycles, and streamline par
 ### Project Status
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v1.10.0-brightgreen?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-v1.11.0-brightgreen?style=flat-square" alt="Version">
   &nbsp;|&nbsp;
   <a href="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml?query=branch%3Amain"><img src="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml/badge.svg?branch=main&style=flat-square" alt="CI main"></a>
   &nbsp;|&nbsp;
@@ -41,9 +41,9 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 | Version | Date | Description |
 |---------|------|-------------|
-| **v1.10.0** | 2026-07-02 | Audit log for every model change + login/portal rate limiting |
+| **v1.11.0** | 2026-07-02 | Stripe Checkout for parent-portal payments + signed webhook reconciliation |
+| v1.10.0 | 2026-07-02 | Audit log for every model change + login/portal rate limiting |
 | v1.9.0 | 2026-07-02 | Parent portal with magic-link auth (dashboard, payments, PDF downloads) |
-| v1.8.0 | 2026-07-02 | SMS payment reminders via Twilio (opt-in per parent) |
 
 ---
 
@@ -54,7 +54,6 @@ Built to centralize student records, automate billing cycles, and streamline par
   - [Table of Contents](#table-of-contents)
   - [Version History \& Roadmap](#version-history--roadmap)
     - [Roadmap](#roadmap)
-      - [v1.11 — Stripe Payment Integration](#v111--stripe-payment-integration)
       - [v1.12 — Mobile Optimization \& PWA](#v112--mobile-optimization--pwa)
   - [Tech Stack](#tech-stack)
     - [Backend](#backend)
@@ -145,8 +144,22 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 ## Version History & Roadmap
 
-<details id="v1100" open>
-<summary><strong>v1.10.0 — Audit Log & Security Hardening (current)</strong></summary>
+<details id="v1110" open>
+<summary><strong>v1.11.0 — Stripe Payment Integration (current)</strong></summary>
+
+- New `billing/services/stripe_service.py` — direct httpx calls to Stripe's Checkout + webhook APIs. No `stripe` SDK dependency; the two endpoints we use don't justify the install-image weight. Dormant until `STRIPE_SECRET_KEY` is set (`is_configured()` gates the frontend button).
+- New `Payment.stripe_session_id` + `Payment.stripe_payment_intent` fields, both indexed so the webhook can look up the target payment in constant time.
+- Two new endpoints: `POST /parent/payments/<id>/pay-online/` (parent-portal-only, creates a Checkout session and returns the URL for the client to redirect to) and `POST /api/stripe/webhook/` (CSRF-exempt, signature-verified, added to `PUBLIC_PREFIXES` so the admin middleware doesn't block Stripe's callers).
+- Webhook handler reconciles two events: `checkout.session.completed` marks the payment as completed and stores the PaymentIntent id; `checkout.session.expired` wipes the session id so a new link can be issued.
+- HMAC-SHA256 signature verification with a 5-minute tolerance window. Verification is skipped only when `STRIPE_WEBHOOK_SECRET` is unset — production must set it.
+- Parent portal payments table gains a "Pagar online" button on every pending row; a tiny JS shim posts to the endpoint and redirects the browser to Stripe.
+- Three new settings (`STRIPE_SECRET_KEY`, `STRIPE_PUBLISHABLE_KEY`, `STRIPE_WEBHOOK_SECRET`), all env-driven, all default to empty.
+- 22 new tests covering the service happy path, StripeError propagation, HMAC verification (valid / tampered payload / expired timestamp / missing secret bypass), webhook reconciliation for the four event branches, and the endpoint surface (401 / 404 / 409 / 503 / 200).
+
+</details>
+
+<details id="v1100">
+<summary><strong>v1.10.0 — Audit Log & Security Hardening</strong></summary>
 
 - New `AuditLog` model (`core/audit_models.py`) — immutable trail of who changed what and when. Distinct from `HistoryLog` (compact 1,000-entry user feed): audit rows are machine-readable, retained forever, and record per-field diffs as JSON.
 - `AuditActorMiddleware` stashes the current authenticated user into a `contextvars.ContextVar` (WSGI-local + ASGI-safe) so signal receivers attribute changes without threading the user through every save.
@@ -781,10 +794,6 @@ All tools configured in `pyproject.toml` — single source of truth.
 
 <details id="roadmap">
 <summary><strong>Click to expand full roadmap (v1.1 — v1.12)</strong></summary>
-
-#### v1.11 — Stripe Payment Integration
-
-Online payment via Stripe. Parents receive payment links by email. Automatic reconciliation with pending payments. Receipts generated on completion.
 
 #### v1.12 — Mobile Optimization & PWA
 

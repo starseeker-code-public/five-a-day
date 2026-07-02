@@ -117,6 +117,9 @@ from core.views.schedule import fun_friday_view, save_schedule_slot, schedule_vi
 # Sheets export (v1.2)
 from core.views.sheets import export_to_sheets
 
+# Stripe (v1.11)
+from core.views.stripe_views import create_checkout_link, stripe_webhook
+
 # Students
 from core.views.students import (
     StudentCreateView,

@@ -42,6 +42,14 @@
                     <a href="{% url 'parent_portal_receipt' p.id %}" class="text-primary-700 hover:text-primary-900 no-underline">
                         Recibo PDF
                     </a>
+                    {% elif p.payment_status == 'pending' %}
+                    <button type="button"
+                            data-payment-id="{{ p.id }}"
+                            data-url="{% url 'stripe_create_checkout_link' p.id %}"
+                            onclick="payOnline(this)"
+                            class="px-3 py-1 bg-primary-500 hover:bg-primary-600 text-white rounded-md text-xs font-medium">
+                        Pagar online
+                    </button>
                     {% endif %}
                 </td>
             </tr>
@@ -51,4 +59,32 @@
         </tbody>
     </table>
 </div>
+<script>
+function getCsrfToken() {
+    const cookie = document.cookie.split(';').find(c => c.trim().startsWith('csrftoken='));
+    return cookie ? cookie.split('=')[1] : '';
+}
+async function payOnline(btn) {
+    btn.disabled = true;
+    btn.textContent = 'Cargando...';
+    try {
+        const resp = await fetch(btn.dataset.url, {
+            method: 'POST',
+            headers: {'X-CSRFToken': getCsrfToken(), 'X-Requested-With': 'XMLHttpRequest'},
+        });
+        const data = await resp.json();
+        if (data.success && data.url) {
+            window.location.href = data.url;
+        } else {
+            btn.disabled = false;
+            btn.textContent = 'Pagar online';
+            alert(data.error || 'No se pudo iniciar el pago.');
+        }
+    } catch (e) {
+        btn.disabled = false;
+        btn.textContent = 'Pagar online';
+        alert('Error de red.');
+    }
+}
+</script>
 {% endblock %}

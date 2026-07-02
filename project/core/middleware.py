@@ -181,6 +181,7 @@ class SimpleAuthMiddleware:
         "/auth/google/",
         "/password-reset/",
         "/parent/",  # v1.9: parent portal uses its own magic-link session
+        "/api/stripe/webhook/",  # v1.11: called by Stripe's servers, signed via header
     )
 
     def __init__(self, get_response):

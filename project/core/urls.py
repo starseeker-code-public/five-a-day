@@ -11,6 +11,8 @@ from core.views import (
     api_toggle_error_email,
     api_update_backlog_task,
     complete_todo,
+    # Stripe (v1.11)
+    create_checkout_link,
     # Todos
     create_todo,
     # Google Sheets export (v1.2)
@@ -39,6 +41,8 @@ from core.views import (
     save_schedule_slot,
     # Schedule
     schedule_view,
+    # Stripe webhook (v1.11) — CSRF-exempt
+    stripe_webhook,
     # Support
     submit_support_ticket,
     # Error test pages
@@ -97,6 +101,13 @@ urlpatterns = [
     path("parent/payments/", parent_portal_payments, name="parent_portal_payments"),
     path("parent/payments/<int:payment_id>/receipt.pdf", parent_portal_receipt, name="parent_portal_receipt"),
     path("parent/tax-certificate.pdf", parent_portal_tax_certificate, name="parent_portal_tax_certificate"),
+    path(
+        "parent/payments/<int:payment_id>/pay-online/",
+        create_checkout_link,
+        name="stripe_create_checkout_link",
+    ),
+    # Stripe webhook (v1.11) — CSRF-exempt, called by Stripe's servers
+    path("api/stripe/webhook/", stripe_webhook, name="stripe_webhook"),
     # Testing tools
     path("testing/", testing_tools_view, name="testing_tools"),
     path("api/testing/seed/", api_seed_database, name="api_seed_database"),

@@ -329,6 +329,20 @@ class Payment(models.Model):
     concept = models.CharField(max_length=200)
     reference_number = models.CharField(max_length=50, blank=True)  # Bank reference, receipt number, etc.
 
+    # v1.11 — Stripe reconciliation
+    stripe_session_id = models.CharField(
+        max_length=200,
+        blank=True,
+        db_index=True,
+        help_text="Stripe Checkout session id; populated when a payment link is issued.",
+    )
+    stripe_payment_intent = models.CharField(
+        max_length=200,
+        blank=True,
+        db_index=True,
+        help_text="Stripe PaymentIntent id; populated when the webhook fires on session completion.",
+    )
+
     observations = models.TextField(blank=True)
     document_url = models.URLField(blank=True)
 

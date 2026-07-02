@@ -20,7 +20,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # NOTA: Usa `make version x.y.z` para actualizar ambos sitios a la vez:
 #   - pyproject.toml (campo version)
 #   - README.md (badge y tabla de versiones — gestionado por la skill update-readme)
-APP_VERSION = os.getenv("APP_VERSION", "1.10.0")
+APP_VERSION = os.getenv("APP_VERSION", "1.11.0")
 
 # ============================================================================
 # SECURITY SETTINGS
@@ -351,3 +351,13 @@ GOOGLE_SHEETS_SPREADSHEET_ID = os.getenv("GOOGLE_SHEETS_SPREADSHEET_ID", "")
 TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID", "")
 TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN", "")
 TWILIO_FROM_NUMBER = os.getenv("TWILIO_FROM_NUMBER", "")
+
+# ============================================================================
+# STRIPE PAYMENTS (v1.11) — OPTIONAL
+# ============================================================================
+# When STRIPE_SECRET_KEY is set the parent portal renders a "Pay now" button
+# that creates a Checkout session. STRIPE_WEBHOOK_SECRET is the signing key
+# for the /api/stripe/webhook/ receiver — required in production.
+STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "")
+STRIPE_PUBLISHABLE_KEY = os.getenv("STRIPE_PUBLISHABLE_KEY", "")
+STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
