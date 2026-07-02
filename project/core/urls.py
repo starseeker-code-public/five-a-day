@@ -41,6 +41,8 @@ from core.views import (
     save_schedule_slot,
     # Schedule
     schedule_view,
+    # PWA (v1.12)
+    service_worker,
     # Stripe webhook (v1.11) — CSRF-exempt
     stripe_webhook,
     # Support
@@ -53,6 +55,7 @@ from core.views import (
     test_error_500,
     # Testing tools
     testing_tools_view,
+    web_manifest,
 )
 
 urlpatterns = [
@@ -74,6 +77,9 @@ urlpatterns = [
         BrandedPasswordResetCompleteView.as_view(),
         name="password_reset_complete",
     ),
+    # PWA (v1.12) — must be at origin root to control the whole scope
+    path("manifest.webmanifest", web_manifest, name="web_manifest"),
+    path("sw.js", service_worker, name="service_worker"),
     # Dashboard
     path("", home, name="home"),
     path("database/", all_info, name="all_info"),

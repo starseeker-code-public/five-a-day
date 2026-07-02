@@ -182,6 +182,8 @@ class SimpleAuthMiddleware:
         "/password-reset/",
         "/parent/",  # v1.9: parent portal uses its own magic-link session
         "/api/stripe/webhook/",  # v1.11: called by Stripe's servers, signed via header
+        "/manifest.webmanifest",  # v1.12: PWA manifest, must be public
+        "/sw.js",  # v1.12: service worker, must be public
     )
 
     def __init__(self, get_response):

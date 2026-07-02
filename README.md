@@ -20,7 +20,7 @@ Built to centralize student records, automate billing cycles, and streamline par
 ### Project Status
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v1.11.0-brightgreen?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-v1.12.0-brightgreen?style=flat-square" alt="Version">
   &nbsp;|&nbsp;
   <a href="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml?query=branch%3Amain"><img src="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml/badge.svg?branch=main&style=flat-square" alt="CI main"></a>
   &nbsp;|&nbsp;
@@ -41,9 +41,9 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 | Version | Date | Description |
 |---------|------|-------------|
-| **v1.11.0** | 2026-07-02 | Stripe Checkout for parent-portal payments + signed webhook reconciliation |
+| **v1.12.0** | 2026-07-02 | Installable PWA — web manifest + service worker cache-first shell |
+| v1.11.0 | 2026-07-02 | Stripe Checkout for parent-portal payments + signed webhook reconciliation |
 | v1.10.0 | 2026-07-02 | Audit log for every model change + login/portal rate limiting |
-| v1.9.0 | 2026-07-02 | Parent portal with magic-link auth (dashboard, payments, PDF downloads) |
 
 ---
 
@@ -54,7 +54,6 @@ Built to centralize student records, automate billing cycles, and streamline par
   - [Table of Contents](#table-of-contents)
   - [Version History \& Roadmap](#version-history--roadmap)
     - [Roadmap](#roadmap)
-      - [v1.12 — Mobile Optimization \& PWA](#v112--mobile-optimization--pwa)
   - [Tech Stack](#tech-stack)
     - [Backend](#backend)
     - [Frontend](#frontend)
@@ -144,8 +143,20 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 ## Version History & Roadmap
 
-<details id="v1110" open>
-<summary><strong>v1.11.0 — Stripe Payment Integration (current)</strong></summary>
+<details id="v1120" open>
+<summary><strong>v1.12.0 — Installable PWA (current)</strong></summary>
+
+- New `/manifest.webmanifest` endpoint serves the web app manifest (name, icons, theme colour, three home-screen shortcuts). Enables "Add to Home Screen" on iOS + Android and installable-app prompts on desktop Chromium.
+- New `/sw.js` endpoint serves a purpose-built service worker: cache-first for same-origin GETs to the dashboard shell (`/`, `/students/`, `/payments/`, the logo), network-first for everything else. Never caches `/api/*`, `/login/`, or `/logout/` — those must always be fresh.
+- Cache key is derived from `APP_VERSION`, so every `make version` bump invalidates the client cache automatically on the next visit.
+- Base template picks up the manifest link, viewport-appropriate meta tags (`theme-color`, iOS + Android web-app-capable, custom status-bar style), and a small idempotent registration script that runs `navigator.serviceWorker.register("/sw.js")` after `window.load` so the initial paint isn't blocked.
+- Both endpoints added to `SimpleAuthMiddleware.PUBLIC_PREFIXES` — installability probes and offline reloads must succeed without a session cookie.
+- 8 new tests covering the manifest shape, cache-control headers, `Service-Worker-Allowed: /`, cache-key rotation on version bump, and unauthenticated accessibility.
+
+</details>
+
+<details id="v1110">
+<summary><strong>v1.11.0 — Stripe Payment Integration</strong></summary>
 
 - New `billing/services/stripe_service.py` — direct httpx calls to Stripe's Checkout + webhook APIs. No `stripe` SDK dependency; the two endpoints we use don't justify the install-image weight. Dormant until `STRIPE_SECRET_KEY` is set (`is_configured()` gates the frontend button).
 - New `Payment.stripe_session_id` + `Payment.stripe_payment_intent` fields, both indexed so the webhook can look up the target payment in constant time.
@@ -793,11 +804,11 @@ All tools configured in `pyproject.toml` — single source of truth.
 ### Roadmap
 
 <details id="roadmap">
-<summary><strong>Click to expand full roadmap (v1.1 — v1.12)</strong></summary>
+<summary><strong>Click to expand roadmap (all shipped)</strong></summary>
 
-#### v1.12 — Mobile Optimization & PWA
-
-Progressive Web App support: installable on mobile, offline-capable dashboard, push notifications for overdue payments and birthdays.
+All v1.1 – v1.12 milestones are shipped. Post-v1.12 evolution now happens in
+directly-scoped work rather than the numbered roadmap; add new items here
+when they're planned and dated.
 
 </details>
 

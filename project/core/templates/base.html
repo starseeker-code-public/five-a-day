@@ -16,6 +16,14 @@
     <link rel="icon" type="image/png" sizes="32x32" href="{% static 'favicon-32x32.png' %}">
     <link rel="apple-touch-icon" sizes="180x180" href="{% static 'apple-touch-icon.png' %}">
 
+    <!-- PWA (v1.12) -->
+    <link rel="manifest" href="{% url 'web_manifest' %}">
+    <meta name="theme-color" content="#6d28d9">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
+    <meta name="apple-mobile-web-app-title" content="Five a Day">
+
     <!-- Open Graph — Facebook, Instagram (via FB), WhatsApp, Telegram, LinkedIn, Discord, Slack … -->
     <meta property="og:type" content="website">
     <meta property="og:site_name" content="Five a Day eVolution">
@@ -381,6 +389,20 @@
     <!-- Global scripts -->
     <script src="{% static 'js/support.js' %}"></script>
     <script src="{% static 'js/base.js' %}"></script>
+
+    <!-- PWA (v1.12) — register the service worker after the page loads so the
+         registration never blocks the first paint. Silently degrades on browsers
+         that don't support service workers. -->
+    <script>
+    if ("serviceWorker" in navigator) {
+        window.addEventListener("load", function () {
+            navigator.serviceWorker.register("/sw.js").catch(function (err) {
+                // Registration failures are cosmetic — the app works without it.
+                console.debug("SW registration failed:", err);
+            });
+        });
+    }
+    </script>
 
     {% block extra_js %}{% endblock %}
 </body>

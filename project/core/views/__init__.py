@@ -108,6 +108,9 @@ from core.views.payments import (
     validate_student_parent,
 )
 
+# PWA (v1.12)
+from core.views.pwa import service_worker, web_manifest
+
 # Reports & analytics (v1.7)
 from core.views.reports import reports_pdf, reports_view
 
