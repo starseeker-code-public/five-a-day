@@ -187,6 +187,11 @@ class Parent(models.Model):
     phone = models.CharField(max_length=20)
     email = models.EmailField()
     iban = models.CharField(max_length=34, blank=True)  # International Bank Account Number
+    sms_opt_in = models.BooleanField(
+        default=False,
+        verbose_name="SMS opt-in",
+        help_text="v1.8: True if the parent has opted in to SMS notifications (payment reminders, urgent comms).",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)  # Added for consistency
 

@@ -258,6 +258,10 @@ def send_payment_reminders(self):
     """
     Weekly task: Send payment reminders to parents with pending payments.
     Looks for pending payments due within the next 7 days.
+
+    v1.8: also queues an SMS to every parent that has opted in
+    (`parent.sms_opt_in=True`) — SMS is a *supplement* to email, not a
+    replacement, so both channels fire for opted-in parents.
     """
     from datetime import timedelta
 
@@ -277,6 +281,7 @@ def send_payment_reminders(self):
     logger.info(f"Enviando {pending_payments.count()} recordatorios de pago")
 
     emails_data = []
+    sms_queued = 0
     for payment in pending_payments:
         if payment.parent and payment.parent.email:
             emails_data.append(
@@ -290,13 +295,57 @@ def send_payment_reminders(self):
                     },
                 }
             )
+        # v1.8: SMS to opted-in parents (async, so a Twilio outage doesn't stall email)
+        if payment.parent and payment.parent.sms_opt_in and payment.parent.phone:
+            send_payment_reminder_sms_task.delay(payment.id)
+            sms_queued += 1
 
     results = email_service.send_bulk_emails(
         template_name="payment_reminder", emails_data=emails_data, fail_silently=True
     )
+    results["sms_queued"] = sms_queued
 
-    logger.info(f"Recordatorios enviados: {results['sent']} exitosos, {results['failed']} fallidos")
+    logger.info(f"Recordatorios enviados: {results['sent']} exitosos, {results['failed']} fallidos; SMS: {sms_queued}")
     return results
+
+
+@shared_task(
+    name="comms.tasks.send_payment_reminder_sms_task",
+    bind=True,
+    max_retries=3,
+    default_retry_delay=60,
+    autoretry_for=(Exception,),
+)
+def send_payment_reminder_sms_task(self, payment_id: int):
+    """
+    v1.8: send a single-payment SMS reminder to the parent. Skips gracefully
+    when the SMS service isn't configured or the parent hasn't opted in.
+    """
+    from billing.models import Payment
+    from comms.services.sms_service import get_sms_service
+
+    try:
+        payment = Payment.objects.select_related("student", "parent").get(id=payment_id)
+    except Payment.DoesNotExist:
+        logger.warning("send_payment_reminder_sms_task: payment %s not found", payment_id)
+        return {"status": "error", "message": "payment not found"}
+
+    if not payment.parent:
+        return {"status": "skipped", "reason": "no parent"}
+
+    sms = get_sms_service()
+    if not sms.is_configured():
+        logger.info("SMS service not configured, skipping payment reminder for %s", payment_id)
+        return {"status": "skipped", "reason": "sms not configured"}
+
+    body = (
+        f"Five a Day: Recordatorio — pago pendiente para {payment.student.full_name} "
+        f"({payment.amount:.2f}€, vence {payment.due_date:%d/%m/%Y})."
+    )
+    result = sms.send_to_parent(payment.parent, body)
+    if not result.success:
+        logger.warning("SMS reminder failed for payment %s: %s", payment_id, result.error)
+    return result.as_dict()
 
 
 @shared_task(

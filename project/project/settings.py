@@ -20,7 +20,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # NOTA: Usa `make version x.y.z` para actualizar ambos sitios a la vez:
 #   - pyproject.toml (campo version)
 #   - README.md (badge y tabla de versiones — gestionado por la skill update-readme)
-APP_VERSION = os.getenv("APP_VERSION", "1.7.0")
+APP_VERSION = os.getenv("APP_VERSION", "1.8.0")
 
 # ============================================================================
 # SECURITY SETTINGS
@@ -340,3 +340,13 @@ GOOGLE_SHEETS_SERVICE_ACCOUNT_FILE = os.getenv("GOOGLE_SHEETS_SERVICE_ACCOUNT_FI
 # Target spreadsheet — the doc ID from its URL (…/spreadsheets/d/<ID>/edit).
 # The service account must have Editor access to the sheet.
 GOOGLE_SHEETS_SPREADSHEET_ID = os.getenv("GOOGLE_SHEETS_SPREADSHEET_ID", "")
+
+# ============================================================================
+# TWILIO SMS (v1.8) — OPTIONAL
+# ============================================================================
+# All three must be set for the SMS service to be considered "configured".
+# When any is missing, SmsService.is_configured() returns False and calls
+# resolve to a structured failure so email fallback can kick in.
+TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID", "")
+TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN", "")
+TWILIO_FROM_NUMBER = os.getenv("TWILIO_FROM_NUMBER", "")

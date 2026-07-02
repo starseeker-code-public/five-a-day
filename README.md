@@ -20,7 +20,7 @@ Built to centralize student records, automate billing cycles, and streamline par
 ### Project Status
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v1.7.0-brightgreen?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-v1.8.0-brightgreen?style=flat-square" alt="Version">
   &nbsp;|&nbsp;
   <a href="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml?query=branch%3Amain"><img src="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml/badge.svg?branch=main&style=flat-square" alt="CI main"></a>
   &nbsp;|&nbsp;
@@ -41,9 +41,9 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 | Version | Date | Description |
 |---------|------|-------------|
-| **v1.7.0** | 2026-07-02 | Reports dashboard: financial, collection, retention, group utilisation + PDF export |
+| **v1.8.0** | 2026-07-02 | SMS payment reminders via Twilio (opt-in per parent) |
+| v1.7.0 | 2026-07-02 | Reports dashboard: financial, collection, retention, group utilisation + PDF export |
 | v1.5.0 | 2026-07-02 | Expense tracking with recurring templates + income vs expense widget |
-| v1.4.0 | 2026-07-02 | Beat schedule for monthly payment generation + monthly report |
 
 ---
 
@@ -54,7 +54,6 @@ Built to centralize student records, automate billing cycles, and streamline par
   - [Table of Contents](#table-of-contents)
   - [Version History \& Roadmap](#version-history--roadmap)
     - [Roadmap](#roadmap)
-      - [v1.8 — SMS Notifications (Twilio)](#v18--sms-notifications-twilio)
       - [v1.9 — Parent Portal](#v19--parent-portal)
       - [v1.10 — Audit Log \& Security Hardening](#v110--audit-log--security-hardening)
       - [v1.11 — Stripe Payment Integration](#v111--stripe-payment-integration)
@@ -148,8 +147,20 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 ## Version History & Roadmap
 
-<details id="v170" open>
-<summary><strong>v1.7.0 — Reports & Analytics (current)</strong></summary>
+<details id="v180" open>
+<summary><strong>v1.8.0 — SMS Notifications (Twilio, opt-in) (current)</strong></summary>
+
+- New `Parent.sms_opt_in` field (BooleanField, default False). Concrete opt-in per parent — SMS is never sent without an explicit True.
+- New `comms.services.sms_service.SmsService` wraps the Twilio SDK behind an `is_configured()` guard + `SmsResult` dataclass. `twilio` is imported lazily so environments that don't use SMS never pay the install cost.
+- New Celery task `comms.tasks.send_payment_reminder_sms_task` — retries on failure, gracefully skips when the service is unconfigured, and returns a structured `SmsResult` dict on success.
+- Existing `send_payment_reminders` now supplements email with SMS for every opted-in parent — email remains the primary channel; SMS is a nudge on top. A Twilio outage cannot stall email because the SMS branch queues asynchronously.
+- Three new settings (`TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM_NUMBER`), all optional and read from env vars.
+- 13 tests covering configuration detection, low-level send, opt-in guard, phone-missing guard, and the Celery task's four branches.
+
+</details>
+
+<details id="v170">
+<summary><strong>v1.7.0 — Reports & Analytics</strong></summary>
 
 - New `core.services.analytics_service` with `financial_summary_month`, `financial_summary_year`, `collection_rate`, `retention_snapshot`, `group_utilisation`, and a `dashboard_report` bundle used by both the HTML page and the PDF export.
 - New `/reports/` page: month/year controls, 4-tile financial snapshot (income / pending / expenses / net), collection-rate + retention cards, per-group utilisation table (`enrolled/max_students` + waiters), and a 12-row yearly table.
@@ -748,10 +759,6 @@ All tools configured in `pyproject.toml` — single source of truth.
 
 <details id="roadmap">
 <summary><strong>Click to expand full roadmap (v1.1 — v1.12)</strong></summary>
-
-#### v1.8 — SMS Notifications (Twilio)
-
-SMS as an alternative notification channel for payment reminders and urgent communications. Opt-in per parent. Fallback to email when SMS fails.
 
 #### v1.9 — Parent Portal
 
