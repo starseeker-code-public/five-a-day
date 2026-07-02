@@ -1,0 +1,36 @@
+"""
+Billing Celery tasks (v1.4).
+
+Wraps existing management commands / service methods so they can be
+scheduled via Celery Beat instead of an external cron.
+"""
+
+from datetime import date
+
+from celery import shared_task
+from celery.utils.log import get_task_logger
+
+logger = get_task_logger(__name__)
+
+
+@shared_task(name="billing.tasks.generate_monthly_payments_task", bind=True)
+def generate_monthly_payments_task(self, month: int | None = None, year: int | None = None):
+    """
+    Monthly (day 1) job: generate the pending monthly / quarterly payment
+    rows for every active enrollment. Runs the existing `generate_payments`
+    management command so CLI and Beat share exactly one code path.
+    """
+    import io
+
+    from django.core.management import call_command
+
+    today = date.today()
+    m = month or today.month
+    y = year or today.year
+
+    logger.info("Generating monthly payments for %02d/%d", m, y)
+    out = io.StringIO()
+    call_command("generate_payments", month=m, year=y, stdout=out)
+    log_output = out.getvalue()
+    logger.info("generate_payments output:\n%s", log_output)
+    return {"status": "success", "month": m, "year": y, "output": log_output}

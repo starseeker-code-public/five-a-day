@@ -20,7 +20,7 @@ Built to centralize student records, automate billing cycles, and streamline par
 ### Project Status
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v1.3.0-brightgreen?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-v1.4.0-brightgreen?style=flat-square" alt="Version">
   &nbsp;|&nbsp;
   <a href="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml?query=branch%3Amain"><img src="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml/badge.svg?branch=main&style=flat-square" alt="CI main"></a>
   &nbsp;|&nbsp;
@@ -41,9 +41,9 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 | Version | Date | Description |
 |---------|------|-------------|
-| **v1.3.0** | 2026-07-02 | PDF receipts, quarterly summaries, tax certificates (reportlab) |
+| **v1.4.0** | 2026-07-02 | Beat schedule for monthly payment generation + monthly report |
+| v1.3.0 | 2026-07-02 | PDF receipts, quarterly summaries, tax certificates (reportlab) |
 | v1.2.0 | 2026-07-02 | Google Sheets export (students + payments) |
-| v1.1.0 | 2026-07-02 | Waiting list & group capacity soft limits |
 
 ---
 
@@ -54,7 +54,6 @@ Built to centralize student records, automate billing cycles, and streamline par
   - [Table of Contents](#table-of-contents)
   - [Version History \& Roadmap](#version-history--roadmap)
     - [Roadmap](#roadmap)
-      - [v1.4 — Celery + Redis Deployment](#v14--celery--redis-deployment)
       - [v1.5 — Expense Tracking](#v15--expense-tracking)
       - [v1.7 — Advanced Reporting \& Analytics](#v17--advanced-reporting--analytics)
       - [v1.8 — SMS Notifications (Twilio)](#v18--sms-notifications-twilio)
@@ -151,8 +150,28 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 ## Version History & Roadmap
 
-<details id="v130" open>
-<summary><strong>v1.3.0 — PDF Invoice Generation (current)</strong></summary>
+<details id="v140" open>
+<summary><strong>v1.4.0 — Celery Beat Schedule (current)</strong></summary>
+
+**Beat schedule additions**
+
+- `generate-monthly-payments`: runs `billing.tasks.generate_monthly_payments_task` on day 1 of every month at 06:00 Europe/Madrid. Wraps the existing `python manage.py generate_payments` command so Beat and the CLI share exactly one code path.
+- `send-monthly-report`: runs `comms.tasks.send_monthly_report_task` on day 28 at 20:00 Europe/Madrid. Aggregates expected / collected / outstanding totals for the current month via a single `Payment.objects.aggregate` call and emails them to `SUPPORT_EMAIL` (skips gracefully when unset).
+
+**Task discovery**
+
+- New `billing/tasks.py` module (previously the app had no async tasks). Adds the module to Celery's autodiscover surface — no manual imports needed.
+- Pre-existing birthday-emails and payment-reminders schedules remain unchanged.
+
+**Testing**
+
+- 5 unit tests for the new tasks (`tests/unit/test_beat_tasks.py`) covering the CLI-command wrap, the "no recipient" skip path, and custom-recipient forwarding.
+- 8 Beat-schedule sanity tests (`tests/unit/test_celery_config.py`) that assert both new entries are present, run on the right day-of-month, target the correct queue, and are registered with the Celery app.
+
+</details>
+
+<details id="v130">
+<summary><strong>v1.3.0 — PDF Invoice Generation</strong></summary>
 
 **PDF service**
 
@@ -692,10 +711,6 @@ All tools configured in `pyproject.toml` — single source of truth.
 
 <details id="roadmap">
 <summary><strong>Click to expand full roadmap (v1.1 — v1.12)</strong></summary>
-
-#### v1.4 — Celery + Redis Deployment
-
-Full async task processing with Redis broker. Move all email sends to background tasks. Add Celery Beat for scheduled jobs: daily birthday emails at 8:00 AM, monthly payment generation on the 1st, monthly reports on the 28th.
 
 #### v1.5 — Expense Tracking
 

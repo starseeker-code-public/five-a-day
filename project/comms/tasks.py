@@ -168,6 +168,91 @@ def send_birthday_emails_task(self):
     return {"status": "success", "birthdays_found": len(birthday_students), "tasks_queued": len(birthday_students)}
 
 
+@shared_task(name="comms.tasks.send_monthly_report_task", bind=True)
+def send_monthly_report_task(self, recipient_email: str | None = None):
+    """
+    Monthly (day 28) job: email a compact financial snapshot for the current
+    month to the support / admin address. When `recipient_email` is None,
+    reads `settings.SUPPORT_EMAIL` (which is where every admin-facing
+    notification already goes).
+    """
+    from decimal import Decimal
+
+    from django.conf import settings
+    from django.db.models import Case, DecimalField, Sum, Value, When
+
+    from billing.models import Payment
+
+    to = recipient_email or getattr(settings, "SUPPORT_EMAIL", None)
+    if not to:
+        logger.warning("send_monthly_report_task: no SUPPORT_EMAIL configured, skipping")
+        return {"status": "skipped", "reason": "no recipient"}
+
+    today = date.today()
+    zero = Decimal("0.00")
+    stats = Payment.objects.aggregate(
+        expected=Sum(
+            Case(
+                When(
+                    due_date__month=today.month,
+                    due_date__year=today.year,
+                    then="amount",
+                ),
+                default=Value(0),
+                output_field=DecimalField(),
+            )
+        ),
+        collected=Sum(
+            Case(
+                When(
+                    payment_status="completed",
+                    payment_date__month=today.month,
+                    payment_date__year=today.year,
+                    then="amount",
+                ),
+                default=Value(0),
+                output_field=DecimalField(),
+            )
+        ),
+    )
+    expected = stats["expected"] or zero
+    collected = stats["collected"] or zero
+    outstanding = expected - collected
+
+    pending_count = Payment.objects.filter(
+        payment_status="pending",
+        due_date__month=today.month,
+        due_date__year=today.year,
+    ).count()
+
+    subject = f"[Five a Day] Informe mensual {today:%m/%Y}"
+    body = (
+        f"Informe financiero para {today:%m/%Y}:\n\n"
+        f"  Esperado:     {expected:.2f} €\n"
+        f"  Cobrado:      {collected:.2f} €\n"
+        f"  Pendiente:    {outstanding:.2f} €\n"
+        f"  Pagos abiertos: {pending_count}\n"
+    )
+
+    from django.core.mail import send_mail
+
+    send_mail(
+        subject=subject,
+        message=body,
+        from_email=settings.DEFAULT_FROM_EMAIL,
+        recipient_list=[to],
+        fail_silently=True,
+    )
+    logger.info("Monthly report sent to %s", to)
+    return {
+        "status": "success",
+        "expected": str(expected),
+        "collected": str(collected),
+        "outstanding": str(outstanding),
+        "pending_count": pending_count,
+    }
+
+
 @shared_task(name="comms.tasks.send_payment_reminders", bind=True)
 def send_payment_reminders(self):
     """
