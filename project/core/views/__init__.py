@@ -80,6 +80,7 @@ from core.views.payments import (
     parse_date_value,
     payment_detail,
     payment_detail_view,
+    payment_receipt_pdf,
     payment_statistics,
     payments_list,
     quick_complete_payment,

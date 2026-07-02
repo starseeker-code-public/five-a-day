@@ -379,11 +379,23 @@ def generate_tax_certificate_pdf(parent, year: int) -> bytes:
 
     Returns:
         Bytes del PDF generado
+
+    NOTE (v1.3): delegates to `billing.services.pdf_service.generate_tax_certificate`
+    which uses reportlab. The old inline HTML+WeasyPrint path is kept below solely
+    for the rare case reportlab fails at runtime (e.g. corrupted install) —
+    reportlab is a hard dependency so the fallback should never fire in practice.
     """
     from decimal import Decimal
     from io import BytesIO
 
     from billing.models import Payment
+
+    try:
+        from billing.services.pdf_service import generate_tax_certificate
+
+        return generate_tax_certificate(parent, year)
+    except Exception:  # noqa: BLE001 — retain HTML fallback for defence in depth
+        logger.exception("reportlab path failed, falling back to HTML certificate")
 
     # Obtener todos los pagos completados del padre en ese ano
     payments = (

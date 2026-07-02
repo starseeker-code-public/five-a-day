@@ -266,6 +266,18 @@ def payment_detail_view(request, payment_id):
     return render(request, "payments/payment_detail.html", context)
 
 
+@require_http_methods(["GET"])
+def payment_receipt_pdf(request, payment_id):
+    """Stream a payment-receipt PDF (v1.3)."""
+    from billing.services.pdf_service import generate_payment_receipt
+
+    payment = get_object_or_404(Payment.objects.select_related("student", "parent"), id=payment_id)
+    pdf_bytes = generate_payment_receipt(payment)
+    response = HttpResponse(pdf_bytes, content_type="application/pdf")
+    response["Content-Disposition"] = f'attachment; filename="recibo-{payment.id}.pdf"'
+    return response
+
+
 @require_http_methods(["POST"])
 def update_payment(request, payment_id):
     """

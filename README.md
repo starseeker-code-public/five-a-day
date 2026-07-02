@@ -20,7 +20,7 @@ Built to centralize student records, automate billing cycles, and streamline par
 ### Project Status
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v1.2.0-brightgreen?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-v1.3.0-brightgreen?style=flat-square" alt="Version">
   &nbsp;|&nbsp;
   <a href="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml?query=branch%3Amain"><img src="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml/badge.svg?branch=main&style=flat-square" alt="CI main"></a>
   &nbsp;|&nbsp;
@@ -41,9 +41,9 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 | Version | Date | Description |
 |---------|------|-------------|
-| **v1.2.0** | 2026-07-02 | Google Sheets export (students + payments) |
+| **v1.3.0** | 2026-07-02 | PDF receipts, quarterly summaries, tax certificates (reportlab) |
+| v1.2.0 | 2026-07-02 | Google Sheets export (students + payments) |
 | v1.1.0 | 2026-07-02 | Waiting list & group capacity soft limits |
-| v1.0.13 | 2026-06-14 | Env-file consolidation, settings simplification, Render removed |
 
 ---
 
@@ -54,7 +54,6 @@ Built to centralize student records, automate billing cycles, and streamline par
   - [Table of Contents](#table-of-contents)
   - [Version History \& Roadmap](#version-history--roadmap)
     - [Roadmap](#roadmap)
-      - [v1.3 — PDF Invoice Generation](#v13--pdf-invoice-generation)
       - [v1.4 — Celery + Redis Deployment](#v14--celery--redis-deployment)
       - [v1.5 — Expense Tracking](#v15--expense-tracking)
       - [v1.7 — Advanced Reporting \& Analytics](#v17--advanced-reporting--analytics)
@@ -152,8 +151,33 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 ## Version History & Roadmap
 
-<details id="v120" open>
-<summary><strong>v1.2.0 — Google Sheets Integration (current)</strong></summary>
+<details id="v130" open>
+<summary><strong>v1.3.0 — PDF Invoice Generation (current)</strong></summary>
+
+**PDF service**
+
+- New `billing/services/pdf_service.py` built on **reportlab** (pure-Python, no cairo/pango deps — deploys cleanly on Cloud Run and the testing VM without touching the base image).
+- Three public functions: `generate_payment_receipt(payment)`, `generate_quarterly_summary(student, payments, quarter_label)`, and `generate_tax_certificate(parent, year)`. All three return raw PDF bytes so callers can attach to email, stream as an HTTP response, or upload to Cloud Storage without intermediate buffering.
+- Shared `AcademyInfo` dataclass pulls business info from SiteConfiguration when populated; falls back to hard-coded defaults so a fresh install still produces a valid document.
+- Consistent header (academy name + title + subtitle) and footer ("generated on…" + website) across all three document types, with the primary violet as the accent colour.
+
+**Endpoints**
+
+- New `GET /payments/<id>/receipt.pdf` streams a receipt directly (Content-Disposition: attachment; filename="recibo-<id>.pdf"). No JS wrapper — links can be embedded in any template.
+
+**Backwards-compatible integration with comms**
+
+- `comms.services.email_functions.generate_tax_certificate_pdf` now delegates to the new service. The old HTML+WeasyPrint block is retained as a defence-in-depth fallback (unreachable in practice because reportlab is now a hard dependency).
+
+**Testing**
+
+- 7 unit tests in `tests/unit/test_pdf_service.py` covering: PDF byte signature (`%PDF-…%%EOF`), missing payment date, missing parent, empty payment list for quarterly, zero-payment tax certificate, non-trivial size when payments exist.
+- 2 integration tests in `tests/integration/test_receipt_view.py` for the `/payments/<id>/receipt.pdf` endpoint (200 + application/pdf, 404 on missing id).
+
+</details>
+
+<details id="v120">
+<summary><strong>v1.2.0 — Google Sheets Integration</strong></summary>
 
 **Service layer**
 
@@ -668,10 +692,6 @@ All tools configured in `pyproject.toml` — single source of truth.
 
 <details id="roadmap">
 <summary><strong>Click to expand full roadmap (v1.1 — v1.12)</strong></summary>
-
-#### v1.3 — PDF Invoice Generation
-
-Proper PDF generation using WeasyPrint. Invoice/receipt PDFs for individual payments and quarterly summaries. Replace the current HTML-fallback tax certificate.
 
 #### v1.4 — Celery + Redis Deployment
 
