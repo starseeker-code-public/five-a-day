@@ -20,7 +20,7 @@ Built to centralize student records, automate billing cycles, and streamline par
 ### Project Status
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v1.8.0-brightgreen?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-v1.9.0-brightgreen?style=flat-square" alt="Version">
   &nbsp;|&nbsp;
   <a href="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml?query=branch%3Amain"><img src="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml/badge.svg?branch=main&style=flat-square" alt="CI main"></a>
   &nbsp;|&nbsp;
@@ -41,9 +41,9 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 | Version | Date | Description |
 |---------|------|-------------|
-| **v1.8.0** | 2026-07-02 | SMS payment reminders via Twilio (opt-in per parent) |
+| **v1.9.0** | 2026-07-02 | Parent portal with magic-link auth (dashboard, payments, PDF downloads) |
+| v1.8.0 | 2026-07-02 | SMS payment reminders via Twilio (opt-in per parent) |
 | v1.7.0 | 2026-07-02 | Reports dashboard: financial, collection, retention, group utilisation + PDF export |
-| v1.5.0 | 2026-07-02 | Expense tracking with recurring templates + income vs expense widget |
 
 ---
 
@@ -54,7 +54,6 @@ Built to centralize student records, automate billing cycles, and streamline par
   - [Table of Contents](#table-of-contents)
   - [Version History \& Roadmap](#version-history--roadmap)
     - [Roadmap](#roadmap)
-      - [v1.9 — Parent Portal](#v19--parent-portal)
       - [v1.10 — Audit Log \& Security Hardening](#v110--audit-log--security-hardening)
       - [v1.11 — Stripe Payment Integration](#v111--stripe-payment-integration)
       - [v1.12 — Mobile Optimization \& PWA](#v112--mobile-optimization--pwa)
@@ -147,8 +146,20 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 ## Version History & Roadmap
 
-<details id="v180" open>
-<summary><strong>v1.8.0 — SMS Notifications (Twilio, opt-in) (current)</strong></summary>
+<details id="v190" open>
+<summary><strong>v1.9.0 — Parent Portal (current)</strong></summary>
+
+- New read-only web portal for parents at `/parent/`. Completely separate from the admin auth surface: its own session key, its own base template, its own template folder.
+- Magic-link authentication (30-minute TTL): POST `/parent/login/` with an email → the system issues a `ParentSessionToken` (via `secrets.token_hex(16)` for 128 bits of entropy) and emails a link to `/parent/login/<token>/`. Enumeration protection: unknown emails also see the "check your inbox" page. Tokens are single-use — `consume()` marks `used_at` and refuses reuse.
+- Portal surface: `parent_portal_dashboard` (children, upcoming payments, downloads), `parent_portal_payments` (filterable by year), `parent_portal_receipt` (PDF, scoped to the current parent by 404), `parent_portal_tax_certificate` (PDF for the given year), and `parent_portal_logout`.
+- New `students.ParentSessionToken` model in a sibling module (`parent_portal_models`) to keep `students.models` focused. Imported through the app so migrations pick it up.
+- `SimpleAuthMiddleware.PUBLIC_PREFIXES` gains `/parent/` — the admin session middleware doesn't get in the way of a parent's own session.
+- 22 tests split across `tests/unit/test_parent_session_token.py` (token issue/validity/consume) and `tests/integration/test_parent_portal.py` (magic-link flow, portal pages, cross-parent access denial, receipt PDF signature).
+
+</details>
+
+<details id="v180">
+<summary><strong>v1.8.0 — SMS Notifications (Twilio, opt-in)</strong></summary>
 
 - New `Parent.sms_opt_in` field (BooleanField, default False). Concrete opt-in per parent — SMS is never sent without an explicit True.
 - New `comms.services.sms_service.SmsService` wraps the Twilio SDK behind an `is_configured()` guard + `SmsResult` dataclass. `twilio` is imported lazily so environments that don't use SMS never pay the install cost.
@@ -759,10 +770,6 @@ All tools configured in `pyproject.toml` — single source of truth.
 
 <details id="roadmap">
 <summary><strong>Click to expand full roadmap (v1.1 — v1.12)</strong></summary>
-
-#### v1.9 — Parent Portal
-
-Read-only web portal for parents to view enrollment status, payment history, upcoming events, and download receipts/certificates. Separate authentication from admin panel.
 
 #### v1.10 — Audit Log & Security Hardening
 

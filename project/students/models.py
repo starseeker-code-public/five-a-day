@@ -295,6 +295,11 @@ class StudentParent(models.Model):
         return f"{self.parent} -> {self.student}"
 
 
+# v1.9 — parent portal magic-link tokens. Kept in a sibling module so the
+# top-level student data model stays focused.
+from students.parent_portal_models import ParentSessionToken  # noqa: E402,F401
+
+
 @receiver(pre_save, sender=Student)
 def _capture_active_transition(sender, instance, **kwargs):
     """Stash the DB value of `active` so post_save can detect True→False."""

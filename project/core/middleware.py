@@ -180,6 +180,7 @@ class SimpleAuthMiddleware:
         "/media/",
         "/auth/google/",
         "/password-reset/",
+        "/parent/",  # v1.9: parent portal uses its own magic-link session
     )
 
     def __init__(self, get_response):

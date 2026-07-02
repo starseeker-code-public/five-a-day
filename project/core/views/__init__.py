@@ -67,6 +67,17 @@ from core.views.management import (
     update_site_config,
 )
 
+# Parent portal (v1.9)
+from core.views.parent_portal import (
+    parent_portal_dashboard,
+    parent_portal_login,
+    parent_portal_logout,
+    parent_portal_payments,
+    parent_portal_receipt,
+    parent_portal_tax_certificate,
+    parent_portal_verify,
+)
+
 # Parents
 from core.views.parents import ParentCreateView
 from core.views.password_reset import (

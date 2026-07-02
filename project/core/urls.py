@@ -25,6 +25,14 @@ from core.views import (
     # Auth
     login_view,
     logout_view,
+    # Parent portal (v1.9)
+    parent_portal_dashboard,
+    parent_portal_login,
+    parent_portal_logout,
+    parent_portal_payments,
+    parent_portal_receipt,
+    parent_portal_tax_certificate,
+    parent_portal_verify,
     # Reports & analytics (v1.7)
     reports_pdf,
     reports_view,
@@ -81,6 +89,14 @@ urlpatterns = [
     # Reports & analytics (v1.7)
     path("reports/", reports_view, name="reports_view"),
     path("reports/download.pdf", reports_pdf, name="reports_pdf"),
+    # Parent portal (v1.9) — magic-link auth, session separate from admin
+    path("parent/login/", parent_portal_login, name="parent_portal_login"),
+    path("parent/login/<str:token>/", parent_portal_verify, name="parent_portal_verify"),
+    path("parent/logout/", parent_portal_logout, name="parent_portal_logout"),
+    path("parent/", parent_portal_dashboard, name="parent_portal_dashboard"),
+    path("parent/payments/", parent_portal_payments, name="parent_portal_payments"),
+    path("parent/payments/<int:payment_id>/receipt.pdf", parent_portal_receipt, name="parent_portal_receipt"),
+    path("parent/tax-certificate.pdf", parent_portal_tax_certificate, name="parent_portal_tax_certificate"),
     # Testing tools
     path("testing/", testing_tools_view, name="testing_tools"),
     path("api/testing/seed/", api_seed_database, name="api_seed_database"),
