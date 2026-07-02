@@ -8,7 +8,7 @@ and group utilisation. Pure query helpers — no HTTP, no rendering, no PDF.
 from __future__ import annotations
 
 import calendar
-from datetime import date, timedelta
+from datetime import UTC, date, timedelta
 from decimal import Decimal
 from typing import Any
 
@@ -90,10 +90,15 @@ def retention_snapshot(reference: date | None = None) -> dict[str, Any]:
     active today? Used for the yearly report card, not a rigorous cohort
     analysis.
     """
+    from datetime import datetime, time
+
     today = reference or date.today()
     one_year_ago = today - timedelta(days=365)
+    # `created_at` is a tz-aware DateTimeField — compare against a tz-aware value
+    # to avoid Django's "naive datetime while time zone support is active" warning.
+    one_year_ago_dt = datetime.combine(one_year_ago, time.min, tzinfo=UTC)
 
-    baseline_students = Student.objects.filter(created_at__lte=one_year_ago)
+    baseline_students = Student.objects.filter(created_at__lte=one_year_ago_dt)
     baseline_count = baseline_students.count()
     still_active_count = baseline_students.filter(active=True).count()
 

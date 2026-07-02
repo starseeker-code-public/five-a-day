@@ -1,6 +1,6 @@
 """Unit tests for the analytics service (v1.7)."""
 
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
 import pytest
@@ -58,7 +58,8 @@ class TestRetentionSnapshot:
         assert r["retention_percent"] == Decimal("0.00")
 
     def test_100_percent_retention(self, student):
-        old_created = date.today() - timedelta(days=400)
+        # Backdate created_at with tz-aware datetime to avoid the naive-dt warning.
+        old_created = datetime.now(UTC) - timedelta(days=400)
         student.__class__.objects.filter(pk=student.pk).update(created_at=old_created)
         r = retention_snapshot()
         assert r["baseline"] >= 1
