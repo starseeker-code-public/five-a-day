@@ -13,6 +13,8 @@ from core.views import (
     complete_todo,
     # Todos
     create_todo,
+    # Google Sheets export (v1.2)
+    export_to_sheets,
     fun_friday_view,
     google_oauth_callback,
     google_oauth_redirect,
@@ -71,6 +73,8 @@ urlpatterns = [
     path("api/history/", history_list, name="history_list"),
     # Support
     path("api/support/submit/", submit_support_ticket, name="submit_support_ticket"),
+    # Google Sheets export (v1.2)
+    path("api/sheets/export/", export_to_sheets, name="export_to_sheets"),
     # Testing tools
     path("testing/", testing_tools_view, name="testing_tools"),
     path("api/testing/seed/", api_seed_database, name="api_seed_database"),

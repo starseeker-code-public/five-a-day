@@ -92,6 +92,9 @@ from core.views.payments import (
 # Schedule
 from core.views.schedule import fun_friday_view, save_schedule_slot, schedule_view
 
+# Sheets export (v1.2)
+from core.views.sheets import export_to_sheets
+
 # Students
 from core.views.students import (
     StudentCreateView,

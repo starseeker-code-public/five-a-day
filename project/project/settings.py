@@ -20,7 +20,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # NOTA: Usa `make version x.y.z` para actualizar ambos sitios a la vez:
 #   - pyproject.toml (campo version)
 #   - README.md (badge y tabla de versiones — gestionado por la skill update-readme)
-APP_VERSION = os.getenv("APP_VERSION", "1.1.0")
+APP_VERSION = os.getenv("APP_VERSION", "1.2.0")
 
 # ============================================================================
 # SECURITY SETTINGS
@@ -326,3 +326,17 @@ CELERY_TASK_ROUTES = {
 if not CELERY_BROKER_URL:
     CELERY_TASK_ALWAYS_EAGER = True
     CELERY_TASK_EAGER_PROPAGATES = True
+
+# ============================================================================
+# GOOGLE SHEETS INTEGRATION (v1.2)
+# ============================================================================
+# Optional. When both a service-account credential and a spreadsheet id are
+# set, the /api/sheets/export/ endpoint and `manage.py export_to_sheets`
+# command will write student/payment tables to that spreadsheet.
+#
+# One of these two must be set for auth (JSON inline wins if both are set):
+GOOGLE_SHEETS_SERVICE_ACCOUNT_JSON = os.getenv("GOOGLE_SHEETS_SERVICE_ACCOUNT_JSON", "")
+GOOGLE_SHEETS_SERVICE_ACCOUNT_FILE = os.getenv("GOOGLE_SHEETS_SERVICE_ACCOUNT_FILE", "")
+# Target spreadsheet — the doc ID from its URL (…/spreadsheets/d/<ID>/edit).
+# The service account must have Editor access to the sheet.
+GOOGLE_SHEETS_SPREADSHEET_ID = os.getenv("GOOGLE_SHEETS_SPREADSHEET_ID", "")

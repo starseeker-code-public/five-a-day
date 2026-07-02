@@ -83,6 +83,8 @@ class HistoryLog(models.Model):
         ("waiting_list_added", "Añadido a lista de espera"),
         ("waiting_list_assigned", "Asignado desde lista de espera"),
         ("waiting_list_spot_open", "Hueco disponible"),
+        # v1.2 — Google Sheets integration
+        ("sheets_exported", "Exportación a Google Sheets"),
     ]
 
     action = models.CharField(max_length=30, choices=ACTION_CHOICES)
