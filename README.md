@@ -20,7 +20,7 @@ Built to centralize student records, automate billing cycles, and streamline par
 ### Project Status
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v1.5.0-brightgreen?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-v1.7.0-brightgreen?style=flat-square" alt="Version">
   &nbsp;|&nbsp;
   <a href="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml?query=branch%3Amain"><img src="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml/badge.svg?branch=main&style=flat-square" alt="CI main"></a>
   &nbsp;|&nbsp;
@@ -41,9 +41,9 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 | Version | Date | Description |
 |---------|------|-------------|
-| **v1.5.0** | 2026-07-02 | Expense tracking with recurring templates + income vs expense widget |
+| **v1.7.0** | 2026-07-02 | Reports dashboard: financial, collection, retention, group utilisation + PDF export |
+| v1.5.0 | 2026-07-02 | Expense tracking with recurring templates + income vs expense widget |
 | v1.4.0 | 2026-07-02 | Beat schedule for monthly payment generation + monthly report |
-| v1.3.0 | 2026-07-02 | PDF receipts, quarterly summaries, tax certificates (reportlab) |
 
 ---
 
@@ -54,7 +54,6 @@ Built to centralize student records, automate billing cycles, and streamline par
   - [Table of Contents](#table-of-contents)
   - [Version History \& Roadmap](#version-history--roadmap)
     - [Roadmap](#roadmap)
-      - [v1.7 — Advanced Reporting \& Analytics](#v17--advanced-reporting--analytics)
       - [v1.8 — SMS Notifications (Twilio)](#v18--sms-notifications-twilio)
       - [v1.9 — Parent Portal](#v19--parent-portal)
       - [v1.10 — Audit Log \& Security Hardening](#v110--audit-log--security-hardening)
@@ -149,8 +148,19 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 ## Version History & Roadmap
 
-<details id="v150" open>
-<summary><strong>v1.5.0 — Expense Tracking (current)</strong></summary>
+<details id="v170" open>
+<summary><strong>v1.7.0 — Reports & Analytics (current)</strong></summary>
+
+- New `core.services.analytics_service` with `financial_summary_month`, `financial_summary_year`, `collection_rate`, `retention_snapshot`, `group_utilisation`, and a `dashboard_report` bundle used by both the HTML page and the PDF export.
+- New `/reports/` page: month/year controls, 4-tile financial snapshot (income / pending / expenses / net), collection-rate + retention cards, per-group utilisation table (`enrolled/max_students` + waiters), and a 12-row yearly table.
+- New `GET /reports/download.pdf` renders the same data through the reportlab pipeline (`billing.services.pdf_service`) — reuses the shared header/footer/styles for a consistent look with receipts and tax certificates.
+- Sidebar gains a "Informes" entry (`bar_chart` icon, admin-only). Non-admin whitelist extended with `reports_view` + `reports_pdf` for future teacher-facing rollout.
+- 15 tests covering every service function, the endpoint happy paths, and the PDF byte signature.
+
+</details>
+
+<details id="v150">
+<summary><strong>v1.5.0 — Expense Tracking</strong></summary>
 
 Adds the second half of the finance loop — the app can now record every euro
 that leaves the academy alongside every euro that comes in.
@@ -738,10 +748,6 @@ All tools configured in `pyproject.toml` — single source of truth.
 
 <details id="roadmap">
 <summary><strong>Click to expand full roadmap (v1.1 — v1.12)</strong></summary>
-
-#### v1.7 — Advanced Reporting & Analytics
-
-Monthly and yearly financial reports with charts. Student retention analytics. Payment collection rates. Group utilization metrics. Exportable to PDF.
 
 #### v1.8 — SMS Notifications (Twilio)
 

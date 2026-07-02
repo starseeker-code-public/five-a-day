@@ -97,6 +97,9 @@ from core.views.payments import (
     validate_student_parent,
 )
 
+# Reports & analytics (v1.7)
+from core.views.reports import reports_pdf, reports_view
+
 # Schedule
 from core.views.schedule import fun_friday_view, save_schedule_slot, schedule_view
 

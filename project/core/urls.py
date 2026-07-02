@@ -25,6 +25,9 @@ from core.views import (
     # Auth
     login_view,
     logout_view,
+    # Reports & analytics (v1.7)
+    reports_pdf,
+    reports_view,
     save_schedule_slot,
     # Schedule
     schedule_view,
@@ -75,6 +78,9 @@ urlpatterns = [
     path("api/support/submit/", submit_support_ticket, name="submit_support_ticket"),
     # Google Sheets export (v1.2)
     path("api/sheets/export/", export_to_sheets, name="export_to_sheets"),
+    # Reports & analytics (v1.7)
+    path("reports/", reports_view, name="reports_view"),
+    path("reports/download.pdf", reports_pdf, name="reports_pdf"),
     # Testing tools
     path("testing/", testing_tools_view, name="testing_tools"),
     path("api/testing/seed/", api_seed_database, name="api_seed_database"),

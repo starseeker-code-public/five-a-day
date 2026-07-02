@@ -130,6 +130,9 @@ NON_ADMIN_ALLOWED_URL_NAMES = frozenset(
         "expenses_list",
         "create_expense",
         "delete_expense",
+        # Reports (v1.7) — read-only for non-admin teachers
+        "reports_view",
+        "reports_pdf",
         # Todos, history, support
         "create_todo",
         "complete_todo",
