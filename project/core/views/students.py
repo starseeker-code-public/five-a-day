@@ -45,6 +45,7 @@ class StudentCreateView(CreateView):
         mode = self.request.GET.get("mode", "normal")
         context["creation_mode"] = mode
         context["is_adult_mode"] = mode == "adult"
+        context["is_waiting_mode"] = mode == "waiting"
 
         parent_id = self.request.GET.get("parent_id")
         if parent_id:
@@ -90,12 +91,19 @@ class StudentCreateView(CreateView):
         from comms.tasks import send_welcome_email_task
         from core.models import HistoryLog
 
-        enrollment_form = EnrollmentForm(self.request.POST)
-
-        if not enrollment_form.is_valid():
-            return self.form_invalid(form)
-
+        is_waiting_mode = (
+            self.request.POST.get("is_waiting") in ("on", "true", "1") or self.request.GET.get("mode") == "waiting"
+        )
         is_adult_mode = self.request.POST.get("is_adult_mode") == "true"
+
+        # For waiting-list students we skip the enrollment form entirely — no
+        # plan/discount is chosen until the student is promoted off the list.
+        if not is_waiting_mode:
+            enrollment_form = EnrollmentForm(self.request.POST)
+            if not enrollment_form.is_valid():
+                return self.form_invalid(form)
+        else:
+            enrollment_form = None
 
         try:
             with transaction.atomic():
@@ -105,6 +113,8 @@ class StudentCreateView(CreateView):
                     student.gdpr_signed = True
                     student.email = self.request.POST.get("adult_email", "")
                     student.phone = self.request.POST.get("adult_phone", "")
+                if is_waiting_mode:
+                    student.is_waiting = True
                 student.save()
 
                 parent = None
@@ -123,6 +133,18 @@ class StudentCreateView(CreateView):
                         messages.error(self.request, "El padre especificado no existe")
                         student.delete()
                         return self.form_invalid(form)
+
+                if is_waiting_mode:
+                    HistoryLog.log(
+                        "waiting_list_added",
+                        f"Nuevo en lista de espera: {student.full_name} — {student.group.group_name}",
+                        icon="hourglass_top",
+                    )
+                    messages.success(
+                        self.request,
+                        f"✅ {student.full_name} añadido/a a la lista de espera.",
+                    )
+                    return HttpResponseRedirect(reverse("waiting_list"))
 
                 # Create enrollment
                 enrollment = enrollment_form.create_enrollment(student, is_adult=is_adult_mode)
@@ -204,6 +226,7 @@ class StudentListView(ListView):
         queryset = (
             Student.objects.filter(
                 active=True,
+                is_waiting=False,
                 enrollments__academic_year=academic_year,
             )
             .distinct()
@@ -283,20 +306,28 @@ class StudentUpdateView(UpdateView):
         return context
 
     def form_valid(self, form):
-        enrollment_form = EnrollmentForm(self.request.POST)
+        # Waiting-list students don't have an active enrollment, so we skip the
+        # enrollment form. Once is_waiting is toggled off, a fresh enrollment is
+        # created below.
+        is_waiting_now = form.cleaned_data.get("is_waiting", False)
 
-        if not enrollment_form.is_valid():
-            return self.form_invalid(form)
+        enrollment_form = None
+        if not is_waiting_now:
+            enrollment_form = EnrollmentForm(self.request.POST)
+            if not enrollment_form.is_valid():
+                return self.form_invalid(form)
 
         try:
             with transaction.atomic():
                 student = form.save()
 
-                # Deactivate old enrollment if exists
-                student.enrollments.filter(status="active").update(status="finished")
-
-                # Create new enrollment
-                enrollment_form.create_enrollment(student, is_adult=student.is_adult)
+                if is_waiting_now:
+                    # Cancel any active enrollment — the student is off the roster.
+                    student.enrollments.filter(status="active").update(status="cancelled")
+                else:
+                    # Deactivate old enrollment if exists, then issue the new one.
+                    student.enrollments.filter(status="active").update(status="finished")
+                    enrollment_form.create_enrollment(student, is_adult=student.is_adult)
 
                 messages.success(
                     self.request,

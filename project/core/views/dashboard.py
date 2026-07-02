@@ -217,6 +217,17 @@ def home(request):
     ).order_by("first_name")[:5]
     today_birthday_names = [s.first_name for s in today_birthday_students]
 
+    # Waiting list & group capacity (v1.1)
+    from core.views.waiting_list import group_capacity_summary
+
+    capacity_rows = group_capacity_summary()
+    waiting_count = sum(row["waiting"] for row in capacity_rows)
+    groups_with_openings = [
+        {"name": row["name"], "color": row["color"], "available": row["available"], "waiting": row["waiting"]}
+        for row in capacity_rows
+        if row["has_room_for_waiters"]
+    ]
+
     quote_text, quote_author, new_cookie = _get_quote(request)
 
     context = {
@@ -241,6 +252,8 @@ def home(request):
         "today": today,
         "inspirational_quote": quote_text,
         "inspirational_author": quote_author,
+        "waiting_count": waiting_count,
+        "groups_with_openings": groups_with_openings,
     }
 
     response = render(request, "home.html", context)

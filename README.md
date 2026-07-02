@@ -20,7 +20,7 @@ Built to centralize student records, automate billing cycles, and streamline par
 ### Project Status
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v1.0.13-brightgreen?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-v1.1.0-brightgreen?style=flat-square" alt="Version">
   &nbsp;|&nbsp;
   <a href="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml?query=branch%3Amain"><img src="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml/badge.svg?branch=main&style=flat-square" alt="CI main"></a>
   &nbsp;|&nbsp;
@@ -41,9 +41,9 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 | Version | Date | Description |
 |---------|------|-------------|
-| **v1.0.13** | 2026-06-14 | Env-file consolidation, settings simplification, Render removed |
+| **v1.1.0** | 2026-07-02 | Waiting list & group capacity soft limits |
+| v1.0.13 | 2026-06-14 | Env-file consolidation, settings simplification, Render removed |
 | v1.0.12 | 2026-06-10 | Teacher login + password reset, non-admin whitelist |
-| v1.0.11 | 2026-04-22 | Testing env fixes, CI hardening, static files cleanup |
 
 ---
 
@@ -54,7 +54,6 @@ Built to centralize student records, automate billing cycles, and streamline par
   - [Table of Contents](#table-of-contents)
   - [Version History \& Roadmap](#version-history--roadmap)
     - [Roadmap](#roadmap)
-      - [v1.1 — Waiting List \& Group Capacity](#v11--waiting-list--group-capacity)
       - [v1.2 — Google Sheets Integration](#v12--google-sheets-integration)
       - [v1.3 — PDF Invoice Generation](#v13--pdf-invoice-generation)
       - [v1.4 — Celery + Redis Deployment](#v14--celery--redis-deployment)
@@ -154,8 +153,43 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 ## Version History & Roadmap
 
-<details id="v1013" open>
-<summary><strong>v1.0.13 — Env-File Consolidation, Settings Simplification & Render Removal (current)</strong></summary>
+<details id="v110" open>
+<summary><strong>v1.1.0 — Waiting List & Group Capacity (current)</strong></summary>
+
+**Waiting list**
+
+- New `Student.is_waiting` flag + `waiting_since` timestamp (auto-set on flip, cleared when unset). Waiting-list students still live in the same `students` table and keep their preferred `group` FK, but they don't count against the group's enrolled capacity and are excluded from `/students/`.
+- New `/students/waiting/` page with per-student cards, FIFO ordering (`waiting_since` asc), a per-group filter, and a header capacity summary showing enrolled / max / available spots for every active group.
+- Quick-assign action (`POST /students/<id>/assign/`) promotes a waiting student to enrolled in one click: flips `is_waiting=False`, creates a default full-time monthly `Enrollment`, and a pending enrollment-fee `Payment`. Refuses to run when the group is already at cap.
+- Reverse action (`POST /students/<id>/wait/`) moves an enrolled student back onto the waiting list.
+- Non-admin Teacher whitelist updated: `waiting_list`, `assign_from_waiting_list`, `add_to_waiting_list` are all reachable in view+edit modes for Teachers, matching the existing student-management authority level.
+
+**Group capacity**
+
+- New `Group.max_students` (PositiveIntegerField, default `0`) — a soft cap on enrolled students. `0` means "no cap" for backwards compatibility with every existing group.
+- Group model gains `enrolled_count`, `waiting_count`, `available_spots`, `is_full` computed properties. `enrolled_count` excludes both inactive and waiting students, so `available_spots` reflects the number of real active seats free.
+- `group_capacity_summary()` helper returns annotated capacity + waiter counts for the dashboard and the waiting-list page in a single query (uses conditional `Count` aggregates — no N+1).
+- Group admin now shows `max_students` / `enrolled_count` / `available_spots` in the list view.
+
+**Dashboard integration**
+
+- New dashboard card highlighting `waiting_count` alongside a chip list of groups that have free spots *and* waiters (`has_room_for_waiters`), each linking through to the waiting-list page.
+- Sidebar gains a "Lista de Espera" entry with a `hourglass_top` icon, visible to admins and non-admin Teachers alike.
+
+**Notifications**
+
+- Post-save signal on `Student` fires when `active` transitions `True → False`; if the group has waiters, a `HistoryLog` entry (`waiting_list_spot_open`) is written so the dashboard history dropdown surfaces the newly available spot.
+- Three new `HistoryLog` action choices: `waiting_list_added`, `waiting_list_assigned`, `waiting_list_spot_open`.
+
+**Testing**
+
+- 14 unit tests in `tests/unit/test_waiting_list.py` covering the group capacity properties, `waiting_since` auto-set / clear, `group_capacity_summary`, and the pre-save `active` transition capture.
+- 16 integration tests in `tests/integration/test_waiting_list_views.py` covering the list page, quick-assign happy path, cap enforcement, HTTP method restriction, waiting-list exclusion from the main students list, and the dashboard widget context.
+
+</details>
+
+<details id="v1013">
+<summary><strong>v1.0.13 — Env-File Consolidation, Settings Simplification & Render Removal</strong></summary>
 
 **Env files: 7 → 3, no overlays**
 
@@ -610,17 +644,6 @@ All tools configured in `pyproject.toml` — single source of truth.
 
 <details id="roadmap">
 <summary><strong>Click to expand full roadmap (v1.1 — v1.12)</strong></summary>
-
-#### v1.1 — Waiting List & Group Capacity
-
-Students can be created with a `waiting_list` flag instead of being immediately enrolled. When a group has capacity (a student leaves), waiting list students are surfaced for assignment.
-
-- New `is_waiting` boolean on Student model
-- `max_students` soft limit on Group model with `student_count` tracking
-- Notification when a student is deactivated and a group drops below capacity
-- Waiting list management view: filter by group preference, priority by creation date
-- Quick-assign flow: from waiting list or student creation, assign to group with one click
-- Dashboard widget showing groups with available spots and waiting students
 
 #### v1.2 — Google Sheets Integration
 

@@ -79,6 +79,10 @@ class HistoryLog(models.Model):
         ("payment_created", "Pago creado"),
         ("email_sent", "Email enviado"),
         ("schedule_updated", "Horario actualizado"),
+        # v1.1 — Waiting list & group capacity
+        ("waiting_list_added", "Añadido a lista de espera"),
+        ("waiting_list_assigned", "Asignado desde lista de espera"),
+        ("waiting_list_spot_open", "Hueco disponible"),
     ]
 
     action = models.CharField(max_length=30, choices=ACTION_CHOICES)

@@ -121,3 +121,12 @@ from core.views.testing_tools import (
 
 # Todos & history
 from core.views.todos import complete_todo, create_todo, history_list
+
+# Waiting list (v1.1)
+from core.views.waiting_list import (
+    add_to_waiting_list,
+    assign_from_waiting_list,
+    group_capacity_summary,
+    notify_capacity_freed,
+    waiting_list_view,
+)
