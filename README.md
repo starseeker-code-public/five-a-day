@@ -20,7 +20,7 @@ Built to centralize student records, automate billing cycles, and streamline par
 ### Project Status
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v1.4.0-brightgreen?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-v1.5.0-brightgreen?style=flat-square" alt="Version">
   &nbsp;|&nbsp;
   <a href="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml?query=branch%3Amain"><img src="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml/badge.svg?branch=main&style=flat-square" alt="CI main"></a>
   &nbsp;|&nbsp;
@@ -41,9 +41,9 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 | Version | Date | Description |
 |---------|------|-------------|
-| **v1.4.0** | 2026-07-02 | Beat schedule for monthly payment generation + monthly report |
+| **v1.5.0** | 2026-07-02 | Expense tracking with recurring templates + income vs expense widget |
+| v1.4.0 | 2026-07-02 | Beat schedule for monthly payment generation + monthly report |
 | v1.3.0 | 2026-07-02 | PDF receipts, quarterly summaries, tax certificates (reportlab) |
-| v1.2.0 | 2026-07-02 | Google Sheets export (students + payments) |
 
 ---
 
@@ -54,7 +54,6 @@ Built to centralize student records, automate billing cycles, and streamline par
   - [Table of Contents](#table-of-contents)
   - [Version History \& Roadmap](#version-history--roadmap)
     - [Roadmap](#roadmap)
-      - [v1.5 — Expense Tracking](#v15--expense-tracking)
       - [v1.7 — Advanced Reporting \& Analytics](#v17--advanced-reporting--analytics)
       - [v1.8 — SMS Notifications (Twilio)](#v18--sms-notifications-twilio)
       - [v1.9 — Parent Portal](#v19--parent-portal)
@@ -150,8 +149,36 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 ## Version History & Roadmap
 
-<details id="v140" open>
-<summary><strong>v1.4.0 — Celery Beat Schedule (current)</strong></summary>
+<details id="v150" open>
+<summary><strong>v1.5.0 — Expense Tracking (current)</strong></summary>
+
+Adds the second half of the finance loop — the app can now record every euro
+that leaves the academy alongside every euro that comes in.
+
+**Model**
+
+- New `Expense` model with `description`, `category` (rent / salaries / supplies / utilities / marketing / software / insurance / taxes / other), `amount`, `expense_date`, and free-form `notes`.
+- Optional recurring-template mode via `is_recurring=True` + `recurring_day` (1–28). Templates are never counted in monthly totals; instead a Beat job materialises a concrete `Expense` row (with a `generated_from` FK) on the first of every month, keeping historical reports honest and idempotent.
+
+**Views + UI**
+
+- New `/expenses/` page with month/year/category filters, an income vs expense summary (Ingresos / Gastos / Beneficio neto), a create form, and a compact table listing.
+- Recurring templates surface in a dedicated section at the bottom of the page so admins can prune / edit them without hunting.
+- Sidebar gains a "Gastos" entry with the `receipt_long` icon, visible to admins and non-admin teachers alike.
+- Non-admin Teacher whitelist extended with `expenses_list`, `create_expense`, and `delete_expense`.
+
+**Beat integration**
+
+- New `billing.tasks.materialize_recurring_expenses_task` runs on day 1 at 06:30 Europe/Madrid — right after the payment-generation job so the month's ledger is complete before the admin opens the dashboard.
+
+**Testing**
+
+- 17 tests (`tests/unit/test_expenses.py` + `tests/integration/test_expense_views.py`) covering the model constraints, the `monthly_totals` service (empty, mixed, recurring-excluded), the `materialize_recurring` idempotency, and the full CRUD endpoint surface.
+
+</details>
+
+<details id="v140">
+<summary><strong>v1.4.0 — Celery Beat Schedule</strong></summary>
 
 **Beat schedule additions**
 
@@ -711,10 +738,6 @@ All tools configured in `pyproject.toml` — single source of truth.
 
 <details id="roadmap">
 <summary><strong>Click to expand full roadmap (v1.1 — v1.12)</strong></summary>
-
-#### v1.5 — Expense Tracking
-
-Track academy expenses (rent, supplies, salaries) with categories, recurring templates, and monthly totals. Income-vs-expense dashboard widget showing profitability.
 
 #### v1.7 — Advanced Reporting & Analytics
 

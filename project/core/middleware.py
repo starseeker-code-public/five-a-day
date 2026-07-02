@@ -126,6 +126,10 @@ NON_ADMIN_ALLOWED_URL_NAMES = frozenset(
         "management",
         "api_get_teachers",
         "language_cheque_students",
+        # Expenses (v1.5) — visible to non-admin teachers for read + create
+        "expenses_list",
+        "create_expense",
+        "delete_expense",
         # Todos, history, support
         "create_todo",
         "complete_todo",

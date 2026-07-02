@@ -13,6 +13,23 @@ from celery.utils.log import get_task_logger
 logger = get_task_logger(__name__)
 
 
+@shared_task(name="billing.tasks.materialize_recurring_expenses_task", bind=True)
+def materialize_recurring_expenses_task(self, month: int | None = None, year: int | None = None):
+    """
+    Monthly (day 1) job: turn every `is_recurring=True` Expense template into a
+    concrete Expense row for the given month. Idempotent — skips templates that
+    have already been materialised via `generated_from`.
+    """
+    from billing.services.expense_service import materialize_recurring
+
+    today = date.today()
+    m = month or today.month
+    y = year or today.year
+    created = materialize_recurring(m, y)
+    logger.info("Materialized %d recurring expenses for %02d/%d", created, m, y)
+    return {"status": "success", "created": created, "month": m, "year": y}
+
+
 @shared_task(name="billing.tasks.generate_monthly_payments_task", bind=True)
 def generate_monthly_payments_task(self, month: int | None = None, year: int | None = None):
     """

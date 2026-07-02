@@ -1,0 +1,182 @@
+{% extends 'base.html' %}
+
+{% block title %}Five a Day - Gastos{% endblock %}
+
+{% block page_title %}Gastos{% endblock %}
+{% block page_subtitle %}Registra y categoriza los gastos de la academia{% endblock %}
+
+{% block content %}
+<div class="mb-6">
+    <div class="flex items-center gap-3 mb-2">
+        <span class="material-symbols-outlined text-primary-600 text-5xl">receipt_long</span>
+        <h1 class="text-3xl font-bold tracking-tight text-neutral-800">Gastos</h1>
+    </div>
+    <p class="text-neutral-600">Vista mes {{ month }}/{{ year }}</p>
+</div>
+
+<!-- Income vs Expense summary -->
+<div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
+    <div class="bg-white rounded-lg p-6 border-l-4 border-green-500">
+        <p class="text-sm uppercase tracking-wider text-neutral-500 mb-1">Ingresos del mes</p>
+        <p class="text-3xl font-bold text-green-600">{{ totals.income|floatformat:2 }} €</p>
+    </div>
+    <div class="bg-white rounded-lg p-6 border-l-4 border-red-500">
+        <p class="text-sm uppercase tracking-wider text-neutral-500 mb-1">Gastos del mes</p>
+        <p class="text-3xl font-bold text-red-500">{{ totals.expenses|floatformat:2 }} €</p>
+    </div>
+    <div class="bg-white rounded-lg p-6 border-l-4 border-primary-500">
+        <p class="text-sm uppercase tracking-wider text-neutral-500 mb-1">Beneficio neto</p>
+        <p class="text-3xl font-bold {% if totals.net >= 0 %}text-green-600{% else %}text-red-500{% endif %}">{{ totals.net|floatformat:2 }} €</p>
+    </div>
+</div>
+
+<!-- Filter + new expense form -->
+<div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
+    <form method="get" class="lg:col-span-1 bg-white rounded-lg p-4 shadow-sm">
+        <h3 class="font-semibold text-neutral-700 mb-3">Filtros</h3>
+        <div class="grid grid-cols-2 gap-2 mb-2">
+            <div>
+                <label class="block text-xs text-neutral-500">Mes</label>
+                <input type="number" name="month" min="1" max="12" value="{{ month }}" class="w-full px-2 py-1 border border-neutral-300 rounded-md text-sm">
+            </div>
+            <div>
+                <label class="block text-xs text-neutral-500">Año</label>
+                <input type="number" name="year" min="2020" max="2100" value="{{ year }}" class="w-full px-2 py-1 border border-neutral-300 rounded-md text-sm">
+            </div>
+        </div>
+        <div class="mb-3">
+            <label class="block text-xs text-neutral-500">Categoría</label>
+            <select name="category" class="w-full px-2 py-1 border border-neutral-300 rounded-md text-sm">
+                <option value="">Todas</option>
+                {% for value, label in categories %}
+                    <option value="{{ value }}" {% if value == category %}selected{% endif %}>{{ label }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <button type="submit" class="w-full px-3 py-2 bg-primary-500 hover:bg-primary-600 text-white rounded-md text-sm font-medium">Aplicar</button>
+    </form>
+
+    <form method="post" action="{% url 'create_expense' %}" class="lg:col-span-2 bg-white rounded-lg p-4 shadow-sm">
+        {% csrf_token %}
+        <h3 class="font-semibold text-neutral-700 mb-3">Nuevo gasto</h3>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div class="md:col-span-2">
+                <label class="block text-xs text-neutral-500">Descripción</label>
+                <input type="text" name="description" required class="w-full px-2 py-1 border border-neutral-300 rounded-md text-sm" placeholder="Alquiler local">
+            </div>
+            <div>
+                <label class="block text-xs text-neutral-500">Categoría</label>
+                <select name="category" class="w-full px-2 py-1 border border-neutral-300 rounded-md text-sm">
+                    {% for value, label in categories %}
+                        <option value="{{ value }}">{{ label }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div>
+                <label class="block text-xs text-neutral-500">Importe (€)</label>
+                <input type="number" name="amount" step="0.01" min="0.01" required class="w-full px-2 py-1 border border-neutral-300 rounded-md text-sm">
+            </div>
+            <div>
+                <label class="block text-xs text-neutral-500">Fecha</label>
+                <input type="date" name="expense_date" value="{{ month }}-{{ year }}" class="w-full px-2 py-1 border border-neutral-300 rounded-md text-sm">
+            </div>
+            <div>
+                <label class="block text-xs text-neutral-500 flex items-center gap-2">
+                    <input type="checkbox" name="is_recurring" class="form-check-input">
+                    Recurrente
+                </label>
+                <input type="number" name="recurring_day" min="1" max="28" placeholder="Día (1-28)" class="w-full px-2 py-1 border border-neutral-300 rounded-md text-sm mt-1">
+            </div>
+            <div class="md:col-span-2">
+                <label class="block text-xs text-neutral-500">Notas</label>
+                <textarea name="notes" rows="2" class="w-full px-2 py-1 border border-neutral-300 rounded-md text-sm"></textarea>
+            </div>
+        </div>
+        <button type="submit" class="mt-3 px-4 py-2 bg-primary-500 hover:bg-primary-600 text-white rounded-md text-sm font-medium">
+            Guardar
+        </button>
+    </form>
+</div>
+
+<!-- Expense table -->
+<div class="bg-white rounded-lg shadow-lg overflow-hidden">
+    <div class="overflow-x-auto">
+        <table class="w-full">
+            <thead class="bg-primary-50 border-b border-primary-200">
+                <tr>
+                    <th class="px-6 py-4 text-left text-sm font-semibold text-primary-700 uppercase tracking-wider">Fecha</th>
+                    <th class="px-6 py-4 text-left text-sm font-semibold text-primary-700 uppercase tracking-wider">Descripción</th>
+                    <th class="px-6 py-4 text-center text-sm font-semibold text-primary-700 uppercase tracking-wider">Categoría</th>
+                    <th class="px-6 py-4 text-right text-sm font-semibold text-primary-700 uppercase tracking-wider">Importe</th>
+                    <th class="px-6 py-4 text-center text-sm font-semibold text-primary-700 uppercase tracking-wider"></th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-neutral-100">
+                {% for e in expenses %}
+                <tr class="hover:bg-neutral-50">
+                    <td class="px-6 py-3 text-sm text-neutral-600">{{ e.expense_date|date:"d/m/Y" }}</td>
+                    <td class="px-6 py-3 text-sm text-neutral-800">
+                        {{ e.description }}
+                        {% if e.generated_from %}
+                            <span class="text-xs text-neutral-400">(recurrente)</span>
+                        {% endif %}
+                        {% if e.notes %}
+                            <div class="text-xs text-neutral-500">{{ e.notes|truncatechars:60 }}</div>
+                        {% endif %}
+                    </td>
+                    <td class="px-6 py-3 text-center text-sm">{{ e.get_category_display }}</td>
+                    <td class="px-6 py-3 text-right font-medium text-red-500">-{{ e.amount|floatformat:2 }} €</td>
+                    <td class="px-6 py-3 text-center">
+                        <form method="post" action="{% url 'delete_expense' e.id %}" onsubmit="return confirm('¿Eliminar este gasto?')" class="inline">
+                            {% csrf_token %}
+                            <button type="submit" class="text-red-500 hover:text-red-700" title="Eliminar">
+                                <span class="material-symbols-outlined text-sm">delete</span>
+                            </button>
+                        </form>
+                    </td>
+                </tr>
+                {% empty %}
+                <tr>
+                    <td colspan="5" class="px-6 py-8 text-center text-neutral-400">
+                        No hay gastos registrados para este período.
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+{% if templates %}
+<div class="mt-8 bg-white rounded-lg shadow-sm p-4">
+    <h3 class="font-semibold text-neutral-700 mb-3">Plantillas recurrentes</h3>
+    <table class="w-full text-sm">
+        <thead class="text-xs text-neutral-500 uppercase">
+            <tr>
+                <th class="py-2 text-left">Descripción</th>
+                <th class="py-2 text-center">Categoría</th>
+                <th class="py-2 text-center">Día</th>
+                <th class="py-2 text-right">Importe</th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody class="divide-y divide-neutral-100">
+            {% for t in templates %}
+            <tr>
+                <td class="py-2">{{ t.description }}</td>
+                <td class="py-2 text-center">{{ t.get_category_display }}</td>
+                <td class="py-2 text-center">Día {{ t.recurring_day }}</td>
+                <td class="py-2 text-right">{{ t.amount|floatformat:2 }} €</td>
+                <td class="py-2 text-center">
+                    <form method="post" action="{% url 'delete_expense' t.id %}" onsubmit="return confirm('¿Eliminar plantilla?')" class="inline">
+                        {% csrf_token %}
+                        <button type="submit" class="text-red-500 hover:text-red-700"><span class="material-symbols-outlined text-sm">delete</span></button>
+                    </form>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
+{% endblock %}

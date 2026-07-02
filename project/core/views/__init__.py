@@ -42,6 +42,13 @@ from core.views.errors import (
     test_error_500,
 )
 
+# Expenses (v1.5)
+from core.views.expenses import (
+    create_expense,
+    delete_expense,
+    expenses_list,
+)
+
 # Fun Friday attendance
 from core.views.fun_friday_attendance import (
     add_fun_friday_attendance,
