@@ -9,7 +9,7 @@
     </h1>
     
     <p style="text-align: center; color: #6B7280; font-size: 14px; margin-bottom: 30px;">
-        {{ month|default:"Diciembre" }} {{ year|default:2025 }}
+        {{ month|default_if_none:"" }} {{ year|default_if_none:"" }}
     </p>
     
     <p style="font-size: 16px; color: #374151; line-height: 1.6;">

@@ -7,6 +7,7 @@ Moved from core/email.py as part of the comms app split.
 
 import logging
 import os
+from datetime import date
 from email.mime.image import MIMEImage
 
 from django.conf import settings
@@ -93,8 +94,11 @@ class EmailService:
             if context is None:
                 context = {}
 
-            # Anadir variables globales al contexto
-            context.setdefault("year", 2025)
+            # Anadir variables globales al contexto. `year` used to be hard-
+            # coded to 2025, silently backdating every email footer / tax
+            # certificate context. Derive from today's date so 2026+ emails
+            # render with the current year.
+            context.setdefault("year", date.today().year)
             context.setdefault("site_name", "Five a Day")
 
             # Renderizar template HTML

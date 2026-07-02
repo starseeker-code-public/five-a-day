@@ -54,21 +54,25 @@ def web_manifest(request):
 # be served from arbitrary paths without extra headers) and can reference
 # APP_VERSION for cache-busting.
 _SW_TEMPLATE = """// Five a Day — service worker (v1.12)
-// Cache-first for GETs to same-origin URLs so the dashboard shell + static
-// assets stay responsive over flaky connections; network-first everywhere
-// else so the app never serves stale data by mistake.
+//
+// Cache strategy — deliberately narrow:
+//   - Cache-first ONLY for /static/ assets and the login page (which is
+//     public and identical for every user).
+//   - Network-first with cache fallback for the manifest + logo so an
+//     offline load still renders the shell.
+//   - Everything else (dashboard, students, payments, parent portal,
+//     API): NEVER cached — those responses are user-scoped and caching
+//     them would leak session data on shared devices after logout.
 
 const CACHE_NAME = "fiveaday-v%(cache_key)s";
-const SHELL_URLS = [
-    "/",
-    "/students/",
-    "/payments/",
+const STATIC_SHELL = [
     "/static/images/logo_white_bg.png",
+    "/manifest.webmanifest",
 ];
 
 self.addEventListener("install", (event) => {
     event.waitUntil(
-        caches.open(CACHE_NAME).then((cache) => cache.addAll(SHELL_URLS)).catch(() => null)
+        caches.open(CACHE_NAME).then((cache) => cache.addAll(STATIC_SHELL)).catch(() => null)
     );
     self.skipWaiting();
 });
@@ -82,16 +86,26 @@ self.addEventListener("activate", (event) => {
     self.clients.claim();
 });
 
+function isCacheable(url) {
+    const path = url.pathname;
+    // Static assets never carry a session — safe to cache.
+    if (path.startsWith("/static/") || path.startsWith("/media/")) return true;
+    // Manifest + the login page are public and identical for every user.
+    if (path === "/manifest.webmanifest") return true;
+    if (path === "/login/") return true;
+    return false;
+}
+
 self.addEventListener("fetch", (event) => {
     const req = event.request;
-    if (req.method !== "GET" || new URL(req.url).origin !== self.location.origin) {
-        return;
-    }
-    // Skip auth / API endpoints — we never want a stale login page or payments list
-    const path = new URL(req.url).pathname;
-    if (path.startsWith("/api/") || path.startsWith("/login/") || path.startsWith("/logout/")) {
-        return;
-    }
+    if (req.method !== "GET") return;
+    const url = new URL(req.url);
+    if (url.origin !== self.location.origin) return;
+
+    // Bypass the SW entirely for anything session-scoped so a logged-out
+    // user cannot see the previous user's dashboard by pulling from cache.
+    if (!isCacheable(url)) return;
+
     event.respondWith(
         caches.match(req).then((cached) => {
             const network = fetch(req).then((res) => {

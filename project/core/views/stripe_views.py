@@ -43,8 +43,13 @@ def create_checkout_link(request, payment_id: int):
             status=503,
         )
 
-    success_url = request.build_absolute_uri(reverse("parent_portal_payments"))
-    cancel_url = success_url
+    # Distinct URLs so the parent portal can render a specific toast on each
+    # outcome; sharing the same URL means "cancel" and "success" both look
+    # identical to the browser.
+    base = request.build_absolute_uri(reverse("parent_portal_payments"))
+    joiner = "&" if "?" in base else "?"
+    success_url = f"{base}{joiner}paid={payment.id}"
+    cancel_url = f"{base}{joiner}cancelled={payment.id}"
     try:
         session = service.create_checkout_session(
             payment,

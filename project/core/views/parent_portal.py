@@ -11,9 +11,7 @@ from __future__ import annotations
 import logging
 from datetime import date
 
-from django.conf import settings
 from django.contrib import messages
-from django.core.mail import send_mail
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
@@ -66,21 +64,16 @@ def parent_portal_login(request):
         if parent:
             token = ParentSessionToken.issue(parent)
             link = request.build_absolute_uri(reverse("parent_portal_verify", args=[token.token]))
+            # Queue the email asynchronously. Synchronous SMTP inside the POST
+            # would (a) leak "email exists" via response-time timing and defeat
+            # the enumeration-protection story, and (b) let a slow Gmail auth
+            # stall the "check your inbox" render.
+            from comms.tasks import send_parent_magic_link_task
+
             try:
-                send_mail(
-                    subject="Acceso al portal · Five a Day",
-                    message=(
-                        f"Hola {parent.first_name},\n\n"
-                        f"Haz clic en este enlace para acceder al portal. Es válido durante 30 minutos:\n"
-                        f"{link}\n\n"
-                        "Si no lo has solicitado, ignora este mensaje.\n"
-                    ),
-                    from_email=getattr(settings, "DEFAULT_FROM_EMAIL", None),
-                    recipient_list=[parent.email],
-                    fail_silently=True,
-                )
-            except Exception as e:  # noqa: BLE001 — log but don't leak errors
-                logger.warning("Failed to send parent magic link to %s: %s", email, e)
+                send_parent_magic_link_task.delay(parent.id, link)
+            except Exception:  # noqa: BLE001 — never fail the request over email
+                logger.exception("Failed to enqueue magic-link email for parent %s", parent.id)
         else:
             logger.info("Parent portal login attempted for unknown email: %s", email)
 
@@ -93,14 +86,15 @@ def parent_portal_login(request):
     return render(request, "parent_portal/login.html")
 
 
+@rate_limit("parent_portal_verify", limit=20, window_seconds=60, count_methods=("GET", "POST"))
+@require_http_methods(["GET"])
 def parent_portal_verify(request, token: str):
-    """Consume the magic-link token and set the parent session."""
-    session_token = ParentSessionToken.objects.filter(token=token).select_related("parent").first()
+    """Consume the magic-link token and set the parent session. Rate-limited
+    to 20/min/IP so an attacker can't iterate the 32-hex token space at
+    unlimited RPS. GET-only — the magic link comes via email."""
+    session_token = ParentSessionToken.consume_by_token(token)
     if session_token is None:
-        messages.error(request, "Enlace inválido.")
-        return redirect("parent_portal_login")
-    if not session_token.consume():
-        messages.error(request, "Enlace caducado o ya utilizado.")
+        messages.error(request, "Enlace inválido o caducado.")
         return redirect("parent_portal_login")
 
     request.session[_PARENT_SESSION_KEY] = session_token.parent_id
@@ -147,7 +141,13 @@ def parent_portal_payments(request):
     if redirect_resp:
         return redirect_resp
 
-    year = int(request.GET.get("year") or date.today().year)
+    # Never trust query-string ints — a malformed `?year=foo` used to crash
+    # the view with a 500.
+    try:
+        year = int(request.GET.get("year") or date.today().year)
+    except (TypeError, ValueError):
+        year = date.today().year
+
     payments = (
         Payment.objects.filter(parent=parent, due_date__year=year)
         .select_related("student", "enrollment")
@@ -188,7 +188,11 @@ def parent_portal_tax_certificate(request):
     if redirect_resp:
         return redirect_resp
 
-    year = int(request.GET.get("year") or date.today().year)
+    try:
+        year = int(request.GET.get("year") or date.today().year)
+    except (TypeError, ValueError):
+        year = date.today().year
+
     from billing.services.pdf_service import generate_tax_certificate
 
     pdf_bytes = generate_tax_certificate(parent, year)

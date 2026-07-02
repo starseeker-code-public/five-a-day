@@ -103,39 +103,45 @@ def send_birthday_email_task(self, student_id: int):
     """
     Async task to send a birthday email to a specific student.
 
-    Args:
-        student_id: ID of the student
+    Sends to EVERY parent that has an email — not just the first one. Both
+    mom and dad want to know it's their kid's birthday; before this fix the
+    task did `.first()` and only picked the arbitrary first row.
     """
     from comms.services.email_service import email_service
     from students.models import Student
 
     try:
         student = Student.objects.prefetch_related("parents").get(id=student_id)
-
-        # Get the first parent with an email
-        parent = student.parents.exclude(email="").exclude(email__isnull=True).first()
-
-        if not parent:
-            logger.warning("Student id=%d has no parent with email", student_id)
-            return {"status": "skipped", "reason": "no parent email"}
-
-        success = email_service.send_email(
-            template_name="happy_birthday",
-            recipients=parent.email,
-            subject=f"🎉 ¡Feliz Cumpleaños {student.first_name}!",
-            context={"name": student.first_name},
-        )
-
-        if success:
-            logger.info("Birthday email sent for student_id=%d", student_id)
-        else:
-            raise RuntimeError("Fallo en el envio del email")
-
-        return {"status": "success", "recipient": parent.email, "student": student.full_name}
-
     except Student.DoesNotExist:
         logger.error("Student not found: id=%d", student_id)
         return {"status": "error", "message": "Student not found"}
+
+    recipients = list(student.parents.exclude(email="").exclude(email__isnull=True).values_list("email", flat=True))
+    # Adult students receive the email themselves when no parent is on file.
+    if not recipients and student.is_adult and student.email:
+        recipients = [student.email]
+
+    if not recipients:
+        logger.warning("Student id=%d has no parent (or self) with email", student_id)
+        return {"status": "skipped", "reason": "no email recipient"}
+
+    successes = 0
+    for email in recipients:
+        ok = email_service.send_email(
+            template_name="happy_birthday",
+            recipients=email,
+            subject=f"🎉 ¡Feliz Cumpleaños {student.first_name}!",
+            context={"name": student.first_name},
+            fail_silently=True,
+        )
+        if ok:
+            successes += 1
+
+    if successes == 0:
+        raise RuntimeError("Fallo en el envio del email")
+
+    logger.info("Birthday email sent for student_id=%d to %d recipient(s)", student_id, successes)
+    return {"status": "success", "recipients": recipients, "student": student.full_name}
 
 
 @shared_task(name="comms.tasks.send_birthday_emails_task", bind=True)
@@ -146,9 +152,15 @@ def send_birthday_emails_task(self):
 
     Configured in celery.py to run at 8:00 AM.
     """
+    from django.utils import timezone
+
     from students.models import Student
 
-    today = date.today()
+    # `date.today()` reads the container's local time (UTC in Docker), which
+    # can be the previous day when Celery Beat fires at 08:00 Europe/Madrid
+    # in DST — the birthdays we'd send would be for the wrong date. Use
+    # `timezone.localdate()` so we always work in `settings.TIME_ZONE`.
+    today = timezone.localdate()
 
     # Find active students with a birthday today
     birthday_students = Student.objects.filter(
@@ -182,10 +194,14 @@ def send_monthly_report_task(self, recipient_email: str | None = None):
     from django.db.models import Case, DecimalField, Sum, Value, When
 
     from billing.models import Payment
+    from comms.services.email_service import email_service
 
     to = recipient_email or getattr(settings, "SUPPORT_EMAIL", None)
     if not to:
-        logger.warning("send_monthly_report_task: no SUPPORT_EMAIL configured, skipping")
+        logger.warning(
+            "send_monthly_report_task: SUPPORT_EMAIL is not set — nobody to email; "
+            "set SUPPORT_EMAIL in the environment to activate the monthly report."
+        )
         return {"status": "skipped", "reason": "no recipient"}
 
     today = date.today()
@@ -202,12 +218,17 @@ def send_monthly_report_task(self, recipient_email: str | None = None):
                 output_field=DecimalField(),
             )
         ),
+        # Uses `due_date` consistently (matches `expected` above) so
+        # `outstanding = expected - collected` is arithmetic over one
+        # population — the previous code mixed `due_date` and `payment_date`
+        # and could produce negative "outstanding" when a payment was cashed
+        # in a different month from the one it was due in.
         collected=Sum(
             Case(
                 When(
                     payment_status="completed",
-                    payment_date__month=today.month,
-                    payment_date__year=today.year,
+                    due_date__month=today.month,
+                    due_date__year=today.year,
                     then="amount",
                 ),
                 default=Value(0),
@@ -225,27 +246,22 @@ def send_monthly_report_task(self, recipient_email: str | None = None):
         due_date__year=today.year,
     ).count()
 
-    subject = f"[Five a Day] Informe mensual {today:%m/%Y}"
-    body = (
-        f"Informe financiero para {today:%m/%Y}:\n\n"
-        f"  Esperado:     {expected:.2f} €\n"
-        f"  Cobrado:      {collected:.2f} €\n"
-        f"  Pendiente:    {outstanding:.2f} €\n"
-        f"  Pagos abiertos: {pending_count}\n"
-    )
-
-    from django.core.mail import send_mail
-
-    send_mail(
-        subject=subject,
-        message=body,
-        from_email=settings.DEFAULT_FROM_EMAIL,
-        recipient_list=[to],
+    success = email_service.send_email(
+        template_name="admin_monthly_report",
+        recipients=to,
+        subject=f"[Five a Day] Informe mensual {today:%m/%Y}",
+        context={
+            "period": f"{today:%m/%Y}",
+            "expected": f"{expected:.2f}",
+            "collected": f"{collected:.2f}",
+            "outstanding": f"{outstanding:.2f}",
+            "pending_count": pending_count,
+        },
         fail_silently=True,
     )
-    logger.info("Monthly report sent to %s", to)
+    logger.info("Monthly report sent to %s (email_success=%s)", to, success)
     return {
-        "status": "success",
+        "status": "success" if success else "failed",
         "expected": str(expected),
         "collected": str(collected),
         "outstanding": str(outstanding),
@@ -281,7 +297,11 @@ def send_payment_reminders(self):
     logger.info(f"Enviando {pending_payments.count()} recordatorios de pago")
 
     emails_data = []
-    sms_queued = 0
+    # Dedupe SMS by parent so families with several kids only get one SMS
+    # per weekly run. The email path keeps one message per child (each
+    # email is per-payment, per-student) — the SMS medium is noisier and
+    # would look spammy at 3-4 texts in a row.
+    sms_parent_ids: set[int] = set()
     for payment in pending_payments:
         if payment.parent and payment.parent.email:
             emails_data.append(
@@ -290,22 +310,35 @@ def send_payment_reminders(self):
                     "subject": f"Recordatorio de Pago - {payment.student.full_name}",
                     "context": {
                         "student_name": payment.student.full_name,
-                        "amount": float(payment.amount),
+                        # Decimal — never float for money. The template can
+                        # format via {{ amount|floatformat:2 }}.
+                        "amount": str(payment.amount),
                         "due_date": payment.due_date.strftime("%d/%m/%Y"),
                     },
                 }
             )
         # v1.8: SMS to opted-in parents (async, so a Twilio outage doesn't stall email)
         if payment.parent and payment.parent.sms_opt_in and payment.parent.phone:
-            send_payment_reminder_sms_task.delay(payment.id)
-            sms_queued += 1
+            if payment.parent_id not in sms_parent_ids:
+                send_payment_reminder_sms_task.delay(payment.id)
+                sms_parent_ids.add(payment.parent_id)
 
+    # Use payment_reminder_simple (student_name/amount/due_date context) —
+    # the full payment_reminder.html template expects a batch context (IBAN,
+    # prices, day-range) that we don't have here, and rendering the per-student
+    # reminder with that template used to produce blank fields all through the
+    # email body.
     results = email_service.send_bulk_emails(
-        template_name="payment_reminder", emails_data=emails_data, fail_silently=True
+        template_name="payment_reminder_simple", emails_data=emails_data, fail_silently=True
     )
-    results["sms_queued"] = sms_queued
+    results["sms_queued"] = len(sms_parent_ids)
 
-    logger.info(f"Recordatorios enviados: {results['sent']} exitosos, {results['failed']} fallidos; SMS: {sms_queued}")
+    logger.info(
+        "Recordatorios enviados: %d exitosos, %d fallidos; SMS: %d",
+        results["sent"],
+        results["failed"],
+        len(sms_parent_ids),
+    )
     return results
 
 
@@ -346,6 +379,97 @@ def send_payment_reminder_sms_task(self, payment_id: int):
     if not result.success:
         logger.warning("SMS reminder failed for payment %s: %s", payment_id, result.error)
     return result.as_dict()
+
+
+@shared_task(
+    name="comms.tasks.send_parent_magic_link_task",
+    bind=True,
+    max_retries=2,
+    default_retry_delay=30,
+)
+def send_parent_magic_link_task(self, parent_id: int, link: str):
+    """
+    v1.9 companion task: email the magic-link URL to a parent.
+
+    Runs asynchronously so the /parent/login/ POST returns in constant time
+    regardless of SMTP latency — that keeps the enumeration-protection story
+    honest (attacker can't distinguish real vs unknown emails by timing).
+    """
+    from comms.services.email_service import email_service
+    from students.models import Parent
+
+    try:
+        parent = Parent.objects.get(id=parent_id)
+    except Parent.DoesNotExist:
+        logger.warning("send_parent_magic_link_task: parent %s not found", parent_id)
+        return {"status": "error", "message": "parent not found"}
+
+    if not parent.email:
+        return {"status": "skipped", "reason": "no email"}
+
+    success = email_service.send_email(
+        template_name="parent_magic_link",
+        recipients=parent.email,
+        subject="Acceso al portal · Five a Day",
+        context={
+            "parent_name": parent.first_name,
+            "link": link,
+            "expires_minutes": 30,
+        },
+        fail_silently=True,
+    )
+    return {"status": "success" if success else "failed", "recipient": parent.email}
+
+
+@shared_task(
+    name="comms.tasks.send_payment_receipt_email_task",
+    bind=True,
+    max_retries=3,
+    default_retry_delay=60,
+    autoretry_for=(Exception,),
+)
+def send_payment_receipt_email_task(self, payment_id: int):
+    """
+    v1.11 companion task: after Stripe marks a payment completed, email the
+    parent a PDF receipt so they have written proof of the transaction.
+    Silently skipped when the parent has no email.
+    """
+    from billing.models import Payment
+    from billing.services.pdf_service import generate_payment_receipt
+    from comms.services.email_service import email_service
+
+    try:
+        payment = Payment.objects.select_related("student", "parent").get(id=payment_id)
+    except Payment.DoesNotExist:
+        logger.warning("send_payment_receipt_email_task: payment %s not found", payment_id)
+        return {"status": "error", "message": "payment not found"}
+
+    recipient = payment.parent.email if payment.parent else payment.student.email
+    if not recipient:
+        logger.info("send_payment_receipt_email_task: no recipient email for payment %s", payment_id)
+        return {"status": "skipped", "reason": "no recipient"}
+
+    try:
+        pdf_bytes = generate_payment_receipt(payment)
+    except Exception:  # noqa: BLE001 — log and surface, retries will handle transients
+        logger.exception("Failed to render PDF for payment %s", payment_id)
+        raise
+
+    success = email_service.send_email(
+        template_name="payment_receipt",
+        recipients=recipient,
+        subject=f"Recibo de pago · {payment.student.full_name}",
+        context={
+            "student_name": payment.student.full_name,
+            "amount": str(payment.amount),
+            "concept": payment.concept,
+            "payment_date": payment.payment_date.strftime("%d/%m/%Y") if payment.payment_date else "",
+        },
+        attachments=[(f"recibo-{payment.id}.pdf", pdf_bytes, "application/pdf")],
+    )
+    if not success:
+        raise RuntimeError(f"send_email returned False for payment {payment_id}")
+    return {"status": "success", "recipient": recipient, "payment_id": payment_id}
 
 
 @shared_task(

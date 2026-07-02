@@ -1,0 +1,12 @@
+{% extends 'emails/base_email.html' %}
+
+{% block title %}Recordatorio de pago · Five a Day{% endblock %}
+
+{% block content %}
+<p>Hola,</p>
+<p>Este es un recordatorio automático: tenéis un pago pendiente para <strong>{{ student_name }}</strong> por importe de <strong>{{ amount }} €</strong>, con vencimiento el <strong>{{ due_date }}</strong>.</p>
+<p>Si ya habéis realizado el pago, ignorad este mensaje. Si tenéis cualquier duda, respondednos a este correo y os atenderemos lo antes posible.</p>
+<p style="color:#666; font-size:12px; margin-top:24px;">
+    El recordatorio se genera automáticamente cada semana para pagos que vencen en los próximos 7 días.
+</p>
+{% endblock %}

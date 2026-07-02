@@ -58,9 +58,29 @@ class TestVerifyWebhookSignature:
         v1 = hmac.new(secret.encode(), signed.encode(), hashlib.sha256).hexdigest()
         return f"t={ts},v1={v1}"
 
-    def test_missing_secret_skips_verification(self):
+    def test_missing_secret_rejects_all_webhooks(self):
+        """After the security fix, an unset STRIPE_WEBHOOK_SECRET must NOT
+        bypass signature verification — otherwise an attacker who reaches
+        the endpoint can mark arbitrary payments completed."""
         with override_settings(STRIPE_WEBHOOK_SECRET=""):
-            assert StripeService().verify_webhook_signature(b"{}", "irrelevant") is True
+            assert StripeService().verify_webhook_signature(b"{}", "irrelevant") is False
+
+    def test_rejects_empty_signature_header(self):
+        with override_settings(STRIPE_WEBHOOK_SECRET="whsec_xxx"):
+            assert StripeService().verify_webhook_signature(b"{}", "") is False
+
+    def test_accepts_multiple_v1_signatures_during_rotation(self):
+        """Stripe signs each event with every active secret during rotation;
+        the parser must inspect ALL `v1=` entries, not just the last one."""
+        secret = "whsec_new"
+        payload = b'{"id":"evt"}'
+        ts = int(time.time())
+        signed = f"{ts}.{payload.decode()}"
+        good = hmac.new(secret.encode(), signed.encode(), hashlib.sha256).hexdigest()
+        # First v1 is nonsense (old key that no longer verifies), second is valid
+        sig_header = f"t={ts},v1=deadbeef,v1={good}"
+        with override_settings(STRIPE_WEBHOOK_SECRET=secret):
+            assert StripeService().verify_webhook_signature(payload, sig_header) is True
 
     def test_valid_signature_accepted(self):
         secret = "whsec_xxx"

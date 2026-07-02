@@ -1177,6 +1177,39 @@ TEACHER_SEED_1_PASSWORD=
 ACADEMY_IBAN=
 ACADEMY_IBAN_HOLDER=
 ACADEMY_PHONE=
+
+# ============================================================================
+# GOOGLE SHEETS EXPORT  (v1.2 — optional, all environments)
+# ============================================================================
+# Both a credential and a spreadsheet id must be set for the integration to
+# activate. Otherwise /api/sheets/export/ returns 503 and the management
+# command exits with a clear error.
+#
+# Provide the service-account creds either inline (recommended for Cloud Run
+# + Secret Manager) or as a filesystem path:
+GOOGLE_SHEETS_SERVICE_ACCOUNT_JSON=
+GOOGLE_SHEETS_SERVICE_ACCOUNT_FILE=
+GOOGLE_SHEETS_SPREADSHEET_ID=       # doc ID from the sheet's URL
+
+# ============================================================================
+# TWILIO SMS  (v1.8 — optional, all environments)
+# ============================================================================
+# All three required for SmsService.is_configured() to return True. Only
+# parents with sms_opt_in=True receive SMS — the campaign is strictly opt-in.
+TWILIO_ACCOUNT_SID=
+TWILIO_AUTH_TOKEN=
+TWILIO_FROM_NUMBER=                 # E.164 format, e.g. +34600111222
+
+# ============================================================================
+# STRIPE  (v1.11 — optional, all environments)
+# ============================================================================
+# STRIPE_SECRET_KEY toggles the parent-portal "Pagar online" button.
+# STRIPE_WEBHOOK_SECRET is REQUIRED in production: when unset, the webhook
+# view skips signature verification and any HTTP client could mark payments
+# as paid. Use test-mode keys in dev/testing (sk_test_… / whsec_…).
+STRIPE_SECRET_KEY=
+STRIPE_PUBLISHABLE_KEY=
+STRIPE_WEBHOOK_SECRET=
 ```
 
 A few keys are intentionally absent from the template:

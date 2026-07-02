@@ -176,15 +176,28 @@ class StudentCreateView(CreateView):
                     icon="school",
                 )
 
-                # Enqueue welcome email
-                try:
-                    send_welcome_email_task.delay(
-                        parent_id=parent.id if parent else None,
-                        student_id=student.id,
-                        enrollment_id=enrollment.id,
-                    )
-                except Exception:
-                    pass
+                # Enqueue welcome email AFTER the transaction commits.
+                # In Celery eager mode (dev / no Redis) the task runs
+                # synchronously — if we queued inside the atomic block and a
+                # later step raised, the transaction would roll back but the
+                # parent would already have received an email about a student
+                # that never existed. `transaction.on_commit` defers the
+                # dispatch until COMMIT succeeds.
+                _parent_id = parent.id if parent else None
+                _enrollment_id = enrollment.id
+                _student_id = student.id
+
+                def _queue_welcome():
+                    try:
+                        send_welcome_email_task.delay(
+                            parent_id=_parent_id,
+                            student_id=_student_id,
+                            enrollment_id=_enrollment_id,
+                        )
+                    except Exception:
+                        pass  # never fail the request over email dispatch
+
+                transaction.on_commit(_queue_welcome)
 
                 # Redirect to success page with student info
                 from urllib.parse import quote

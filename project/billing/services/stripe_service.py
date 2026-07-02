@@ -99,23 +99,38 @@ class StripeService:
 
     def verify_webhook_signature(self, payload: bytes, sig_header: str, tolerance_seconds: int = 300) -> bool:
         """
-        Validate a Stripe webhook signature (t=… v1=…). Returns True iff the
-        signature is well-formed, within the tolerance window, and matches the
-        expected HMAC. Verification is skipped when the secret isn't set — the
-        caller should not accept unsigned webhooks in production.
+        Validate a Stripe webhook signature (t=… v1=… v1=…). Returns True iff:
+          - the webhook secret is set (unsigned webhooks are ALWAYS rejected —
+            an attacker who reaches the endpoint must not be able to mark
+            arbitrary payments completed by guessing session ids), AND
+          - the timestamp is within the tolerance window, AND
+          - at least one of the `v1` signatures matches the HMAC of
+            `f"{timestamp}.{payload}"` against the secret.
+
+        Multiple `v1=` values are supported so Stripe key rotation (which
+        signs each event with both the old and new secret for a window) is
+        handled correctly.
         """
         if not self.webhook_secret:
-            logger.warning("STRIPE_WEBHOOK_SECRET is not set — skipping signature verification")
-            return True
-
-        try:
-            parts = dict(item.split("=", 1) for item in sig_header.split(","))
-        except ValueError:
+            logger.error("STRIPE_WEBHOOK_SECRET is not set — rejecting unsigned webhook")
             return False
 
-        timestamp = parts.get("t")
-        received_sig = parts.get("v1")
-        if not (timestamp and received_sig):
+        if not sig_header:
+            return False
+
+        # Stripe format: "t=123456,v1=abc,v1=def,v0=…"
+        timestamp: str | None = None
+        received_sigs: list[str] = []
+        for item in sig_header.split(","):
+            if "=" not in item:
+                continue
+            k, _, v = item.strip().partition("=")
+            if k == "t":
+                timestamp = v
+            elif k == "v1":
+                received_sigs.append(v)
+
+        if not timestamp or not received_sigs:
             return False
 
         try:
@@ -131,7 +146,7 @@ class StripeService:
             hashlib.sha256,
         ).hexdigest()
 
-        return hmac.compare_digest(expected, received_sig)
+        return any(hmac.compare_digest(expected, sig) for sig in received_sigs)
 
     def apply_webhook_event(self, event: dict) -> dict:
         """
@@ -157,11 +172,28 @@ class StripeService:
             return {"status": "ignored", "reason": "no matching payment"}
 
         if event_type == "checkout.session.completed":
+            # Idempotent: Stripe retries webhooks for up to ~3 days after the
+            # first 2xx, so a replay must not overwrite the original
+            # payment_date or trigger duplicate receipt emails.
+            if payment.payment_status == "completed":
+                logger.info("Stripe: payment %s already completed, ignoring replay", payment.id)
+                return {"status": "already_completed", "payment_id": payment.id}
+
             payment.payment_status = "completed"
             payment.payment_date = date.today()
             payment.stripe_payment_intent = session.get("payment_intent", "") or ""
             payment.save(update_fields=["payment_status", "payment_date", "stripe_payment_intent", "updated_at"])
             logger.info("Stripe: payment %s marked completed via checkout.session.completed", payment.id)
+
+            # Fire a receipt email so the parent has proof of payment.
+            # Late import avoids circular imports at module load.
+            try:
+                from comms.tasks import send_payment_receipt_email_task
+
+                send_payment_receipt_email_task.delay(payment.id)
+            except Exception:  # noqa: BLE001 — email is nice-to-have, never fail the webhook
+                logger.exception("Failed to enqueue receipt email for payment %s", payment.id)
+
             return {"status": "completed", "payment_id": payment.id}
 
         if event_type == "checkout.session.expired":

@@ -33,17 +33,26 @@ def _cache_key(scope: str, ip: str) -> str:
     return f"rl:{scope}:{ip}"
 
 
-def rate_limit(scope: str, *, limit: int = DEFAULT_LIMIT, window_seconds: int = DEFAULT_WINDOW_SECONDS):
+def rate_limit(
+    scope: str,
+    *,
+    limit: int = DEFAULT_LIMIT,
+    window_seconds: int = DEFAULT_WINDOW_SECONDS,
+    count_methods: tuple[str, ...] = ("POST",),
+):
     """
     Decorator: throttle a view to `limit` requests per `window_seconds` per
-    client IP. Sends a 429 with a friendly message when exceeded. Only counts
-    POST requests to avoid throttling normal GETs of the same page.
+    client IP. Sends a 429 with a friendly message when exceeded.
+
+    `count_methods` defaults to `("POST",)` so we don't throttle normal GETs
+    of a page. For endpoints like magic-link verify (GET) or brute-forceable
+    token URLs, pass `("GET", "POST")` (or just `("GET",)`).
     """
 
     def decorator(view_func):
         @wraps(view_func)
         def _wrapper(request, *args, **kwargs):
-            if request.method != "POST":
+            if request.method not in count_methods:
                 return view_func(request, *args, **kwargs)
 
             # Bypass in the test suite so the shared cache doesn't leak across
@@ -54,24 +63,26 @@ def rate_limit(scope: str, *, limit: int = DEFAULT_LIMIT, window_seconds: int = 
                 return view_func(request, *args, **kwargs)
 
             key = _cache_key(scope, _client_ip(request))
-            current = cache.get(key, 0)
-            if current >= limit:
-                logger.info("rate limit exceeded: scope=%s ip=%s", scope, _client_ip(request))
+            # `add()` is atomic in memcached and Redis: it seeds the counter to
+            # 0 with the correct TTL only when the key is missing. This closes
+            # the TOCTOU race where two concurrent requests both `get() == 0`
+            # and then race on `set()`, resetting the window and allowing
+            # >limit requests through.
+            cache.add(key, 0, timeout=window_seconds)
+            try:
+                current = cache.incr(key)
+            except ValueError:
+                # Key expired between `add` and `incr` — reseed and count 1.
+                cache.set(key, 1, timeout=window_seconds)
+                current = 1
+
+            if current > limit:
+                logger.info("rate limit exceeded: scope=%s ip=%s current=%s", scope, _client_ip(request), current)
                 return HttpResponse(
                     "⚠️ Demasiados intentos. Prueba de nuevo en un minuto.",
                     status=429,
                     content_type="text/plain; charset=utf-8",
                 )
-            # Atomic increment. `add()` is a "set if not exists" so the first
-            # request in a window gets `current=1` with the TTL; subsequent ones
-            # use `incr()` which preserves the TTL.
-            if current == 0:
-                cache.set(key, 1, timeout=window_seconds)
-            else:
-                try:
-                    cache.incr(key)
-                except ValueError:
-                    cache.set(key, 1, timeout=window_seconds)
             return view_func(request, *args, **kwargs)
 
         return _wrapper

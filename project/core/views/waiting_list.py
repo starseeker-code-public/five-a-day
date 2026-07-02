@@ -87,8 +87,18 @@ def assign_from_waiting_list(request, student_id):
         is_waiting=True,
     )
 
-    # Enforce the group cap. `available_spots is None` means "no cap" — always allow.
+    # Defensive: Student.group is a required FK today, but if that ever
+    # becomes nullable a missing group would produce an AttributeError on
+    # `.is_full` below. Fail loudly with a friendly error instead.
     target_group = student.group
+    if target_group is None:
+        error_msg = "El estudiante no tiene grupo preferido asignado."
+        if request.headers.get("X-Requested-With") == "XMLHttpRequest":
+            return JsonResponse({"success": False, "error": error_msg}, status=400)
+        messages.error(request, f"❌ {error_msg}")
+        return redirect("waiting_list")
+
+    # Enforce the group cap. `available_spots is None` means "no cap" — always allow.
     if target_group.is_full:
         error_msg = (
             f"El grupo {target_group.group_name} está completo "
@@ -100,6 +110,18 @@ def assign_from_waiting_list(request, student_id):
         return redirect("waiting_list")
 
     default_parent = student.parents.first()
+    # Non-adult students must have at least one parent linked; otherwise the
+    # generated Payment would be orphaned (Payment.parent is nullable but
+    # tax certificates and reminders both key off parent).
+    if default_parent is None and not student.is_adult:
+        error_msg = (
+            f"{student.full_name} no tiene padre/madre asociado — no se puede promover "
+            "sin un titular para la matrícula."
+        )
+        if request.headers.get("X-Requested-With") == "XMLHttpRequest":
+            return JsonResponse({"success": False, "error": error_msg}, status=400)
+        messages.error(request, f"❌ {error_msg}")
+        return redirect("waiting_list")
 
     try:
         with transaction.atomic():

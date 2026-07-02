@@ -379,9 +379,94 @@ def generate_tax_certificate(parent, year: int) -> bytes:
     return _build_pdf(flowables)
 
 
+def generate_report_pdf(report: dict, month: int, year: int) -> bytes:
+    """
+    v1.7 report snapshot as a PDF. `report` is the dict returned by
+    `core.services.analytics_service.dashboard_report(month, year)`.
+
+    Kept in the service layer (rather than the view) so both the download
+    endpoint and any future async cron job that emails the report can
+    share the same code path.
+    """
+    academy = _get_academy_info()
+    styles = _styles()
+
+    def money(v):
+        return f"{v:.2f} €"
+
+    financial_rows = [
+        ["Ingresos", money(report["current_month"]["income"])],
+        ["Pendiente", money(report["current_month"]["pending"])],
+        ["Gastos", money(report["current_month"]["expenses"])],
+        ["Beneficio neto", money(report["current_month"]["net"])],
+    ]
+    collection_rows = [
+        ["Esperado", money(report["collection"]["expected"])],
+        ["Cobrado", money(report["collection"]["collected"])],
+        ["Tasa de cobro", f"{report['collection']['percent']}%"],
+    ]
+    retention_rows = [
+        ["Estudiantes con 1+ años", str(report["retention"]["baseline"])],
+        ["Aún activos", str(report["retention"]["still_active"])],
+        ["Retención", f"{report['retention']['retention_percent']}%"],
+    ]
+    group_rows = [["Grupo", "Profesor", "Ocupación", "En espera"]] + [
+        [
+            row["name"],
+            row["teacher"],
+            (
+                f"{row['enrolled']}/{row['max_students']} ({row['utilisation_percent']}%)"
+                if row["max_students"]
+                else f"{row['enrolled']} (sin cupo)"
+            ),
+            str(row["waiting"]),
+        ]
+        for row in report["groups"]
+    ]
+
+    def _kv_table(rows):
+        t = Table(rows, colWidths=[70 * mm, 60 * mm])
+        t.setStyle(
+            TableStyle(
+                [
+                    ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#F5F5F5")),
+                    ("FONTNAME", (0, 0), (0, -1), "Helvetica-Bold"),
+                    ("FONTSIZE", (0, 0), (-1, -1), 10),
+                    ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#DDDDDD")),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+                    ("TOPPADDING", (0, 0), (-1, -1), 5),
+                ]
+            )
+        )
+        return t
+
+    flowables = [
+        *_header_flowables(
+            styles,
+            academy,
+            f"INFORME · {month:02d}/{year}",
+            "Resumen financiero, tasa de cobro, retención y ocupación de grupos.",
+        ),
+        Paragraph("<b>Resumen financiero</b>", styles["h2"]),
+        _kv_table(financial_rows),
+        Spacer(1, 6 * mm),
+        Paragraph("<b>Tasa de cobro</b>", styles["h2"]),
+        _kv_table(collection_rows),
+        Spacer(1, 6 * mm),
+        Paragraph("<b>Retención de estudiantes</b>", styles["h2"]),
+        _kv_table(retention_rows),
+        Spacer(1, 6 * mm),
+        Paragraph("<b>Ocupación por grupo</b>", styles["h2"]),
+        Table(group_rows, colWidths=[45 * mm, 55 * mm, 55 * mm, 20 * mm]),
+        *_footer_flowables(styles, academy),
+    ]
+    return _build_pdf(flowables)
+
+
 __all__ = [
     "AcademyInfo",
     "generate_payment_receipt",
     "generate_quarterly_summary",
+    "generate_report_pdf",
     "generate_tax_certificate",
 ]
