@@ -133,6 +133,10 @@ NON_ADMIN_ALLOWED_URL_NAMES = frozenset(
         # Reports (v1.7) — read-only for non-admin teachers
         "reports_view",
         "reports_pdf",
+        # Two-factor auth (v1.13) — verify is reached mid-login (pre-session)
+        # so it's already in PUBLIC_PREFIXES. Setup/manage are admin-only and
+        # deliberately absent from this whitelist.
+        "two_factor_verify",
         # Todos, history, support
         "create_todo",
         "complete_todo",
@@ -184,6 +188,7 @@ class SimpleAuthMiddleware:
         "/api/stripe/webhook/",  # v1.11: called by Stripe's servers, signed via header
         "/manifest.webmanifest",  # v1.12: PWA manifest, must be public
         "/sw.js",  # v1.12: service worker, must be public
+        "/two-factor/verify/",  # v1.13: mid-login 2FA gate (pre-session)
     )
 
     def __init__(self, get_response):

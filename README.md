@@ -20,7 +20,7 @@ Built to centralize student records, automate billing cycles, and streamline par
 ### Project Status
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v1.12.0-brightgreen?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-v1.13.0-brightgreen?style=flat-square" alt="Version">
   &nbsp;|&nbsp;
   <a href="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml?query=branch%3Amain"><img src="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml/badge.svg?branch=main&style=flat-square" alt="CI main"></a>
   &nbsp;|&nbsp;
@@ -41,9 +41,9 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 | Version | Date | Description |
 |---------|------|-------------|
-| **v1.12.0** | 2026-07-02 | Installable PWA — web manifest + service worker cache-first shell |
+| **v1.13.0** | 2026-07-03 | Admin TOTP 2FA + returning-student enrollment discount + tech-debt sweep |
+| v1.12.0 | 2026-07-02 | Installable PWA — web manifest + service worker cache-first shell |
 | v1.11.0 | 2026-07-02 | Stripe Checkout for parent-portal payments + signed webhook reconciliation |
-| v1.10.0 | 2026-07-02 | Audit log for every model change + login/portal rate limiting |
 
 ---
 
@@ -143,8 +143,38 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 ## Version History & Roadmap
 
-<details id="v1120" open>
-<summary><strong>v1.12.0 — Installable PWA (current)</strong></summary>
+<details id="v1130" open>
+<summary><strong>v1.13.0 — Admin TOTP 2FA + Returning-Student Discount + Tech-Debt Sweep (current)</strong></summary>
+
+**Admin two-factor authentication (TOTP)**
+
+- New `Teacher.two_factor_secret` / `two_factor_enabled` / `two_factor_backup_codes` fields (base32 secret, boolean flag, JSON list of sha256-hashed one-time backup codes).
+- New `core/services/two_factor_service.py` wraps `pyotp` for TOTP generation + verification (30-second window, `valid_window=1` slack) and `qrcode` for the enrolment QR code. Backup codes are generated in plaintext, shown to the user exactly once, and persisted as sha256 hashes.
+- New views: `/two-factor/setup/` (renders QR + backup codes, POST to confirm enrolment), `/two-factor/manage/` (rotate backup codes, disable), `/two-factor/verify/` (mid-login gate, rate-limited to 6/min/IP against brute force).
+- Login flow: password check succeeds → if `Teacher.two_factor_enabled` the request is redirected to `/two-factor/verify/` with a short-lived pending session (`_2fa_pending_user_id`, 5-minute expiry) that is NOT yet marked `is_authenticated`. Only after the OTP or backup code verifies does `_finalize_session_login` promote the session. Google OAuth logins take the same gate — a scanned OAuth email is only one factor.
+- New `manage.py reset_two_factor <email>` command wipes the secret + codes for a locked-out admin (recovery flow when both phone and all backup codes are lost).
+- Only Teachers with `admin=True` can reach setup/manage — non-admins are bounced back to `home` with a flash message. `two_factor_verify` is in `SimpleAuthMiddleware.PUBLIC_PREFIXES` since it must be reachable before the session is fully authenticated.
+- Enrolment package: 8 backup codes (8-hex-char) generated per user, single-use.
+- 34 tests: TOTP + backup-code semantics, enrolment happy path, wrong-code rejection, rate-limited verify, admin-only gating, `reset_two_factor` management command.
+
+**Returning-student enrollment discount**
+
+- New `SiteConfiguration.returning_student_enrollment_discount` (Decimal, default €20.00) exposed as an editable field in the Management → Discounts panel.
+- New `EnrollmentService.is_returning_student(student, this_academic_year)` — a student is "returning" iff they have any prior `Enrollment` for a different academic year (any status: active, finished, cancelled — all count, they were once signed up).
+- New `EnrollmentService.compute_enrollment_fee(config, student, is_adult)` — returns `(final_fee, discount_applied)` with the returning-student discount subtracted (floored at 0). Adults are always excluded from this discount (they have their own separate `adult_enrollment_fee`).
+- The discount is applied automatically in both enrollment-fee creation paths — `StudentCreateView.form_valid` (new-student flow) and `waiting_list_view.assign_from_waiting_list` (waiting-list promotion). The concept string on the resulting `Payment` includes `"(dto. alumno recurrente −20.00 €)"` when applied, so the admin can see where the discount came from.
+- **Stacks with sibling + language-cheque discounts** (each targets a different fee — sibling/cheque hit the monthly fee, returning-student hits the one-time enrollment fee).
+- 11 tests covering the detection helper, the fee-compute helper (with and without discount, adult exclusion, zero-configured no-op, floor-at-zero on huge values), the `SiteConfiguration` default, and the management update API.
+
+**Tech-debt sweep**
+
+- Created `student_update.html` — the class-based `StudentUpdateView` had `template_name = "student_update.html"` but no file existed, so a real `GET /students/<id>/update/` would 500. The new template renders both the student form and the enrollment form, with an amber notice at the top when the student is on the waiting list.
+- Fixed the two pre-existing SQLite ordering flakes in `test_transactions.py`: `Payment.objects.order_by("-created_at")` was non-deterministic on SQLite (millisecond-precision timestamps meant tie-broken order was arbitrary). Added `-id` as a stable secondary key in both `get_payments_for_last_two_school_years` and `get_all_payments_unrestricted`. The tests now pass on both SQLite and PostgreSQL — no more `--deselect` in the CI command.
+
+</details>
+
+<details id="v1120">
+<summary><strong>v1.12.0 — Installable PWA</strong></summary>
 
 - New `/manifest.webmanifest` endpoint serves the web app manifest (name, icons, theme colour, three home-screen shortcuts). Enables "Add to Home Screen" on iOS + Android and installable-app prompts on desktop Chromium.
 - New `/sw.js` endpoint serves a purpose-built service worker: cache-first for same-origin GETs to the dashboard shell (`/`, `/students/`, `/payments/`, the logo), network-first for everything else. Never caches `/api/*`, `/login/`, or `/logout/` — those must always be fresh.
@@ -1261,7 +1291,12 @@ Run `make` or `make help` for the full list. Key commands:
 | `make celery-status` / `make celery-test-task` | Inspect active tasks / queue a debug task |
 | **Versioning** | |
 | `make version` | Show current pyproject + README badge values, warn on drift |
-| `make version 1.1.0` | Update `pyproject.toml`, `settings.py`, README badge, regenerate `uv.lock` (with y/N confirmation) |
+| `make version 1.13.0` | Update `pyproject.toml`, `settings.py`, README badge, regenerate `uv.lock` (with y/N confirmation) |
+| **Admin ops** | |
+| `manage.py reset_two_factor <email>` | Wipe 2FA secret + backup codes for a locked-out admin (v1.13) |
+| `manage.py export_to_sheets [--students] [--payments]` | Push snapshots to Google Sheets (v1.2) |
+| `manage.py generate_payments [--month M --year Y]` | Create monthly / quarterly payment rows for active enrollments |
+| `manage.py seed_teachers` | Idempotently seed Teacher rows from `TEACHER_SEED_<N>_*` env vars |
 | **Developer Tooling** | |
 | `make sync` | Install all deps (including dev) via uv |
 | `make lint` / `make lint FIX=1` | Run Ruff linter (optionally auto-fix) |
@@ -1337,6 +1372,20 @@ The table below describes every variable in the [.env template](#env-template) a
 | `ACADEMY_IBAN` | Bank account for payment reminders | No | — |
 | `ACADEMY_IBAN_HOLDER` | IBAN account holder | No | — |
 | `ACADEMY_PHONE` | Phone for Bizum payments | No | — |
+| **Google Sheets export (v1.2)** — optional, dormant until configured | | | |
+| `GOOGLE_SHEETS_SERVICE_ACCOUNT_JSON` | Inline service-account JSON (recommended for Cloud Run + Secret Manager) | No | — |
+| `GOOGLE_SHEETS_SERVICE_ACCOUNT_FILE` | Filesystem path to a service-account JSON file (alternative to inline) | No | — |
+| `GOOGLE_SHEETS_SPREADSHEET_ID` | Target spreadsheet doc ID; service account must have Editor access | No | — |
+| **Twilio SMS (v1.8)** — optional, opt-in per parent | | | |
+| `TWILIO_ACCOUNT_SID` | Twilio Account SID | No | — |
+| `TWILIO_AUTH_TOKEN` | Twilio Auth Token | No | — |
+| `TWILIO_FROM_NUMBER` | E.164-format sender (e.g. `+34600111222`) | No | — |
+| **Stripe (v1.11)** — optional, gates the parent-portal "Pagar online" button | | | |
+| `STRIPE_SECRET_KEY` | Stripe Secret Key (`sk_test_…` in dev/testing, `sk_live_…` in prod) | No | — |
+| `STRIPE_PUBLISHABLE_KEY` | Stripe Publishable Key (`pk_…`) — client-side reference only | No | — |
+| `STRIPE_WEBHOOK_SECRET` | Webhook signing secret (`whsec_…`) — **REQUIRED in prod**; when unset the webhook view rejects all events | For prod Stripe | — |
+| **Rate limiting (v1.10)** | | | |
+| `RATELIMIT_ENABLE` | Set to `False` to bypass the login/portal rate limiter (used in tests; leave unset in real envs) | No | `True` |
 | **Logging / misc** | | | |
 | `LOG_LEVEL` | App log level | No | `DEBUG` in dev, `INFO` in prod |
 | `DJANGO_LOG_LEVEL` | Django framework log level | No | inherits `LOG_LEVEL` |
@@ -1403,51 +1452,73 @@ graph LR
 five-a-day/
 ├── project/
 │   ├── project/                  Django settings module
-│   │   ├── settings.py           Main settings
-│   │   ├── settings_test.py      Test overrides (PostgreSQL or SQLite)
+│   │   ├── settings.py           Main settings (env-driven)
+│   │   ├── settings_test.py      Test overrides (PostgreSQL default, SQLite fallback)
 │   │   ├── urls.py               Root URL conf → includes 4 app URL files
-│   │   ├── celery.py             Celery configuration
+│   │   ├── celery.py             Celery app + Beat schedule (4 periodic tasks)
 │   │   └── wsgi.py / asgi.py
 │   │
-│   ├── core/                     Dashboard, Auth, Schedule, Utilities
-│   │   ├── models.py             TodoItem, HistoryLog, FunFridayAttendance, ScheduleSlot
-│   │   ├── views/                14 view modules (dashboard, auth, password_reset,
+│   ├── core/                     Dashboard, Auth, Schedule, Utilities, Cross-cutting
+│   │   ├── models.py             TodoItem, HistoryLog, FunFridayAttendance, ScheduleSlot, QAConfiguration
+│   │   ├── audit_models.py       AuditLog (v1.10 — immutable per-model change trail)
+│   │   ├── audit_signals.py      Signal receivers + AuditActorMiddleware (contextvar-based actor)
+│   │   ├── rate_limit.py         Cache-backed IP rate limiter (v1.10)
+│   │   ├── views/                22 view modules — auth, password_reset, dashboard,
 │   │   │                         students, parents, payments, management, app_forms,
 │   │   │                         schedule, fun_friday_attendance, todos, support,
-│   │   │                         errors, testing_tools)
+│   │   │                         errors, testing_tools, waiting_list (v1.1), sheets (v1.2),
+│   │   │                         expenses (v1.5), reports (v1.7), parent_portal (v1.9),
+│   │   │                         stripe_views (v1.11), pwa (v1.12), two_factor (v1.13)
+│   │   ├── services/             3 modules — analytics_service (v1.7),
+│   │   │                         google_sheets_service (v1.2), two_factor_service (v1.13)
 │   │   ├── constants.py          DIAS_ES, MESES_ES, SCHEDULED_APPS
-│   │   ├── middleware.py         SimpleAuthMiddleware (auth + non-admin teacher whitelist), QAErrorEmailMiddleware
+│   │   ├── middleware.py         SimpleAuthMiddleware + QAErrorEmailMiddleware
 │   │   ├── decorators.py         qa_access_required (testing env gate)
 │   │   ├── context_processors.py Notifications + is_admin_user / is_non_admin_teacher flags
-│   │   ├── transactions.py       Optimized queryset builders
-│   │   ├── templates/            ALL HTML templates (base, pages, emails, password_reset email)
-│   │   ├── static/               CSS (app.css) + JS (13 modules) + images
-│   │   └── management/commands/  seed_teachers (idempotent Teacher + auth.User seed)
+│   │   ├── transactions.py       Optimised queryset builders with stable ordering
+│   │   ├── templates/            All HTML templates — base, pages, emails/, parent_portal/,
+│   │   │                         two_factor/ (v1.13), plus expenses/reports/waiting_list
+│   │   ├── static/               CSS (app.css) + JS (14 modules) + images
+│   │   └── management/commands/  seed_teachers, seed_testdata, export_to_sheets (v1.2),
+│   │                             reset_two_factor (v1.13), plus 2 more
 │   │
 │   ├── students/                 People Management
-│   │   ├── models.py             Student, Parent, StudentParent, Teacher (with auth.User link), Group
+│   │   ├── models.py             Student, Parent, StudentParent, Teacher, Group.
+│   │   │                         v1.1: Student.is_waiting/waiting_since + Group.max_students.
+│   │   │                         v1.8: Parent.sms_opt_in. v1.13: Teacher.two_factor_*
+│   │   ├── parent_portal_models.py  ParentSessionToken (v1.9, magic-link + SELECT FOR UPDATE)
 │   │   ├── forms.py              StudentForm, ParentForm, ParentFormSet
-│   │   ├── admin.py              Custom admin with inlines
-│   │   ├── urls.py               12 URL patterns
-│   │   └── migrations/0003_teacher_user.py  Adds Teacher.user OneToOne to auth.User
+│   │   ├── admin.py              Custom admin with inlines + group capacity columns
+│   │   ├── urls.py               14 URL patterns
+│   │   └── migrations/           7 migrations (through 0007_add_teacher_two_factor)
 │   │
 │   ├── billing/                  Financial Management
-│   │   ├── models.py             SiteConfiguration, EnrollmentType, Enrollment, Payment
+│   │   ├── models.py             SiteConfiguration (v1.13: returning_student_enrollment_discount),
+│   │   │                         EnrollmentType, Enrollment, Payment (v1.11: stripe_session_id,
+│   │   │                         stripe_payment_intent), Expense (v1.5)
 │   │   ├── forms.py              EnrollmentForm (delegates to service)
 │   │   ├── constants.py          Pricing seeds, choice tuples
-│   │   ├── services/             EnrollmentService, PaymentService, PricingService
+│   │   ├── services/             6 modules — enrollment_service (v1.13: returning-student
+│   │   │                         detection), payment_service, pricing_service,
+│   │   │                         expense_service (v1.5), pdf_service (v1.3 — reportlab),
+│   │   │                         stripe_service (v1.11 — httpx, no SDK dep)
+│   │   ├── tasks.py              generate_monthly_payments_task, materialize_recurring_expenses_task
 │   │   ├── exports.py            Excel/CSV builders
-│   │   ├── admin.py              Payment + Enrollment admin with actions
-│   │   ├── urls.py               20 URL patterns
-│   │   └── management/commands/  generate_payments, seed_testdata
+│   │   ├── admin.py              Payment + Enrollment + Expense admin
+│   │   ├── urls.py               23 URL patterns
+│   │   └── management/commands/  generate_payments
 │   │
 │   ├── comms/                    Communications
-│   │   ├── services/             EmailService + 12 email functions + PDF gen
-│   │   ├── tasks.py              6 Celery tasks
-│   │   ├── urls.py               10 URL patterns
+│   │   ├── services/             email_service (EmailService singleton),
+│   │   │                         email_functions (~50 convenience helpers),
+│   │   │                         sms_service (v1.8 — Twilio, lazy import)
+│   │   ├── tasks.py              12 Celery tasks — welcome, birthday (all parents, v1.13
+│   │   │                         localdate), payment reminders (email + SMS dedup),
+│   │   │                         monthly report, magic link (v1.9), payment receipt (v1.11)
+│   │   ├── urls.py               11 URL patterns
 │   │   └── management/commands/  send_email, test_all_emails
 │   │
-│   ├── tests/                    pytest suite (623 tests, 96 % coverage) — unit/ + integration/
+│   ├── tests/                    pytest suite (955+ tests, 96 % coverage) — unit/ + integration/
 │   ├── templates/registration/   Password-reset templates (form, done, confirm, complete + email body)
 │   ├── templates/admin/          Django admin overrides (branded theme)
 │   └── conftest.py               Shared fixtures (models + authenticated_client)
@@ -1477,7 +1548,7 @@ five-a-day/
 ├── Dockerfile                    Multi-stage build (builder + runtime)
 ├── docker-compose.yml            PostgreSQL + Redis + Django + Celery worker + beat
 ├── docker-compose.testing.yml    QA override (Gunicorn, DEBUG=False)
-├── Makefile                      45+ commands (`make help`)
+├── Makefile                      48 targets (`make help`)
 ├── pyproject.toml                Dependencies (uv-managed) + tool config
 ├── uv.lock                       Reproducible dependency lock
 ├── entrypoint.sh                 Docker entrypoint (migrate, collectstatic, start)
@@ -1794,27 +1865,21 @@ Within each file, related tests are grouped into classes. Where a large file abs
 
 ### Coverage Report
 
-| File | Stmts | Miss | Cover | Missing lines |
-| --- | --- | --- | --- | --- |
-| `billing/models.py` | 143 | 7 | 95% | 282-292, 361, 366 |
-| `billing/services/enrollment_service.py` | 69 | 5 | 93% | 97, 107-110, 140 |
-| `billing/services/payment_service.py` | 55 | 3 | 95% | 38, 41, 48 |
-| `comms/services/email_functions.py` | 97 | 5 | 95% | 514-516, 559-560 |
-| `comms/services/email_service.py` | 59 | 6 | 90% | 55, 118-122 |
-| `core/context_processors.py` | 25 | 5 | 80% | 15-16, 22, 33-34 |
-| `core/middleware.py` | 50 | 2 | 96% | 51-52 |
-| `core/models.py` | 91 | 4 | 96% | 48, 61, 147, 167 |
-| `core/transactions.py` | 19 | 1 | 95% | 28 |
-| `core/views/app_forms.py` | 615 | 46 | 93% | 51, 138-140, 152-154, 168-171, 188-189, 211, 267-268, 291-292, 342-344, 375, 527-529, 535, 673, 695, 714, 788, 792, 814, 825, 901, 927, 940, 953, 965, 976, 987, 1098, 1144, 1172-1173, 1201-1202 |
-| `core/views/auth.py` | 103 | 11 | 89% | 65, 69-85, 100, 129 |
-| `core/views/dashboard.py` | 111 | 6 | 95% | 104-111, 152, 168 |
-| `core/views/parents.py` | 26 | 3 | 88% | 24-29 |
-| `core/views/payments.py` | 226 | 4 | 98% | 320-321, 349-350 |
-| `core/views/schedule.py` | 59 | 1 | 98% | 45 |
-| `core/views/students.py` | 298 | 11 | 96% | 53-54, 96, 181-183, 289, 506, 509-511 |
-| `students/models.py` | 88 | 1 | 99% | 135 |
+Live snapshot from the last full run (`make test coverage`):
 
-**42 files** have 100% coverage (skipped above). Total coverage: **96%** across 2,809 statements. Coverage is **very good**. Coverage is enforced at three levels: pre-commit hook (≥ 75%), CI hard floor (≥ 75%), and CI warning (< 90%).
+| Suite | Count | Notes |
+|-------|-------|-------|
+| Unit tests (`project/tests/unit/`) | ~570 | Models, services, tasks, helpers, template rendering |
+| Integration tests (`project/tests/integration/`) | ~380 | Views, middleware, auth flows, portal + webhook endpoints |
+| **Total** | **955+** | All green on PostgreSQL AND SQLite (pre-existing ordering flakes fixed in v1.13) |
+
+Total coverage is **~96 %** across ~4,200 statements. Coverage is enforced at three levels: pre-commit hook (≥ 75 %), CI hard floor (≥ 75 %), and CI warning (< 90 %). The remaining uncovered lines are mostly:
+
+- `core/views/app_forms.py` — rare error branches in admin-facing email forms (44 uncovered / 615 stmts)
+- `core/views/auth.py` — OAuth-only branches that require a real Google response (15 uncovered)
+- Defensive exception fallbacks that are hard to trigger without breaking DB connectivity
+
+**53+ files** have 100 % coverage (services, models, migrations, tasks). New v1.13 code (`two_factor_service`, `two_factor` views, `returning_student` fee logic) has explicit happy-path + error-path tests for every branch.
 
 ---
 
@@ -1827,11 +1892,19 @@ All migrations were regenerated from scratch during the v1.0.0 multi-app split.
 | `students` | `0001_initial` | Teacher, Group, Parent, Student, StudentParent | — |
 | `students` | `0002` | Student gender field, StudentParent UniqueConstraint | `students.0001` |
 | `students` | `0003_teacher_user` | Adds `Teacher.user` OneToOneField → `auth.User` (nullable, `on_delete=SET_NULL`) | `students.0002`, `auth` |
+| `students` | `0004_waiting_list_and_group_capacity` | `Student.is_waiting`, `waiting_since`, `Group.max_students` (v1.1) | `students.0003` |
+| `students` | `0005_add_parent_sms_opt_in` | `Parent.sms_opt_in` (v1.8) | `students.0004` |
+| `students` | `0006_add_parent_session_token` | `ParentSessionToken` — magic-link magic-link auth (v1.9) | `students.0005` |
+| `students` | `0007_add_teacher_two_factor` | `Teacher.two_factor_secret / _enabled / _backup_codes` (v1.13) | `students.0006` |
 | `billing` | `0001_initial` | SiteConfiguration, EnrollmentType, Enrollment, Payment | `students.0001` |
 | `billing` | `0002` | Enrollment academic_year index | `billing.0001`, `students.0002` |
+| `billing` | `0003_add_expense_model` | `Expense` — recurring templates + auto-materialised rows (v1.5) | `billing.0002` |
+| `billing` | `0004_add_payment_stripe_fields` | `Payment.stripe_session_id`, `stripe_payment_intent` (v1.11) | `billing.0003` |
+| `billing` | `0005_add_returning_student_discount` | `SiteConfiguration.returning_student_enrollment_discount` (v1.13) | `billing.0004` |
 | `core` | `0001_initial` | TodoItem, HistoryLog, FunFridayAttendance, ScheduleSlot | `students.0001` |
-| `core` | `0002` | UniqueConstraint for FunFridayAttendance and ScheduleSlot (replaces unique_together) | `core.0001`, `students.0002` |
+| `core` | `0002` | UniqueConstraint for FunFridayAttendance and ScheduleSlot | `core.0001`, `students.0002` |
 | `core` | `0003_qa_backlog_and_config` | QA backlog model and config fields | `core.0002` |
+| `core` | `0004_add_audit_log` | `AuditLog` model + expanded HistoryLog action choices (v1.10) | `core.0003` |
 | `comms` | — | (no models) | — |
 
 ```bash
@@ -1860,11 +1933,15 @@ This section documents every security decision, mechanism, and configuration in 
 | Auth middleware — Layer 2 | `core/middleware.py::NON_ADMIN_ALLOWED_URL_NAMES` | When the session belongs to a Teacher with `admin=False`, requests are restricted to a URL-name whitelist. Admin-only routes return 403 JSON on `/api/*` or redirect to the dashboard with a flash message on HTML routes. Admin Teachers and OAuth/dev-superuser sessions bypass this layer. |
 | Password reset | `core/views/password_reset.py` | Branded subclasses of Django's built-in views, served at `/password-reset/...`. URLs are in `PUBLIC_PREFIXES` so a locked-out teacher can still reach them. Uses Django's signed token machinery; HTML email rendered from `emails/password_reset.html`. |
 | OAuth credentials | `core/views/auth.py` | Google tokens (access, refresh) are stored in session server-side. `client_secret` is never sent to the frontend. Allowed email check is backend-only. |
+| Two-factor (TOTP) | `core/views/two_factor.py` + `core/services/two_factor_service.py` | v1.13. Admin Teachers can enrol via `/two-factor/setup/` — the setup page renders a QR (pyotp provisioning URI) + 8 one-time backup codes (shown once, sha256-hashed at rest). After enrolment, the login flow stashes the user id on the session (`_2fa_pending_user_id`) WITHOUT setting `is_authenticated` and redirects to `/two-factor/verify/`. Only after a valid TOTP or backup code does `_finalize_session_login` promote the session. Rate-limited to 6/min/IP. Recovery: `manage.py reset_two_factor <email>` from the server console. Google OAuth also takes the 2FA gate — the OAuth-confirmed email is only one factor. |
+| Audit log | `core/audit_models.py` + `core/audit_signals.py` | v1.10. Immutable `AuditLog` model records every create / update / delete on tracked models (Student, Parent, Teacher, Group, Enrollment, Payment, SiteConfiguration, Expense) with actor + per-field diff. `AuditActorMiddleware` stashes the current user in a `contextvars.ContextVar` (WSGI-local + ASGI-safe). Per-model field allow-list keeps GDPR-sensitive PII (Parent.dni/iban/email/phone, Teacher.email, password hashes) out of the JSON payload. |
+| Rate limiting | `core/rate_limit.py` | v1.10. Cache-backed IP throttle (`cache.add` + `cache.incr` — atomic on Redis and memcached, closes the TOCTOU race a plain `get→set` would open). Applied to `/login/` (5/min/IP), `/parent/login/` (5/min/IP), `/parent/login/<token>/` (20/min/IP against brute force), and `/two-factor/verify/` (6/min/IP). `RATELIMIT_ENABLE=False` bypasses in tests. |
 
 **Design decisions**:
 
 - **Django User model is now in use** — testing and production both authenticate Teachers through `auth.User` (hashed passwords + Django's auth machinery). Dev still uses env-var basic-auth for ergonomic reasons; an underlying superuser is auto-mirrored so the experience matches.
 - **Two-tier role model** — admin Teachers see everything; non-admin Teachers see the dashboard, students, fun friday, and a read-only management page. Role mapping flows from `Teacher.admin` → `auth.User.is_staff`/`is_superuser` via `Teacher.ensure_user` and a `post_save` signal.
+- **2FA is opt-in per admin** — enabling it takes 30 seconds (scan a QR, type one code, save 8 backup codes). Recommended for every production admin. Non-admin Teachers can't enrol (they don't have sensitive endpoints); dev-mode env-var basic-auth doesn't have a Teacher record so it's never prompted for a second factor.
 - Google OAuth is optional — if `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET` are not set, the OAuth button is hidden.
 - `OAUTHLIB_INSECURE_TRANSPORT` is only set when `DEBUG=True` (for local HTTP testing).
 - The password-reset email is the only path to activate a Teacher whose seed block omits `..._PASSWORD` — Gmail SMTP must work in any environment that issues real reset links.
@@ -1985,18 +2062,22 @@ These are not blockers but would strengthen the system for scale or compliance:
 
 | Priority | Improvement | Why |
 |----------|------------|-----|
-| **High** | Rate limiting on login (`django-ratelimit`, 5 attempts/15 min per IP) | Prevents brute force. Currently no protection. |
 | **High** | Content-Security-Policy header | Prevents XSS. Currently absent — Tailwind CDN requires `unsafe-inline` for styles, but scripts can be locked down. |
 | **High** | Referrer-Policy header (`strict-origin-when-cross-origin`) | Prevents referrer leakage to external links. Currently absent. |
+| **Medium** | Enforce 2FA for all admins (not opt-in) | Currently opt-in per admin. A `Teacher.admin=True` save could refuse until 2FA is enrolled. |
 | **Medium** | Session rotation on OAuth login (`request.session.create()`) | Prevents session fixation. Currently session ID persists through OAuth flow. |
 | **Medium** | Inactivity timeout (30 min idle logout) | 24h session is long for sensitive student data. |
-| **Medium** | Security event audit log (failed logins with IP, CSRF failures) | Currently no visibility into attack attempts. |
 | **Medium** | Permissions-Policy header | Disables camera, microphone, geolocation APIs the app doesn't need. |
 | **Medium** | `Argon2` password hasher | Stronger than the default PBKDF2 now used for Teacher passwords. Switch `PASSWORD_HASHERS` once `argon2-cffi` is added to deps. |
 | **Low** | Request ID tracking (`X-Request-ID` middleware) | Enables log correlation across services. |
 | **Low** | `detect-secrets` pre-commit hook | Prevents accidental secret commits in the future. |
-| **Low** | Migrate to OAuth-only (deprecate password login) | Reduces credential attack surface to zero. |
 | **Low** | Web Application Firewall (WAF) rules at cloud provider level | Blocks common attack patterns before they reach Django. |
+
+**Shipped since the last README revision** (all now built-in, moved out of this list):
+
+- ✅ Rate limiting on login + parent-portal login + 2FA verify (v1.10 + v1.13)
+- ✅ Security event audit log — every admin CRUD action recorded in `AuditLog` (v1.10)
+- ✅ Two-factor authentication (TOTP + backup codes) for admin Teachers (v1.13)
 
 ---
 

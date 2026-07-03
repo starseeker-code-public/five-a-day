@@ -1,0 +1,90 @@
+{% extends 'base.html' %}
+{% block title %}Editar estudiante · Five a Day{% endblock %}
+
+{% block page_title %}Editar estudiante{% endblock %}
+{% block page_subtitle %}{{ student.full_name }}{% endblock %}
+
+{% block header_actions %}
+<a href="{% url 'student_detail' student.id %}"
+   class="header-action-btn bg-neutral-200 hover:bg-neutral-300 text-neutral-700 px-4 py-2 rounded-md flex items-center gap-2 no-underline">
+    <span class="material-symbols-outlined text-[18px]">arrow_back</span> Volver a la ficha
+</a>
+{% endblock %}
+
+{% block content %}
+<div class="max-w-3xl mx-auto bg-white rounded-lg shadow p-8">
+    {% if student.is_waiting %}
+        <div class="bg-amber-50 border border-amber-200 rounded p-4 mb-6">
+            <p class="text-sm text-amber-900">
+                <strong>{{ student.full_name }}</strong> está en la <a href="{% url 'waiting_list' %}" class="underline">lista de espera</a>.
+                Desmarca la casilla &laquo;En lista de espera&raquo; para promover al estudiante a matriculado —
+                se creará automáticamente una matrícula mensual con el plan que elijas.
+            </p>
+        </div>
+    {% endif %}
+
+    <form method="post">
+        {% csrf_token %}
+        {% if form.non_field_errors %}
+            <div class="bg-red-100 border border-red-200 rounded p-3 mb-4 text-red-700 text-sm">
+                {{ form.non_field_errors }}
+            </div>
+        {% endif %}
+
+        <h2 class="text-lg font-semibold text-neutral-800 mb-4">Datos del estudiante</h2>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+            {% for field in form %}
+                <div class="{% if field.name == 'allergies' %}md:col-span-2{% endif %}">
+                    <label for="{{ field.id_for_label }}" class="block text-xs text-neutral-500 mb-1">
+                        {{ field.label }}{% if field.field.required %} *{% endif %}
+                    </label>
+                    {{ field }}
+                    {% if field.errors %}
+                        <p class="text-red-600 text-xs mt-1">{{ field.errors|join:", " }}</p>
+                    {% endif %}
+                    {% if field.help_text %}
+                        <p class="text-neutral-500 text-xs mt-1">{{ field.help_text }}</p>
+                    {% endif %}
+                </div>
+            {% endfor %}
+        </div>
+
+        {% if not student.is_waiting or enrollment_form %}
+        <h2 class="text-lg font-semibold text-neutral-800 mb-4 mt-8">Matrícula</h2>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+            {% for field in enrollment_form %}
+                <div>
+                    <label for="{{ field.id_for_label }}" class="block text-xs text-neutral-500 mb-1">
+                        {{ field.label }}
+                    </label>
+                    {{ field }}
+                    {% if field.errors %}
+                        <p class="text-red-600 text-xs mt-1">{{ field.errors|join:", " }}</p>
+                    {% endif %}
+                </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+
+        <div class="flex items-center gap-3 mt-8">
+            <button type="submit" class="px-6 py-2 bg-primary-500 hover:bg-primary-600 text-white rounded-md font-medium">
+                Guardar cambios
+            </button>
+            <a href="{% url 'student_detail' student.id %}"
+               class="text-neutral-600 hover:text-neutral-800 no-underline">Cancelar</a>
+        </div>
+    </form>
+
+    <div class="border-t border-neutral-100 mt-8 pt-6 text-sm text-neutral-500">
+        <p><strong>Padres asociados:</strong></p>
+        <ul class="list-disc list-inside mt-2">
+            {% for p in parents %}
+                <li>{{ p.full_name }} ({{ p.email }})</li>
+            {% empty %}
+                <li class="text-red-500">Sin padres asociados</li>
+            {% endfor %}
+        </ul>
+        <p class="mt-3 text-xs">Para gestionar padres/tutores, usa la modal de edición desde la lista de estudiantes.</p>
+    </div>
+</div>
+{% endblock %}

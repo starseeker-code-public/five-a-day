@@ -1,6 +1,6 @@
 [project]
 name = "five-a-day"
-version = "1.12.0"
+version = "1.13.0"
 description = "Five a Day management software"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -35,6 +35,8 @@ dependencies = [
     # GHSA-537c-gmf6-5ccf fixed in 48.0.1.
     "cryptography>=48.0.1",
     "reportlab>=5.0.0",
+    "pyotp>=2.10.0",
+    "qrcode>=8.2",
 ]
 
 [dependency-groups]

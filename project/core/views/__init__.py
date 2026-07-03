@@ -153,6 +153,13 @@ from core.views.testing_tools import (
 # Todos & history
 from core.views.todos import complete_todo, create_todo, history_list
 
+# Two-factor authentication (v1.13)
+from core.views.two_factor import (
+    two_factor_manage,
+    two_factor_setup,
+    two_factor_verify,
+)
+
 # Waiting list (v1.1)
 from core.views.waiting_list import (
     add_to_waiting_list,

@@ -144,7 +144,13 @@ def assign_from_waiting_list(request, student_id):
             today = date.today()
             last_day = calendar.monthrange(today.year, today.month)[1]
             due_date = date(today.year, today.month, last_day)
-            enrollment_fee = config.adult_enrollment_fee if student.is_adult else config.children_enrollment_fee
+            # v1.13 — apply returning-student discount when applicable.
+            enrollment_fee, returning_discount = EnrollmentService.compute_enrollment_fee(
+                config, student, is_adult=student.is_adult
+            )
+            concept = f"Matrícula {enrollment.academic_year} — {student.full_name}"
+            if returning_discount:
+                concept += f" (dto. alumno recurrente −{returning_discount:.2f} €)"
             Payment.objects.create(
                 student=student,
                 parent=default_parent,
@@ -155,7 +161,7 @@ def assign_from_waiting_list(request, student_id):
                 currency="EUR",
                 payment_status="pending",
                 due_date=due_date,
-                concept=f"Matrícula {enrollment.academic_year} — {student.full_name}",
+                concept=concept,
             )
 
             HistoryLog.log(

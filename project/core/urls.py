@@ -55,6 +55,10 @@ from core.views import (
     test_error_500,
     # Testing tools
     testing_tools_view,
+    # Two-factor authentication (v1.13)
+    two_factor_manage,
+    two_factor_setup,
+    two_factor_verify,
     web_manifest,
 )
 
@@ -99,6 +103,10 @@ urlpatterns = [
     # Reports & analytics (v1.7)
     path("reports/", reports_view, name="reports_view"),
     path("reports/download.pdf", reports_pdf, name="reports_pdf"),
+    # Two-factor authentication (v1.13)
+    path("two-factor/setup/", two_factor_setup, name="two_factor_setup"),
+    path("two-factor/manage/", two_factor_manage, name="two_factor_manage"),
+    path("two-factor/verify/", two_factor_verify, name="two_factor_verify"),
     # Parent portal (v1.9) — magic-link auth, session separate from admin
     path("parent/login/", parent_portal_login, name="parent_portal_login"),
     path("parent/login/<str:token>/", parent_portal_verify, name="parent_portal_verify"),

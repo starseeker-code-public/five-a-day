@@ -20,6 +20,22 @@ class Teacher(models.Model):
         related_name="teacher",
         help_text="Django auth user — login identity + hashed password for this teacher.",
     )
+    # v1.13 — TOTP two-factor authentication (admins only in practice)
+    two_factor_secret = models.CharField(
+        max_length=64,
+        blank=True,
+        default="",
+        help_text="Base32-encoded TOTP shared secret. Empty when 2FA is not set up.",
+    )
+    two_factor_enabled = models.BooleanField(
+        default=False,
+        help_text="True once the user has confirmed enrolment by entering a valid TOTP code.",
+    )
+    two_factor_backup_codes = models.JSONField(
+        default=list,
+        blank=True,
+        help_text="Hashed one-time backup codes (list of sha256 hex strings). Consumed on use.",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

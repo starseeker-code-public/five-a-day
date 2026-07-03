@@ -153,6 +153,18 @@ class SiteConfiguration(models.Model):
         validators=[MinValueValidator(Decimal("0.00"))],
         verbose_name="Solo 3 semanas (%)",
     )
+    # v1.13 — returning-student enrollment discount. Flat euros knocked off
+    # the one-time enrollment fee when a student re-enrols in a later
+    # academic year. Auto-detected by EnrollmentService (any prior
+    # Enrollment for the same student, any status, any earlier academic
+    # year). Stacks with sibling + language-cheque discounts.
+    returning_student_enrollment_discount = models.DecimalField(
+        max_digits=8,
+        decimal_places=2,
+        default=Decimal("20.00"),
+        validators=[MinValueValidator(Decimal("0.00"))],
+        verbose_name="Estudiante recurrente (€ fijo sobre la matrícula)",
+    )
 
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -196,6 +208,7 @@ class SiteConfiguration(models.Model):
                 "half_month_discount": constants.HALF_MONTH_DISCOUNT[0],
                 "one_week_discount": constants.ONE_WEEK_DISCOUNT[0],
                 "three_week_discount": constants.THREE_WEEK_DISCOUNT[0],
+                "returning_student_enrollment_discount": constants.RETURNING_STUDENT_ENROLLMENT_DISCOUNT,
             },
         )
         return config

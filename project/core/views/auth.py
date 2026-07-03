@@ -57,6 +57,27 @@ def _finalize_session_login(request, user, display_name: str, *, google: bool = 
         request.session["google_authenticated"] = True
 
 
+def _needs_two_factor(user) -> bool:
+    """True iff `user` has a linked Teacher with 2FA enabled."""
+    teacher = getattr(user, "teacher", None)
+    return teacher is not None and teacher.two_factor_enabled
+
+
+def _stage_pending_2fa(request, user):
+    """
+    Password check succeeded but the user has 2FA enabled — stash the user
+    id on the session (WITHOUT setting `is_authenticated`) so the /two-
+    factor/verify/ page can finish the login. `SimpleAuthMiddleware` treats
+    the session as unauthenticated until the OTP is confirmed.
+    """
+    from core.views.two_factor import _PENDING_USER_SESSION_KEY
+
+    # Clear any leftover pre-auth state from a previous attempt
+    request.session.flush()
+    request.session[_PENDING_USER_SESSION_KEY] = user.id
+    request.session.set_expiry(300)  # 5 minutes to complete the second factor
+
+
 @rate_limit("login", limit=5, window_seconds=60)
 def login_view(request):
     """
@@ -97,6 +118,7 @@ def login_view(request):
 
             if username == valid_username and password == valid_password:
                 user = _ensure_dev_user(username)
+                # Dev-mode users never have a Teacher record → no 2FA gate.
                 _finalize_session_login(request, user, username)
                 return redirect("home")
             messages.error(request, "❌ Usuario o contraseña incorrectos")
@@ -104,6 +126,11 @@ def login_view(request):
             # Testing / production: authenticate Teachers via their linked User.
             user = _django_authenticate(request, username=username, password=password)
             if user is not None and user.is_active:
+                if _needs_two_factor(user):
+                    # Password OK but 2FA enrolled → force the second factor.
+                    _stage_pending_2fa(request, user)
+                    return redirect("two_factor_verify")
+
                 display = getattr(user, "first_name", "") or user.get_username()
                 _finalize_session_login(request, user, display)
                 return redirect("home")
@@ -302,6 +329,21 @@ def google_oauth_callback(request):
         return redirect("login")
 
     user = _ensure_oauth_superuser(user_email, user_name)
+
+    # OAuth still has to clear the 2FA gate when the linked Teacher enrolled
+    # the second factor — the OAuth-confirmed email is only one factor.
+    if _needs_two_factor(user):
+        _stage_pending_2fa(request, user)
+        # Preserve the Google creds so the verify step can hand them back
+        # after the OTP succeeds.
+        request.session["_2fa_pending_google_creds"] = {
+            "token": credentials.token,
+            "refresh_token": credentials.refresh_token,
+            "token_uri": credentials.token_uri,
+            "client_id": credentials.client_id,
+        }
+        return redirect("two_factor_verify")
+
     _finalize_session_login(request, user, user_name, google=True)
 
     # Store credentials so other views can reuse them for Gmail / Sheets

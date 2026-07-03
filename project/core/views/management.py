@@ -56,6 +56,8 @@ def update_site_config(request):
             "half_month_discount",
             "one_week_discount",
             "three_week_discount",
+            # v1.13 — returning-student enrollment discount (flat €)
+            "returning_student_enrollment_discount",
         ]:
             if field in data:
                 setattr(config, field, Decimal(str(data[field])))

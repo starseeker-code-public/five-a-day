@@ -149,13 +149,23 @@ class StudentCreateView(CreateView):
                 # Create enrollment
                 enrollment = enrollment_form.create_enrollment(student, is_adult=is_adult_mode)
 
-                # Create enrollment fee payment (pending, due end of month)
+                # Create enrollment fee payment (pending, due end of month).
+                # Applies the returning-student discount automatically when
+                # the student has any prior Enrollment for an earlier
+                # academic year (v1.13).
+                from billing.services.enrollment_service import EnrollmentService
+
                 config = SiteConfiguration.get_config()
                 today = date.today()
                 last_day = calendar.monthrange(today.year, today.month)[1]
                 due_date = date(today.year, today.month, last_day)
 
-                enrollment_fee = config.adult_enrollment_fee if is_adult_mode else config.children_enrollment_fee
+                enrollment_fee, returning_discount = EnrollmentService.compute_enrollment_fee(
+                    config, student, is_adult=is_adult_mode
+                )
+                concept = f"Matrícula {enrollment.academic_year} — {student.full_name}"
+                if returning_discount:
+                    concept += f" (dto. alumno recurrente −{returning_discount:.2f} €)"
 
                 Payment.objects.create(
                     student=student,
@@ -167,7 +177,7 @@ class StudentCreateView(CreateView):
                     currency="EUR",
                     payment_status="pending",
                     due_date=due_date,
-                    concept=f"Matrícula {enrollment.academic_year} — {student.full_name}",
+                    concept=concept,
                 )
 
                 HistoryLog.log(

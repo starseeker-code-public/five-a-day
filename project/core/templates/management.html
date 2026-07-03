@@ -113,6 +113,18 @@
                                    class="config-input w-full px-4 py-2 border border-neutral-300 rounded-md bg-neutral-100 cursor-not-allowed"
                                    disabled>
                         </div>
+                        <div>
+                            <label class="block text-sm font-medium text-neutral-600 mb-1">
+                                Alumno recurrente (€ fijo sobre matrícula)
+                            </label>
+                            <input type="number" step="0.01" min="0" name="returning_student_enrollment_discount"
+                                   value="{{ config.returning_student_enrollment_discount|unlocalize }}"
+                                   class="config-input w-full px-4 py-2 border border-neutral-300 rounded-md bg-neutral-100 cursor-not-allowed"
+                                   disabled>
+                            <p class="text-xs text-neutral-500 mt-1">
+                                Se aplica automáticamente cuando el alumno se re-matricula en un año académico posterior.
+                            </p>
+                        </div>
                     </form>
                 </div>
 
