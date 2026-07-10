@@ -6,9 +6,10 @@ Moved from core/email.py as part of the comms app split.
 """
 
 import logging
+import mimetypes
 import os
 from datetime import date
-from email.mime.image import MIMEImage
+from email.message import MIMEPart
 
 from django.conf import settings
 from django.core.mail import EmailMultiAlternatives
@@ -114,16 +115,25 @@ class EmailService:
             )
             email.attach_alternative(html_content, "text/html")
 
-            # Anadir imagenes inline si existen
+            # Anadir imagenes inline si existen (para <img src="cid:...">).
+            # Django 6.0 eliminó el atributo `mixed_subtype`; adjuntamos un
+            # MIMEPart moderno con Content-ID y Content-Disposition: inline.
             if inline_images:
-                email.mixed_subtype = "related"
                 for content_id, image_path in inline_images.items():
                     if os.path.exists(image_path):
+                        ctype, _ = mimetypes.guess_type(image_path)
+                        maintype, _, subtype = (ctype or "image/png").partition("/")
                         with open(image_path, "rb") as img_file:
-                            img = MIMEImage(img_file.read())
-                            img.add_header("Content-ID", f"<{content_id}>")
-                            img.add_header("Content-Disposition", "inline", filename=os.path.basename(image_path))
-                            email.attach(img)
+                            image_part = MIMEPart()
+                            image_part.set_content(
+                                img_file.read(),
+                                maintype=maintype,
+                                subtype=subtype,
+                                disposition="inline",
+                                filename=os.path.basename(image_path),
+                            )
+                            image_part["Content-ID"] = f"<{content_id}>"
+                            email.attach(image_part)
 
             # Anadir adjuntos si existen
             if attachments:
