@@ -391,3 +391,29 @@ class TestVacationClosureCrossMonth:
         )
         assert "1 de abril" in rendered
         assert "5 de abril" in rendered
+
+    def test_view_derives_end_month_from_end_date(self):
+        """The template already supported `month_closure_end`, but the
+        vacation_closure_form view never passed it — so a Navidad closure
+        (23 dic → 3 ene) rendered "3 de diciembre". The view must derive the
+        end month from the closure END date."""
+        import json
+
+        from django.test import RequestFactory
+
+        from core.views.app_forms import vacation_closure_form
+
+        req = RequestFactory().post(
+            "/apps/vacation-closure/",
+            {
+                "action": "preview",
+                "closure_start_date": "2026-12-23",
+                "closure_end_date": "2027-01-03",
+                "reopening_date": "2027-01-08",
+                "closure_reason": "Navidad",
+            },
+        )
+        req.session = {}
+        html = json.loads(vacation_closure_form(req).content)["html"]
+        # end date is 3 January → must read "3 de enero", never "3 de diciembre"
+        assert "3 de enero por motivo" in html
