@@ -20,7 +20,7 @@ Built to centralize student records, automate billing cycles, and streamline par
 ### Project Status
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v1.13.2-brightgreen?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-v1.13.3-brightgreen?style=flat-square" alt="Version">
   &nbsp;|&nbsp;
   <a href="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml?query=branch%3Amain"><img src="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml/badge.svg?branch=main&style=flat-square" alt="CI main"></a>
   &nbsp;|&nbsp;
@@ -41,9 +41,9 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 | Version | Date | Description |
 |---------|------|-------------|
-| **v1.13.0** | 2026-07-03 | Admin TOTP 2FA + returning-student enrollment discount + tech-debt sweep |
-| v1.12.0 | 2026-07-02 | Installable PWA — web manifest + service worker cache-first shell |
-| v1.11.0 | 2026-07-02 | Stripe Checkout for parent-portal payments + signed webhook reconciliation |
+| **v1.13.3** | 2026-07-11 | pip-audit CVE fixes (msgpack, Django) + dependabot action bumps |
+| v1.13.2 | 2026-07-11 | Fix vacation-closure email wrong end month across month boundaries |
+| v1.13.1 | 2026-07-11 | Fix inline-image emails (Fun Friday) for Django 6.0 |
 
 ---
 
@@ -143,8 +143,44 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 ## Version History & Roadmap
 
-<details id="v1130" open>
-<summary><strong>v1.13.0 — Admin TOTP 2FA + Returning-Student Discount + Tech-Debt Sweep (current)</strong></summary>
+<details id="v1133" open>
+<summary><strong>v1.13.3 — pip-audit CVE fixes + dependabot action bumps (current)</strong></summary>
+
+**Security / dependencies**
+
+- Bumped `msgpack` 1.1.2 → 1.2.1 (GHSA-6v7p-g79w-8964) — transitive via `pip-audit[filecache] → cachecontrol`. This was the reported CI `pip-audit` failure.
+- Bumped `Django` 6.0.6 → 6.0.7 (PYSEC-2026-2090 / 2091 / 2092), surfaced by `pip-audit` once msgpack was patched. `uv run pip-audit` now reports no known vulnerabilities.
+
+**Dependabot (resolved as one commit)**
+
+- `actions/checkout` v4 → v7, `codecov/codecov-action` v5 → v7, `docker/build-push-action` v6 → v7, `actions/dependency-review-action` v4 → v5, `dawidd6/action-send-mail` v3 → v17, applied across all `.github/workflows/*.yml`.
+
+</details>
+
+<details id="v1132">
+<summary><strong>v1.13.2 — Vacation-closure email cross-month fix</strong></summary>
+
+**Bug fix**
+
+- `vacation_closure.html` and `send_vacation_closure_email` already supported `month_closure_end` (the month of the closure's END date), but `vacation_closure_form` never derived or passed it — so a closure spanning two months (e.g. Navidad, 23 Dec → 3 Jan) rendered "hasta el 3 de **diciembre**" instead of enero.
+- The view now derives `month_closure_end` from the closure end date on all three paths (preview, real send, and the default GET preview). Added a view-level regression test (the template level was already covered).
+
+</details>
+
+<details id="v1131">
+<summary><strong>v1.13.1 — Inline-image emails fixed for Django 6.0</strong></summary>
+
+**Bug fix**
+
+- `EmailService.send_email` set the `EmailMessage.mixed_subtype` attribute, which Django 6.0 removed — raising `AttributeError` for any email carrying an inline image. This crashed Fun Friday emails sent with an event image and the `test_all_emails` QA command.
+- Inline images are now attached as a modern `email.message.MIMEPart` with a `Content-ID` header and `Content-Disposition: inline`, so `<img src="cid:…">` references resolve without the removed attribute.
+- `test_all_emails` now sets the `event_image` flag alongside its inline attachment, so the Fun Friday preview renders the image instead of orphaning it.
+- Added a regression test that sends a real inline image and asserts the `Content-ID` / inline part is present.
+
+</details>
+
+<details id="v1130">
+<summary><strong>v1.13.0 — Admin TOTP 2FA + Returning-Student Discount + Tech-Debt Sweep</strong></summary>
 
 **Admin two-factor authentication (TOTP)**
 
@@ -1518,7 +1554,7 @@ five-a-day/
 │   │   ├── urls.py               11 URL patterns
 │   │   └── management/commands/  send_email, test_all_emails
 │   │
-│   ├── tests/                    pytest suite (955+ tests, 96 % coverage) — unit/ + integration/
+│   ├── tests/                    pytest suite (957 tests, 96 % coverage) — unit/ + integration/
 │   ├── templates/registration/   Password-reset templates (form, done, confirm, complete + email body)
 │   ├── templates/admin/          Django admin overrides (branded theme)
 │   └── conftest.py               Shared fixtures (models + authenticated_client)
@@ -2418,7 +2454,7 @@ Configure at **Settings → Secrets and variables → Actions**:
 | `development → testing` merged + PR opened to `main` | `OWNER_EMAILS` (secret) | auto-merge.yml |
 | New commit on `main` (production ready to deploy) | `hellofiveaday@gmail.com` (hardcoded) | notify-production.yml |
 
-Both use Gmail SMTP via the `dawidd6/action-send-mail@v3` action. Emails include HTML formatting, links to the commit/PR, and actionable next steps.
+Both use Gmail SMTP via the `dawidd6/action-send-mail@v17` action. Emails include HTML formatting, links to the commit/PR, and actionable next steps.
 
 ### Dependabot
 
@@ -2451,7 +2487,7 @@ make up                        # Start Docker (PostgreSQL + Redis + Django + Cel
 1. Work on `development` (or a short-lived branch off `development`)
 2. Make changes following the conventions below
 3. Run `make pc-run` — Ruff + mypy + bandit all pass, offers to auto-bump the patch version on success, and auto-stages `uv.lock` if regenerated
-4. Run `make test` — all 623 tests must pass (PostgreSQL via Docker, parallel, with coverage)
+4. Run `make test` — all 957 tests must pass (PostgreSQL via Docker, parallel, with coverage)
 5. `git commit` with a message like `v1.0.6 - Short description` (version comes first — conventions match every other commit in the project)
 6. `git push origin development`
 7. CI runs automatically on your push (see [CI/CD](#cicd--github-actions))
