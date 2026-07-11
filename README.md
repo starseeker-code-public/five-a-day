@@ -20,7 +20,7 @@ Built to centralize student records, automate billing cycles, and streamline par
 ### Project Status
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v1.13.3-brightgreen?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-v1.13.4-brightgreen?style=flat-square" alt="Version">
   &nbsp;|&nbsp;
   <a href="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml?query=branch%3Amain"><img src="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml/badge.svg?branch=main&style=flat-square" alt="CI main"></a>
   &nbsp;|&nbsp;
@@ -41,9 +41,9 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 | Version | Date | Description |
 |---------|------|-------------|
-| **v1.13.3** | 2026-07-11 | pip-audit CVE fixes (msgpack, Django) + dependabot action bumps |
+| **v1.13.4** | 2026-07-11 | Dark theme, CSRF/payments/Fun-Friday/todo fixes, teacher-gated QA |
+| v1.13.3 | 2026-07-11 | pip-audit CVE fixes (msgpack, Django) + dependabot action bumps |
 | v1.13.2 | 2026-07-11 | Fix vacation-closure email wrong end month across month boundaries |
-| v1.13.1 | 2026-07-11 | Fix inline-image emails (Fun Friday) for Django 6.0 |
 
 ---
 
@@ -143,8 +143,30 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 ## Version History & Roadmap
 
-<details id="v1133" open>
-<summary><strong>v1.13.3 — pip-audit CVE fixes + dependabot action bumps (current)</strong></summary>
+<details id="v1134" open>
+<summary><strong>v1.13.4 — Dark theme + testing-stack bug sweep (current)</strong></summary>
+
+**Theme (light / dark)**
+
+- Added a persistent light/dark theme toggle in the header, next to the notifications bell. Light is the untouched default; dark is a violet-tinted theme in tune with the `primary` palette. The choice is saved in `localStorage` and applied before first paint (no flash). Implemented with `darkMode: 'class'`, a new `core/static/css/theme.css` override sheet (inert unless `html.dark`), and `core/static/js/theme.js`.
+
+**Bug fixes (only manifested in the testing/production stack, `DEBUG=False`)**
+
+- **Systemic CSRF failure** — the `csrftoken` cookie is `HttpOnly` when `DEBUG=False`, so JS `getCsrf()` helpers that read `document.cookie` returned an empty token and every AJAX POST 403'd. Fixed the helpers in `home.js`, `students.js`, `payments.js`, `schedule.js`, `student-detail.js`, and `fun-friday.js` to read the hidden `{% csrf_token %}` input first (cookie fallback). This repaired **completing a payment**, **completing a todo** (completed todos now disappear), **Fun Friday enrollment** (dedicated view + the icon in other views), and schedule saves — all in one fix.
+- **Create-payment student search** — `search_students` rendered the full students HTML page instead of JSON, so the student autocomplete never populated and the create form stayed blocked. It now returns `{"results": [{id, full_name, school}]}`; selecting a student auto-fills the parent. Also removed a stray `ReferenceError` (undefined `parentSearch`) on the create page.
+
+**Payments scheduling**
+
+- Enrolling a student now schedules the whole academic year of pending fees, not just the enrollment fee: `PaymentService.schedule_academic_year_payments()` creates monthly (Sep–Jun) or quarterly (Oct/Jan/Apr) pending payments due at period end, starting at the enrollment month. It's idempotent, so the periodic `generate_payments` command never double-creates. Wired into both student creation and waiting-list assignment.
+
+**QA testing tools access**
+
+- Removed the dedicated `manitas` QA user and the `QA_TESTING_USERNAME` setting. The `/testing/` dashboard and its sidebar icon are now gated on **any logged-in Teacher** in the testing environment (`core.decorators._request_teacher`), including non-admin teachers (their whitelist now covers `testing_tools` + the QA API endpoints).
+
+</details>
+
+<details id="v1133">
+<summary><strong>v1.13.3 — pip-audit CVE fixes + dependabot action bumps</strong></summary>
 
 **Security / dependencies**
 
@@ -802,9 +824,9 @@ All tools configured in `pyproject.toml` — single source of truth.
 
 **Access control**
 - `qa_access_required` decorator in `core/decorators.py`
-- Gated by `DJANGO_ENV=testing` + `DEBUG=False` + session username matches `QA_TESTING_USERNAME`
+- Gated by `DJANGO_ENV=testing` + `DEBUG=False` + the request is made by a logged-in Teacher (admin or not)
 - Returns 404 (not 403) for unauthorized users — page appears not to exist
-- Sidebar icon hidden for all non-QA users via context processor
+- Sidebar icon hidden for non-Teacher sessions via context processor
 
 **Bug fixes**
 - Added `STATICFILES_DIRS` for `project/static/` — email CSS was missing from collectstatic manifest
@@ -1204,9 +1226,6 @@ POSTGRES_PASSWORD=                # openssl rand -base64 32
 LOGIN_USERNAME=
 LOGIN_PASSWORD=
 
-# QA dashboard — only visible to the user with this username (testing only)
-QA_TESTING_USERNAME=
-
 # ============================================================================
 # EMAIL  (all environments — Gmail SMTP + App Password)
 # ============================================================================
@@ -1389,7 +1408,6 @@ The table below describes every variable in the [.env template](#env-template) a
 | **Auth** | | | |
 | `LOGIN_USERNAME` | Dev-only basic-auth username (compared by the login view when `DJANGO_ENV=development`). Ignored in testing/production. | **Yes in dev** | — (login refused if missing) |
 | `LOGIN_PASSWORD` | Dev-only basic-auth password. Ignored in testing/production — Teachers log in via `auth.User` (seed them with `TEACHER_SEED_*`). | **Yes in dev** | — (login refused if missing) |
-| `QA_TESTING_USERNAME` | Extra user allowed to see `/testing/` dashboard | No (QA only) | — |
 | `GOOGLE_CLIENT_ID` | OAuth client ID | For Google login | — |
 | `GOOGLE_CLIENT_SECRET` | OAuth client secret | For Google login | — |
 | `GOOGLE_REDIRECT_URI` | OAuth callback URL | For Google login | auto-detected |
@@ -1554,7 +1572,7 @@ five-a-day/
 │   │   ├── urls.py               11 URL patterns
 │   │   └── management/commands/  send_email, test_all_emails
 │   │
-│   ├── tests/                    pytest suite (957 tests, 96 % coverage) — unit/ + integration/
+│   ├── tests/                    pytest suite (961 tests, 96 % coverage) — unit/ + integration/
 │   ├── templates/registration/   Password-reset templates (form, done, confirm, complete + email body)
 │   ├── templates/admin/          Django admin overrides (branded theme)
 │   └── conftest.py               Shared fixtures (models + authenticated_client)
@@ -1872,7 +1890,8 @@ Within each file, related tests are grouped into classes. Where a large file abs
 | [`unit/test_student_forms.py`](project/tests/unit/test_student_forms.py) | 7 | `StudentForm` + `ParentForm` validation: future birth date rejected, DNI minimum length, required fields, both date formats |
 | [`unit/test_exports.py`](project/tests/unit/test_exports.py) | 7 | Excel workbook generation via `openpyxl`: Students, Enrollments, Payments sheets + combined workbook; empty-database edge case |
 | [`unit/test_payment_helpers.py`](project/tests/unit/test_payment_helpers.py) | 7 | `parse_date_value` (6 formats including invalid) + `payment_detail` AJAX helper called directly via `RequestFactory` |
-| [`unit/test_decorators.py`](project/tests/unit/test_decorators.py) | 5 | `@qa_access_required`: allow when `IS_TESTING_ENV + QA_TESTING_USERNAME + session.username` all match, 404 on any missing condition |
+| [`unit/test_decorators.py`](project/tests/unit/test_decorators.py) | 4 | `@qa_access_required`: allow when `IS_TESTING_ENV` + the request is a logged-in Teacher, 404 when not testing env / authenticated non-teacher / anonymous |
+| [`unit/test_payment_scheduling.py`](project/tests/unit/test_payment_scheduling.py) | 4 | `PaymentService.schedule_academic_year_payments`: monthly enrollment → 10 pending payments (Sep–Jun) due at month end, quarterly → 3 (Oct/Jan/Apr), idempotent on re-run, inactive student skipped |
 | [`unit/test_error_handlers.py`](project/tests/unit/test_error_handlers.py) | 5 | `handler400`/`handler403`/`handler404`/`handler405`/`handler500` render with correct status codes |
 | [`unit/test_qa_error_middleware.py`](project/tests/unit/test_qa_error_middleware.py) | 5 | `QAErrorEmailMiddleware.process_exception` via `RequestFactory`: pass-through, disabled config, no support email, send success, send failure swallowed |
 | [`unit/test_testing_tools_helpers.py`](project/tests/unit/test_testing_tools_helpers.py) | 2 | `_git_info` helper: success path + non-zero returncode branch with `subprocess.run` mocked |
@@ -1884,7 +1903,7 @@ Within each file, related tests are grouped into classes. Where a large file abs
 | [`integration/test_app_form_views.py`](project/tests/integration/test_app_form_views.py) | 97 | Every email form GET page, POST `action=preview` (JSON HTML), `test_send` with/without EMAIL_TEST_* env vars, main send-to-parents for every form (fun_friday, payment_reminder, vacation_closure, tax_certificate, monthly_report, birthday, receipts × 3, newsletter, enrollment/welcome), invalid-date fallbacks, missing-field errors, no-parents-with-email edge cases, per-recipient exception swallowing, welcome_form redirect |
 | [`integration/test_views.py`](project/tests/integration/test_views.py) | 54 | Cross-cutting top-level HTTP coverage: auth flow, dashboard, `all_info`, student/parent list + detail + create + search, payment list + create + detail + CRUD + stats + CSV + validation, todos + history API, management admin, email form pages (parametrized), enrollment API, error pages (parametrized), schedule, Fun Friday, support |
 | [`integration/test_payment_views.py`](project/tests/integration/test_payment_views.py) | 37 | All HTTP payment endpoints: list (search, stats), create (+ invalid parent + unexpected exception), detail-view (+ 404), update (JSON + FormData + all error branches), delete (success + exception 500), deactivate (success + exception 400), quick-complete (success + invalid method + broken JSON), get-details (success + exception), search payments/parents (short query + hits), validate student-parent (all branches), export DB to Excel |
-| [`integration/test_student_views.py`](project/tests/integration/test_student_views.py) | 22 | `StudentListView` (search, exclude inactive, context), `StudentDetailView` (parents visible, 404), `StudentCreateView` (form + adult mode + success + full POST + error paths including invalid parent, existing-parent mode, create_sibling flag, email-task swallow), `search_students` FBV |
+| [`integration/test_student_views.py`](project/tests/integration/test_student_views.py) | 23 | `StudentListView` (search, exclude inactive, context), `StudentDetailView` (parents visible, 404), `StudentCreateView` (form + adult mode + success + full POST + error paths including invalid parent, existing-parent mode, create_sibling flag, email-task swallow), `search_students` JSON endpoint (results + short-query empty) |
 | [`integration/test_teacher_auth_flow.py`](project/tests/integration/test_teacher_auth_flow.py) | 21 | Login dispatcher branches (dev env-var vs `auth.User`-backed Teacher login), OAuth user creation/Teacher-linking, `_finalize_session_login` setting both `_auth_user_id` and `is_authenticated`, `SimpleAuthMiddleware` whitelist behaviour for non-admin Teachers (allowed routes, 403 JSON for `/api/*`, dashboard redirect with flash for HTML), template gating (sidebar swap, read-only management) |
 | [`integration/test_testing_tools.py`](project/tests/integration/test_testing_tools.py) | 20 | QA dashboard `/testing/` gated by `@qa_access_required` (via `override_settings`): dashboard renders + git failure handled, `api_seed_database` (success + reset + command error 500 + non-QA 404), `api_create_backlog_task` (all branches + email send/swallow), `api_update_backlog_task` (success + invalid status + 404), `api_toggle_error_email` (on + off + bad JSON) |
 | [`integration/test_management_views.py`](project/tests/integration/test_management_views.py) | 19 | `gestion_view` + `update_site_config` (all fields + bad JSON), `create_teacher` (success + duplicate + missing field + bad JSON), `create_group` (success + missing fields + duplicate + nonexistent teacher + bad JSON), `api_get_teachers`, `update_enrollment_modality` (success + invalid + no enrollment + student not found), `language_cheque_students` |
@@ -2218,17 +2237,17 @@ The testing dashboard and all its API endpoints are protected by three condition
 |---|---|---|
 | Environment is `testing` | `DJANGO_ENV=testing` | `settings.IS_TESTING_ENV` |
 | Debug is off | `DJANGO_DEBUG=False` | `settings.IS_TESTING_ENV` |
-| User matches QA username | `QA_TESTING_USERNAME` in `.env.testing` | `core/decorators.py` via session |
+| Request is a logged-in Teacher | linked `Teacher` on the session user | `core/decorators.py` (`_request_teacher`) |
 
 If any condition fails, the page returns **404 Not Found** (not 403) so the URL appears not to exist. The sidebar icon is also hidden — controlled by the `show_testing_tools` context variable injected by `core/context_processors.py`.
 
 This means:
 - In **development** (`DEBUG=True`): the page doesn't exist, no sidebar icon.
 - In **production** (`DJANGO_ENV=production`): the page doesn't exist, no sidebar icon.
-- In **testing** with a **non-QA user**: the page doesn't exist, no sidebar icon.
-- In **testing** with the **QA user** (`manitas`): full access, sidebar icon visible.
+- In **testing** with a **non-Teacher session**: the page doesn't exist, no sidebar icon.
+- In **testing** logged in as **any Teacher** (admin or not): full access, sidebar icon visible.
 
-The QA username is configured in `.env.testing` (never hardcoded) via `QA_TESTING_USERNAME`. To grant another user access, change the value in the env file.
+Access is granted to every seeded Teacher account (`TEACHER_SEED_*`) — no dedicated QA user is needed. Non-admin teachers reach it because `testing_tools` and the QA API endpoints are on the non-admin whitelist in `core/middleware.py`.
 
 **Running locally (for developers):**
 
@@ -2487,7 +2506,7 @@ make up                        # Start Docker (PostgreSQL + Redis + Django + Cel
 1. Work on `development` (or a short-lived branch off `development`)
 2. Make changes following the conventions below
 3. Run `make pc-run` — Ruff + mypy + bandit all pass, offers to auto-bump the patch version on success, and auto-stages `uv.lock` if regenerated
-4. Run `make test` — all 957 tests must pass (PostgreSQL via Docker, parallel, with coverage)
+4. Run `make test` — all 961 tests must pass (PostgreSQL via Docker, parallel, with coverage)
 5. `git commit` with a message like `v1.0.6 - Short description` (version comes first — conventions match every other commit in the project)
 6. `git push origin development`
 7. CI runs automatically on your push (see [CI/CD](#cicd--github-actions))

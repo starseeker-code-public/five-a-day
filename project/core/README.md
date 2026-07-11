@@ -42,7 +42,7 @@ Student, payment, management, and email app routes live in `students/urls.py`, `
 
 - **`SimpleAuthMiddleware`** (`middleware.py`) — two-layer access control. **Layer 1 (authentication)**: all URLs are protected except the public prefixes (`/login/`, `/health/`, `/static/`, `/media/`, `/auth/google/*`, `/password-reset/*`); unauthenticated requests are redirected to login. **Layer 2 (authorization)**: when the session user is a non-admin Teacher (`teacher.admin=False`), requests are restricted to the `NON_ADMIN_ALLOWED_URL_NAMES` whitelist — admin-only routes redirect to the dashboard with a flash message (or return 403 JSON for `/api/*` endpoints). Keep the whitelist in sync with `core/urls.py` and the per-app urls.
 - **`QAErrorEmailMiddleware`** (`middleware.py`) — in the QA environment, catches unhandled exceptions and emails them to `SUPPORT_EMAIL` with the full traceback. Toggleable via the `/testing/` dashboard.
-- **`qa_access_required`** (`decorators.py`) — reusable gate for `/testing/` views and endpoints. Returns 404 (not 403) unless `DJANGO_ENV=testing`, `DEBUG=False`, and the session user matches `QA_TESTING_USERNAME`.
+- **`qa_access_required`** (`decorators.py`) — reusable gate for `/testing/` views and endpoints. Returns 404 (not 403) unless `DJANGO_ENV=testing`, `DEBUG=False`, and the request is made by a logged-in Teacher (admin or not; resolved via `_request_teacher`). `testing_tools` + the QA API endpoints are on the non-admin whitelist so non-admin teachers can reach them too.
 
 ## Context Processor
 

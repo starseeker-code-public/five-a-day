@@ -164,6 +164,11 @@ def assign_from_waiting_list(request, student_id):
                 concept=concept,
             )
 
+            # Schedule the recurring academic-year fees (idempotent).
+            from billing.services.payment_service import PaymentService
+
+            PaymentService.schedule_academic_year_payments(enrollment, default_parent)
+
             HistoryLog.log(
                 "waiting_list_assigned",
                 f"Asignado desde lista de espera: {student.full_name} → {target_group.group_name}",

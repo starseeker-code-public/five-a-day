@@ -11,7 +11,9 @@
     let currentPage = 1;
 
     function getCsrf() {
-        return document.cookie.split(';').map(c=>c.trim()).find(c=>c.startsWith('csrftoken='))?.split('=')[1]||'';
+        return document.querySelector('[name=csrfmiddlewaretoken]')?.value
+            || document.cookie.split(';').map(c=>c.trim()).find(c=>c.startsWith('csrftoken='))?.split('=')[1]
+            || '';
     }
 
     // Get all data rows (cached once)
@@ -429,8 +431,6 @@
     document.addEventListener('click', function(e) {
         if (!studentSearch.contains(e.target) && !studentSuggestions.contains(e.target))
             studentSuggestions.classList.add('hidden');
-        if (!parentSearch.contains(e.target) && !parentSuggestions.contains(e.target))
-            parentSuggestions.classList.add('hidden');
     });
 
     // Form validation

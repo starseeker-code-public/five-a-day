@@ -142,6 +142,14 @@ NON_ADMIN_ALLOWED_URL_NAMES = frozenset(
         "complete_todo",
         "history_list",
         "submit_support_ticket",
+        # QA testing tools (testing env only; view itself is @qa_access_required,
+        # and the whole feature is invisible outside DJANGO_ENV=testing). Listed
+        # here so non-admin Teachers can reach the QA dashboard + its API too.
+        "testing_tools",
+        "api_seed_database",
+        "api_create_backlog_task",
+        "api_update_backlog_task",
+        "api_toggle_error_email",
         # Error test pages (harmless)
         "test_error_400",
         "test_error_403",

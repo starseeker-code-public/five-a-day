@@ -5,7 +5,7 @@ from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.db.models import Q
 from django.http import HttpResponseRedirect, JsonResponse
-from django.shortcuts import get_object_or_404, redirect, render
+from django.shortcuts import get_object_or_404, redirect
 from django.urls import reverse, reverse_lazy
 from django.views.generic import CreateView, DetailView, ListView, UpdateView
 
@@ -179,6 +179,13 @@ class StudentCreateView(CreateView):
                     due_date=due_date,
                     concept=concept,
                 )
+
+                # Schedule the recurring fees for the rest of the academic year
+                # (monthly Sep–Jun or quarterly Oct/Jan/Apr), each pending and
+                # due at period end. Idempotent vs. the generate_payments cron.
+                from billing.services.payment_service import PaymentService
+
+                PaymentService.schedule_academic_year_payments(enrollment, parent)
 
                 HistoryLog.log(
                     "student_enrolled",
@@ -420,20 +427,25 @@ def get_ff_student_ids(friday_date):
 
 
 def search_students(request):
-    # Get all students with related data
-    students = Student.objects.select_related("group", "group__teacher").prefetch_related("parents").filter(active=True)
+    """AJAX endpoint to search active students by name (JSON).
 
-    # Get all groups and parents for the form
-    groups = Group.objects.filter(active=True).select_related("teacher")
-    parents = Parent.objects.all()
+    Mirrors ``search_parents``: returns ``{"results": [{id, full_name, school}]}``
+    so the create-payment student autocomplete can populate suggestions (and,
+    on selection, auto-fetch the student's parent via ``validate_student_parent``).
+    """
+    query = request.GET.get("q", "").strip()
 
-    context = {
-        "students": students,
-        "groups": groups,
-        "parents": parents,
-    }
+    if len(query) < 2:
+        return JsonResponse({"results": []})
 
-    return render(request, "students.html", context)
+    students = (
+        Student.objects.filter(active=True)
+        .filter(Q(first_name__icontains=query) | Q(last_name__icontains=query))
+        .select_related("group")[:10]
+    )
+
+    results = [{"id": s.id, "full_name": s.full_name, "school": s.school or ""} for s in students]
+    return JsonResponse({"results": results})
 
 
 def handle_student_form(request):

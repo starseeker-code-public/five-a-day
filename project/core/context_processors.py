@@ -33,24 +33,19 @@ def today_notifications(request):
     except Exception:
         history_count = 0
 
-    # QA testing tools visibility
-    show_testing_tools = (
-        settings.IS_TESTING_ENV
-        and settings.QA_TESTING_USERNAME
-        and hasattr(request, "session")
-        and request.session.get("username") == settings.QA_TESTING_USERNAME
-    )
-
     # Teacher-role flags for template-level gating of admin-only UI.
     # Anyone who isn't a linked non-admin teacher is treated as admin
     # (dev basic-auth, OAuth, and admin Teachers all count as admin).
     user = getattr(request, "user", None)
-    is_non_admin_teacher = False
+    teacher = None
     if user is not None and getattr(user, "is_authenticated", False):
         teacher = getattr(user, "teacher", None)
-        if teacher is not None and not teacher.admin:
-            is_non_admin_teacher = True
+    is_non_admin_teacher = teacher is not None and not teacher.admin
     is_admin_user = not is_non_admin_teacher
+
+    # QA testing tools visibility — any logged-in Teacher (admin or not) in the
+    # testing environment. Gated on a real Teacher account, not a QA username.
+    show_testing_tools = settings.IS_TESTING_ENV and teacher is not None
 
     return {
         "notifications_today_todos": todos,

@@ -38,6 +38,7 @@ The `billing` app owns all financial logic: pricing configuration, enrollment pl
 - `calculate_monthly_amount(enrollment, config, month)` — monthly payment with discounts + June bonus (delegates to `_get_base_monthly_fee`)
 - `calculate_quarterly_amount(enrollment, config, quarter_due_month)` — 3 months minus quarterly discount (delegates to `_get_base_monthly_fee`)
 - `complete_payment(payment_id)` — marks payment completed with today's date (within `transaction.atomic()`)
+- `schedule_academic_year_payments(enrollment, parent=None)` — on enrollment, creates all pending periodic payments for the academic year: monthly (Sep–Jun) or quarterly (Oct/Jan/Apr), each due at period end, starting at the enrollment month. Idempotent (matches on payment_type + due-date month/year) so the periodic `generate_payments` command never double-creates. Called by `StudentCreateView` and waiting-list assignment. Returns the count created.
 - `should_generate_monthly/quarterly(month)` — academic calendar validation
 - `get_payment_statistics(month, year)` — aggregate pending/completed counts and totals
 

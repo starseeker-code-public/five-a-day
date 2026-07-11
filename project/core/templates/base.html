@@ -69,10 +69,23 @@
     }
     </script>
 
+    <!-- Theme (light/dark): apply the saved class before first paint to avoid
+         a flash of the wrong theme. Light is the default when nothing is saved. -->
+    <script>
+    (function () {
+        try {
+            if (localStorage.getItem('theme') === 'dark') {
+                document.documentElement.classList.add('dark');
+            }
+        } catch (e) { /* localStorage unavailable → default light */ }
+    })();
+    </script>
+
     <!-- Tailwind CSS (CDN) -->
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
     tailwind.config = {
+        darkMode: 'class',
         theme: {
             extend: {
                 colors: {
@@ -95,6 +108,9 @@
 
     <!-- App custom styles (sidebar, icons) -->
     <link rel="stylesheet" href="{% static 'css/app.css' %}">
+
+    <!-- Dark theme overrides (inert unless html.dark is set) -->
+    <link rel="stylesheet" href="{% static 'css/theme.css' %}">
 
     {% block extra_css %}{% endblock %}
 </head>
@@ -276,6 +292,12 @@
                             {% endif %}
                         </div>
                     </div>
+                    <!-- Theme toggle (light / dark) -->
+                    <button id="theme-toggle-btn" type="button" title="Cambiar tema claro/oscuro" aria-label="Cambiar tema claro/oscuro"
+                            class="p-3 rounded-full text-neutral-800 bg-primary-100 transition-all duration-200 hover:bg-primary-200">
+                        <span class="material-symbols-outlined theme-icon-light">dark_mode</span>
+                        <span class="material-symbols-outlined theme-icon-dark">light_mode</span>
+                    </button>
                     {% block header_actions %}
                     <a href="{% url 'parent_create' %}" class="header-action-btn bg-primary-500 hover:bg-primary-600 text-white px-6 py-3 rounded-md flex items-center gap-2 transition-all duration-200 transform hover:scale-105 hover:shadow-md text-base font-semibold leading-none no-underline">
                         <span class="material-symbols-outlined text-xl">school</span> Nuevo Estudiante
@@ -389,6 +411,7 @@
     <!-- Global scripts -->
     <script src="{% static 'js/support.js' %}"></script>
     <script src="{% static 'js/base.js' %}"></script>
+    <script src="{% static 'js/theme.js' %}"></script>
 
     <!-- PWA (v1.12) — register the service worker after the page loads so the
          registration never blocks the first paint. Silently degrades on browsers

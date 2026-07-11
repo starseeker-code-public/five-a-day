@@ -20,7 +20,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # NOTA: Usa `make version x.y.z` para actualizar ambos sitios a la vez:
 #   - pyproject.toml (campo version)
 #   - README.md (badge y tabla de versiones — gestionado por la skill update-readme)
-APP_VERSION = os.getenv("APP_VERSION", "1.13.3")
+APP_VERSION = os.getenv("APP_VERSION", "1.13.4")
 
 # ============================================================================
 # SECURITY SETTINGS
@@ -70,9 +70,9 @@ if not DEBUG:
 # seeding only run for testing/production) and by the QA testing dashboard.
 ENVIRONMENT = os.getenv("DJANGO_ENV", "development")
 
-# QA testing tools — only enabled when DJANGO_ENV=testing and a QA user is configured
+# QA testing tools — only enabled when DJANGO_ENV=testing (DEBUG off). The
+# dashboard is then visible to any logged-in Teacher (see core.decorators).
 IS_TESTING_ENV = ENVIRONMENT == "testing" and not DEBUG
-QA_TESTING_USERNAME = os.getenv("QA_TESTING_USERNAME", "")
 
 # ============================================================================
 # SESSION CONFIGURATION
