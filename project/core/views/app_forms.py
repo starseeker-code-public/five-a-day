@@ -14,7 +14,6 @@ from django.utils.html import strip_tags
 
 from comms.services.email_functions import (
     send_all_tax_certificates,
-    send_fun_friday_email,
     send_monthly_report,
     send_payment_reminder_email,
     send_quarterly_receipt_email,
@@ -188,36 +187,47 @@ Esta semana haremos manualidades creativas con materiales reciclados.
             messages.warning(request, "⚠️ No hay padres con email para enviar")
             return redirect("home")
 
-        success_count = 0
-        error_count = 0
+        # Don't send now — schedule the announcement for 14:30 on the MONDAY of
+        # the target Friday's week (e.g. a Friday on the 17th → Monday the 13th
+        # at 14:30). If that moment has already passed, Celery sends it ASAP.
+        import datetime as _dt
 
-        for email in parent_emails:
-            try:
-                result = send_fun_friday_email(
-                    recipients=email,
-                    day_name=day_name,
-                    day_number=event_date.day,
-                    month=month_name,
-                    start_time=start_time,
-                    end_time=end_time,
-                    activity_description=activity_description,
-                    minimum_age=min_age_int,
-                    maximum_age=max_age_int,
-                    meeting_point=meeting_point if meeting_point else None,
-                )
-                if result:
-                    success_count += 1
-                else:
-                    error_count += 1
-            except Exception:
-                error_count += 1
+        from django.utils import timezone as _tz
 
-        if success_count > 0:
-            HistoryLog.log("email_sent", f"Fun Friday: {success_count} email(s) enviados", icon="mail")
-            messages.success(request, f"✅ Fun Friday enviado a {success_count} padre(s)")
-        if error_count > 0:
-            messages.warning(request, f"⚠️ {error_count} email(s) no pudieron enviarse")
+        from comms.tasks import send_fun_friday_emails_task
 
+        monday = event_date - timedelta(days=event_date.weekday())
+        send_at = _dt.datetime.combine(monday, _dt.time(14, 30))
+        if _tz.is_naive(send_at):
+            send_at = _tz.make_aware(send_at, _tz.get_current_timezone())
+
+        send_fun_friday_emails_task.apply_async(
+            kwargs={
+                "recipients": parent_emails,
+                "day_name": day_name,
+                "day_number": event_date.day,
+                "month": month_name,
+                "start_time": start_time,
+                "end_time": end_time,
+                "activity_description": activity_description,
+                "minimum_age": min_age_int,
+                "maximum_age": max_age_int,
+                "meeting_point": meeting_point if meeting_point else None,
+            },
+            eta=send_at,
+        )
+
+        HistoryLog.log(
+            "email_scheduled",
+            f"Fun Friday ({day_name} {event_date.day} {month_name}): "
+            f"{len(parent_emails)} email(s) programados para el {monday.strftime('%d/%m')} a las 14:30",
+            icon="schedule_send",
+        )
+        messages.success(
+            request,
+            f"✅ Fun Friday programado: {len(parent_emails)} email(s) se enviarán "
+            f"el lunes {monday.strftime('%d/%m')} a las 14:30.",
+        )
         return redirect("home")
 
     # GET - Mostrar formulario con email preview

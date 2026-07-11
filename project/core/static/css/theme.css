@@ -1,122 +1,17 @@
 /* ==========================================================================
- * theme.css — Dark theme for Five a Day eVolution
+ * theme.css — theme hooks
  * --------------------------------------------------------------------------
- * The app is styled with hard-coded Tailwind (CDN) utility classes and no
- * `dark:` variants, so dark mode is delivered here as a set of overrides that
- * activate only under `html.dark` (toggled by theme.js, persisted in
- * localStorage). The light theme is Tailwind's defaults untouched — this file
- * is inert unless the `dark` class is present.
+ * The app currently uses ONE theme (the original violet palette) for both
+ * light and dark. The light/dark toggle infrastructure is kept in place
+ * (button in the header, `theme.js`, `darkMode: 'class'`, the no-flash script
+ * in base.html) so a dedicated dark theme can be added here later WITHOUT
+ * touching templates — it will live as `html.dark .<utility>` overrides.
  *
- * Palette is a violet-tinted dark, in tune with the light theme's `primary`
- * (violet) scale: near-black violet surfaces, light lavender text, and the
- * same primary-500/600 violet for interactive accents.
+ * Until then this file only swaps the toggle icon; `html.dark` makes NO visual
+ * change, so dark mode looks identical to light (the beloved violet theme).
  * ======================================================================== */
 
-html.dark {
-    color-scheme: dark;
-
-    /* Surface + ink scale (referenced by the rules below) */
-    --fad-bg:        #141220;  /* page background            */
-    --fad-surface:   #1e1a2e;  /* cards / white panels        */
-    --fad-surface-2: #272235;  /* hover / raised surfaces     */
-    --fad-sidebar:   #1c1730;  /* sidebar (bg-primary-100)    */
-    --fad-accent-bg: #2a2340;  /* icon-button / primary-50/100 chips */
-    --fad-active:    #382d59;  /* active nav (bg-primary-200) */
-
-    --fad-ink:       #ece9f6;  /* strongest text (neutral-800/900) */
-    --fad-ink-2:     #d5d0e6;  /* neutral-700                 */
-    --fad-muted:     #b0aac9;  /* neutral-600                 */
-    --fad-muted-2:   #918bab;  /* neutral-500                 */
-    --fad-faint:     #726c8a;  /* neutral-400/300             */
-
-    --fad-violet:    #b9a5f5;  /* readable violet on dark (primary-600/700 text) */
-    --fad-border:    #332c48;  /* neutral borders             */
-    --fad-border-2:  #3f3559;  /* primary borders             */
-}
-
-/* ── Page + structural backgrounds ─────────────────────────────────────── */
-html.dark body,
-html.dark .bg-neutral-50,
-html.dark .bg-neutral-100 { background-color: var(--fad-bg); }
-
-html.dark .bg-white { background-color: var(--fad-surface); }
-html.dark .bg-neutral-200 { background-color: var(--fad-surface-2); }
-
-html.dark .bg-primary-100 { background-color: var(--fad-accent-bg); }
-html.dark .bg-primary-50  { background-color: var(--fad-accent-bg); }
-html.dark .bg-primary-200 { background-color: var(--fad-active); }
-
-/* Sidebar keeps its own slightly distinct violet-dark surface */
-html.dark #main-sidebar { background-color: var(--fad-sidebar); }
-
-/* ── Text ──────────────────────────────────────────────────────────────── */
-html.dark .text-neutral-900,
-html.dark .text-neutral-800 { color: var(--fad-ink); }
-html.dark .text-neutral-700 { color: var(--fad-ink-2); }
-html.dark .text-neutral-600 { color: var(--fad-muted); }
-html.dark .text-neutral-500 { color: var(--fad-muted-2); }
-html.dark .text-neutral-400,
-html.dark .text-neutral-300 { color: var(--fad-faint); }
-
-/* The light theme's `primary` is PINK; the dark theme re-skins every primary
- * utility back to VIOLET (in tune with the classic light look) so no pink
- * leaks into dark mode. Text/link violet is lightened for contrast on dark. */
-html.dark .text-primary-900,
-html.dark .text-primary-800,
-html.dark .text-primary-700,
-html.dark .text-primary-600,
-html.dark .text-primary-500,
-html.dark .text-primary-400,
-html.dark .text-primary-300 { color: var(--fad-violet); }
-
-/* ── Borders + dividers ────────────────────────────────────────────────── */
-html.dark .border-neutral-50,
-html.dark .border-neutral-100,
-html.dark .border-neutral-200,
-html.dark .border-neutral-300 { border-color: var(--fad-border); }
-html.dark .border-primary-100,
-html.dark .border-primary-200,
-html.dark .border-primary-300 { border-color: var(--fad-border-2); }
-/* Vivid violet borders (focus/emphasis) — mid/high primary shades */
-html.dark .border-primary-400,
-html.dark .border-primary-500,
-html.dark .border-primary-600 { border-color: #7c3aed; }
-html.dark .divide-neutral-100 > :not([hidden]) ~ :not([hidden]) { border-color: var(--fad-border); }
-
-/* ── Hover states (need to beat Tailwind's own hover utilities) ────────── */
-html.dark .hover\:bg-neutral-50:hover,
-html.dark .hover\:bg-neutral-100:hover { background-color: var(--fad-surface-2); }
-html.dark .hover\:bg-primary-100:hover { background-color: var(--fad-active); }
-html.dark .hover\:text-primary-700:hover { color: var(--fad-violet); }
-
-/* ── Form controls ─────────────────────────────────────────────────────── */
-html.dark input,
-html.dark textarea,
-html.dark select {
-    background-color: var(--fad-surface-2);
-    color: var(--fad-ink);
-    border-color: var(--fad-border);
-}
-html.dark input::placeholder,
-html.dark textarea::placeholder { color: var(--fad-faint); }
-html.dark input[type="checkbox"],
-html.dark input[type="radio"] { accent-color: #8b5cf6; }
-
-/* Keep solid violet action buttons vivid (don't let the bg-* rules dull them) */
-html.dark .bg-primary-400 { background-color: #8b5cf6; }
-html.dark .bg-primary-500 { background-color: #8b5cf6; }
-html.dark .bg-primary-600 { background-color: #7c3aed; }
-html.dark .hover\:bg-primary-600:hover { background-color: #6d28d9; }
-html.dark .bg-primary-500 .material-symbols-outlined,
-html.dark .header-action-btn { color: #fff; }
-
-/* Focus rings + focus borders → violet (Tailwind ring uses --tw-ring-color) */
-html.dark .ring-primary-400,
-html.dark .ring-primary-500,
-html.dark .focus\:ring-primary-500:focus { --tw-ring-color: #8b5cf6; }
-html.dark .focus\:border-primary-500:focus { border-color: #7c3aed; }
-
-/* ── Theme-toggle icon swap (moon in light, sun in dark) ───────────────── */
+/* Theme-toggle icon swap (moon shown in light, sun shown in dark) */
 .theme-icon-dark { display: none; }
 html.dark .theme-icon-light { display: none; }
 html.dark .theme-icon-dark { display: inline; }

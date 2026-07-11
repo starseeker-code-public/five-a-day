@@ -20,7 +20,7 @@ Built to centralize student records, automate billing cycles, and streamline par
 ### Project Status
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v1.13.5-brightgreen?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-v1.13.6-brightgreen?style=flat-square" alt="Version">
   &nbsp;|&nbsp;
   <a href="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml?query=branch%3Amain"><img src="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml/badge.svg?branch=main&style=flat-square" alt="CI main"></a>
   &nbsp;|&nbsp;
@@ -41,9 +41,9 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 | Version | Date | Description |
 |---------|------|-------------|
-| **v1.13.5** | 2026-07-11 | Restore original pink light theme (dark stays violet), adult-payment fix |
+| **v1.13.6** | 2026-07-11 | Single violet theme (light=dark), Fun Friday email scheduling |
+| v1.13.5 | 2026-07-11 | Adult-payment fix, welcome-email schedule (theme experiment) |
 | v1.13.4 | 2026-07-11 | Dark theme, CSRF/payments/Fun-Friday/todo fixes, teacher-gated QA |
-| v1.13.3 | 2026-07-11 | pip-audit CVE fixes (msgpack, Django) + dependabot action bumps |
 
 ---
 
@@ -143,8 +143,21 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 ## Version History & Roadmap
 
-<details id="v1135" open>
-<summary><strong>v1.13.5 — Pink light theme + adult payments + welcome email (current)</strong></summary>
+<details id="v1136" open>
+<summary><strong>v1.13.6 — Single violet theme + Fun Friday email scheduling (current)</strong></summary>
+
+**Theme**
+
+- Reverted the v1.13.5 pink experiment: the app uses the **original violet palette** again (primary-500 `#8b5cf6`), and it is now the **same for both light and dark** (the beloved classic look). The light/dark toggle stays in the header, but `theme.css` currently only swaps the toggle icon — `html.dark` makes no visual change. A dedicated dark theme will be added later as `html.dark` overrides in `theme.css`.
+
+**Fun Friday**
+
+- The Fun Friday announcement is no longer sent immediately. It's now **scheduled** (Celery `apply_async(eta=…)`) for **14:30 on the Monday of the target Friday's week** — e.g. a Fun Friday on the 17th queues the emails for Monday the 13th at 14:30. New `send_fun_friday_emails_task` in `comms/tasks.py`; the QA "test send" path still sends immediately.
+
+</details>
+
+<details id="v1135">
+<summary><strong>v1.13.5 — Adult payments + welcome email (theme experiment)</strong></summary>
 
 **Theme**
 

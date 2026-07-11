@@ -597,3 +597,47 @@ def send_enrollment_confirmation_task(self, enrollment_id: int, attachments_path
     except Enrollment.DoesNotExist:
         logger.error("Enrollment not found: id=%d", enrollment_id)
         return {"status": "error", "message": "Enrollment not found"}
+
+
+@shared_task(name="comms.tasks.send_fun_friday_emails_task", bind=True)
+def send_fun_friday_emails_task(
+    self,
+    recipients: list,
+    day_name: str,
+    day_number: int,
+    month: str,
+    start_time: str,
+    end_time: str,
+    activity_description: str,
+    minimum_age=None,
+    maximum_age=None,
+    meeting_point=None,
+):
+    """Send the Fun Friday announcement to every recipient.
+
+    Scheduled (via ``apply_async(eta=...)``) for 14:30 on the Monday of the
+    target Friday's week — not sent immediately. See ``fun_friday_form``.
+    """
+    from comms.services.email_functions import send_fun_friday_email
+
+    sent = 0
+    for email in recipients:
+        try:
+            if send_fun_friday_email(
+                recipients=email,
+                day_name=day_name,
+                day_number=day_number,
+                month=month,
+                start_time=start_time,
+                end_time=end_time,
+                activity_description=activity_description,
+                minimum_age=minimum_age,
+                maximum_age=maximum_age,
+                meeting_point=meeting_point,
+            ):
+                sent += 1
+        except Exception:  # noqa: BLE001 — one bad recipient must not abort the batch
+            logger.exception("Fun Friday email failed for %s", email)
+
+    logger.info("Fun Friday emails sent: %d/%d", sent, len(recipients))
+    return {"status": "success", "sent": sent, "total": len(recipients)}
