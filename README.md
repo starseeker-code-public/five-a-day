@@ -20,7 +20,7 @@ Built to centralize student records, automate billing cycles, and streamline par
 ### Project Status
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v1.13.6-brightgreen?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-v1.13.7-brightgreen?style=flat-square" alt="Version">
   &nbsp;|&nbsp;
   <a href="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml?query=branch%3Amain"><img src="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml/badge.svg?branch=main&style=flat-square" alt="CI main"></a>
   &nbsp;|&nbsp;
@@ -41,9 +41,9 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 | Version | Date | Description |
 |---------|------|-------------|
-| **v1.13.6** | 2026-07-11 | Single violet theme (light=dark), Fun Friday email scheduling |
+| **v1.13.7** | 2026-07-11 | Service worker network-first (fixes stale CSS/theme after navigation) |
+| v1.13.6 | 2026-07-11 | Single violet theme (light=dark), Fun Friday email scheduling |
 | v1.13.5 | 2026-07-11 | Adult-payment fix, welcome-email schedule (theme experiment) |
-| v1.13.4 | 2026-07-11 | Dark theme, CSRF/payments/Fun-Friday/todo fixes, teacher-gated QA |
 
 ---
 
@@ -143,8 +143,17 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 ## Version History & Roadmap
 
-<details id="v1136" open>
-<summary><strong>v1.13.6 — Single violet theme + Fun Friday email scheduling (current)</strong></summary>
+<details id="v1137" open>
+<summary><strong>v1.13.7 — Service worker network-first (stale-style fix) (current)</strong></summary>
+
+**PWA / caching bug fix**
+
+- The service worker cached `/static/` assets **cache-first**, so after the first load it served **stale CSS/JS** on normal navigation — the theme looked wrong until a hard refresh, then broke again when changing views. Switched the SW to **network-first** for cacheable assets (static, media, manifest, login): the freshest CSS/JS/theme always wins when online, with the cache kept only as an offline fallback. Also set `sw.js` to `no-cache` so a new worker is picked up on the next navigation. Bumping the app version rotates `CACHE_NAME`, purging the old cache on activate.
+
+</details>
+
+<details id="v1136">
+<summary><strong>v1.13.6 — Single violet theme + Fun Friday email scheduling</strong></summary>
 
 **Theme**
 
