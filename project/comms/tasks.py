@@ -60,12 +60,15 @@ def send_welcome_email_task(self, parent_id: int, student_id: int, enrollment_id
             logger.warning("No email address for welcome email (student_id=%d)", student_id)
             return {"status": "skipped", "message": "No email address"}
 
+        from core.schedule_utils import get_group_schedule_lines
+
         context = {
             "parent_name": recipient_name,
             "student_name": student.full_name,
             "group_name": student.group.group_name if student.group else None,
             "enrollment_type": enrollment.enrollment_type.display_name if enrollment.enrollment_type else None,
             "schedule_type": enrollment.get_schedule_type_display(),
+            "schedule_lines": get_group_schedule_lines(student.group),
             "start_date": enrollment.enrollment_date.strftime("%d/%m/%Y") if enrollment.enrollment_date else None,
         }
 

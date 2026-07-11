@@ -9,7 +9,7 @@
     <!-- SEO / descriptive metadata -->
     <meta name="description" content="{% block meta_description %}Five a Day eVolution — sistema de gestión académica de Five a Day English Academy (Albacete): estudiantes, matrículas, pagos, horarios y comunicaciones.{% endblock %}">
     <meta name="author" content="Five a Day English Academy">
-    <meta name="theme-color" content="#6d28d9">
+    <meta name="theme-color" content="#c30d53">
 
     <!-- Favicon & app icons -->
     <link rel="icon" type="image/x-icon" href="{% static 'favicon.ico' %}">
@@ -18,7 +18,7 @@
 
     <!-- PWA (v1.12) -->
     <link rel="manifest" href="{% url 'web_manifest' %}">
-    <meta name="theme-color" content="#6d28d9">
+    <meta name="theme-color" content="#c30d53">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="default">
@@ -89,10 +89,13 @@
         theme: {
             extend: {
                 colors: {
+                    // Light theme = the original rose/pink palette (primary-500
+                    // #f93a76). Dark theme re-skins `primary` to violet via
+                    // theme.css (html.dark). See docs/CLAUDE.md theme gotcha.
                     primary: {
-                        50: '#f5f3ff', 100: '#ede9fe', 200: '#ddd6fe', 300: '#c4b5fd',
-                        400: '#a78bfa', 500: '#8b5cf6', 600: '#7c3aed', 700: '#6d28d9',
-                        800: '#5b21b6', 900: '#4c1d95',
+                        50: '#fdf2f7', 100: '#fce7f1', 200: '#fbcfe1', 300: '#f7a8c4',
+                        400: '#f56d9b', 500: '#f93a76', 600: '#e01e5f', 700: '#c30d53',
+                        800: '#9d0b43', 900: '#7a0c37',
                     }
                 },
                 fontFamily: {

@@ -58,12 +58,16 @@ html.dark .text-neutral-500 { color: var(--fad-muted-2); }
 html.dark .text-neutral-400,
 html.dark .text-neutral-300 { color: var(--fad-faint); }
 
-/* Violet labels/links need lightening for contrast on dark */
+/* The light theme's `primary` is PINK; the dark theme re-skins every primary
+ * utility back to VIOLET (in tune with the classic light look) so no pink
+ * leaks into dark mode. Text/link violet is lightened for contrast on dark. */
 html.dark .text-primary-900,
 html.dark .text-primary-800,
 html.dark .text-primary-700,
 html.dark .text-primary-600,
-html.dark .text-primary-500 { color: var(--fad-violet); }
+html.dark .text-primary-500,
+html.dark .text-primary-400,
+html.dark .text-primary-300 { color: var(--fad-violet); }
 
 /* ── Borders + dividers ────────────────────────────────────────────────── */
 html.dark .border-neutral-50,
@@ -73,6 +77,10 @@ html.dark .border-neutral-300 { border-color: var(--fad-border); }
 html.dark .border-primary-100,
 html.dark .border-primary-200,
 html.dark .border-primary-300 { border-color: var(--fad-border-2); }
+/* Vivid violet borders (focus/emphasis) — mid/high primary shades */
+html.dark .border-primary-400,
+html.dark .border-primary-500,
+html.dark .border-primary-600 { border-color: #7c3aed; }
 html.dark .divide-neutral-100 > :not([hidden]) ~ :not([hidden]) { border-color: var(--fad-border); }
 
 /* ── Hover states (need to beat Tailwind's own hover utilities) ────────── */
@@ -95,11 +103,18 @@ html.dark input[type="checkbox"],
 html.dark input[type="radio"] { accent-color: #8b5cf6; }
 
 /* Keep solid violet action buttons vivid (don't let the bg-* rules dull them) */
+html.dark .bg-primary-400 { background-color: #8b5cf6; }
 html.dark .bg-primary-500 { background-color: #8b5cf6; }
 html.dark .bg-primary-600 { background-color: #7c3aed; }
 html.dark .hover\:bg-primary-600:hover { background-color: #6d28d9; }
 html.dark .bg-primary-500 .material-symbols-outlined,
 html.dark .header-action-btn { color: #fff; }
+
+/* Focus rings + focus borders → violet (Tailwind ring uses --tw-ring-color) */
+html.dark .ring-primary-400,
+html.dark .ring-primary-500,
+html.dark .focus\:ring-primary-500:focus { --tw-ring-color: #8b5cf6; }
+html.dark .focus\:border-primary-500:focus { border-color: #7c3aed; }
 
 /* ── Theme-toggle icon swap (moon in light, sun in dark) ───────────────── */
 .theme-icon-dark { display: none; }

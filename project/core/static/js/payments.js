@@ -380,10 +380,13 @@
             if (data.parents && data.parents.length > 0) {
                 const p = data.parents[0];
                 selectedParent = { id: p.id, name: p.full_name };
+                if (selectedStudent) selectedStudent.noParent = false;
                 document.getElementById('parent_id').value = p.id;
                 if (parentDisplay) parentDisplay.value = p.full_name;
             } else {
+                // Adult students have no parent/guardian — this is valid.
                 selectedParent = null;
+                if (selectedStudent) selectedStudent.noParent = true;
                 document.getElementById('parent_id').value = '';
                 if (parentDisplay) parentDisplay.value = 'Sin padre/tutor (estudiante adulto)';
             }
@@ -435,7 +438,9 @@
 
     // Form validation
     form.addEventListener('submit', (e) => {
-        if (!selectedStudent || !selectedParent) {
+        // A student is always required; a parent is required EXCEPT for adult
+        // students, who have no parent/guardian (selectedStudent.noParent).
+        if (!selectedStudent || (!selectedParent && !selectedStudent.noParent)) {
             e.preventDefault();
             validationMessage.classList.remove('hidden');
             validationMessage.style.color = '#dc2626';

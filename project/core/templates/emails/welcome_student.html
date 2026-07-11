@@ -51,7 +51,7 @@
                     <strong>Horario:</strong>
                 </td>
                 <td style="padding: 8px 0; border-bottom: 1px solid #C7D2FE; text-align: right;">
-                    {{ schedule_type|default:"Por confirmar" }}
+                    {% if schedule_lines %}{% for line in schedule_lines %}{{ line }}{% if not forloop.last %}<br>{% endif %}{% endfor %}{% else %}{{ schedule_type|default:"Por confirmar" }}{% endif %}
                 </td>
             </tr>
             <tr>
@@ -66,8 +66,9 @@
     </div>
     
     <p style="font-size: 16px; color: #6B7280; margin-bottom: 20px;">
-        Estamos emocionados de tener a {{ student_name }} en nuestra familia Five a Day. 
-        Nos esforzamos por crear un ambiente de aprendizaje divertido y enriquecedor.
+        Nos llena de ilusión que forméis parte de nuestra comunidad y estamos encantadas de poder
+        contribuir satisfactoriamente al proceso de aprendizaje del inglés. Estamos en contacto.
+        Vuestro feedback es fundamental para seguir creciendo como academia.
     </p>
     
     <div style="background-color: #F0FDF4; border-left: 4px solid #22C55E; padding: 15px; margin: 20px 0; text-align: left;">

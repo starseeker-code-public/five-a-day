@@ -20,7 +20,7 @@ Built to centralize student records, automate billing cycles, and streamline par
 ### Project Status
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v1.13.4-brightgreen?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-v1.13.5-brightgreen?style=flat-square" alt="Version">
   &nbsp;|&nbsp;
   <a href="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml?query=branch%3Amain"><img src="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml/badge.svg?branch=main&style=flat-square" alt="CI main"></a>
   &nbsp;|&nbsp;
@@ -41,9 +41,9 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 | Version | Date | Description |
 |---------|------|-------------|
-| **v1.13.4** | 2026-07-11 | Dark theme, CSRF/payments/Fun-Friday/todo fixes, teacher-gated QA |
+| **v1.13.5** | 2026-07-11 | Restore original pink light theme (dark stays violet), adult-payment fix |
+| v1.13.4 | 2026-07-11 | Dark theme, CSRF/payments/Fun-Friday/todo fixes, teacher-gated QA |
 | v1.13.3 | 2026-07-11 | pip-audit CVE fixes (msgpack, Django) + dependabot action bumps |
-| v1.13.2 | 2026-07-11 | Fix vacation-closure email wrong end month across month boundaries |
 
 ---
 
@@ -143,8 +143,26 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 ## Version History & Roadmap
 
-<details id="v1134" open>
-<summary><strong>v1.13.4 — Dark theme + testing-stack bug sweep (current)</strong></summary>
+<details id="v1135" open>
+<summary><strong>v1.13.5 — Pink light theme + adult payments + welcome email (current)</strong></summary>
+
+**Theme**
+
+- Restored the academy's original **rose/pink** palette (primary-500 `#f93a76`) as the **light** theme (the default look before the switch to violet). The **dark** theme keeps the violet look: `theme.css` fully re-skins every `primary` utility to violet under `html.dark`, so no pink leaks into dark mode. `theme-color` meta updated to the pink.
+
+**Payments**
+
+- Adult students have no parent/guardian, which is valid. `create_payment` now requires a parent only for non-adult students and creates the payment with `parent=None` for adults; the create-payment JS mirrors this (no parent requirement in the submit guard for adults).
+
+**Welcome email**
+
+- The enrolment email now shows the student's **exact class schedule** derived from their group's slots (e.g. "Viernes de 16:10 a 17:30"), via the new shared `core/schedule_utils.py` (single source of truth for the row/day → time mapping, also used by the schedule view).
+- Reworded the welcome message to the academy's new copy.
+
+</details>
+
+<details id="v1134">
+<summary><strong>v1.13.4 — Dark theme + testing-stack bug sweep</strong></summary>
 
 **Theme (light / dark)**
 

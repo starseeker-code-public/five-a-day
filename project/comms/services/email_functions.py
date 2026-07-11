@@ -83,6 +83,7 @@ def send_welcome_email(
     enrollment_type: str = None,
     schedule_type: str = None,
     start_date: str = None,
+    schedule_lines: list | None = None,
 ) -> bool:
     """
     Envia email de bienvenida cuando se matricula un nuevo estudiante.
@@ -109,6 +110,7 @@ def send_welcome_email(
             "group_name": group_name,
             "enrollment_type": enrollment_type,
             "schedule_type": schedule_type,
+            "schedule_lines": schedule_lines or [],
             "start_date": start_date,
         },
         fail_silently=True,
