@@ -14,12 +14,37 @@
 {% endblock %}
 
 {% block help_content %}
-<p>La sección <strong>Gastos</strong> registra y categoriza los gastos de la academia.</p>
-<ul style="list-style:disc; margin:0.5rem 0 0 1.25rem; line-height:1.8;">
-    <li>Arriba, el resumen de ingresos, gastos y beneficio neto del mes.</li>
-    <li>Filtra por mes, año y categoría.</li>
-    <li>Añade un gasto; puedes marcarlo como <strong>recurrente</strong> — mensual (día del mes), anual (día y mes) o semanal (los días de la semana que elijas).</li>
-    <li>"Consultar recibos" abre la carpeta de Google Drive.</li>
+<p>La sección <strong>Gastos</strong> registra y clasifica lo que gasta la academia (alquiler, material, fotocopias, etc.) para poder calcular el beneficio. Es una sección solo para administradores y trabaja siempre sobre un <strong>mes concreto</strong>.</p>
+
+<h4 style="font-weight:700;margin-top:1rem;">El resumen del mes</h4>
+<p>Las tres tarjetas de arriba muestran, para el mes seleccionado: los <strong>ingresos</strong> (dinero cobrado), los <strong>gastos</strong> y el <strong>beneficio neto</strong> (ingresos menos gastos), en verde si es positivo y en rojo si es negativo.</p>
+
+<h4 style="font-weight:700;margin-top:1rem;">Elegir el periodo</h4>
+<p>En el bloque <strong>Filtros</strong> eliges el <strong>mes</strong>, el <strong>año</strong> y, si quieres, una <strong>categoría</strong>. Pulsa <strong>Aplicar</strong> para recargar la vista con ese periodo.</p>
+
+<h4 style="font-weight:700;margin-top:1rem;">Registrar un gasto</h4>
+<p>En el bloque <strong>Nuevo gasto</strong> rellena la descripción, la categoría, el importe, la fecha y unas notas opcionales, y pulsa <strong>Guardar</strong>.</p>
+<p style="margin-top:0.4rem;">Si el gasto se repite, marca la casilla <strong>Recurrente</strong>. Se despliegan las opciones de frecuencia:</p>
+<ul style="list-style:disc;margin:0.4rem 0 0 1.25rem;line-height:1.7;">
+    <li><strong>Mensual</strong>: indica el día del mes (1 a 28) en que se repite.</li>
+    <li><strong>Anual</strong>: indica el día y el mes.</li>
+    <li><strong>Semanal</strong>: marca los días de la semana en que ocurre.</li>
+</ul>
+<p style="margin-top:0.4rem;">Un gasto recurrente crea una <strong>plantilla</strong> que va generando los gastos por sí sola en las fechas indicadas.</p>
+
+<h4 style="font-weight:700;margin-top:1rem;">La tabla y las plantillas</h4>
+<ul style="list-style:disc;margin:0.4rem 0 0 1.25rem;line-height:1.7;">
+    <li>La tabla lista los gastos del periodo; los generados por una plantilla llevan la etiqueta <strong>(recurrente)</strong>. El icono de la papelera elimina un gasto (pide confirmación).</li>
+    <li>Más abajo, <strong>Plantillas recurrentes</strong> muestra las reglas activas con su frecuencia. Borrar una plantilla detiene la generación futura de ese gasto.</li>
+</ul>
+
+<h4 style="font-weight:700;margin-top:1rem;">Recibos</h4>
+<p>El botón <strong>Consultar recibos</strong> (cabecera) abre la carpeta de Google Drive donde se guardan los justificantes.</p>
+
+<h4 style="font-weight:700;margin-top:1rem;">Consejos</h4>
+<ul style="list-style:disc;margin:0.4rem 0 0 1.25rem;line-height:1.7;">
+    <li>Configura como recurrentes los gastos fijos (alquiler, seguros…) y te olvidas de anotarlos cada mes.</li>
+    <li>Categorizar bien los gastos mejora la calidad de los Informes.</li>
 </ul>
 {% endblock %}
 

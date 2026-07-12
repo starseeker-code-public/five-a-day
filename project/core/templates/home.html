@@ -38,14 +38,47 @@
 {% endblock %}
 
 {% block help_content %}
-<p>El <strong>Panel Principal</strong> resume el estado de la academia de un vistazo: cumpleaños, emails programados, tareas del día y (para administradores) pagos pendientes e ingresos del mes. También muestra la lista de espera y la ocupación de los grupos, y puedes crear y completar tareas pendientes.</p>
+<p>El <strong>Panel Principal</strong> es la pantalla de inicio y resume el estado de la academia de un vistazo. Es lo primero que ves al entrar y te lleva directamente a lo que necesita tu atención hoy: cumpleaños, emails programados, tareas y (para administradores) el dinero pendiente e ingresado este mes.</p>
+
+<h4 style="font-weight:700;margin-top:1rem;">Las tarjetas de resumen</h4>
+<p>En la parte superior hay una fila de tarjetas. Cada una muestra un número grande y un pequeño detalle debajo:</p>
+<ul style="list-style:disc;margin:0.4rem 0 0 1.25rem;line-height:1.7;">
+    <li><strong>Pagos pendientes</strong> (solo administradores): cuántos cobros quedan por hacer y los primeros nombres. Pulsa el número rojo de estudiantes para abrir la lista completa del mes, o el enlace <strong>Recordatorio</strong> para enviar el aviso de pago.</li>
+    <li><strong>Cumpleaños</strong>: los alumnos que cumplen años este mes, con el día y la edad que cumplen. Si hay alguno hoy, aparece destacado.</li>
+    <li><strong>Emails</strong>: los envíos automáticos programados para este mes (Fun Friday, recordatorios, etc.). Cada nombre es un enlace que te lleva a su formulario. Si tienes tareas vencidas, se avisa aquí en rojo.</li>
+    <li><strong>Ingresos del mes</strong> (solo administradores): lo cobrado frente a lo esperado este mes.</li>
+    <li><strong>Lista de espera</strong>: cuántos alumnos esperan plaza y qué grupos tienen huecos libres. El número es un enlace directo a la lista de espera.</li>
+</ul>
+
+<h4 style="font-weight:700;margin-top:1rem;">La lista de tareas</h4>
+<p>Debajo de las tarjetas tienes una lista de tareas pendientes compartida por el equipo:</p>
+<ul style="list-style:disc;margin:0.4rem 0 0 1.25rem;line-height:1.7;">
+    <li>Escribe la tarea en el cuadro de texto y elige cuándo vence: <strong>Hoy</strong>, <strong>Esta semana</strong> o una <strong>Fecha</strong> concreta (aparece un calendario). Pulsa el botón <strong>+</strong> para añadirla.</li>
+    <li>Marca la casilla de una tarea para darla por completada; desaparece de la lista.</li>
+    <li>Las tareas cuya fecha ya pasó se muestran en <strong>rojo</strong> para que no se te escapen.</li>
+</ul>
+
+<h4 style="font-weight:700;margin-top:1rem;">Otros detalles</h4>
+<ul style="list-style:disc;margin:0.4rem 0 0 1.25rem;line-height:1.7;">
+    <li>El botón <strong>Nuevo Pago</strong> de la cabecera (solo administradores) te lleva directo a registrar un cobro sin pasar por la sección de Pagos.</li>
+    <li>La frase que aparece bajo el título cambia en cada visita: es solo un toque de inspiración para el día.</li>
+</ul>
+
 <p style="margin-top:1rem;"><strong>Atajos de teclado</strong> (funcionan fuera de las cajas de texto). El número aparece sobre cada icono del menú lateral:</p>
 <ul style="list-style:disc; margin:0.5rem 0 0 1.25rem; line-height:1.9;">
     <li><kbd>0</kbd> Panel · <kbd>1</kbd> Estudiantes · <kbd>2</kbd> Lista de espera · <kbd>3</kbd> Horario</li>
     <li><kbd>4</kbd> Pagos · <kbd>5</kbd> Gastos · <kbd>6</kbd> Aplicaciones · <kbd>7</kbd> Gestión</li>
     <li><kbd>8</kbd> Informes · <kbd>9</kbd> Base de datos</li>
 </ul>
-<p style="margin-top:0.75rem; color:#6b7280;">Algunas secciones (pagos, gastos, informes…) solo están disponibles para administradores.</p>
+
+<h4 style="font-weight:700;margin-top:1rem;">Según tu perfil</h4>
+<p>Si has entrado como <strong>profesor sin permisos de administrador</strong>, las tarjetas de dinero (Pagos pendientes e Ingresos del mes) y el botón Nuevo Pago no aparecen, y el menú lateral solo muestra las secciones que puedes usar (Estudiantes, Lista de espera, Horario y Gestión en modo lectura). Los cumpleaños, los emails, la lista de espera y las tareas sí son visibles para todos.</p>
+
+<h4 style="font-weight:700;margin-top:1rem;">Consejos</h4>
+<ul style="list-style:disc;margin:0.4rem 0 0 1.25rem;line-height:1.7;">
+    <li>Empieza el día por aquí: repasa cumpleaños y tareas vencidas antes de nada.</li>
+    <li>Usa las tareas para no olvidar gestiones (llamar a un padre, pedir un GDPR firmado…). Al ser compartidas, todo el equipo ve lo mismo.</li>
+</ul>
 {% endblock %}
 
 {% block content %}

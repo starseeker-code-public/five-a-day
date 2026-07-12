@@ -20,11 +20,35 @@
 {% endblock %}
 
 {% block help_content %}
-<p><strong>Gestión</strong> centraliza la configuración de la academia.</p>
-<ul style="list-style:disc; margin:0.5rem 0 0 1.25rem; line-height:1.8;">
-    <li>Precios y configuración general (los administradores pueden editarlos).</li>
-    <li>Crear y consultar profesores y grupos.</li>
-    <li>Los profesores nuevos se crean sin permisos de administrador; un administrador puede concederlos después desde el panel <code>/admin/</code>.</li>
+<p><strong>Gestión</strong> centraliza la configuración de la academia: los precios y las tarifas, y los profesores y grupos. La página tiene dos secciones plegables; pulsa la cabecera de cada una para abrirla o cerrarla.</p>
+
+<h4 style="font-weight:700;margin-top:1rem;">Precios y tarifas</h4>
+<p>Aquí están todos los importes que usa el sistema para calcular los cobros:</p>
+<ul style="list-style:disc;margin:0.4rem 0 0 1.25rem;line-height:1.7;">
+    <li><strong>Matrículas</strong>: cuota de matrícula de niños y de adultos.</li>
+    <li><strong>Mensualidades</strong>: jornada completa, media jornada y grupo de adultos.</li>
+    <li><strong>Descuentos</strong>: cheque idioma (importe fijo al mes), hermanos (porcentaje sobre la mensualidad) y alumno recurrente (descuento fijo sobre la matrícula, que se aplica solo cuando un alumno se vuelve a matricular en un curso posterior).</li>
+</ul>
+<p style="margin-top:0.4rem;">Estos valores son la <strong>única fuente</strong> de la que salen los precios de toda la aplicación: cambiarlos aquí afecta a los cobros que se generen a partir de ese momento.</p>
+
+<h4 style="font-weight:700;margin-top:1rem;">Editar los precios (solo administradores)</h4>
+<ul style="list-style:disc;margin:0.4rem 0 0 1.25rem;line-height:1.7;">
+    <li>Por defecto los campos están bloqueados. Pulsa <strong>Cambiar Valores</strong> (cabecera) para desbloquearlos, edítalos y pulsa <strong>Guardar Cambios</strong> (o <strong>Cancelar</strong> para descartar).</li>
+    <li>Los profesores sin permisos de administrador ven esta página en <strong>modo solo lectura</strong>: pueden consultar los precios y los grupos, pero no modificar nada ni crear profesores o grupos.</li>
+</ul>
+
+<h4 style="font-weight:700;margin-top:1rem;">Grupos y profesores</h4>
+<ul style="list-style:disc;margin:0.4rem 0 0 1.25rem;line-height:1.7;">
+    <li>La tabla lista los grupos con su color, su profesora y cuántos alumnos tienen.</li>
+    <li><strong>Nuevo Profesor</strong> (admin): añade un profesor con nombre, email y teléfono.</li>
+    <li><strong>Nuevo Grupo</strong> (admin): crea un grupo dándole nombre, un <strong>color</strong> (con el que se identifica en el horario) y la profesora responsable.</li>
+</ul>
+<p style="margin-top:0.4rem;">Los profesores nuevos se crean <strong>sin permisos de administrador</strong>. Si alguien necesita esos permisos, un administrador puede concedérselos después desde el panel <code>/admin/</code> de Django.</p>
+
+<h4 style="font-weight:700;margin-top:1rem;">Consejos</h4>
+<ul style="list-style:disc;margin:0.4rem 0 0 1.25rem;line-height:1.7;">
+    <li>Antes de crear un grupo, asegúrate de que su profesora ya está dada de alta.</li>
+    <li>Elige colores distintos para cada grupo: así el horario se lee mucho mejor.</li>
 </ul>
 {% endblock %}
 

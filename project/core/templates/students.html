@@ -46,12 +46,45 @@
 {% endblock %}
 
 {% block help_content %}
-<p>La sección <strong>Estudiantes</strong> es el listado de todos los alumnos.</p>
-<ul style="list-style:disc; margin:0.5rem 0 0 1.25rem; line-height:1.8;">
-    <li>Busca por nombre y filtra por grupo o estado (activo / inactivo).</li>
-    <li>Pulsa un estudiante para ver su ficha, editarla o darlo de baja.</li>
-    <li>Crea un alumno nuevo con el botón superior: se le asigna grupo y se generan su matrícula y los pagos del curso.</li>
-    <li>Cada fila muestra el grupo y el estado del alumno.</li>
+<p>La sección <strong>Estudiantes</strong> es el listado de todos los alumnos activos de la academia. Desde aquí matriculas alumnos nuevos, consultas su ficha y gestionas el día a día (grupo, Fun Friday, GDPR…). Arriba a la izquierda se indica el total de alumnos activos y cuántos tienen <strong>cheque idioma</strong>.</p>
+
+<h4 style="font-weight:700;margin-top:1rem;">Matricular un alumno nuevo</h4>
+<p>El botón <strong>Nuevo Estudiante</strong> (arriba a la derecha) despliega tres opciones según el caso:</p>
+<ul style="list-style:disc;margin:0.4rem 0 0 1.25rem;line-height:1.7;">
+    <li><strong>Matricular</strong>: crea a la vez un padre/tutor nuevo y su hijo. Úsalo cuando la familia aún no existe en el sistema.</li>
+    <li><strong>Padre existente</strong>: matricula a un hijo de un padre/tutor que ya está registrado (por ejemplo, un hermano).</li>
+    <li><strong>Adulto</strong>: para alumnos de 18 años o más, que no necesitan tutor.</li>
+</ul>
+<p style="margin-top:0.4rem;">Al matricular se asigna el grupo, se crea la <strong>matrícula</strong> y se generan automáticamente los <strong>pagos de todo el curso</strong> (la cuota de matrícula y las mensualidades o trimestres correspondientes). No tienes que crear los pagos a mano.</p>
+
+<h4 style="font-weight:700;margin-top:1rem;">La tabla de alumnos</h4>
+<p>Cada fila muestra: nombre y colegio, edad, grupo (con su color), padres/tutores, tipo de matrícula, estado del <strong>GDPR</strong> (Firmado / Pendiente) y el <strong>Fun Friday</strong>. El icono del ojo, al final de la fila, abre la <strong>ficha completa</strong> del alumno.</p>
+<p style="margin-top:0.4rem;">En la ficha verás sus datos, los padres/tutores, las matrículas (donde puedes cambiar la modalidad de pago entre <strong>mensual</strong> y <strong>trimestral</strong>), la asistencia a Fun Friday y el historial de pagos del alumno.</p>
+
+<h4 style="font-weight:700;margin-top:1rem;">El botón de Fun Friday</h4>
+<p>En la columna Fun Friday puedes marcar de un clic si el alumno viene el próximo viernes. El color del icono lo resume:</p>
+<ul style="list-style:disc;margin:0.4rem 0 0 1.25rem;line-height:1.7;">
+    <li><strong>Verde</strong>: apuntado esta semana.</li>
+    <li><strong>Amarillo con tick</strong>: apuntado esta semana y también vino la semana pasada.</li>
+    <li><strong>Amarillo con aspa</strong>: no apuntado esta semana, pero vino la pasada.</li>
+    <li><strong>Gris</strong>: no apuntado.</li>
+</ul>
+
+<h4 style="font-weight:700;margin-top:1rem;">Buscar, filtrar y ordenar</h4>
+<p>Con los botones de la derecha (todo ocurre al instante, sin recargar la página):</p>
+<ul style="list-style:disc;margin:0.4rem 0 0 1.25rem;line-height:1.7;">
+    <li><strong>Lupa</strong>: muestra el cuadro de búsqueda para filtrar por nombre. Vuelve a pulsarla para cerrarla y limpiar.</li>
+    <li><strong>Tipo</strong> (icono de grupos): va rotando entre Todos → Solo niños → Solo adultos → Cheque idioma.</li>
+    <li><strong>Fun Friday</strong> (icono de fiesta): rota entre Todos → Sin Fun Friday esta semana → Con Fun Friday esta semana.</li>
+    <li><strong>Ordenar</strong>: rota entre fecha de alta (↑ / ↓) y nombre (A→Z / Z→A).</li>
+</ul>
+<p style="margin-top:0.4rem;">Los filtros se combinan entre sí: por ejemplo, puedes ver solo los niños sin Fun Friday apuntado esta semana.</p>
+
+<h4 style="font-weight:700;margin-top:1rem;">Consejos</h4>
+<ul style="list-style:disc;margin:0.4rem 0 0 1.25rem;line-height:1.7;">
+    <li>Un aviso rojo "Sin padres asignados" indica una ficha incompleta que conviene corregir.</li>
+    <li>El filtro de cheque idioma te da rápidamente la lista de quién tiene ese descuento aplicado.</li>
+    <li>Esta sección está disponible también para los profesores sin permisos de administrador: pueden matricular y gestionar alumnos con normalidad.</li>
 </ul>
 {% endblock %}
 

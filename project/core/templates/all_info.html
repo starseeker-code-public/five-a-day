@@ -23,10 +23,30 @@
 {% endblock %}
 
 {% block help_content %}
-<p>La <strong>Base de datos</strong> ofrece una vista completa de estudiantes y pagos.</p>
-<ul style="list-style:disc; margin:0.5rem 0 0 1.25rem; line-height:1.8;">
-    <li>Tablas de alumnos y de pagos, paginadas y ordenables por columnas.</li>
-    <li>Exporta los datos a Excel.</li>
+<p>La <strong>Base de datos</strong> ofrece la vista más completa de todo lo que hay en el sistema: dos grandes tablas, una de <strong>estudiantes</strong> y otra de <strong>pagos</strong>, con todas sus columnas. Es una sección solo para administradores, pensada para consultar y exportar datos en detalle.</p>
+
+<h4 style="font-weight:700;margin-top:1rem;">Tabla de estudiantes</h4>
+<p>Recoge, por alumno: ID, nombre y apellidos, fecha de nacimiento, edad, colegio, alergias, estado del GDPR, grupo, matrícula (tipo y modalidad), profesora y los datos de contacto de los padres (móvil, email e IBAN). Arriba se indica el total de alumnos registrados.</p>
+
+<h4 style="font-weight:700;margin-top:1rem;">Tabla de pagos</h4>
+<p>Recoge, por pago: ID, estudiante, teléfono, matrícula, tipo y método de pago, cantidad, estado, fechas de vencimiento y de cobro, concepto, número de referencia, notas y la fecha de creación.</p>
+
+<h4 style="font-weight:700;margin-top:1rem;">Moverse por las tablas</h4>
+<ul style="list-style:disc;margin:0.4rem 0 0 1.25rem;line-height:1.7;">
+    <li>Son tablas anchas: <strong>desplázalas en horizontal</strong> para ver todas las columnas.</li>
+    <li>Cada tabla tiene su propio desplegable <strong>Ordenar por</strong> (por fecha, ID, nombre o apellido en estudiantes; por fecha o estudiante en pagos).</li>
+    <li>Cuando hay muchos registros, cada tabla se pagina de forma independiente con los controles de página que aparecen debajo.</li>
+</ul>
+
+<h4 style="font-weight:700;margin-top:1rem;">Exportar y administración avanzada</h4>
+<ul style="list-style:disc;margin:0.4rem 0 0 1.25rem;line-height:1.7;">
+    <li>El botón de <strong>descarga</strong> (junto al orden de estudiantes) exporta los datos a un archivo <strong>Excel</strong>.</li>
+    <li><strong>Admin Django</strong> (cabecera) abre el panel de administración técnico, para consultas o cambios que no están en la interfaz normal. Úsalo con cuidado.</li>
+</ul>
+
+<h4 style="font-weight:700;margin-top:1rem;">Consejos</h4>
+<ul style="list-style:disc;margin:0.4rem 0 0 1.25rem;line-height:1.7;">
+    <li>Para el día a día, es más cómodo trabajar desde Estudiantes o Pagos; esta vista brilla cuando necesitas verlo <em>todo</em> junto o llevártelo a una hoja de cálculo.</li>
 </ul>
 {% endblock %}
 

@@ -97,13 +97,44 @@
 {% endblock %}
 
 {% block help_content %}
-<p>El <strong>Panel de Testing</strong> es para probar la aplicación y reportar incidencias durante el desarrollo (solo administradores).</p>
-<ul style="list-style:disc; margin:0.5rem 0 0 1.25rem; line-height:1.8;">
-    <li><strong>Proyecto</strong>: versión, entorno y último commit en tiempo real (con enlace a la documentación en GitHub).</li>
-    <li><strong>Datos de prueba</strong>: llena la base de datos con datos realistas, o bórralos y vuelve a sembrar.</li>
-    <li><strong>Backlog</strong>: registra errores o tareas (puedes adjuntar una captura, que se envía por email sin guardarse); al marcarlas como hechas se avisa por email.</li>
-    <li><strong>¿Listo para desplegar?</strong>: envía un aviso por email de que esta versión está validada.</li>
-    <li>Accesos rápidos a Admin, Google Drive, Google Cloud, GitHub y correo temporal.</li>
+<p>El <strong>Panel de Testing</strong> es el centro de control del entorno de pruebas: sirve para validar la aplicación y reportar incidencias durante el desarrollo. Solo es accesible para <strong>profesores administradores</strong> en el entorno de testing; el resto de usuarios ni siquiera ve el icono en el menú y recibe un 404 si intenta entrar a <code>/testing/</code>.</p>
+
+<h4 style="font-weight:700;margin-top:1rem;">Proyecto</h4>
+<p>La tarjeta principal muestra, en tiempo real, información del servidor y de git: <strong>versión</strong> de la aplicación, <strong>entorno</strong>, estado de <em>debug</em>, versiones de Python y Django, base de datos, hora y zona horaria del servidor, y los datos del <strong>último commit</strong> (rama, hash, mensaje, autor y fecha). Los iconos de código enlazan con la documentación del proyecto en GitHub.</p>
+
+<h4 style="font-weight:700;margin-top:1rem;">Datos de prueba</h4>
+<p>El comando de siembra rellena la base de datos con un juego de datos realista para poder ejercitar todas las funcionalidades sin teclear nada a mano (profesores, grupos, padres con hermanos, alumnos —incluidos adultos e inactivos—, matrículas con descuentos, pagos en todos los estados, gastos, horarios, tareas e historial):</p>
+<ul style="list-style:disc;margin:0.4rem 0 0 1.25rem;line-height:1.7;">
+    <li>El botón <strong>play</strong> (verde) siembra los datos sin borrar los existentes (es idempotente).</li>
+    <li>El botón <strong>restart</strong> (rojo) <strong>borra todos los datos generados por el comando y vuelve a sembrar</strong>; pide confirmación.</li>
+    <li>El resultado del comando aparece en la consola negra de la derecha.</li>
+</ul>
+
+<h4 style="font-weight:700;margin-top:1rem;">Backlog</h4>
+<p>Registra errores, sugerencias o tareas de prueba. Escribe un <strong>título</strong> y una <strong>descripción</strong> (cuanto más detalle, mejor), elige la <strong>prioridad</strong> (Baja / Media / Alta) y pulsa <strong>+</strong>. Cada tarea creada se <strong>envía por email</strong> al equipo de desarrollo.</p>
+<ul style="list-style:disc;margin:0.4rem 0 0 1.25rem;line-height:1.7;">
+    <li>Puedes adjuntar una <strong>captura de pantalla</strong> (máx. 5&nbsp;MB): viaja en el email pero <strong>no se guarda</strong> en el servidor.</li>
+    <li>El botón de tick verde marca una tarea como <strong>hecha</strong>; también se notifica por email.</li>
+</ul>
+
+<h4 style="font-weight:700;margin-top:1rem;">Reporte de errores</h4>
+<p>El interruptor <strong>Reporte de errores</strong> activa o desactiva el envío automático de errores por email al soporte. Úsalo para no inundar de correos mientras haces pruebas ruidosas.</p>
+
+<h4 style="font-weight:700;margin-top:1rem;">¿Listo para desplegar?</h4>
+<p>El botón de tick verde envía —tras confirmar— un aviso por email al soporte y a los profesores administradores de que <strong>esta versión está validada y lista para desplegar</strong>.</p>
+
+<h4 style="font-weight:700;margin-top:1rem;">Accesos rápidos</h4>
+<p>Enlaces directos a Admin de Django, Google Drive, Google Cloud, la documentación en GitHub y un servicio de correo temporal (útil para probar altas y emails con direcciones desechables).</p>
+
+<h4 style="font-weight:700;margin-top:1rem;">Probar como profesor NO administrador</h4>
+<p>Buena parte de la app cambia según el perfil, así que conviene probarla también con una cuenta sin permisos de administrador. Hay una sembrada para esto:</p>
+<ul style="list-style:disc;margin:0.4rem 0 0 1.25rem;line-height:1.7;">
+    <li>Cierra sesión y vuelve a entrar con la cuenta <strong><code>test@test.com</code></strong> (John Doe), usando <strong>la contraseña de pruebas</strong> (la misma que comparten las cuentas de profesor sembradas).</li>
+    <li>Como profesor no administrador verás un <strong>menú lateral reducido</strong>: solo Panel, Estudiantes, Lista de espera, Horario y Gestión (esta última en <strong>solo lectura</strong>).</li>
+    <li>El <strong>Horario</strong> es de solo lectura (sin lápiz de edición) y en el <strong>Panel Principal</strong> desaparecen las tarjetas de dinero (pagos pendientes e ingresos).</li>
+    <li>No tendrás acceso a <strong>Pagos, Gastos, Aplicaciones, Informes ni Base de datos</strong>, ni a este panel de <strong>Testing</strong> (<code>/testing/</code> devuelve 404).</li>
+    <li>Sí conservas la gestión completa de alumnos: matricular, editar fichas, lista de espera y marcar la asistencia a Fun Friday.</li>
+    <li>Para volver a tu perfil, cierra sesión y entra de nuevo con tu cuenta de administrador.</li>
 </ul>
 {% endblock %}
 
@@ -371,7 +402,7 @@
         <h2 class="text-lg font-bold text-neutral-800 mb-1">¿Marcar esta versión como lista?</h2>
         <p class="text-sm text-neutral-500 mb-5">Se enviará un correo al soporte y a los profesores administradores avisando de que <strong>v{{ app_version }}</strong> está lista para desplegar.</p>
         <div class="flex gap-3 justify-center">
-            <button type="button" id="ready-cancel-btn" class="px-5 py-2 rounded-full text-sm font-semibold" style="background:#ede9fe;color:#4c1d95;">Cancelar</button>
+            <button type="button" id="ready-cancel-btn" class="px-5 py-2 rounded-full text-sm font-semibold bg-primary-100 text-primary-700 hover:bg-primary-200">Cancelar</button>
             <button type="button" id="ready-confirm-btn" class="px-5 py-2 rounded-full text-sm font-semibold text-white bg-emerald-600 hover:bg-emerald-700">Sí, marcar como lista</button>
         </div>
     </div>

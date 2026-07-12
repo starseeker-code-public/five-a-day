@@ -20,7 +20,7 @@ Built to centralize student records, automate billing cycles, and streamline par
 ### Project Status
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v1.13.11-brightgreen?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-v1.14.0-brightgreen?style=flat-square" alt="Version">
   &nbsp;|&nbsp;
   <a href="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml?query=branch%3Amain"><img src="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml/badge.svg?branch=main&style=flat-square" alt="CI main"></a>
   &nbsp;|&nbsp;
@@ -41,9 +41,9 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 | Version | Date | Description |
 |---------|------|-------------|
-| **v1.13.11** | 2026-07-12 | Keyboard nav hotkeys, per-view help "?" panels, CI-secret docs |
+| **v1.14.0** | 2026-07-12 | Comprehensive in-app help guides for every view; dark-theme fixes |
+| v1.13.11 | 2026-07-12 | Keyboard nav hotkeys, per-view help "?" panels, CI-secret docs |
 | v1.13.10 | 2026-07-12 | CI deploy emails, recurring-expense frequencies, backlog screenshots |
-| v1.13.9 | 2026-07-12 | Non-admin teacher UX, teacher-admin lock, backlog email + auto-cleanup |
 
 ---
 
@@ -143,8 +143,24 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 ## Version History & Roadmap
 
-<details id="v11311" open>
-<summary><strong>v1.13.11 — Keyboard nav hotkeys + per-view help panels (current)</strong></summary>
+<details id="v1140" open>
+<summary><strong>v1.14.0 — Comprehensive in-app help guides (current)</strong></summary>
+
+**In-app help**
+
+- Every main view (Home, Students, Waiting list, Schedule, Payments, Expenses, Apps, Management, Reports, Database) **and** the Testing panel now has a genuinely thorough Spanish guide behind its bottom-left "?" button — each walks through every section, button, filter and the typical workflow, with role differences and tips (the modal scrolls). Home's guide also documents the keyboard shortcuts.
+- The Testing guide explains how to **simulate a non-admin teacher** by logging in as the seeded `test@test.com` account (the password is not printed — the repo is public).
+
+**Dark theme**
+
+- Fixed the confirmation modal's **Cancelar** button, which was barely legible in dark mode (now uses the themed `primary` utilities instead of an inline dark-violet colour).
+
+This release caps the rapid v1.13.x iteration (dark theme, testing-dashboard redesign, admin-only QA, richer seeder, non-admin UX, recurring-expense frequencies, CI deploy emails, keyboard nav) with a complete self-service help layer.
+
+</details>
+
+<details id="v11311">
+<summary><strong>v1.13.11 — Keyboard nav hotkeys + per-view help panels</strong></summary>
 
 **Keyboard quick-nav**
 
