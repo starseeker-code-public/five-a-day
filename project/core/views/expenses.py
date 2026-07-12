@@ -40,6 +40,8 @@ def expenses_list(request):
             "year": year,
             "category": category,
             "categories": Expense.EXPENSE_CATEGORY_CHOICES,
+            "frequencies": Expense.RECURRING_FREQUENCY_CHOICES,
+            "weekday_choices": Expense.WEEKDAY_CHOICES,
             "totals": totals,
         },
     )
@@ -62,6 +64,7 @@ def create_expense(request):
     expense_date_str = request.POST.get("expense_date") or date.today().isoformat()
     notes = (request.POST.get("notes") or "").strip()
     is_recurring = request.POST.get("is_recurring") in ("on", "true", "1")
+    recurring_frequency = (request.POST.get("recurring_frequency") or "monthly").strip()
     recurring_day_raw = request.POST.get("recurring_day") or ""
 
     if not description or amount is None or amount <= 0:
@@ -74,12 +77,33 @@ def create_expense(request):
         parsed_date = date.today()
 
     recurring_day = None
+    recurring_month = None
+    recurring_weekdays = ""
     if is_recurring:
-        try:
-            recurring_day = int(recurring_day_raw)
-        except ValueError:
-            recurring_day = 1
-        recurring_day = max(1, min(recurring_day, 28))
+        if recurring_frequency not in ("monthly", "yearly", "weekly"):
+            recurring_frequency = "monthly"
+
+        if recurring_frequency == "weekly":
+            selected = request.POST.getlist("recurring_weekdays")
+            valid = sorted({int(d) for d in selected if d.isdigit() and 0 <= int(d) <= 6})
+            if not valid:
+                messages.error(request, "Un gasto semanal debe tener al menos un día de la semana.")
+                return redirect("expenses_list")
+            recurring_weekdays = ",".join(str(d) for d in valid)
+        else:
+            try:
+                recurring_day = int(recurring_day_raw)
+            except ValueError:
+                recurring_day = 1
+            recurring_day = max(1, min(recurring_day, 28))
+            if recurring_frequency == "yearly":
+                try:
+                    recurring_month = int(request.POST.get("recurring_month") or 1)
+                except ValueError:
+                    recurring_month = 1
+                recurring_month = max(1, min(recurring_month, 12))
+    else:
+        recurring_frequency = "monthly"
 
     Expense.objects.create(
         description=description,
@@ -88,7 +112,10 @@ def create_expense(request):
         expense_date=parsed_date,
         notes=notes,
         is_recurring=is_recurring,
+        recurring_frequency=recurring_frequency,
         recurring_day=recurring_day,
+        recurring_month=recurring_month,
+        recurring_weekdays=recurring_weekdays,
     )
     messages.success(request, f"✅ Gasto '{description}' guardado.")
     return redirect("expenses_list")

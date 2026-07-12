@@ -181,18 +181,35 @@ class TestApiCreateBacklogTask:
 
     @override_settings(IS_TESTING_ENV=True, SUPPORT_EMAIL="sup@test.com")
     def test_email_is_sent_when_support_email_configured(self, qa_client):
-        with patch("core.views.testing_tools.send_mail") as mock_mail:
-            qa_client.post(
-                reverse("api_create_backlog_task"),
-                data=json.dumps({"title": "Issue", "description": "", "priority": "medium"}),
-                content_type="application/json",
-            )
-        mock_mail.assert_called_once()
+        from django.core import mail
+
+        qa_client.post(
+            reverse("api_create_backlog_task"),
+            data=json.dumps({"title": "Issue", "description": "", "priority": "medium"}),
+            content_type="application/json",
+        )
+        assert len(mail.outbox) == 1
+        assert mail.outbox[0].to == ["sup@test.com"]
+
+    @override_settings(IS_TESTING_ENV=True, SUPPORT_EMAIL="sup@test.com")
+    def test_screenshot_is_attached_to_email_not_stored(self, qa_client):
+        from django.core import mail
+        from django.core.files.uploadedfile import SimpleUploadedFile
+
+        img = SimpleUploadedFile("shot.png", b"\x89PNG\r\n\x1a\n" + b"0" * 64, content_type="image/png")
+        # multipart POST (form-data), not JSON — this is how a screenshot rides along
+        qa_client.post(
+            reverse("api_create_backlog_task"),
+            data={"title": "With shot", "description": "", "priority": "low", "screenshot": img},
+        )
+        assert len(mail.outbox) == 1
+        assert len(mail.outbox[0].attachments) == 1
+        assert mail.outbox[0].attachments[0][0] == "shot.png"
 
     @override_settings(IS_TESTING_ENV=True, SUPPORT_EMAIL="sup@test.com")
     def test_email_failure_is_swallowed(self, qa_client):
-        """send_mail throwing does not break the task creation."""
-        with patch("core.views.testing_tools.send_mail", side_effect=RuntimeError("smtp down")):
+        """An email send failure does not break task creation."""
+        with patch("django.core.mail.EmailMessage.send", side_effect=RuntimeError("smtp down")):
             response = qa_client.post(
                 reverse("api_create_backlog_task"),
                 data=json.dumps({"title": "Issue", "description": "", "priority": "medium"}),

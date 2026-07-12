@@ -20,7 +20,7 @@ Built to centralize student records, automate billing cycles, and streamline par
 ### Project Status
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v1.13.9-brightgreen?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-v1.13.10-brightgreen?style=flat-square" alt="Version">
   &nbsp;|&nbsp;
   <a href="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml?query=branch%3Amain"><img src="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml/badge.svg?branch=main&style=flat-square" alt="CI main"></a>
   &nbsp;|&nbsp;
@@ -41,9 +41,9 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 | Version | Date | Description |
 |---------|------|-------------|
-| **v1.13.9** | 2026-07-12 | Non-admin teacher UX, teacher-admin lock, backlog email + auto-cleanup |
+| **v1.13.10** | 2026-07-12 | CI deploy emails, recurring-expense frequencies, backlog screenshots |
+| v1.13.9 | 2026-07-12 | Non-admin teacher UX, teacher-admin lock, backlog email + auto-cleanup |
 | v1.13.8 | 2026-07-12 | Dark theme, Testing redesign, QA admin-only, richer seeder |
-| v1.13.7 | 2026-07-11 | Service worker network-first (fixes stale CSS/theme after navigation) |
 
 ---
 
@@ -143,8 +143,28 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 ## Version History & Roadmap
 
-<details id="v1139" open>
-<summary><strong>v1.13.9 — Non-admin teacher UX, teacher-admin lock, backlog housekeeping (current)</strong></summary>
+<details id="v11310" open>
+<summary><strong>v1.13.10 — CI deploy emails, recurring-expense frequencies, backlog screenshots (current)</strong></summary>
+
+**CI deploy notifications**
+
+- The **development → testing** auto-merge now emails support + the two admin teachers a friendly, readable notice: what changed, a prominent **"Open testing environment"** button (the testing URL), and the technical details (old→new version, tags, merge commit) at the end. Recipients come from the `TESTING_NOTIFY_EMAILS` secret (falls back to `OWNER_EMAILS`); URL from `TESTING_URL`.
+- The **production** (`main`) notification now also goes to `SUPPORT_EMAIL` (alongside `hellofiveaday@gmail.com`), with the same readable format (old→new version, optional `PRODUCTION_URL` button, deploy steps).
+
+**Recurring expenses**
+
+- Recurring expenses now support **monthly** (day-of-month), **yearly** (day + month) and **weekly** (any subset of weekdays — each Monday, Monday+Tuesday, … or every day). New `recurring_frequency` / `recurring_month` / `recurring_weekdays` fields (migration `billing/0006`); weekly/yearly materialise via a new daily Celery-beat task (`materialize_recurring_expenses_daily_task`, idempotent). The expenses form gained the frequency selector + weekday checkboxes.
+
+**Testing dashboard**
+
+- The **¿Listo para desplegar?** check now opens a styled **confirmation modal** before emailing.
+- Backlog tickets can include a **screenshot** — it is **attached to the notification email and never stored** (max 5 MB, images only) to keep storage in check.
+- In the testing environment, the help modal shows a banner pointing testers to the dedicated **Testing panel** (with a direct link); the help form is meant for production.
+
+</details>
+
+<details id="v1139">
+<summary><strong>v1.13.9 — Non-admin teacher UX, teacher-admin lock, backlog housekeeping</strong></summary>
 
 **Non-admin teachers**
 
@@ -1659,7 +1679,7 @@ five-a-day/
 │   │   ├── urls.py               11 URL patterns
 │   │   └── management/commands/  send_email, test_all_emails
 │   │
-│   ├── tests/                    pytest suite (965 tests, 96 % coverage) — unit/ + integration/
+│   ├── tests/                    pytest suite (985 tests, 96 % coverage) — unit/ + integration/
 │   ├── templates/registration/   Password-reset templates (form, done, confirm, complete + email body)
 │   ├── templates/admin/          Django admin overrides (branded theme)
 │   └── conftest.py               Shared fixtures (models + authenticated_client)
@@ -2593,7 +2613,7 @@ make up                        # Start Docker (PostgreSQL + Redis + Django + Cel
 1. Work on `development` (or a short-lived branch off `development`)
 2. Make changes following the conventions below
 3. Run `make pc-run` — Ruff + mypy + bandit all pass, offers to auto-bump the patch version on success, and auto-stages `uv.lock` if regenerated
-4. Run `make test` — all 965 tests must pass (PostgreSQL via Docker, parallel, with coverage)
+4. Run `make test` — all 985 tests must pass (PostgreSQL via Docker, parallel, with coverage)
 5. `git commit` with a message like `v1.0.6 - Short description` (version comes first — conventions match every other commit in the project)
 6. `git push origin development`
 7. CI runs automatically on your push (see [CI/CD](#cicd--github-actions))

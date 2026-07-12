@@ -414,10 +414,18 @@ class Expense(models.Model):
     """
     A single academy expense (rent, supplies, salaries, utilities, other).
 
-    Recurring expenses are represented by `is_recurring=True` on a template row
-    that carries `recurring_day` (1-28). A monthly Celery Beat job materialises
-    concrete Expense rows from those templates so historical reporting stays
-    honest — the template itself is never counted twice.
+    Recurring expenses are represented by `is_recurring=True` on a template row.
+    The cadence is controlled by `recurring_frequency`:
+
+    - ``monthly`` — every calendar month on ``recurring_day`` (1-28).
+    - ``yearly``  — once a year on ``recurring_day`` + ``recurring_month``.
+    - ``weekly``  — on each weekday listed in ``recurring_weekdays`` (ints 0-6,
+      Monday=0 … Sunday=6, matching ``date.weekday()``).
+
+    Monthly templates are materialised by a monthly Celery Beat job; weekly and
+    yearly templates by a daily job. Materialisation creates concrete Expense
+    rows so historical reporting stays honest — the template itself is never
+    counted twice.
     """
 
     EXPENSE_CATEGORY_CHOICES = [
@@ -432,6 +440,23 @@ class Expense(models.Model):
         ("other", "Otros"),
     ]
 
+    RECURRING_FREQUENCY_CHOICES = [
+        ("monthly", "Mensual"),
+        ("yearly", "Anual"),
+        ("weekly", "Semanal"),
+    ]
+
+    # date.weekday(): Monday=0 … Sunday=6. Labels are Spanish (UI).
+    WEEKDAY_CHOICES = [
+        (0, "Lunes"),
+        (1, "Martes"),
+        (2, "Miércoles"),
+        (3, "Jueves"),
+        (4, "Viernes"),
+        (5, "Sábado"),
+        (6, "Domingo"),
+    ]
+
     description = models.CharField(max_length=200)
     category = models.CharField(max_length=20, choices=EXPENSE_CATEGORY_CHOICES, default="other")
     amount = models.DecimalField(
@@ -443,10 +468,27 @@ class Expense(models.Model):
     notes = models.TextField(blank=True)
 
     is_recurring = models.BooleanField(default=False)
+    recurring_frequency = models.CharField(
+        max_length=10,
+        choices=RECURRING_FREQUENCY_CHOICES,
+        default="monthly",
+        help_text="Cadence of a recurring template: monthly, yearly or weekly.",
+    )
     recurring_day = models.PositiveSmallIntegerField(
         null=True,
         blank=True,
-        help_text="Day of the month (1–28) when a recurring template should materialise a concrete Expense.",
+        help_text="Day of the month (1–28). Used by monthly + yearly templates.",
+    )
+    recurring_month = models.PositiveSmallIntegerField(
+        null=True,
+        blank=True,
+        help_text="Month (1–12) when a yearly template should materialise.",
+    )
+    recurring_weekdays = models.CharField(
+        max_length=20,
+        blank=True,
+        default="",
+        help_text="Comma-separated weekday ints (0=Mon … 6=Sun) for weekly templates.",
     )
     # Link back to the template row when the record was auto-generated.
     generated_from = models.ForeignKey(
@@ -472,8 +514,65 @@ class Expense(models.Model):
     def __str__(self):
         return f"{self.description} — {self.amount}€ ({self.get_category_display()})"
 
+    def weekday_set(self):
+        """Return the set of weekday ints (0-6) for a weekly template."""
+        if not self.recurring_weekdays:
+            return set()
+        return {int(x) for x in self.recurring_weekdays.split(",") if x.strip() != ""}
+
+    def recurring_summary(self):
+        """Human-readable (Spanish) description of a recurring template's cadence."""
+        if not self.is_recurring:
+            return ""
+        if self.recurring_frequency == "monthly":
+            return f"Mensual · día {self.recurring_day}"
+        if self.recurring_frequency == "yearly":
+            months = dict(
+                [
+                    (1, "enero"),
+                    (2, "febrero"),
+                    (3, "marzo"),
+                    (4, "abril"),
+                    (5, "mayo"),
+                    (6, "junio"),
+                    (7, "julio"),
+                    (8, "agosto"),
+                    (9, "septiembre"),
+                    (10, "octubre"),
+                    (11, "noviembre"),
+                    (12, "diciembre"),
+                ]
+            )
+            return f"Anual · {self.recurring_day} de {months.get(self.recurring_month, '?')}"
+        if self.recurring_frequency == "weekly":
+            labels = dict(self.WEEKDAY_CHOICES)
+            days = ", ".join(labels[d] for d in sorted(self.weekday_set()))
+            return f"Semanal · {days}"
+        return ""
+
     def clean(self):
-        if self.is_recurring and not self.recurring_day:
-            raise ValidationError("Recurring expenses must set recurring_day (1–28).")
-        if self.recurring_day and not (1 <= self.recurring_day <= 28):
-            raise ValidationError("recurring_day must be between 1 and 28.")
+        if not self.is_recurring:
+            return
+
+        if self.recurring_frequency == "monthly":
+            if not self.recurring_day:
+                raise ValidationError("Monthly recurring expenses must set recurring_day (1–28).")
+            if not (1 <= self.recurring_day <= 28):
+                raise ValidationError("recurring_day must be between 1 and 28.")
+        elif self.recurring_frequency == "yearly":
+            if not self.recurring_day:
+                raise ValidationError("Yearly recurring expenses must set recurring_day (1–28).")
+            if not (1 <= self.recurring_day <= 28):
+                raise ValidationError("recurring_day must be between 1 and 28.")
+            if not self.recurring_month:
+                raise ValidationError("Yearly recurring expenses must set recurring_month (1–12).")
+            if not (1 <= self.recurring_month <= 12):
+                raise ValidationError("recurring_month must be between 1 and 12.")
+        elif self.recurring_frequency == "weekly":
+            weekdays = self.weekday_set()
+            if not weekdays:
+                raise ValidationError("Weekly recurring expenses must select at least one weekday.")
+            if any(not (0 <= d <= 6) for d in weekdays):
+                raise ValidationError("recurring_weekdays must contain ints between 0 (Mon) and 6 (Sun).")
+        else:
+            raise ValidationError("recurring_frequency must be monthly, yearly or weekly.")

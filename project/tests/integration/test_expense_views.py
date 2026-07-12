@@ -77,6 +77,60 @@ class TestCreateExpenseView:
         assert response.status_code == 302
         recurring = Expense.objects.filter(is_recurring=True).last()
         assert recurring.recurring_day == 5
+        assert recurring.recurring_frequency == "monthly"
+
+    def test_yearly_recurring_expense(self, authenticated_client):
+        response = authenticated_client.post(
+            reverse("create_expense"),
+            {
+                "description": "Seguro anual",
+                "category": "insurance",
+                "amount": "800.00",
+                "expense_date": "2026-03-05",
+                "is_recurring": "on",
+                "recurring_frequency": "yearly",
+                "recurring_day": "10",
+                "recurring_month": "6",
+            },
+        )
+        assert response.status_code == 302
+        recurring = Expense.objects.filter(is_recurring=True, recurring_frequency="yearly").last()
+        assert recurring is not None
+        assert recurring.recurring_day == 10
+        assert recurring.recurring_month == 6
+
+    def test_weekly_recurring_expense(self, authenticated_client):
+        response = authenticated_client.post(
+            reverse("create_expense"),
+            {
+                "description": "Limpieza",
+                "category": "other",
+                "amount": "30.00",
+                "expense_date": "2026-03-05",
+                "is_recurring": "on",
+                "recurring_frequency": "weekly",
+                "recurring_weekdays": ["0", "2", "4"],
+            },
+        )
+        assert response.status_code == 302
+        recurring = Expense.objects.filter(is_recurring=True, recurring_frequency="weekly").last()
+        assert recurring is not None
+        assert recurring.weekday_set() == {0, 2, 4}
+
+    def test_weekly_without_weekdays_rejected(self, authenticated_client):
+        before = Expense.objects.count()
+        response = authenticated_client.post(
+            reverse("create_expense"),
+            {
+                "description": "Limpieza",
+                "category": "other",
+                "amount": "30.00",
+                "is_recurring": "on",
+                "recurring_frequency": "weekly",
+            },
+        )
+        assert response.status_code == 302  # redirect back with error message
+        assert Expense.objects.count() == before
 
 
 class TestDeleteExpenseView:

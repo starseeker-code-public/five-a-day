@@ -26,8 +26,23 @@ def materialize_recurring_expenses_task(self, month: int | None = None, year: in
     m = month or today.month
     y = year or today.year
     created = materialize_recurring(m, y)
-    logger.info("Materialized %d recurring expenses for %02d/%d", created, m, y)
+    logger.info("Materialized %d monthly recurring expenses for %02d/%d", created, m, y)
     return {"status": "success", "created": created, "month": m, "year": y}
+
+
+@shared_task(name="billing.tasks.materialize_recurring_expenses_daily_task", bind=True)
+def materialize_recurring_expenses_daily_task(self, target_date: str | None = None):
+    """
+    Daily job: materialise WEEKLY recurring templates whose weekday matches today
+    and YEARLY templates whose month+day match today. Idempotent — safe to re-run
+    (matches on template + concrete date). `target_date` is an ISO string for tests.
+    """
+    from billing.services.expense_service import materialize_recurring_for_date
+
+    d = date.fromisoformat(target_date) if target_date else date.today()
+    created = materialize_recurring_for_date(d)
+    logger.info("Materialized %d weekly/yearly recurring expenses for %s", created, d.isoformat())
+    return {"status": "success", "created": created, "date": d.isoformat()}
 
 
 @shared_task(name="billing.tasks.generate_monthly_payments_task", bind=True)

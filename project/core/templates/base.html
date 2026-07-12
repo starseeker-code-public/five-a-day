@@ -344,6 +344,17 @@
 
             <!-- Step 1: Category -->
             <div id="support-step-category" class="p-6">
+                {% if show_testing_tools %}
+                <a href="{% url 'testing_tools' %}" class="block no-underline mb-4 p-4 rounded-xl bg-cyan-50 border border-cyan-200 hover:bg-cyan-100 transition-colors">
+                    <div class="flex items-center gap-3">
+                        <span class="material-symbols-outlined text-cyan-600">science</span>
+                        <div>
+                            <p class="text-sm font-semibold text-cyan-800">Estás en el entorno de pruebas</p>
+                            <p class="text-xs text-cyan-700">Para reportar errores o sugerencias mientras pruebas, usa mejor el <strong>Panel de Testing</strong> — está hecho para eso y el equipo lo revisa directamente. Toca aquí para abrirlo →</p>
+                        </div>
+                    </div>
+                </a>
+                {% endif %}
                 <p class="text-neutral-600 text-sm mb-4 text-center">Selecciona el tipo de incidencia:</p>
                 <div class="grid grid-cols-2 gap-3">
                     <button type="button" class="support-category-btn group p-4 rounded-xl bg-blue-50 hover:bg-blue-100 border-2 border-transparent hover:border-blue-400 transition-all duration-200 flex flex-col items-center gap-2" data-category="interfaz">

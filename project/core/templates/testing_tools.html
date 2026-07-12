@@ -316,6 +316,14 @@
                     <span class="material-symbols-outlined text-[18px]">add</span>
                 </button>
             </div>
+            <div class="mt-2 flex items-center gap-2">
+                <label for="backlog-screenshot" class="inline-flex items-center gap-1 text-xs text-neutral-500 cursor-pointer hover:text-primary-600">
+                    <span class="material-symbols-outlined text-[16px]">attach_file</span>
+                    Captura de pantalla (opcional)
+                </label>
+                <input type="file" id="backlog-screenshot" accept="image/*" class="text-xs text-neutral-500">
+                <span class="text-[11px] text-neutral-400">Se adjunta al email, no se guarda. Máx. 5&nbsp;MB.</span>
+            </div>
             <p id="backlog-error" class="text-red-600 text-xs mt-2 hidden"></p>
         </div>
 
@@ -339,6 +347,21 @@
             {% empty %}
             <p class="text-sm text-neutral-400 text-center py-6" id="backlog-empty">No hay tareas. Crea una arriba.</p>
             {% endfor %}
+        </div>
+    </div>
+</div>
+
+<!-- Confirmation modal for "¿Listo para desplegar?" -->
+<div id="ready-confirm-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:60;align-items:center;justify-content:center;padding:1rem;">
+    <div class="qa-card" style="max-width:26rem;width:100%;text-align:center;">
+        <div class="qa-card-icon bg-emerald-100" style="margin:0 auto 1rem;">
+            <span class="material-symbols-outlined text-emerald-600">rocket_launch</span>
+        </div>
+        <h2 class="text-lg font-bold text-neutral-800 mb-1">¿Marcar esta versión como lista?</h2>
+        <p class="text-sm text-neutral-500 mb-5">Se enviará un correo al soporte y a los profesores administradores avisando de que <strong>v{{ app_version }}</strong> está lista para desplegar.</p>
+        <div class="flex gap-3 justify-center">
+            <button type="button" id="ready-cancel-btn" class="px-5 py-2 rounded-full text-sm font-semibold" style="background:#ede9fe;color:#4c1d95;">Cancelar</button>
+            <button type="button" id="ready-confirm-btn" class="px-5 py-2 rounded-full text-sm font-semibold text-white bg-emerald-600 hover:bg-emerald-700">Sí, marcar como lista</button>
         </div>
     </div>
 </div>
@@ -407,25 +430,35 @@
         if (confirm('Esto borrara TODOS los datos y los re-sembrara. ¿Continuar?')) seed(true);
     });
 
-    // ── ¿Listo para desplegar? ──────────────────────
+    // ── ¿Listo para desplegar? (con confirmación) ──────────────────────
     const readyBtn = document.getElementById('ready-ship-btn');
     const readyMsg = document.getElementById('ready-ship-msg');
-    if (readyBtn) {
-        readyBtn.addEventListener('click', () => {
-            if (!confirm('¿Marcar esta versión como LISTA y avisar al soporte por email?')) return;
-            readyBtn.disabled = true;
-            readyMsg.classList.remove('hidden');
-            readyMsg.style.color = '#6b7280';
-            readyMsg.textContent = 'Enviando aviso...';
-            post(page.dataset.readyUrl, {})
-                .then(data => {
-                    readyMsg.style.color = data.success ? '#16a34a' : '#dc2626';
-                    readyMsg.textContent = data.success ? ('✓ ' + data.message) : ('Error: ' + data.message);
-                })
-                .catch(err => { readyMsg.style.color = '#dc2626'; readyMsg.textContent = 'Error: ' + err; })
-                .finally(() => { readyBtn.disabled = false; });
-        });
+    const readyModal = document.getElementById('ready-confirm-modal');
+    const readyConfirm = document.getElementById('ready-confirm-btn');
+    const readyCancel = document.getElementById('ready-cancel-btn');
+
+    function openReadyModal() { if (readyModal) readyModal.style.display = 'flex'; }
+    function closeReadyModal() { if (readyModal) readyModal.style.display = 'none'; }
+
+    function sendReady() {
+        closeReadyModal();
+        readyBtn.disabled = true;
+        readyMsg.classList.remove('hidden');
+        readyMsg.style.color = '#6b7280';
+        readyMsg.textContent = 'Enviando aviso...';
+        post(page.dataset.readyUrl, {})
+            .then(data => {
+                readyMsg.style.color = data.success ? '#16a34a' : '#dc2626';
+                readyMsg.textContent = data.success ? ('✓ ' + data.message) : ('Error: ' + data.message);
+            })
+            .catch(err => { readyMsg.style.color = '#dc2626'; readyMsg.textContent = 'Error: ' + err; })
+            .finally(() => { readyBtn.disabled = false; });
     }
+
+    if (readyBtn) readyBtn.addEventListener('click', openReadyModal);
+    if (readyConfirm) readyConfirm.addEventListener('click', sendReady);
+    if (readyCancel) readyCancel.addEventListener('click', closeReadyModal);
+    if (readyModal) readyModal.addEventListener('click', (e) => { if (e.target === readyModal) closeReadyModal(); });
 
     // ── Backlog ─────────────────────────────────────
     const backlogList = document.getElementById('backlog-list');
@@ -438,15 +471,34 @@
         const description = descInput.value.trim();
         const priority = document.getElementById('backlog-priority').value;
         const errorEl = document.getElementById('backlog-error');
+        const shotInput = document.getElementById('backlog-screenshot');
+        const shot = shotInput && shotInput.files ? shotInput.files[0] : null;
 
         if (!title) {
             errorEl.textContent = 'El titulo es obligatorio.';
             errorEl.classList.remove('hidden');
             return;
         }
+        if (shot && shot.size > 5 * 1024 * 1024) {
+            errorEl.textContent = 'La imagen supera los 5 MB.';
+            errorEl.classList.remove('hidden');
+            return;
+        }
         errorEl.classList.add('hidden');
 
-        post(page.dataset.backlogCreateUrl, {title, description, priority})
+        // multipart so the screenshot (if any) rides along — it is attached to
+        // the notification email and NOT stored server-side.
+        const fd = new FormData();
+        fd.append('title', title);
+        fd.append('description', description);
+        fd.append('priority', priority);
+        if (shot) fd.append('screenshot', shot);
+
+        fetch(page.dataset.backlogCreateUrl, {
+            method: 'POST',
+            headers: {'X-CSRFToken': getCsrfToken()},
+            body: fd,
+        }).then(r => r.json())
             .then(data => {
                 if (!data.success) {
                     errorEl.textContent = data.message;
@@ -472,6 +524,7 @@
                 backlogList.insertBefore(item, backlogList.firstChild);
                 titleInput.value = '';
                 descInput.value = '';
+                if (shotInput) shotInput.value = '';
             })
             .catch(() => {
                 errorEl.textContent = 'Error en la peticion.';

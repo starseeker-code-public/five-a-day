@@ -109,17 +109,35 @@ def api_seed_database(request):
 @qa_access_required
 @require_http_methods(["POST"])
 def api_create_backlog_task(request):
-    """Create a backlog task and optionally email it to support."""
+    """Create a backlog task and email it to support.
+
+    An optional screenshot is sent multipart and ATTACHED to the email only —
+    it is never stored on disk or in the DB (deliberate, to avoid image storage
+    spiralling out of control). Max 5 MB, images only.
+    """
     try:
-        data = json.loads(request.body)
-        title = data.get("title", "").strip()
-        description = data.get("description", "").strip()
-        priority = data.get("priority", "medium")
+        # Multipart (so a screenshot can ride along); fall back to JSON.
+        if request.content_type and request.content_type.startswith("multipart/"):
+            title = (request.POST.get("title") or "").strip()
+            description = (request.POST.get("description") or "").strip()
+            priority = request.POST.get("priority", "medium")
+            screenshot = request.FILES.get("screenshot")
+        else:
+            data = json.loads(request.body)
+            title = data.get("title", "").strip()
+            description = data.get("description", "").strip()
+            priority = data.get("priority", "medium")
+            screenshot = None
 
         if not title:
             return JsonResponse({"success": False, "message": "El titulo es obligatorio."}, status=400)
         if priority not in VALID_PRIORITIES:
             return JsonResponse({"success": False, "message": "Prioridad no valida."}, status=400)
+        if screenshot is not None:
+            if screenshot.size > 5 * 1024 * 1024:
+                return JsonResponse({"success": False, "message": "La imagen supera los 5 MB."}, status=400)
+            if not (screenshot.content_type or "").startswith("image/"):
+                return JsonResponse({"success": False, "message": "El adjunto debe ser una imagen."}, status=400)
 
         username = request.session.get("username", "anonymous")
         task = BacklogTask.objects.create(
@@ -129,9 +147,11 @@ def api_create_backlog_task(request):
             created_by=username,
         )
 
-        # Send email to support
+        # Email support — attach the screenshot in-memory (never persisted).
         support_email = getattr(settings, "SUPPORT_EMAIL", None)
         if support_email:
+            from django.core.mail import EmailMessage
+
             subject = f"[BACKLOG][{priority.upper()}] {title}"
             body = (
                 f"Nueva tarea en el backlog de QA\n"
@@ -141,19 +161,22 @@ def api_create_backlog_task(request):
                 f"Creado por:  {username}\n"
                 f"Fecha:       {task.created_at:%Y-%m-%d %H:%M}\n\n"
                 f"Descripcion:\n{description or '(ninguna)'}\n\n"
+                f"{'Se adjunta una captura de pantalla.' if screenshot else ''}\n"
                 f"{'=' * 50}\n"
                 f"Five a Day — Entorno QA\n"
             )
             try:
-                send_mail(
+                email = EmailMessage(
                     subject=subject,
-                    message=body,
+                    body=body,
                     from_email=settings.DEFAULT_FROM_EMAIL,
-                    recipient_list=[support_email],
-                    fail_silently=True,
+                    to=[support_email],
                 )
-            except Exception:
-                pass  # Never block task creation on email failure
+                if screenshot is not None:
+                    email.attach(screenshot.name, screenshot.read(), screenshot.content_type)
+                email.send(fail_silently=True)
+            except Exception:  # noqa: BLE001 — never block task creation on email failure
+                pass
 
         return JsonResponse(
             {
