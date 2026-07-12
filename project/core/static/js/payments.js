@@ -49,12 +49,9 @@
         const nav = document.getElementById('paginationNav');
         if (totalPages <= 1) { nav.innerHTML = ''; return; }
 
-        const btnStyle = 'text-decoration:none;width:2.5rem;height:2.5rem;border-radius:9999px;display:inline-flex;align-items:center;justify-content:center;border:1px solid #e5e7eb;background:#fff;color:#525252;font-size:0.875rem;cursor:pointer;transition:background 0.2s;';
-        const activeStyle = 'width:2.5rem;height:2.5rem;border-radius:9999px;display:inline-flex;align-items:center;justify-content:center;background:#8b5cf6;color:#fff;font-size:0.875rem;font-weight:700;';
-
         let html = '';
         if (currentPage > 1) {
-            html += `<button type="button" class="pg-btn" data-page="${currentPage - 1}" style="${btnStyle}font-size:1rem;">\u2039</button>`;
+            html += `<button type="button" class="pg-btn" data-page="${currentPage - 1}" style="font-size:1rem;">\u2039</button>`;
         }
 
         // Show limited page range for many pages
@@ -73,16 +70,16 @@
 
         for (const p of pages) {
             if (p === '...') {
-                html += `<span style="width:2rem;text-align:center;color:#9ca3af;">\u2026</span>`;
+                html += `<span class="pg-ellipsis">\u2026</span>`;
             } else if (p === currentPage) {
-                html += `<span style="${activeStyle}">${p}</span>`;
+                html += `<span class="pg-active">${p}</span>`;
             } else {
-                html += `<button type="button" class="pg-btn" data-page="${p}" style="${btnStyle}">${p}</button>`;
+                html += `<button type="button" class="pg-btn" data-page="${p}">${p}</button>`;
             }
         }
 
         if (currentPage < totalPages) {
-            html += `<button type="button" class="pg-btn" data-page="${currentPage + 1}" style="${btnStyle}font-size:1rem;">\u203A</button>`;
+            html += `<button type="button" class="pg-btn" data-page="${currentPage + 1}" style="font-size:1rem;">\u203A</button>`;
         }
         nav.innerHTML = html;
 

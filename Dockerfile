@@ -43,10 +43,13 @@ ENV PYTHONUNBUFFERED=1 \
     PATH="/app/.venv/bin:$PATH"
 
 # Install only runtime system deps
+# git: used by the QA testing dashboard to show the last commit (branch, hash,
+#      author, date) — see core/views/testing_tools._git_info.
 # hadolint ignore=DL3008
 RUN apt-get update && apt-get install -y --no-install-recommends \
     postgresql-client \
     libpq-dev \
+    git \
     && rm -rf /var/lib/apt/lists/*
 
 # Create non-root user

@@ -9,6 +9,20 @@
     <meta name="author" content="Five a Day English Academy">
     <meta name="theme-color" content="#6d28d9">
 
+    <!-- Theme: reaching the login page means the session ended (logout or 6h
+         inactivity expiry), so the saved theme is NOT preserved here — forget
+         it and apply the time-based DEFAULT (light 10:00–16:59, dark otherwise).
+         Runs before first paint to avoid a flash. -->
+    <script>
+    (function () {
+        try { localStorage.removeItem('theme'); } catch (e) { /* ignore */ }
+        try {
+            var h = new Date().getHours();
+            if (!(h >= 10 && h < 17)) document.documentElement.classList.add('dark');
+        } catch (e) { /* default light */ }
+    })();
+    </script>
+
     <!-- Favicon & app icons -->
     <link rel="icon" type="image/x-icon" href="{% static 'favicon.ico' %}">
     <link rel="icon" type="image/png" sizes="32x32" href="{% static 'favicon-32x32.png' %}">
@@ -284,9 +298,69 @@
             to   { opacity: 1; transform: translateY(0); }
         }
 
+        /* ── Theme toggle button (top-right) ─────────────────── */
+        .theme-toggle {
+            position: fixed;
+            top: 1.1rem;
+            right: 1.1rem;
+            width: 2.75rem;
+            height: 2.75rem;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 9999px;
+            border: 1.5px solid rgba(196,181,253,0.5);
+            background: rgba(255,255,255,0.7);
+            color: #6d28d9;
+            cursor: pointer;
+            transition: background 0.2s, color 0.2s, border-color 0.2s;
+            z-index: 10;
+        }
+        .theme-toggle:hover { background: rgba(255,255,255,0.95); }
+        .theme-icon-dark { display: none; }
+
+        /* ── Dark theme (html.dark) ──────────────────────────── */
+        html.dark body {
+            background: linear-gradient(135deg, #141220 0%, #1c1730 55%, #241b38 100%);
+        }
+        html.dark .card {
+            background: rgba(30,26,46,0.95);
+            border-color: rgba(63,53,89,0.9);
+            box-shadow: 0 8px 40px rgba(0,0,0,0.45), 0 1.5px 6px rgba(0,0,0,0.3);
+        }
+        html.dark .card-heading { color: #c4b5fd; }
+        html.dark .card-sub { color: #a78bfa; }
+        html.dark .field label { color: #c4b5fd; }
+        html.dark .input-wrap input {
+            background: #272235;
+            color: #ece9f6;
+            border-color: #3f3559;
+        }
+        html.dark .input-wrap input:focus { background: #2a2540; }
+        html.dark .input-wrap input::placeholder { color: #726c8a; }
+        html.dark .btn-login {
+            background: #2a2340;
+            color: #c4b5fd;
+            border-color: #3f3559;
+        }
+        html.dark .btn-login:hover { background: #382d59; border-color: #7c3aed; }
+        html.dark .footer { color: #918bab; }
+        html.dark .theme-toggle {
+            background: rgba(42,35,64,0.8);
+            border-color: #3f3559;
+            color: #c4b5fd;
+        }
+        html.dark .theme-toggle:hover { background: rgba(56,45,89,0.95); }
+        html.dark .theme-icon-light { display: none; }
+        html.dark .theme-icon-dark { display: inline; }
+
     </style>
 </head>
 <body>
+<button id="theme-toggle-btn" type="button" class="theme-toggle" title="Cambiar tema claro/oscuro" aria-label="Cambiar tema claro/oscuro">
+    <span class="material-symbols-outlined theme-icon-light">dark_mode</span>
+    <span class="material-symbols-outlined theme-icon-dark">light_mode</span>
+</button>
 <div class="wrapper">
 
     <div class="title-block">
@@ -363,6 +437,7 @@
     <p class="footer">Five a Day © 2025 · Todos los derechos reservados</p>
 </div>
 <script src="{% static 'js/login_effects.js' %}"></script>
+<script src="{% static 'js/theme.js' %}"></script>
 <script>
     const quotes = [
         "Atrevete a mostrar tu brillo",

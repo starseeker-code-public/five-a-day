@@ -55,14 +55,14 @@ def web_manifest(request):
 # APP_VERSION for cache-busting.
 _SW_TEMPLATE = """// Five a Day — service worker (v1.12)
 //
-// Cache strategy — NETWORK-FIRST for cacheable assets:
-//   - /static/, /media/, the manifest and the login page are fetched from the
-//     NETWORK first and only fall back to cache when offline. This guarantees
-//     the latest CSS/JS/theme always loads when online — a cache-first policy
-//     here served stale styles on navigation (fresh only on a hard refresh).
-//   - Everything else (dashboard, students, payments, parent portal, API):
-//     NEVER cached — those responses are user-scoped and caching them would
-//     leak session data on shared devices after logout.
+// Cache strategy — deliberately narrow:
+//   - Cache-first ONLY for /static/ assets and the login page (which is
+//     public and identical for every user).
+//   - Network-first with cache fallback for the manifest + logo so an
+//     offline load still renders the shell.
+//   - Everything else (dashboard, students, payments, parent portal,
+//     API): NEVER cached — those responses are user-scoped and caching
+//     them would leak session data on shared devices after logout.
 
 const CACHE_NAME = "fiveaday-v%(cache_key)s";
 const STATIC_SHELL = [
@@ -106,17 +106,17 @@ self.addEventListener("fetch", (event) => {
     // user cannot see the previous user's dashboard by pulling from cache.
     if (!isCacheable(url)) return;
 
-    // Network-first: always try the network so the freshest CSS/JS/theme wins
-    // when online; refresh the cache in the background; fall back to cache only
-    // when the network fails (offline).
     event.respondWith(
-        fetch(req).then((res) => {
-            if (res && res.ok) {
-                const clone = res.clone();
-                caches.open(CACHE_NAME).then((cache) => cache.put(req, clone));
-            }
-            return res;
-        }).catch(() => caches.match(req))
+        caches.match(req).then((cached) => {
+            const network = fetch(req).then((res) => {
+                if (res && res.ok) {
+                    const clone = res.clone();
+                    caches.open(CACHE_NAME).then((cache) => cache.put(req, clone));
+                }
+                return res;
+            }).catch(() => cached);
+            return cached || network;
+        })
     );
 });
 """
@@ -131,9 +131,7 @@ def service_worker(request):
     version = getattr(settings, "APP_VERSION", "1.0")
     body = _SW_TEMPLATE % {"cache_key": version}
     response = HttpResponse(body, content_type="application/javascript")
-    # Never let the browser serve a stale service worker — always re-check it so
-    # a new cache strategy / version takes effect on the next navigation.
-    response["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    response["Cache-Control"] = "public, max-age=3600"
     # Service workers must be served with a "Service-Worker-Allowed: /" header
     # if you want them to control the whole origin. Ours is at /sw.js which
     # implicitly scopes to /, so this header is really about future-proofing

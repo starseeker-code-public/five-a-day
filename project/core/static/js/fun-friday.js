@@ -30,8 +30,8 @@ function updateFFIcon(btn, isThis, isLast) {
     const row = btn.closest('.ff-student-row');
     row.dataset.ffThis = isThis ? '1' : '0';
     const nameSpan = row.querySelector('.ff-name');
-    nameSpan.style.color = isThis ? '#404040' : '#d1d5db';
-    nameSpan.style.fontWeight = isThis ? '500' : '400';
+    // Theme-aware readability + bold when selected (see .ff-name / .ff-selected)
+    nameSpan.classList.toggle('ff-selected', isThis);
     if (isThis && !isLast)      { span.textContent = 'check_circle'; span.style.color = '#22c55e'; }
     else if (isThis && isLast)  { span.textContent = 'check_circle'; span.style.color = '#f59e0b'; }
     else if (!isThis && isLast) { span.textContent = 'cancel';       span.style.color = '#f59e0b'; }

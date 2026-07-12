@@ -142,14 +142,6 @@ NON_ADMIN_ALLOWED_URL_NAMES = frozenset(
         "complete_todo",
         "history_list",
         "submit_support_ticket",
-        # QA testing tools (testing env only; view itself is @qa_access_required,
-        # and the whole feature is invisible outside DJANGO_ENV=testing). Listed
-        # here so non-admin Teachers can reach the QA dashboard + its API too.
-        "testing_tools",
-        "api_seed_database",
-        "api_create_backlog_task",
-        "api_update_backlog_task",
-        "api_toggle_error_email",
         # Error test pages (harmless)
         "test_error_400",
         "test_error_403",
@@ -232,3 +224,25 @@ class SimpleAuthMiddleware:
                 return redirect("home")
 
         return self.get_response(request)
+
+
+class NoHtmlCacheMiddleware:
+    """Prevent browsers from caching dynamic HTML pages.
+
+    Static assets are content-hashed and served `immutable`, but the HTML that
+    references them had no `Cache-Control`, so browsers heuristically cached the
+    page — pinning it to OLD hashed CSS/JS and showing a stale theme after a
+    deploy (fixed only by a hard refresh). Marking HTML `no-cache` forces a
+    revalidation on every navigation, so the current asset hashes always load.
+    Static/media responses (served by WhiteNoise) are untouched.
+    """
+
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        response = self.get_response(request)
+        content_type = response.get("Content-Type", "")
+        if content_type.startswith("text/html") and not response.has_header("Cache-Control"):
+            response["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        return response

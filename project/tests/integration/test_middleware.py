@@ -73,3 +73,20 @@ class TestAuthenticatedAccess:
         response = client.get("/")
         assert response.status_code == 302
         assert "/login/" in response["Location"]
+
+
+class TestNoHtmlCacheMiddleware:
+    """Dynamic HTML must be no-cache so browsers always load current asset hashes."""
+
+    def test_html_response_is_no_cache(self, auth_client):
+        response = auth_client.get("/")
+        assert response.status_code == 200
+        assert response["Content-Type"].startswith("text/html")
+        assert "no-cache" in response["Cache-Control"]
+        assert "no-store" in response["Cache-Control"]
+
+    def test_static_assets_not_touched(self, client):
+        # JSON (health check) is not HTML → middleware leaves it alone
+        response = client.get("/health/")
+        cc = response.get("Cache-Control", "")
+        assert "no-store" not in cc

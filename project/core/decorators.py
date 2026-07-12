@@ -23,16 +23,18 @@ def _request_teacher(request):
 
 def qa_access_required(view_func):
     """Block access unless DJANGO_ENV=testing (DEBUG=False) AND the request is
-    made by a logged-in Teacher (admin or not). Returns 404 for everyone else
-    so the page appears not to exist.
+    made by a logged-in ADMIN Teacher. Returns 404 for everyone else so the
+    page appears not to exist.
 
-    This gates the QA testing dashboard on the real Teacher accounts seeded in
-    the testing environment instead of a dedicated QA username.
+    The QA testing dashboard is gated on admin Teacher accounts (non-admin
+    teachers must not see the dev tools: DB seed/reset, error-email toggle,
+    git internals).
     """
 
     @wraps(view_func)
     def wrapper(request, *args, **kwargs):
-        if not (settings.IS_TESTING_ENV and _request_teacher(request) is not None):
+        teacher = _request_teacher(request)
+        if not (settings.IS_TESTING_ENV and teacher is not None and teacher.admin):
             raise Http404
         return view_func(request, *args, **kwargs)
 

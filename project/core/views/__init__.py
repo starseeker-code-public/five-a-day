@@ -144,6 +144,7 @@ from core.views.support import submit_support_ticket
 # Testing tools (QA)
 from core.views.testing_tools import (
     api_create_backlog_task,
+    api_mark_ready,
     api_seed_database,
     api_toggle_error_email,
     api_update_backlog_task,

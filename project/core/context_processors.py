@@ -43,9 +43,9 @@ def today_notifications(request):
     is_non_admin_teacher = teacher is not None and not teacher.admin
     is_admin_user = not is_non_admin_teacher
 
-    # QA testing tools visibility — any logged-in Teacher (admin or not) in the
-    # testing environment. Gated on a real Teacher account, not a QA username.
-    show_testing_tools = settings.IS_TESTING_ENV and teacher is not None
+    # QA testing tools visibility — logged-in ADMIN Teacher in the testing
+    # environment only (non-admin teachers must not see the dev tools).
+    show_testing_tools = settings.IS_TESTING_ENV and teacher is not None and teacher.admin
 
     return {
         "notifications_today_todos": todos,

@@ -6,8 +6,8 @@ var scheduleEditMode = false;
 function toggleEditMode() {
     scheduleEditMode = !scheduleEditMode;
     const btn = document.getElementById('edit-toggle-btn');
-    btn.style.background = scheduleEditMode ? '#e0f2fe' : '#fff';
-    btn.querySelector('.material-symbols-outlined').style.color = scheduleEditMode ? '#0284c7' : '#6b7280';
+    btn.style.background = scheduleEditMode ? '#e0f2fe' : 'var(--sched-surface)';
+    btn.querySelector('.material-symbols-outlined').style.color = scheduleEditMode ? '#0284c7' : 'var(--sched-ink)';
     btn.title = scheduleEditMode ? 'Salir de edición' : 'Editar horario';
     if (window._scheduleRenderTable) window._scheduleRenderTable();
 }
@@ -18,7 +18,7 @@ document.addEventListener('DOMContentLoaded', function () {
     const allStudents = window.SCHEDULE_CONFIG.students;
     const slotsRaw = window.SCHEDULE_CONFIG.slots;
 
-    const FF_CLR = { bg: '#ede9fe', text: '#6d28d9', dot: '#a78bfa' };
+    const FF_CLR = { bg: 'var(--sched-ff-bg)', text: 'var(--sched-ff-text)', dot: '#a78bfa' };
 
     const groupById = {};
     groups.forEach(g => { groupById[g.id] = g; });
@@ -36,6 +36,11 @@ document.addEventListener('DOMContentLoaded', function () {
     }
     function cellText(hex) {
         const [r,g,b] = hexToRgb(hex);
+        if (document.documentElement.classList.contains('dark')) {
+            // Dark theme: LIGHTEN the group colour toward white for contrast on
+            // the dark cell (darkening it like light mode would be unreadable).
+            return `rgb(${Math.round(r+(255-r)*0.6)},${Math.round(g+(255-g)*0.6)},${Math.round(b+(255-b)*0.6)})`;
+        }
         return `rgb(${Math.round(r*0.55)},${Math.round(g*0.55)},${Math.round(b*0.55)})`;
     }
 
@@ -103,9 +108,9 @@ document.addEventListener('DOMContentLoaded', function () {
         if (!cell || cell.isFunFriday) return;
 
         if (scheduleEditMode) {
-            td.style.background = '#fafafa';
+            td.style.background = 'var(--sched-surface)';
             const sel = document.createElement('select');
-            sel.style.cssText = 'width:100%;font-size:0.7rem;padding:4px 2px;border:1px solid #d1d5db;border-radius:4px;background:#fff;cursor:pointer;';
+            sel.style.cssText = 'width:100%;font-size:0.7rem;padding:4px 2px;border:1px solid var(--sched-border);border-radius:4px;background:#fff;cursor:pointer;';
             const blank = document.createElement('option');
             blank.value = '';
             blank.textContent = '— sin grupo —';
@@ -132,7 +137,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 td.innerHTML = `<div style="display:flex;align-items:center;justify-content:center;gap:2px;">${dot}<span style="font-size:0.936rem;font-weight:600;color:${esc(cellText(g.color))};">${esc(g.name)}</span></div>`;
             } else {
                 // Empty slot — hint to use edit mode
-                td.innerHTML = '<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;opacity:0.35;"><span style="font-size:11.7px;font-weight:600;color:#6b7280;line-height:1.2;">SIN GRUPO</span><span style="font-size:11.7px;color:#9ca3af;line-height:1.2;">editar ✏</span></div>';
+                td.innerHTML = '<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;opacity:0.35;"><span style="font-size:11.7px;font-weight:600;color:var(--sched-ink);line-height:1.2;">SIN GRUPO</span><span style="font-size:11.7px;color:var(--sched-dim);line-height:1.2;">editar ✏</span></div>';
             }
         }
     }
@@ -150,7 +155,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 th.className = 'bg-neutral-50 border-b border-neutral-200 p-3 text-center';
                 if (i < 4) th.classList.add('border-r');
                 th.style.width = 'calc((100% - 56px) / 5)';
-                th.innerHTML = '<span style="font-size:1.1375rem;font-weight:600;color:#404040;">' + name + '</span>';
+                th.innerHTML = '<span style="font-size:1.1375rem;font-weight:600;color:var(--sched-strong);">' + name + '</span>';
                 headerRow.appendChild(th);
             });
         }
@@ -162,12 +167,12 @@ document.addEventListener('DOMContentLoaded', function () {
 
             // Time cell
             const timeTd = document.createElement('td');
-            timeTd.style.cssText = 'width:56px;min-width:56px;max-width:56px;padding:8px 6px;text-align:right;vertical-align:middle;background:#fafafa;position:sticky;left:0;z-index:10;';
-            if (row < NUM_ROWS - 1) timeTd.style.borderBottom = '1px solid #e5e5e5';
-            timeTd.style.borderRight = '1px solid #e5e5e5';
+            timeTd.style.cssText = 'width:56px;min-width:56px;max-width:56px;padding:8px 6px;text-align:right;vertical-align:middle;background:var(--sched-surface);position:sticky;left:0;z-index:10;';
+            if (row < NUM_ROWS - 1) timeTd.style.borderBottom = '1px solid var(--sched-border)';
+            timeTd.style.borderRight = '1px solid var(--sched-border)';
             timeTd.innerHTML =
-                '<span style="display:block;font-size:14.3px;font-weight:600;color:#737373;line-height:1.2;">' + ROW_TIMES[row].start + '</span>' +
-                '<span style="display:block;font-size:13px;color:#d4d4d4;line-height:1.2;margin-top:2px;">' + ROW_TIMES[row].end + '</span>';
+                '<span style="display:block;font-size:14.3px;font-weight:600;color:var(--sched-ink);line-height:1.2;">' + ROW_TIMES[row].start + '</span>' +
+                '<span style="display:block;font-size:13px;color:var(--sched-dim);line-height:1.2;margin-top:2px;">' + ROW_TIMES[row].end + '</span>';
             tr.appendChild(timeTd);
 
             let c = 0;
@@ -179,8 +184,8 @@ document.addEventListener('DOMContentLoaded', function () {
 
                 const td = document.createElement('td');
                 td.style.cssText = 'text-align:center;vertical-align:middle;padding:8px 4px;';
-                if (row < NUM_ROWS - 1) td.style.borderBottom = '1px solid #f0f0f0';
-                if (isLastColInDay && !isLastDay) td.style.borderRight = '1px solid #e5e5e5';
+                if (row < NUM_ROWS - 1) td.style.borderBottom = '1px solid var(--sched-border)';
+                if (isLastColInDay && !isLastDay) td.style.borderRight = '1px solid var(--sched-border)';
 
                 const cell = schedule[row][c];
 
@@ -210,6 +215,18 @@ document.addEventListener('DOMContentLoaded', function () {
     window._scheduleRenderTable = renderTable;
     renderTable();
 
+    // Re-render when the light/dark theme toggles so group-name colours (which
+    // are computed per-theme in cellText) update immediately without a reload.
+    let _lastDark = document.documentElement.classList.contains('dark');
+    new MutationObserver(() => {
+        const isDark = document.documentElement.classList.contains('dark');
+        if (isDark !== _lastDark) {
+            _lastDark = isDark;
+            renderTable();
+            if (typeof renderDropdowns === 'function') renderDropdowns();
+        }
+    }).observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
+
     // ── Day detail dropdowns ────────────────────────────────────
     function renderDropdowns() {
         const dc = document.getElementById('day-dropdowns');
@@ -233,19 +250,19 @@ document.addEventListener('DOMContentLoaded', function () {
                 const g = groupById[b.groupId];
                 if (!g) return;
                 const stuHtml = g.students.length > 0
-                    ? g.students.map(n => '<span>' + esc(n) + '</span>').join('<span style="color:#d4d4d4;margin:0 3px;">·</span>')
-                    : '<span style="color:#a3a3a3;font-style:italic;">Sin estudiantes</span>';
+                    ? g.students.map(n => '<span>' + esc(n) + '</span>').join('<span style="color:var(--sched-dim);margin:0 3px;">·</span>')
+                    : '<span style="color:var(--sched-dim);font-style:italic;">Sin estudiantes</span>';
 
                 cards += '<div style="display:flex;align-items:flex-start;gap:12px;padding:12px 0;">' +
                     '<div style="width:4px;align-self:stretch;border-radius:9999px;background:' + esc(g.color) + ';flex-shrink:0;"></div>' +
                     '<div style="flex:1;min-width:0;">' +
                         '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">' +
                             '<span style="font-size:1.1375rem;font-weight:600;color:' + esc(cellText(g.color)) + ';">' + esc(g.name) + '</span>' +
-                            '<span style="font-size:14.3px;color:#a3a3a3;font-weight:500;">' + b.start + ' - ' + b.end + '</span>' +
-                            '<span style="font-size:14.3px;color:#a3a3a3;">·</span>' +
-                            '<span style="font-size:14.3px;color:#737373;">' + esc(g.teacher) + '</span>' +
+                            '<span style="font-size:14.3px;color:var(--sched-dim);font-weight:500;">' + b.start + ' - ' + b.end + '</span>' +
+                            '<span style="font-size:14.3px;color:var(--sched-dim);">·</span>' +
+                            '<span style="font-size:14.3px;color:var(--sched-ink);">' + esc(g.teacher) + '</span>' +
                         '</div>' +
-                        '<div style="font-size:11px;color:#a3a3a3;margin-top:4px;line-height:1.6;">' + stuHtml + '</div>' +
+                        '<div style="font-size:11px;color:var(--sched-dim);margin-top:4px;line-height:1.6;">' + stuHtml + '</div>' +
                     '</div></div>';
             });
 
@@ -270,11 +287,11 @@ document.addEventListener('DOMContentLoaded', function () {
             allStudents.forEach(st => {
                 list += '<div style="display:flex;align-items:center;gap:12px;padding:8px 0;">' +
                     '<input type="checkbox" class="ff-checkbox" style="width:14px;height:14px;accent-color:#8b5cf6;cursor:pointer;">' +
-                    '<span style="font-size:0.875rem;color:#404040;">' + esc(st.first_name) + ' ' + esc(st.last_name) + '</span>' +
+                    '<span style="font-size:0.875rem;color:var(--sched-strong);">' + esc(st.first_name) + ' ' + esc(st.last_name) + '</span>' +
                 '</div>';
             });
             if (!allStudents.length) {
-                list = '<p style="font-size:0.875rem;color:#a3a3a3;padding:12px 0;text-align:center;">No hay estudiantes activos</p>';
+                list = '<p style="font-size:0.875rem;color:var(--sched-dim);padding:12px 0;text-align:center;">No hay estudiantes activos</p>';
             }
 
             const w = document.createElement('div');
@@ -304,8 +321,8 @@ document.addEventListener('DOMContentLoaded', function () {
         document.addEventListener('change', function (e) {
             if (!e.target.matches('.ff-checkbox')) return;
             const span = e.target.nextElementSibling;
-            if (e.target.checked) { span.style.textDecoration = 'line-through'; span.style.color = '#a3a3a3'; }
-            else { span.style.textDecoration = ''; span.style.color = '#404040'; }
+            if (e.target.checked) { span.style.textDecoration = 'line-through'; span.style.color = 'var(--sched-dim)'; }
+            else { span.style.textDecoration = ''; span.style.color = 'var(--sched-strong)'; }
         });
     }
 

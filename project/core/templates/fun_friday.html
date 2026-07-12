@@ -42,7 +42,7 @@
             <button id="ffFilterBtn" class="px-4 py-2 bg-primary-500 text-white rounded-md hover:bg-primary-600 transition-colors duration-200 flex items-center gap-2" title="Filtrar por Fun Friday">
                 <span class="material-symbols-outlined text-sm" id="ffFilterIcon">filter_list</span>
             </button>
-            <button id="ffListBtn" class="px-4 py-2 rounded-md transition-colors duration-200 flex items-center gap-2 font-semibold text-sm" style="background-color:#ddd6fe;color:#2e1065;" title="Ver listas de asistencia">
+            <button id="ffListBtn" class="ff-tool-btn px-4 py-2 rounded-md transition-colors duration-200 flex items-center gap-2 font-semibold text-sm" title="Ver listas de asistencia">
                 <span class="material-symbols-outlined text-sm">fact_check</span>
                 Listas
             </button>
@@ -85,7 +85,7 @@
                     {% endif %}
                 </button>
 
-                <span class="ff-name flex-1 text-sm" style="{% if student.id in this_week_ids %}color:#404040;font-weight:500;{% else %}color:#d1d5db;font-weight:400;{% endif %}">
+                <span class="ff-name flex-1 text-sm{% if student.id in this_week_ids %} ff-selected{% endif %}">
                     {{ student.first_name }} {{ student.last_name }}
                 </span>
 

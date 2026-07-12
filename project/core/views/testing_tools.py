@@ -25,8 +25,11 @@ def _git_info():
     """Return branch + last commit info. Single subprocess call, never raises."""
     fmt = "%H%n%h%n%s%n%an%n%ci"
     try:
+        # `-c safe.directory=*` avoids git's "dubious ownership" refusal when
+        # the repo is owned by a different user than the process (common with
+        # bind mounts / clones done as root). Requires git in the image.
         result = subprocess.run(
-            ["git", "log", "-1", f"--pretty=format:{fmt}"],
+            ["git", "-c", "safe.directory=*", "log", "-1", f"--pretty=format:{fmt}"],
             capture_output=True,
             text=True,
             timeout=5,
@@ -36,7 +39,7 @@ def _git_info():
             return {}
         lines = result.stdout.strip().split("\n")
         branch = subprocess.run(
-            ["git", "branch", "--show-current"],
+            ["git", "-c", "safe.directory=*", "branch", "--show-current"],
             capture_output=True,
             text=True,
             timeout=3,
@@ -200,3 +203,55 @@ def api_toggle_error_email(request):
         return JsonResponse({"success": True, "enabled": config.error_email_enabled})
     except Exception as e:
         return JsonResponse({"success": False, "message": str(e)}, status=500)
+
+
+@qa_access_required
+@require_http_methods(["POST"])
+def api_mark_ready(request):
+    """Email SUPPORT_EMAIL that an admin marked this version as ready to ship,
+    with a full snapshot of the version / environment / last-commit info."""
+    support_email = getattr(settings, "SUPPORT_EMAIL", None)
+    if not support_email:
+        return JsonResponse({"success": False, "message": "SUPPORT_EMAIL no está configurado."}, status=500)
+
+    user = getattr(request, "user", None)
+    user_email = getattr(user, "email", "") or request.session.get("username", "desconocido")
+    git = _git_info()
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    subject = f"[READY TO SHIP] v{settings.APP_VERSION} — {user_email}"
+    body = (
+        f"{user_email} ha marcado esta versión como LISTA PARA DESPLEGAR.\n"
+        f"{'=' * 55}\n\n"
+        f"Aplicación\n"
+        f"  Versión:        v{settings.APP_VERSION}\n"
+        f"  Entorno:        {settings.ENVIRONMENT}\n"
+        f"  Debug:          {settings.DEBUG}\n"
+        f"  Python:         {sys.version.split()[0]}\n"
+        f"  Django:         {django.get_version()}\n"
+        f"  Base de datos:  {settings.DATABASES['default'].get('NAME', '—')}\n"
+        f"  Motor BD:       {settings.DATABASES['default']['ENGINE']}\n"
+        f"  Zona horaria:   {settings.TIME_ZONE}\n"
+        f"  Fecha/hora:     {now}\n\n"
+        f"Último commit\n"
+        f"  Rama:     {git.get('branch', '—')}\n"
+        f"  Commit:   {git.get('commit_id_full', '—')}\n"
+        f"  Mensaje:  {git.get('commit_message', '—')}\n"
+        f"  Autor:    {git.get('commit_author', '—')}\n"
+        f"  Fecha:    {git.get('commit_date', '—')}\n\n"
+        f"{'=' * 55}\n"
+        f"Marcado por: {user_email}\n"
+        f"Five a Day — Entorno QA\n"
+    )
+    try:
+        send_mail(
+            subject=subject,
+            message=body,
+            from_email=settings.DEFAULT_FROM_EMAIL,
+            recipient_list=[support_email],
+            fail_silently=False,
+        )
+    except Exception as e:  # noqa: BLE001 — surface the send failure to the UI
+        return JsonResponse({"success": False, "message": f"Error al enviar: {e}"}, status=500)
+
+    return JsonResponse({"success": True, "message": f"Enviado a {support_email}"})

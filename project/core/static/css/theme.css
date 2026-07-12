@@ -1,17 +1,243 @@
 /* ==========================================================================
- * theme.css — theme hooks
+ * theme.css — Dark theme for Five a Day eVolution
  * --------------------------------------------------------------------------
- * The app currently uses ONE theme (the original violet palette) for both
- * light and dark. The light/dark toggle infrastructure is kept in place
- * (button in the header, `theme.js`, `darkMode: 'class'`, the no-flash script
- * in base.html) so a dedicated dark theme can be added here later WITHOUT
- * touching templates — it will live as `html.dark .<utility>` overrides.
+ * The app is styled with hard-coded Tailwind (CDN) utility classes and no
+ * `dark:` variants, so dark mode is delivered here as a set of overrides that
+ * activate only under `html.dark` (toggled by theme.js, persisted in
+ * localStorage). The light theme is Tailwind's defaults untouched — this file
+ * is inert unless the `dark` class is present.
  *
- * Until then this file only swaps the toggle icon; `html.dark` makes NO visual
- * change, so dark mode looks identical to light (the beloved violet theme).
+ * Palette is a violet-tinted dark, in tune with the light theme's `primary`
+ * (violet) scale: near-black violet surfaces, light lavender text, and the
+ * same primary-500/600 violet for interactive accents.
  * ======================================================================== */
 
-/* Theme-toggle icon swap (moon shown in light, sun shown in dark) */
+html.dark {
+    color-scheme: dark;
+
+    /* Surface + ink scale (referenced by the rules below) */
+    --fad-bg:        #141220;  /* page background            */
+    --fad-surface:   #1e1a2e;  /* cards / white panels        */
+    --fad-surface-2: #272235;  /* hover / raised surfaces     */
+    --fad-sidebar:   #1c1730;  /* sidebar (bg-primary-100)    */
+    --fad-accent-bg: #2a2340;  /* icon-button / primary-50/100 chips */
+    --fad-active:    #382d59;  /* active nav (bg-primary-200) */
+
+    --fad-ink:       #ece9f6;  /* strongest text (neutral-800/900) */
+    --fad-ink-2:     #d5d0e6;  /* neutral-700                 */
+    --fad-muted:     #b0aac9;  /* neutral-600                 */
+    --fad-muted-2:   #918bab;  /* neutral-500                 */
+    --fad-faint:     #726c8a;  /* neutral-400/300             */
+
+    --fad-violet:    #b9a5f5;  /* readable violet on dark (primary-600/700 text) */
+    --fad-border:    #332c48;  /* neutral borders             */
+    --fad-border-2:  #3f3559;  /* primary borders             */
+
+    /* Schedule grid palette (dark) — overrides the light :root defaults */
+    --sched-surface: #272235;
+    --sched-border:  #332c48;
+    --sched-ink:     #b0aac9;
+    --sched-dim:     #726c8a;
+    --sched-strong:  #ece9f6;
+    --sched-ff-bg:   #2a2340;
+    --sched-ff-text: #b9a5f5;
+
+    /* Fun Friday student names (dark) */
+    --ff-name:     #b0aac9;   /* non-selected: readable light grey */
+    --ff-name-sel: #ece9f6;   /* selected: bright */
+}
+
+/* Fun Friday toolbar buttons (dark) */
+html.dark .ff-tool-btn { background-color: var(--fad-accent-bg); color: var(--fad-violet); }
+html.dark .ff-tool-btn:hover { background-color: var(--fad-active); }
+
+/* ── Page + structural backgrounds ─────────────────────────────────────── */
+html.dark body,
+html.dark .bg-neutral-50,
+html.dark .bg-neutral-100,
+html.dark .bg-gray-50,
+html.dark .bg-gray-100 { background-color: var(--fad-bg); }
+
+html.dark .bg-white { background-color: var(--fad-surface); }
+html.dark .bg-neutral-200 { background-color: var(--fad-surface-2); }
+
+html.dark .bg-primary-100 { background-color: var(--fad-accent-bg); }
+html.dark .bg-primary-50  { background-color: var(--fad-accent-bg); }
+html.dark .bg-primary-200 { background-color: var(--fad-active); }
+
+/* Sidebar keeps its own slightly distinct violet-dark surface */
+html.dark #main-sidebar { background-color: var(--fad-sidebar); }
+
+/* ── Text ──────────────────────────────────────────────────────────────── */
+html.dark .text-neutral-900,
+html.dark .text-neutral-800 { color: var(--fad-ink); }
+html.dark .text-neutral-700 { color: var(--fad-ink-2); }
+html.dark .text-neutral-600 { color: var(--fad-muted); }
+html.dark .text-neutral-500 { color: var(--fad-muted-2); }
+html.dark .text-neutral-400,
+html.dark .text-neutral-300 { color: var(--fad-faint); }
+
+/* Violet labels/links need lightening for contrast on dark */
+html.dark .text-primary-900,
+html.dark .text-primary-800,
+html.dark .text-primary-700,
+html.dark .text-primary-600,
+html.dark .text-primary-500 { color: var(--fad-violet); }
+
+/* ── Borders + dividers ────────────────────────────────────────────────── */
+html.dark .border-neutral-50,
+html.dark .border-neutral-100,
+html.dark .border-neutral-200,
+html.dark .border-neutral-300 { border-color: var(--fad-border); }
+html.dark .border-primary-100,
+html.dark .border-primary-200,
+html.dark .border-primary-300 { border-color: var(--fad-border-2); }
+html.dark .divide-neutral-100 > :not([hidden]) ~ :not([hidden]) { border-color: var(--fad-border); }
+
+/* ── Hover states (need to beat Tailwind's own hover utilities) ────────── */
+html.dark .hover\:bg-neutral-50:hover,
+html.dark .hover\:bg-neutral-100:hover { background-color: var(--fad-surface-2); }
+html.dark .hover\:bg-primary-100:hover { background-color: var(--fad-active); }
+html.dark .hover\:text-primary-700:hover { color: var(--fad-violet); }
+
+/* ── Form controls ─────────────────────────────────────────────────────── */
+html.dark input,
+html.dark textarea,
+html.dark select {
+    background-color: var(--fad-surface-2);
+    color: var(--fad-ink);
+    border-color: var(--fad-border);
+}
+html.dark input::placeholder,
+html.dark textarea::placeholder { color: var(--fad-faint); }
+html.dark input[type="checkbox"],
+html.dark input[type="radio"] { accent-color: #8b5cf6; }
+
+/* Keep solid violet action buttons vivid (don't let the bg-* rules dull them) */
+html.dark .bg-primary-500 { background-color: #8b5cf6; }
+html.dark .bg-primary-600 { background-color: #7c3aed; }
+html.dark .hover\:bg-primary-600:hover { background-color: #6d28d9; }
+html.dark .bg-primary-500 .material-symbols-outlined,
+html.dark .header-action-btn { color: #fff; }
+
+/* ── Status badges (green/red/amber/blue/…) — legible on dark ──────────── */
+html.dark .bg-green-50,
+html.dark .bg-green-100,
+html.dark .bg-green-200,
+html.dark .bg-emerald-50,
+html.dark .bg-emerald-100 { background-color: #16301f; }
+html.dark .bg-red-50,
+html.dark .bg-red-100,
+html.dark .bg-rose-100 { background-color: #3a1d24; }
+html.dark .bg-amber-50,
+html.dark .bg-amber-100,
+html.dark .bg-yellow-50,
+html.dark .bg-yellow-100 { background-color: #33280f; }
+html.dark .bg-blue-50,
+html.dark .bg-blue-100 { background-color: #1a2842; }
+html.dark .bg-cyan-50,
+html.dark .bg-cyan-100 { background-color: #123236; }
+
+html.dark .text-green-700,
+html.dark .text-green-800,
+html.dark .text-emerald-700,
+html.dark .text-emerald-800 { color: #86efac; }
+html.dark .text-red-700,
+html.dark .text-red-800 { color: #fca5a5; }
+html.dark .text-amber-700,
+html.dark .text-amber-800,
+html.dark .text-yellow-700,
+html.dark .text-yellow-800 { color: #fcd34d; }
+html.dark .text-blue-700,
+html.dark .text-blue-800 { color: #93c5fd; }
+html.dark .text-cyan-700,
+html.dark .text-cyan-800 { color: #67e8f9; }
+
+html.dark .border-green-200,
+html.dark .border-emerald-200 { border-color: #1f5133; }
+html.dark .border-red-200 { border-color: #5a2a35; }
+html.dark .border-amber-100,
+html.dark .border-amber-200,
+html.dark .border-yellow-200 { border-color: #574012; }
+html.dark .border-blue-200 { border-color: #2a4166; }
+
+/* ── Inline light backgrounds (style="background:#fff" …) ──────────────────
+ * Some cards/panels hard-code a light background via an inline `style` attr,
+ * which class selectors can't override. Target the style attribute directly
+ * with `!important` (author !important beats a normal inline declaration).
+ * White handled with precise forms so `color:#fff` text is never affected;
+ * the other (unambiguously-background) light hexes use a background-anchored
+ * compound selector. */
+html.dark [style*="background:#fff"],
+html.dark [style*="background: #fff"],
+html.dark [style*="background:#ffffff"],
+html.dark [style*="background: #ffffff"],
+html.dark [style*="background-color:#fff"],
+html.dark [style*="background-color: #fff"],
+html.dark [style*="background:white"],
+html.dark [style*="background: white"],
+html.dark [style*="background"][style*="#f5f5f5"],
+html.dark [style*="background"][style*="#fafafa"],
+html.dark [style*="background"][style*="#f9fafb"],
+html.dark [style*="background"][style*="#f8fafc"],
+html.dark [style*="background"][style*="#f0f0f0"],
+html.dark [style*="background"][style*="#fef3c7"],
+html.dark [style*="background"][style*="#fef2f2"],
+html.dark [style*="background"][style*="#fefce8"],
+html.dark [style*="background"][style*="#fdf2f8"],
+html.dark [style*="background"][style*="#f0fdf4"] { background-color: var(--fad-surface) !important; }
+
+/* Light-violet inline backgrounds → the violet-dark accent surface */
+html.dark [style*="background"][style*="#ede9fe"],
+html.dark [style*="background"][style*="#ddd6fe"],
+html.dark [style*="background"][style*="#f5f3ff"],
+html.dark [style*="background"][style*="#faf5ff"],
+html.dark [style*="background"][style*="#f3e8ff"] { background-color: var(--fad-accent-bg) !important; }
+
+/* Light gradient banners (e.g. the dashboard welcome header) → dark surface */
+html.dark [style*="linear-gradient"][style*="#ede9fe"],
+html.dark [style*="linear-gradient"][style*="#f5f3ff"] { background: var(--fad-accent-bg) !important; }
+
+/* ── Pagination controls (dark) ────────────────────────────────────────── */
+html.dark .pg-btn {
+    background: var(--fad-surface-2);
+    border-color: var(--fad-border-2);
+    color: var(--fad-violet);
+}
+html.dark .pg-btn:hover { background: var(--fad-active); border-color: #7c3aed; }
+html.dark .pg-active { background: #8b5cf6; color: #fff; }
+html.dark .pg-ellipsis { color: var(--fad-faint); }
+
+/* ── Testing (QA) dashboard (dark) ─────────────────────────────────────── */
+html.dark .qa-card {
+    background: var(--fad-surface);
+    border-color: var(--fad-border-2);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+html.dark .qa-info-row { border-bottom-color: var(--fad-border); }
+html.dark .qa-info-label { color: var(--fad-muted); }
+html.dark .qa-info-value { color: var(--fad-ink); }
+html.dark .backlog-item { background: var(--fad-surface-2); border-color: var(--fad-border); }
+html.dark .backlog-item:hover { background: var(--fad-active); }
+html.dark .priority-high { background: #3a1d24; color: #fca5a5; }
+html.dark .priority-medium,
+html.dark .status-in_progress { background: #33280f; color: #fcd34d; }
+html.dark .priority-low,
+html.dark .status-done { background: #16301f; color: #86efac; }
+html.dark .status-open { background: #1a2842; color: #93c5fd; }
+
+/* ── Apps view cards (dark) ────────────────────────────────────────────── */
+html.dark .app-card {
+    background: var(--fad-surface);
+    border-color: var(--fad-border-2);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+html.dark .app-card:hover {
+    border-color: #8b5cf6;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.45);
+}
+
+/* ── Theme-toggle icon swap (moon in light, sun in dark) ───────────────── */
 .theme-icon-dark { display: none; }
 html.dark .theme-icon-light { display: none; }
 html.dark .theme-icon-dark { display: inline; }

@@ -115,3 +115,55 @@
 #scroll-top-btn:hover .material-symbols-outlined {
     color: white !important;
 }
+
+/* ── Pagination controls (payments list, database) ───────────────────────── */
+.pg-btn {
+    text-decoration: none;
+    width: 2.5rem;
+    height: 2.5rem;
+    border-radius: 9999px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid #ddd6fe;      /* violet-200 — fits the theme */
+    background: #fff;
+    color: #6d28d9;                 /* violet — clearly legible */
+    font-size: 0.875rem;
+    cursor: pointer;
+    transition: background 0.2s, color 0.2s, border-color 0.2s;
+}
+.pg-btn:hover { background: #ede9fe; border-color: #c4b5fd; }
+.pg-active {
+    width: 2.5rem;
+    height: 2.5rem;
+    border-radius: 9999px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: #8b5cf6;
+    color: #fff;
+    font-size: 0.875rem;
+    font-weight: 700;
+}
+.pg-ellipsis { width: 2rem; text-align: center; color: #9ca3af; }
+
+/* ── Schedule grid palette (light defaults; dark in theme.css) ────────────── */
+:root {
+    --sched-surface: #fafafa;
+    --sched-border:  #e5e5e5;
+    --sched-ink:     #737373;
+    --sched-dim:     #b3b3b3;
+    --sched-strong:  #404040;
+    --sched-ff-bg:   #ede9fe;
+    --sched-ff-text: #6d28d9;
+}
+
+/* ── Fun Friday: student names + toolbar buttons ─────────────────────────── */
+:root {
+    --ff-name:     #6b7280;   /* non-selected: readable grey */
+    --ff-name-sel: #3b0764;   /* selected: strong violet     */
+}
+.ff-name { color: var(--ff-name); font-weight: 400; }
+.ff-name.ff-selected { color: var(--ff-name-sel); font-weight: 700; }
+.ff-tool-btn { background-color: #ede9fe; color: #5b21b6; }
+.ff-tool-btn:hover { background-color: #ddd6fe; }

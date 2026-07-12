@@ -5,6 +5,14 @@
 {% block page_title %}Gastos{% endblock %}
 {% block page_subtitle %}Registra y categoriza los gastos de la academia{% endblock %}
 
+{% block header_actions %}
+{# TODO: replace the href with the real Google Drive receipts folder URL #}
+<a href="https://drive.google.com/" target="_blank" rel="noopener"
+   class="header-action-btn bg-primary-500 hover:bg-primary-600 text-white px-6 py-3 rounded-md flex items-center gap-2 transition-all duration-200 transform hover:scale-105 hover:shadow-md text-base font-semibold leading-none no-underline">
+    <span class="material-symbols-outlined text-xl">receipt_long</span> Consultar recibos
+</a>
+{% endblock %}
+
 {% block content %}
 <div class="mb-6">
     <div class="flex items-center gap-3 mb-2">

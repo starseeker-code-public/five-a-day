@@ -7,6 +7,7 @@ from core.views import (
     BrandedPasswordResetView,
     all_info,
     api_create_backlog_task,
+    api_mark_ready,
     api_seed_database,
     api_toggle_error_email,
     api_update_backlog_task,
@@ -128,6 +129,7 @@ urlpatterns = [
     path("api/testing/backlog/create/", api_create_backlog_task, name="api_create_backlog_task"),
     path("api/testing/backlog/<int:task_id>/update/", api_update_backlog_task, name="api_update_backlog_task"),
     path("api/testing/error-email/toggle/", api_toggle_error_email, name="api_toggle_error_email"),
+    path("api/testing/ready/", api_mark_ready, name="api_mark_ready"),
     # Error test pages
     path("400/", test_error_400, name="test_error_400"),
     path("403/", test_error_403, name="test_error_403"),
