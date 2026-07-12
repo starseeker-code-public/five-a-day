@@ -45,6 +45,16 @@
 </div>
 {% endblock %}
 
+{% block help_content %}
+<p>La sección <strong>Estudiantes</strong> es el listado de todos los alumnos.</p>
+<ul style="list-style:disc; margin:0.5rem 0 0 1.25rem; line-height:1.8;">
+    <li>Busca por nombre y filtra por grupo o estado (activo / inactivo).</li>
+    <li>Pulsa un estudiante para ver su ficha, editarla o darlo de baja.</li>
+    <li>Crea un alumno nuevo con el botón superior: se le asigna grupo y se generan su matrícula y los pagos del curso.</li>
+    <li>Cada fila muestra el grupo y el estado del alumno.</li>
+</ul>
+{% endblock %}
+
 {% block content %}
 <div class="mb-8">
     <div class="flex items-center gap-3 mb-2">

@@ -19,6 +19,16 @@
 </a>
 {% endblock %}
 
+{% block help_content %}
+<p>La sección <strong>Pagos</strong> lista todos los cobros de la academia.</p>
+<ul style="list-style:disc; margin:0.5rem 0 0 1.25rem; line-height:1.8;">
+    <li>Busca y filtra por estado (pendiente, completado, vencido…).</li>
+    <li>Marca un pago como cobrado con el icono de la primera columna.</li>
+    <li>Crea un pago nuevo (matrícula, mensual, trimestral…) con el botón superior; el alumno se busca y el padre/tutor se rellena solo.</li>
+    <li>Abre un pago para ver el detalle o descargar el recibo en PDF.</li>
+</ul>
+{% endblock %}
+
 {% block content %}
 <div class="mb-8">
     <div class="flex items-center gap-3 mb-2">

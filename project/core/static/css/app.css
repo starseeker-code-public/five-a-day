@@ -168,3 +168,52 @@
 .ff-name.ff-selected { color: var(--ff-name-sel); font-weight: 700; }
 .ff-tool-btn { background-color: #ede9fe; color: #5b21b6; }
 .ff-tool-btn:hover { background-color: #ddd6fe; }
+
+/* ── Sidebar hotkey number badges (1–9, 0) ────────────────────────────────── */
+.sidebar-link { position: relative; }
+.sidebar-link[data-hotkey]::after {
+    content: attr(data-hotkey);
+    position: absolute;
+    top: 3px;
+    right: 7px;
+    font-size: 9px;
+    font-weight: 700;
+    line-height: 1;
+    color: #a78bfa;
+    opacity: 0.9;
+    pointer-events: none;
+}
+
+/* ── Per-view help button ("?", bottom-left) ──────────────────────────────── */
+#view-help-btn {
+    position: fixed;
+    left: 1.25rem;
+    bottom: 1.25rem;
+    width: 2.5rem;
+    height: 2.5rem;
+    border-radius: 9999px;
+    background: #8b5cf6;
+    color: #fff;
+    border: none;
+    cursor: pointer;
+    z-index: 40;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 4px 14px rgba(124, 58, 237, 0.35);
+    transition: background 0.2s, transform 0.2s;
+    display: none; /* base.js reveals it only when the page provides help */
+}
+#view-help-btn:hover { background: #7c3aed; transform: scale(1.08); }
+
+/* ── Keyboard-key hint (help modal) ───────────────────────────────────────── */
+#view-help-modal-body kbd {
+    display: inline-block;
+    background: #ede9fe;
+    color: #5b21b6;
+    border-radius: 4px;
+    padding: 1px 7px;
+    font-size: 12px;
+    font-weight: 700;
+    font-family: ui-monospace, monospace;
+    line-height: 1.5;
+}

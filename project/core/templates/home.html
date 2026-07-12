@@ -37,6 +37,17 @@
 </style>
 {% endblock %}
 
+{% block help_content %}
+<p>El <strong>Panel Principal</strong> resume el estado de la academia de un vistazo: cumpleaños, emails programados, tareas del día y (para administradores) pagos pendientes e ingresos del mes. También muestra la lista de espera y la ocupación de los grupos, y puedes crear y completar tareas pendientes.</p>
+<p style="margin-top:1rem;"><strong>Atajos de teclado</strong> (funcionan fuera de las cajas de texto). El número aparece sobre cada icono del menú lateral:</p>
+<ul style="list-style:disc; margin:0.5rem 0 0 1.25rem; line-height:1.9;">
+    <li><kbd>0</kbd> Panel · <kbd>1</kbd> Estudiantes · <kbd>2</kbd> Lista de espera · <kbd>3</kbd> Horario</li>
+    <li><kbd>4</kbd> Pagos · <kbd>5</kbd> Gastos · <kbd>6</kbd> Aplicaciones · <kbd>7</kbd> Gestión</li>
+    <li><kbd>8</kbd> Informes · <kbd>9</kbd> Base de datos</li>
+</ul>
+<p style="margin-top:0.75rem; color:#6b7280;">Algunas secciones (pagos, gastos, informes…) solo están disponibles para administradores.</p>
+{% endblock %}
+
 {% block content %}
 <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
     <!-- CARD 1: Pagos pendientes (admin only — financial data) -->

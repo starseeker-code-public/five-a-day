@@ -14,6 +14,15 @@
 </a>
 {% endblock %}
 
+{% block help_content %}
+<p>El <strong>Horario</strong> muestra la parrilla semanal de clases (lunes a viernes).</p>
+<ul style="list-style:disc; margin:0.5rem 0 0 1.25rem; line-height:1.8;">
+    <li>Cada celda muestra el grupo y su franja horaria.</li>
+    <li>Solo los administradores pueden editarlo: con el lápiz se activa el modo edición para asignar un grupo a cada hueco.</li>
+    <li>Debajo se detalla, por día, qué alumnos tiene cada grupo.</li>
+</ul>
+{% endblock %}
+
 {% block content %}
 <div class="mb-8">
     <div class="flex items-center gap-3 mb-2">

@@ -19,6 +19,15 @@
 {% endif %}
 {% endblock %}
 
+{% block help_content %}
+<p><strong>Gestión</strong> centraliza la configuración de la academia.</p>
+<ul style="list-style:disc; margin:0.5rem 0 0 1.25rem; line-height:1.8;">
+    <li>Precios y configuración general (los administradores pueden editarlos).</li>
+    <li>Crear y consultar profesores y grupos.</li>
+    <li>Los profesores nuevos se crean sin permisos de administrador; un administrador puede concederlos después desde el panel <code>/admin/</code>.</li>
+</ul>
+{% endblock %}
+
 {% block content %}
 <div class="mb-8">
     <div class="flex items-center gap-3 mb-2">

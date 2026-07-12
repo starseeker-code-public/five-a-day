@@ -20,7 +20,7 @@ Built to centralize student records, automate billing cycles, and streamline par
 ### Project Status
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v1.13.10-brightgreen?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-v1.13.11-brightgreen?style=flat-square" alt="Version">
   &nbsp;|&nbsp;
   <a href="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml?query=branch%3Amain"><img src="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml/badge.svg?branch=main&style=flat-square" alt="CI main"></a>
   &nbsp;|&nbsp;
@@ -41,9 +41,9 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 | Version | Date | Description |
 |---------|------|-------------|
-| **v1.13.10** | 2026-07-12 | CI deploy emails, recurring-expense frequencies, backlog screenshots |
+| **v1.13.11** | 2026-07-12 | Keyboard nav hotkeys, per-view help "?" panels, CI-secret docs |
+| v1.13.10 | 2026-07-12 | CI deploy emails, recurring-expense frequencies, backlog screenshots |
 | v1.13.9 | 2026-07-12 | Non-admin teacher UX, teacher-admin lock, backlog email + auto-cleanup |
-| v1.13.8 | 2026-07-12 | Dark theme, Testing redesign, QA admin-only, richer seeder |
 
 ---
 
@@ -143,8 +143,25 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 ## Version History & Roadmap
 
-<details id="v11310" open>
-<summary><strong>v1.13.10 — CI deploy emails, recurring-expense frequencies, backlog screenshots (current)</strong></summary>
+<details id="v11311" open>
+<summary><strong>v1.13.11 — Keyboard nav hotkeys + per-view help panels (current)</strong></summary>
+
+**Keyboard quick-nav**
+
+- Number keys jump between sections (only outside text fields): <kbd>0</kbd> Home, <kbd>1</kbd> Students, <kbd>2</kbd> Waiting list, <kbd>3</kbd> Schedule, <kbd>4</kbd> Payments, <kbd>5</kbd> Expenses, <kbd>6</kbd> Apps, <kbd>7</kbd> Management, <kbd>8</kbd> Reports, <kbd>9</kbd> Database. Implemented via `data-hotkey` on the sidebar links (so hidden admin-only links are inert for non-admins). Small number badges are shown on each sidebar icon (CSS `::after`).
+
+**Per-view help**
+
+- Every main view (+ `/testing/`) has a small **"?"** button in the bottom-left corner opening a modal that explains the view's features in plain language; Home's help also lists the keyboard shortcuts. Content lives in each template's `{% block help_content %}`; the button only appears when the page provides help.
+
+**Docs**
+
+- Added the new CI deploy-email secrets (`TESTING_NOTIFY_EMAILS`, `TESTING_URL`, `SUPPORT_EMAIL`, `PRODUCTION_URL`) to the README's Required GitHub Secrets table.
+
+</details>
+
+<details id="v11310">
+<summary><strong>v1.13.10 — CI deploy emails, recurring-expense frequencies, backlog screenshots</strong></summary>
 
 **CI deploy notifications**
 
@@ -2568,7 +2585,11 @@ Configure at **Settings → Secrets and variables → Actions**:
 | `GH_PAT` | auto-merge.yml | Fine-grained Personal Access Token. Pushes to `testing` and creates PRs *while triggering downstream CI* (which the default `GITHUB_TOKEN` cannot do). Permissions: Contents RW, Pull requests RW, Checks R, Metadata R |
 | `EMAIL_HOST_USER` | auto-merge.yml, notify-production.yml | Gmail address used to send notification emails |
 | `EMAIL_SECRET` | auto-merge.yml, notify-production.yml | Gmail App Password — can be the same one the application uses for transactional email |
-| `OWNER_EMAILS` | auto-merge.yml | Comma-separated recipient list for the `development → testing` merge notification |
+| `OWNER_EMAILS` | auto-merge.yml | Comma-separated fallback recipient list for the `development → testing` merge notification (used when `TESTING_NOTIFY_EMAILS` is unset) |
+| `TESTING_NOTIFY_EMAILS` | auto-merge.yml | Comma-separated recipients for the `development → testing` deploy email — support + the two admin teachers. Preferred over `OWNER_EMAILS` |
+| `TESTING_URL` | auto-merge.yml | Base URL of the testing environment, used for the "Open testing environment" button (falls back to the testing VM IP) |
+| `SUPPORT_EMAIL` | notify-production.yml | Support address added (alongside `hellofiveaday@gmail.com`) to the production deploy email |
+| `PRODUCTION_URL` | notify-production.yml | Optional — base URL of production; if set, adds an "Open production" button to the production email |
 | `CODECOV_TOKEN` | ci.yml | Optional — only needed for private repos. Public repos push coverage anonymously |
 
 **Rotate `GH_PAT` annually.** Without it, the auto-merge falls back to the default `GITHUB_TOKEN`, which cannot trigger CI on PRs it creates — breaking the pipeline silently.

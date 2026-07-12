@@ -237,6 +237,9 @@ html.dark .app-card:hover {
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.45);
 }
 
+/* Help-modal keyboard keys (dark) */
+html.dark #view-help-modal-body kbd { background: var(--fad-accent-bg); color: var(--fad-violet); }
+
 /* ── Theme-toggle icon swap (moon in light, sun in dark) ───────────────── */
 .theme-icon-dark { display: none; }
 html.dark .theme-icon-light { display: none; }

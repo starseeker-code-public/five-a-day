@@ -96,6 +96,17 @@
 </style>
 {% endblock %}
 
+{% block help_content %}
+<p>El <strong>Panel de Testing</strong> es para probar la aplicación y reportar incidencias durante el desarrollo (solo administradores).</p>
+<ul style="list-style:disc; margin:0.5rem 0 0 1.25rem; line-height:1.8;">
+    <li><strong>Proyecto</strong>: versión, entorno y último commit en tiempo real (con enlace a la documentación en GitHub).</li>
+    <li><strong>Datos de prueba</strong>: llena la base de datos con datos realistas, o bórralos y vuelve a sembrar.</li>
+    <li><strong>Backlog</strong>: registra errores o tareas (puedes adjuntar una captura, que se envía por email sin guardarse); al marcarlas como hechas se avisa por email.</li>
+    <li><strong>¿Listo para desplegar?</strong>: envía un aviso por email de que esta versión está validada.</li>
+    <li>Accesos rápidos a Admin, Google Drive, Google Cloud, GitHub y correo temporal.</li>
+</ul>
+{% endblock %}
+
 {% block content %}
 {% csrf_token %}
 <div class="px-4 py-6" id="testing-page"
