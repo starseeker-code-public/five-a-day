@@ -20,7 +20,7 @@ Built to centralize student records, automate billing cycles, and streamline par
 ### Project Status
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v1.13.8-brightgreen?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-v1.13.9-brightgreen?style=flat-square" alt="Version">
   &nbsp;|&nbsp;
   <a href="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml?query=branch%3Amain"><img src="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml/badge.svg?branch=main&style=flat-square" alt="CI main"></a>
   &nbsp;|&nbsp;
@@ -41,9 +41,9 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 | Version | Date | Description |
 |---------|------|-------------|
-| **v1.13.8** | 2026-07-12 | Dark theme, Testing redesign, QA admin-only, richer seeder |
+| **v1.13.9** | 2026-07-12 | Non-admin teacher UX, teacher-admin lock, backlog email + auto-cleanup |
+| v1.13.8 | 2026-07-12 | Dark theme, Testing redesign, QA admin-only, richer seeder |
 | v1.13.7 | 2026-07-11 | Service worker network-first (fixes stale CSS/theme after navigation) |
-| v1.13.6 | 2026-07-11 | Single violet theme (light=dark), Fun Friday email scheduling |
 
 ---
 
@@ -143,8 +143,30 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 ## Version History & Roadmap
 
-<details id="v1138" open>
-<summary><strong>v1.13.8 — Dark theme, Testing redesign, QA admin-only, richer seeder (current)</strong></summary>
+<details id="v1139" open>
+<summary><strong>v1.13.9 — Non-admin teacher UX, teacher-admin lock, backlog housekeeping (current)</strong></summary>
+
+**Non-admin teachers**
+
+- Home hides all financial widgets from non-admin teachers (*Pagos pendientes*, *Ingresos del mes*, the pending-payments modal, and the *Nuevo Pago* button) via `{% if is_admin_user %}`.
+- Non-admin teachers can now **view** the schedule (`schedule_view` added to the middleware whitelist); the edit toggle is hidden for them and `save_schedule_slot` stays admin-only, so the schedule is read-only for non-admins.
+
+**Teacher admin lock**
+
+- Teachers created from the management page are **always non-admin** (`create_teacher` forces `admin=False`; the "Administrador" checkbox is removed). Only the seeded teachers (`TEACHER_SEED_*`) and the superuser are admins; an admin promotes others via `/admin/`.
+
+**Backlog housekeeping**
+
+- Marking a QA backlog task **done** emails the admin teachers a summary. Done tasks are **auto-deleted after 30 days** by a new daily Celery-beat task (`core.tasks.cleanup_done_backlog_tasks`).
+
+**UI**
+
+- Login page title now animates to a legible lavender in dark mode (was near-black). Sidebar nav icons are vertically **centered** instead of pinned to the bottom.
+
+</details>
+
+<details id="v1138">
+<summary><strong>v1.13.8 — Dark theme, Testing redesign, QA admin-only, richer seeder</strong></summary>
 
 **Theme (light + dark)**
 

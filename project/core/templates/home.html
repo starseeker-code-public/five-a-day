@@ -10,9 +10,11 @@
 {% endblock %}
 
 {% block header_actions %}
+{% if is_admin_user %}
 <a href="{% url 'create_payment' %}" class="header-action-btn bg-primary-500 hover:bg-primary-600 text-white px-6 py-3 rounded-md flex items-center gap-2 transition-all duration-200 transform hover:scale-105 hover:shadow-md text-base font-semibold leading-none no-underline">
     <span class="material-symbols-outlined text-[20px]">payment</span> Nuevo Pago
 </a>
+{% endif %}
 {% endblock %}
 
 {% block extra_css %}
@@ -37,7 +39,8 @@
 
 {% block content %}
 <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
-    <!-- CARD 1: Pagos pendientes -->
+    <!-- CARD 1: Pagos pendientes (admin only — financial data) -->
+    {% if is_admin_user %}
     <div class="bg-white rounded-lg p-6 border-l-4 border-primary-500 hover:shadow-md transition-all duration-200">
         <div class="flex justify-between items-start">
             <div class="flex-1 text-center">
@@ -67,6 +70,7 @@
             {% endif %}
         </div>
     </div>
+    {% endif %}
 
     <!-- CARD 2: Cumpleaños -->
     <div class="bg-white rounded-lg p-6 border-l-4 border-primary-400 hover:shadow-md transition-all duration-200">
@@ -126,7 +130,8 @@
         </div>
     </div>
 
-    <!-- CARD 4: Ingresos del mes -->
+    <!-- CARD 4: Ingresos del mes (admin only — financial data) -->
+    {% if is_admin_user %}
     <div class="bg-white rounded-lg p-6 border-l-4 border-primary-300 hover:shadow-md transition-all duration-200">
         <div class="flex justify-between items-start">
             <div class="flex-1 text-center">
@@ -145,6 +150,7 @@
             <span class="text-neutral-500">{{ expected_revenue|floatformat:0 }}€</span> esperado
         </div>
     </div>
+    {% endif %}
 
     <!-- CARD 4b: Lista de Espera / Capacidad de grupos -->
     <div class="bg-white rounded-lg p-6 col-span-1 md:col-span-2 lg:col-span-4 border-l-4 border-amber-400 hover:shadow-md transition-all duration-200">
@@ -267,7 +273,8 @@
     </div>
 </div>
 
-<!-- Pending Students Modal -->
+<!-- Pending Students Modal (admin only — financial data) -->
+{% if is_admin_user %}
 <div id="pending-modal" style="display:none;position:fixed;inset:0;background-color:rgba(0,0,0,0.5);z-index:50;align-items:center;justify-content:center;padding:1rem;">
     <div class="bg-white rounded-xl shadow-2xl overflow-hidden" style="width:fit-content;min-width:240px;max-width:min(380px,90vw);">
         <div class="px-6 text-white flex justify-between items-center" style="background:linear-gradient(to right,#c4b5fd,#8b5cf6);padding-top:16px;padding-bottom:16px;gap:2rem;">
@@ -291,6 +298,7 @@
         </ul>
     </div>
 </div>
+{% endif %}
 
 {% load static %}
 <script>document.body.dataset.createTodoUrl = '{% url "create_todo" %}';</script>

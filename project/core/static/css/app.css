@@ -20,9 +20,10 @@
 .sidebar-fixed-links {
     position: fixed;
     left: 0;
-    bottom: 0;
+    top: 50%;
+    transform: translateY(-50%);
     width: 7.5rem;
-    padding: 0 1.5rem 1.5rem;
+    padding: 0 1.5rem;
     box-sizing: border-box;
     z-index: 20;
 }

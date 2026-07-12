@@ -30,11 +30,13 @@
             <thead>
                 <tr id="day-header-row">
                     <th id="edit-header-cell" class="w-14 min-w-[56px] max-w-[56px] bg-neutral-50 border-b border-r border-neutral-200 p-2 sticky left-0 z-10">
+                        {% if is_admin_user %}
                         <button id="edit-toggle-btn" title="Editar horario" onclick="toggleEditMode()"
                             class="flex items-center justify-center w-8 h-8 rounded-md border border-neutral-200 bg-white cursor-pointer transition-colors duration-150"
                             onmouseover="this.style.background='#f3f4f6'" onmouseout="if(!scheduleEditMode)this.style.background='#fff'">
                             <span class="material-symbols-outlined text-base text-neutral-500">edit</span>
                         </button>
+                        {% endif %}
                     </th>
                 </tr>
             </thead>

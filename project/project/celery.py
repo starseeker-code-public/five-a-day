@@ -54,6 +54,12 @@ app.conf.beat_schedule = {
         "schedule": crontab(hour=20, minute=0, day_of_month=28),
         "options": {"queue": "emails"},
     },
+    # QA backlog housekeeping — delete tasks done for >30 days, daily at 07:00
+    "cleanup-done-backlog-tasks": {
+        "task": "core.tasks.cleanup_done_backlog_tasks",
+        "schedule": crontab(hour=7, minute=0),
+        "options": {"queue": "celery"},
+    },
 }
 
 app.conf.timezone = "Europe/Madrid"

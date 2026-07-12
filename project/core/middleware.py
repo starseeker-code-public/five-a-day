@@ -115,6 +115,8 @@ NON_ADMIN_ALLOWED_URL_NAMES = frozenset(
         "add_to_waiting_list",
         # Parents
         "parent_create",
+        # Schedule — view-only for non-admin teachers (save_schedule_slot stays admin-only)
+        "schedule_view",
         # Fun Friday (attendance view + attendance API)
         "fun_friday_view",
         "add_fun_friday_attendance",

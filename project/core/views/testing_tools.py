@@ -183,11 +183,46 @@ def api_update_backlog_task(request, task_id):
             return JsonResponse({"success": False, "message": "Estado no valido."}, status=400)
 
         task = BacklogTask.objects.get(pk=task_id)
+        was_done = task.status == "done"
         task.status = new_status
         task.save()
+
+        # When a task is completed, notify the (seeded) admin teachers by email.
+        if new_status == "done" and not was_done:
+            _email_task_done(task)
+
         return JsonResponse({"success": True})
     except BacklogTask.DoesNotExist:
         return JsonResponse({"success": False, "message": "Tarea no encontrada."}, status=404)
+
+
+def _email_task_done(task):
+    """Email the admin teachers that a backlog task was completed (testing env)."""
+    from students.models import Teacher
+
+    recipients = list(Teacher.objects.filter(admin=True, active=True).values_list("email", flat=True))
+    recipients = [e for e in recipients if e]
+    if not recipients:
+        return
+    try:
+        send_mail(
+            subject=f"[BACKLOG][HECHO] {task.title}",
+            message=(
+                f"Una tarea del backlog de QA se ha marcado como HECHA.\n"
+                f"{'=' * 50}\n\n"
+                f"Titulo:      {task.title}\n"
+                f"Prioridad:   {task.priority}\n"
+                f"Creada por:  {task.created_by}\n"
+                f"Fecha:       {task.created_at:%Y-%m-%d %H:%M}\n\n"
+                f"Descripcion:\n{task.description or '(ninguna)'}\n\n"
+                f"{'=' * 50}\nFive a Day — Entorno QA\n"
+            ),
+            from_email=settings.DEFAULT_FROM_EMAIL,
+            recipient_list=recipients,
+            fail_silently=True,
+        )
+    except Exception:  # noqa: BLE001 — never block the status update on email
+        pass
 
 
 @qa_access_required
