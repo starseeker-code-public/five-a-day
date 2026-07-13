@@ -61,7 +61,7 @@ All templates live in `core/templates/`:
 - `home.html`, `login.html`, `schedule.html`, `fun_friday.html`, etc. (login page renders a "¿Has olvidado tu contraseña?" link when `password_reset_available` is true, i.e. non-dev environments)
 - `payments/` — payment list, create, detail
 - `apps/` — email form views + `_email_preview.html` partial
-- `emails/` — 13 HTML email templates extending `emails/base_email.html` (all named in English: `enrollment_child.html`, `payment_reminder.html`, `password_reset.html`, etc.)
+- `emails/` — 18 HTML email templates extending `emails/base_email.html` (all named in English: `enrollment_child.html`, `payment_reminder.html`, `password_reset.html`, etc.). All are styled to a common standard (violet headings, rounded info cards, coloured callouts) matching `welcome_student.html`. `base_email.html` carries an inline `@media (prefers-color-scheme: dark)` stylesheet so emails render in a dark violet theme mirroring the webapp; content templates use inline `style=""` and the dark rules override those hex values with attribute selectors (the same technique as `static/css/theme.css`).
 - `400.html` through `500.html` — error pages
 
 The standalone password-reset flow uses its own template set under `project/templates/registration/` (form, done, confirm, complete, plus `reset_base.html` for shared styling and `password_reset_email.txt` / `password_reset_subject.txt` for the email body fallback). These live outside `core/templates/` because Django's built-in `PasswordResetView` looks them up by the `registration/` prefix.

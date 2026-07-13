@@ -20,7 +20,7 @@ Built to centralize student records, automate billing cycles, and streamline par
 ### Project Status
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v1.14.0-brightgreen?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-v1.14.1-brightgreen?style=flat-square" alt="Version">
   &nbsp;|&nbsp;
   <a href="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml?query=branch%3Amain"><img src="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml/badge.svg?branch=main&style=flat-square" alt="CI main"></a>
   &nbsp;|&nbsp;
@@ -143,8 +143,22 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 ## Version History & Roadmap
 
-<details id="v1140" open>
-<summary><strong>v1.14.0 — Comprehensive in-app help guides (current)</strong></summary>
+<details id="v1141" open>
+<summary><strong>v1.14.1 — Email restyle + dark-mode emails (current)</strong></summary>
+
+**Transactional email overhaul**
+
+- All 17 transactional email templates (enrollment child/adult, payment receipt, receipts for enrollment/quarterly/adult, payment reminders, Fun Friday, birthday, vacation closure, tax certificate, monthly + admin reports, newsletter, parent magic link, password reset) were **restyled to match the `welcome_student` reference** — consistent violet headings, rounded info cards, coloured callouts and table dividers — while preserving every template variable and the shared signature/legal footer.
+- `welcome_student.html` was aligned to the app's violet palette (`#6d28d9`) and gained a **WhatsApp CTA** (`wa.me/34613481141`, 613 481 141) inside its "¿Tienes alguna pregunta?" box.
+
+**Dark-mode emails**
+
+- `base_email.html` now ships an inline `@media (prefers-color-scheme: dark)` stylesheet (plus a `color-scheme` meta) so emails render in a dark violet theme that mirrors the webapp — targeting the inline hex values with attribute selectors, the same technique `theme.css` uses for the app. The signature/footer **content** is unchanged; only its dark rendering was added.
+
+</details>
+
+<details id="v1140">
+<summary><strong>v1.14.0 — Comprehensive in-app help guides</strong></summary>
 
 **In-app help**
 
@@ -1763,7 +1777,7 @@ Dashboard, authentication, scheduling, and shared utilities. Owns all views and 
 | **Models** | TodoItem, HistoryLog (1000-entry cap), FunFridayAttendance, ScheduleSlot |
 | **Views** | 14 modules: auth, password_reset, dashboard, students, parents, payments, management, app_forms, schedule, fun_friday_attendance, todos, support, errors, testing_tools |
 | **Middleware** | SimpleAuthMiddleware — two layers: session auth (public allow-list incl. `/password-reset/`) + non-admin teacher URL-name whitelist |
-| **Templates** | base.html (layout), 15+ page templates, 13 email templates, error pages, plus `templates/registration/` for the password-reset flow |
+| **Templates** | base.html (layout), 15+ page templates, 18 email templates (common violet style + dark-mode support), error pages, plus `templates/registration/` for the password-reset flow |
 | **Static** | app.css (sidebar/icons), 13 JS modules, logo |
 | **Commands** | seed_teachers (Teacher + auth.User from env vars), seed_testdata (in billing) |
 

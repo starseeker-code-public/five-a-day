@@ -1,13 +1,59 @@
 {% extends 'emails/base_email.html' %}
 {% block title %}Recibo de pago · Five a Day{% endblock %}
 {% block content %}
-<h2 style="color:#6d28d9;">¡Pago recibido!</h2>
-<p>Hemos recibido correctamente tu pago para <strong>{{ student_name }}</strong>. Gracias.</p>
-<table style="border-collapse:collapse; margin: 16px 0; width: 100%; max-width: 480px;">
-    <tr><td style="padding:6px 12px; background:#f5f5f5; font-weight:bold;">Concepto</td><td style="padding:6px 12px;">{{ concept }}</td></tr>
-    <tr><td style="padding:6px 12px; background:#f5f5f5; font-weight:bold;">Importe</td><td style="padding:6px 12px;">{{ amount }} €</td></tr>
-    <tr><td style="padding:6px 12px; background:#f5f5f5; font-weight:bold;">Fecha</td><td style="padding:6px 12px;">{{ payment_date }}</td></tr>
-</table>
-<p>Adjunto encontrarás el recibo en PDF para tus archivos.</p>
-<p style="color:#999; font-size:11px; margin-top:32px;">Si tienes cualquier duda sobre este cobro, contacta con nosotros respondiendo a este correo.</p>
+<div style="text-align: center; padding: 40px 20px;">
+    <h1 style="color: #6d28d9; font-size: 32px; margin-bottom: 20px;">
+        🧾 ¡Pago recibido!
+    </h1>
+
+    <p style="font-size: 16px; color: #6B7280; line-height: 1.6; margin-bottom: 20px;">
+        Hemos recibido correctamente tu pago para <strong>{{ student_name }}</strong>. Gracias.
+    </p>
+
+    <div style="background-color: #EEF2FF; border-radius: 12px; padding: 25px; margin: 30px 0; text-align: left;">
+        <h2 style="color: #6d28d9; font-size: 18px; margin: 0 0 15px 0;">
+            📋 Detalles del pago:
+        </h2>
+        <table style="width: 100%; font-size: 14px; color: #374151;">
+            <tr>
+                <td style="padding: 8px 0; border-bottom: 1px solid #C7D2FE;">
+                    <strong>Concepto:</strong>
+                </td>
+                <td style="padding: 8px 0; border-bottom: 1px solid #C7D2FE; text-align: right;">
+                    {{ concept }}
+                </td>
+            </tr>
+            <tr>
+                <td style="padding: 8px 0; border-bottom: 1px solid #C7D2FE;">
+                    <strong>Importe:</strong>
+                </td>
+                <td style="padding: 8px 0; border-bottom: 1px solid #C7D2FE; text-align: right;">
+                    {{ amount }} €
+                </td>
+            </tr>
+            <tr>
+                <td style="padding: 8px 0;">
+                    <strong>Fecha:</strong>
+                </td>
+                <td style="padding: 8px 0; text-align: right;">
+                    {{ payment_date }}
+                </td>
+            </tr>
+        </table>
+    </div>
+
+    <div style="background-color: #F0FDF4; border-left: 4px solid #22C55E; padding: 15px; margin: 20px 0; text-align: left;">
+        <p style="color: #166534; margin: 0; font-size: 14px;">
+            <strong>📎 Recibo en PDF</strong><br>
+            Adjunto encontrarás el recibo en PDF para tus archivos.
+        </p>
+    </div>
+
+    <div style="background-color: #F0FDF4; border-left: 4px solid #22C55E; padding: 15px; margin: 20px 0; text-align: left;">
+        <p style="color: #166534; margin: 0; font-size: 14px;">
+            <strong>📞 ¿Alguna duda sobre este cobro?</strong><br>
+            No dudes en contactarnos. Estamos aquí para ayudarte — <a href="https://wa.me/34613481141?text=Hola%2C%20tengo%20una%20pregunta%20sobre%20un%20pago" style="color: #166534; font-weight: 600;">escríbenos por WhatsApp</a> al <strong>613 481 141</strong>.
+        </p>
+    </div>
+</div>
 {% endblock %}
