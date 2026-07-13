@@ -172,7 +172,7 @@ jobs:
           steps.conditions.outputs.should_merge == 'true' &&
           steps.ci.outputs.passed == 'true' &&
           steps.merge.conclusion == 'failure'
-        uses: dawidd6/action-send-mail@v17
+        uses: dawidd6/action-send-mail@v18
         with:
           server_address: smtp.gmail.com
           server_port: 465
@@ -283,7 +283,7 @@ jobs:
 
       - name: Notify by email
         if: steps.merge.conclusion == 'success'
-        uses: dawidd6/action-send-mail@v17
+        uses: dawidd6/action-send-mail@v18
         with:
           server_address: smtp.gmail.com
           server_port: 465
