@@ -1,7 +1,7 @@
 from django.conf import settings
 from django.core.validators import EmailValidator
 from django.db import models
-from django.db.models.signals import post_save
+from django.db.models.signals import post_save, pre_save
 from django.dispatch import receiver
 
 
@@ -19,6 +19,22 @@ class Teacher(models.Model):
         blank=True,
         related_name="teacher",
         help_text="Django auth user — login identity + hashed password for this teacher.",
+    )
+    # v1.13 — TOTP two-factor authentication (admins only in practice)
+    two_factor_secret = models.CharField(
+        max_length=64,
+        blank=True,
+        default="",
+        help_text="Base32-encoded TOTP shared secret. Empty when 2FA is not set up.",
+    )
+    two_factor_enabled = models.BooleanField(
+        default=False,
+        help_text="True once the user has confirmed enrolment by entering a valid TOTP code.",
+    )
+    two_factor_backup_codes = models.JSONField(
+        default=list,
+        blank=True,
+        help_text="Hashed one-time backup codes (list of sha256 hex strings). Consumed on use.",
     )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -138,6 +154,11 @@ class Group(models.Model):
     group_name = models.CharField(max_length=100, unique=True)
     color = models.CharField(max_length=7, default="#6366f1")
     teacher = models.ForeignKey(Teacher, on_delete=models.PROTECT, related_name="groups")
+    max_students = models.PositiveIntegerField(
+        default=0,
+        verbose_name="Cupo máximo",
+        help_text="Soft limit on active enrolled students. 0 means no cap.",
+    )
     active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -152,6 +173,28 @@ class Group(models.Model):
     def __str__(self):
         return self.group_name
 
+    @property
+    def enrolled_count(self):
+        """Active, non-waiting students currently occupying a spot in this group."""
+        return self.students.filter(active=True, is_waiting=False).count()
+
+    @property
+    def waiting_count(self):
+        """Students on the waiting list whose preferred group is this one."""
+        return self.students.filter(active=True, is_waiting=True).count()
+
+    @property
+    def available_spots(self):
+        """Remaining spots; None when the group has no cap (max_students == 0)."""
+        if not self.max_students:
+            return None
+        return max(self.max_students - self.enrolled_count, 0)
+
+    @property
+    def is_full(self):
+        """True only when a cap is set and enrolled_count has reached it."""
+        return bool(self.max_students) and self.enrolled_count >= self.max_students
+
 
 class Parent(models.Model):
     last_name = models.CharField(max_length=100)
@@ -160,6 +203,11 @@ class Parent(models.Model):
     phone = models.CharField(max_length=20)
     email = models.EmailField()
     iban = models.CharField(max_length=34, blank=True)  # International Bank Account Number
+    sms_opt_in = models.BooleanField(
+        default=False,
+        verbose_name="SMS opt-in",
+        help_text="v1.8: True if the parent has opted in to SMS notifications (payment reminders, urgent comms).",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)  # Added for consistency
 
@@ -196,6 +244,17 @@ class Student(models.Model):
     group = models.ForeignKey(Group, on_delete=models.PROTECT, related_name="students")
     parents = models.ManyToManyField(Parent, through="StudentParent", related_name="children")
     active = models.BooleanField(default=True)
+    is_waiting = models.BooleanField(
+        default=False,
+        verbose_name="En lista de espera",
+        help_text="True when the student is on the waiting list for their preferred group instead of enrolled.",
+    )
+    waiting_since = models.DateTimeField(
+        null=True,
+        blank=True,
+        verbose_name="En espera desde",
+        help_text="Auto-set the first time is_waiting is flipped on; used to prioritize assignments FIFO.",
+    )
     withdrawal_date = models.DateField(null=True, blank=True)
     withdrawal_reason = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -207,6 +266,7 @@ class Student(models.Model):
             models.Index(fields=["group"]),
             models.Index(fields=["active"]),
             models.Index(fields=["birth_date"]),
+            models.Index(fields=["is_waiting"]),
         ]
 
     def __str__(self):
@@ -227,6 +287,15 @@ class Student(models.Model):
             - ((today.month, today.day) < (self.birth_date.month, self.birth_date.day))
         )
 
+    def save(self, *args, **kwargs):
+        if self.is_waiting and self.waiting_since is None:
+            from django.utils import timezone
+
+            self.waiting_since = timezone.now()
+        elif not self.is_waiting and self.waiting_since is not None:
+            self.waiting_since = None
+        super().save(*args, **kwargs)
+
 
 class StudentParent(models.Model):
     student = models.ForeignKey(Student, on_delete=models.CASCADE)
@@ -240,3 +309,34 @@ class StudentParent(models.Model):
 
     def __str__(self):
         return f"{self.parent} -> {self.student}"
+
+
+# v1.9 — parent portal magic-link tokens. Kept in a sibling module so the
+# top-level student data model stays focused.
+from students.parent_portal_models import ParentSessionToken  # noqa: E402,F401
+
+
+@receiver(pre_save, sender=Student)
+def _capture_active_transition(sender, instance, **kwargs):
+    """Stash the DB value of `active` so post_save can detect True→False."""
+    if instance.pk is None:
+        instance._active_was = None
+        return
+    try:
+        instance._active_was = Student.objects.only("active").get(pk=instance.pk).active
+    except Student.DoesNotExist:
+        instance._active_was = None
+
+
+@receiver(post_save, sender=Student)
+def _notify_group_spot_freed(sender, instance, created, **kwargs):
+    """Log a HistoryLog entry when a student is deactivated and their group has waiters."""
+    if created:
+        return
+    was_active = getattr(instance, "_active_was", None)
+    if was_active is not True or instance.active:
+        return
+    # Late import to avoid circular imports at app-loading time.
+    from core.views.waiting_list import notify_capacity_freed
+
+    notify_capacity_freed(instance)

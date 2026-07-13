@@ -20,7 +20,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # NOTA: Usa `make version x.y.z` para actualizar ambos sitios a la vez:
 #   - pyproject.toml (campo version)
 #   - README.md (badge y tabla de versiones — gestionado por la skill update-readme)
-APP_VERSION = os.getenv("APP_VERSION", "1.0.13")
+APP_VERSION = os.getenv("APP_VERSION", "1.13.8")
 
 # ============================================================================
 # SECURITY SETTINGS
@@ -70,14 +70,17 @@ if not DEBUG:
 # seeding only run for testing/production) and by the QA testing dashboard.
 ENVIRONMENT = os.getenv("DJANGO_ENV", "development")
 
-# QA testing tools — only enabled when DJANGO_ENV=testing and a QA user is configured
+# QA testing tools — only enabled when DJANGO_ENV=testing (DEBUG off). The
+# dashboard is then visible to logged-in ADMIN Teachers (see core.decorators).
 IS_TESTING_ENV = ENVIRONMENT == "testing" and not DEBUG
-QA_TESTING_USERNAME = os.getenv("QA_TESTING_USERNAME", "")
 
 # ============================================================================
 # SESSION CONFIGURATION
 # ============================================================================
-SESSION_COOKIE_AGE = int(os.getenv("SESSION_COOKIE_AGE", "86400"))  # 24 horas por defecto
+SESSION_COOKIE_AGE = int(os.getenv("SESSION_COOKIE_AGE", "21600"))  # 6 horas
+# Re-save the session on every request so the 6h window is INACTIVITY-based:
+# any activity resets the timer, and 6h with no activity auto-logs-out.
+SESSION_SAVE_EVERY_REQUEST = os.getenv("SESSION_SAVE_EVERY_REQUEST", "True").lower() == "true"
 SESSION_COOKIE_HTTPONLY = os.getenv("SESSION_COOKIE_HTTPONLY", "True").lower() == "true"
 SESSION_COOKIE_SAMESITE = os.getenv("SESSION_COOKIE_SAMESITE", "Strict" if not DEBUG else "Lax")
 
@@ -117,6 +120,7 @@ INSTALLED_APPS = [  # https://www.djangoproject.com/
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
     "whitenoise.middleware.WhiteNoiseMiddleware",  # Debe ir después de SecurityMiddleware
+    "core.middleware.NoHtmlCacheMiddleware",  # no-cache on dynamic HTML (fresh asset hashes)
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
@@ -125,6 +129,7 @@ MIDDLEWARE = [
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
     "core.middleware.QAErrorEmailMiddleware",  # QA: email errors to support
     "core.middleware.SimpleAuthMiddleware",  # Middleware de autenticación simple
+    "core.audit_signals.AuditActorMiddleware",  # v1.10: attribute audit rows to the current user
 ]
 
 ROOT_URLCONF = "project.urls"
@@ -326,3 +331,37 @@ CELERY_TASK_ROUTES = {
 if not CELERY_BROKER_URL:
     CELERY_TASK_ALWAYS_EAGER = True
     CELERY_TASK_EAGER_PROPAGATES = True
+
+# ============================================================================
+# GOOGLE SHEETS INTEGRATION (v1.2)
+# ============================================================================
+# Optional. When both a service-account credential and a spreadsheet id are
+# set, the /api/sheets/export/ endpoint and `manage.py export_to_sheets`
+# command will write student/payment tables to that spreadsheet.
+#
+# One of these two must be set for auth (JSON inline wins if both are set):
+GOOGLE_SHEETS_SERVICE_ACCOUNT_JSON = os.getenv("GOOGLE_SHEETS_SERVICE_ACCOUNT_JSON", "")
+GOOGLE_SHEETS_SERVICE_ACCOUNT_FILE = os.getenv("GOOGLE_SHEETS_SERVICE_ACCOUNT_FILE", "")
+# Target spreadsheet — the doc ID from its URL (…/spreadsheets/d/<ID>/edit).
+# The service account must have Editor access to the sheet.
+GOOGLE_SHEETS_SPREADSHEET_ID = os.getenv("GOOGLE_SHEETS_SPREADSHEET_ID", "")
+
+# ============================================================================
+# TWILIO SMS (v1.8) — OPTIONAL
+# ============================================================================
+# All three must be set for the SMS service to be considered "configured".
+# When any is missing, SmsService.is_configured() returns False and calls
+# resolve to a structured failure so email fallback can kick in.
+TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID", "")
+TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN", "")
+TWILIO_FROM_NUMBER = os.getenv("TWILIO_FROM_NUMBER", "")
+
+# ============================================================================
+# STRIPE PAYMENTS (v1.11) — OPTIONAL
+# ============================================================================
+# When STRIPE_SECRET_KEY is set the parent portal renders a "Pay now" button
+# that creates a Checkout session. STRIPE_WEBHOOK_SECRET is the signing key
+# for the /api/stripe/webhook/ receiver — required in production.
+STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "")
+STRIPE_PUBLISHABLE_KEY = os.getenv("STRIPE_PUBLISHABLE_KEY", "")
+STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")

@@ -250,3 +250,38 @@ class TestGetEmailConfig:
         cfg = get_email_config()
         assert "host_user" in cfg
         assert "from_email" in cfg
+
+
+class TestInlineImageDjango6:
+    """Regression: Django 6.0 removed EmailMessage.mixed_subtype. Sending an
+    email with a real inline image must not raise and must produce an image
+    part carrying the Content-ID that `<img src="cid:...">` references."""
+
+    def test_inline_image_send_builds_content_id_part(self, tmp_path):
+        img = tmp_path / "logo.png"
+        img.write_bytes(b"\x89PNG\r\n\x1a\nfakepng")
+
+        svc = EmailService()
+        # fail_silently defaults to False, so the old `mixed_subtype = "related"`
+        # would raise AttributeError here and this call would blow up.
+        ok = svc.send_email(
+            template_name="fun_friday",
+            recipients="a@b.com",
+            subject="cid test",
+            context={
+                "day_name": "viernes",
+                "day_number": 7,
+                "month": "marzo",
+                "start_time": "17:00",
+                "end_time": "18:30",
+                "activity_description": "Games",
+                "minimum_age": 4,
+                "maximum_age": 12,
+                "event_image": True,
+            },
+            inline_images={"event_image": str(img)},
+        )
+        assert ok is True
+        raw = mail.outbox[-1].message().as_string()
+        assert "Content-ID: <event_image>" in raw
+        assert "Content-Disposition: inline" in raw

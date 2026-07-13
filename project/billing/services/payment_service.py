@@ -3,6 +3,7 @@ Service layer for payment business logic.
 Extracted from generate_payments management command and views.
 """
 
+import calendar
 from datetime import date
 from decimal import Decimal
 
@@ -77,6 +78,81 @@ class PaymentService:
             payment.payment_date = date.today()
             payment.save()
         return payment
+
+    @staticmethod
+    def schedule_academic_year_payments(enrollment, parent=None):
+        """Create all pending periodic payments for the enrollment's academic year.
+
+        Monthly enrollments get one pending payment per academic month
+        (Sep–Jun); quarterly enrollments get three (Q1 due Oct, Q2 Jan, Q3 Apr).
+        Each is due at the END of its period and starts at the enrollment month,
+        so a student enrolling mid-year is never billed for months before they
+        joined.
+
+        Idempotent: skips any (student, payment_type, month, year) that already
+        has a payment — so the periodic ``generate_payments`` command (which
+        matches on due-date month/year) never double-creates. Returns the number
+        of payments created.
+        """
+        from billing.models import SiteConfiguration
+
+        student = enrollment.student
+        if not student.active:
+            return 0
+
+        config = SiteConfiguration.get_config()
+        start_year = int(enrollment.academic_year.split("-")[0])
+        end_year = int(enrollment.academic_year.split("-")[1])
+        ref = enrollment.enrollment_date or date.today()
+
+        def cal_year(month):
+            return start_year if month >= 9 else end_year
+
+        def period_end(month):
+            year = cal_year(month)
+            return date(year, month, calendar.monthrange(year, month)[1])
+
+        if enrollment.payment_modality == "quarterly":
+            months, payment_type, names = [10, 1, 4], "quarterly", QUARTER_NAMES_ES
+        else:
+            months, payment_type, names = [9, 10, 11, 12, 1, 2, 3, 4, 5, 6], "monthly", MONTH_NAMES_ES
+
+        created = 0
+        for month in months:
+            due_date = period_end(month)
+            if due_date < ref:
+                continue  # period already elapsed at enrollment time
+
+            year = cal_year(month)
+            if Payment.objects.filter(
+                student=student,
+                payment_type=payment_type,
+                due_date__month=month,
+                due_date__year=year,
+            ).exists():
+                continue
+
+            if payment_type == "quarterly":
+                amount = PaymentService.calculate_quarterly_amount(enrollment, config, month)
+                concept = f"Trimestre {names.get(month, '')} {year}"
+            else:
+                amount = PaymentService.calculate_monthly_amount(enrollment, config, month)
+                concept = f"Mensualidad {names.get(month, '')} {year}"
+
+            Payment.objects.create(
+                student=student,
+                parent=parent,
+                enrollment=enrollment,
+                payment_type=payment_type,
+                payment_method="transfer",
+                amount=amount,
+                payment_status="pending",
+                due_date=due_date,
+                concept=concept,
+            )
+            created += 1
+
+        return created
 
     @staticmethod
     def should_generate_monthly(month):

@@ -109,6 +109,10 @@ NON_ADMIN_ALLOWED_URL_NAMES = frozenset(
         "student_detail",
         "student_update",
         "search_students",
+        # Waiting list (v1.1) — same authority level as regular student management
+        "waiting_list",
+        "assign_from_waiting_list",
+        "add_to_waiting_list",
         # Parents
         "parent_create",
         # Fun Friday (attendance view + attendance API)
@@ -122,6 +126,17 @@ NON_ADMIN_ALLOWED_URL_NAMES = frozenset(
         "management",
         "api_get_teachers",
         "language_cheque_students",
+        # Expenses (v1.5) — visible to non-admin teachers for read + create
+        "expenses_list",
+        "create_expense",
+        "delete_expense",
+        # Reports (v1.7) — read-only for non-admin teachers
+        "reports_view",
+        "reports_pdf",
+        # Two-factor auth (v1.13) — verify is reached mid-login (pre-session)
+        # so it's already in PUBLIC_PREFIXES. Setup/manage are admin-only and
+        # deliberately absent from this whitelist.
+        "two_factor_verify",
         # Todos, history, support
         "create_todo",
         "complete_todo",
@@ -169,6 +184,11 @@ class SimpleAuthMiddleware:
         "/media/",
         "/auth/google/",
         "/password-reset/",
+        "/parent/",  # v1.9: parent portal uses its own magic-link session
+        "/api/stripe/webhook/",  # v1.11: called by Stripe's servers, signed via header
+        "/manifest.webmanifest",  # v1.12: PWA manifest, must be public
+        "/sw.js",  # v1.12: service worker, must be public
+        "/two-factor/verify/",  # v1.13: mid-login 2FA gate (pre-session)
     )
 
     def __init__(self, get_response):
@@ -204,3 +224,25 @@ class SimpleAuthMiddleware:
                 return redirect("home")
 
         return self.get_response(request)
+
+
+class NoHtmlCacheMiddleware:
+    """Prevent browsers from caching dynamic HTML pages.
+
+    Static assets are content-hashed and served `immutable`, but the HTML that
+    references them had no `Cache-Control`, so browsers heuristically cached the
+    page — pinning it to OLD hashed CSS/JS and showing a stale theme after a
+    deploy (fixed only by a hard refresh). Marking HTML `no-cache` forces a
+    revalidation on every navigation, so the current asset hashes always load.
+    Static/media responses (served by WhiteNoise) are untouched.
+    """
+
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        response = self.get_response(request)
+        content_type = response.get("Content-Type", "")
+        if content_type.startswith("text/html") and not response.has_header("Cache-Control"):
+            response["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        return response

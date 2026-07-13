@@ -51,6 +51,9 @@ def get_email_apps():
                 "meeting_point": "En la puerta principal del centro",
                 "minimum_age": 5,
                 "maximum_age": 12,
+                # fun_friday.html guards the <img> on this flag; set it so the
+                # attached inline image below is actually rendered (not orphaned).
+                "event_image": True,
             },
             "description": "Invitación Fun Friday (semanal, manual)",
             "inline_images": {"event_image": "core/static/images/logo.png"},

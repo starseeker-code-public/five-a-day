@@ -7,12 +7,17 @@ from core.views import (
     BrandedPasswordResetView,
     all_info,
     api_create_backlog_task,
+    api_mark_ready,
     api_seed_database,
     api_toggle_error_email,
     api_update_backlog_task,
     complete_todo,
+    # Stripe (v1.11)
+    create_checkout_link,
     # Todos
     create_todo,
+    # Google Sheets export (v1.2)
+    export_to_sheets,
     fun_friday_view,
     google_oauth_callback,
     google_oauth_redirect,
@@ -23,9 +28,24 @@ from core.views import (
     # Auth
     login_view,
     logout_view,
+    # Parent portal (v1.9)
+    parent_portal_dashboard,
+    parent_portal_login,
+    parent_portal_logout,
+    parent_portal_payments,
+    parent_portal_receipt,
+    parent_portal_tax_certificate,
+    parent_portal_verify,
+    # Reports & analytics (v1.7)
+    reports_pdf,
+    reports_view,
     save_schedule_slot,
     # Schedule
     schedule_view,
+    # PWA (v1.12)
+    service_worker,
+    # Stripe webhook (v1.11) — CSRF-exempt
+    stripe_webhook,
     # Support
     submit_support_ticket,
     # Error test pages
@@ -36,6 +56,11 @@ from core.views import (
     test_error_500,
     # Testing tools
     testing_tools_view,
+    # Two-factor authentication (v1.13)
+    two_factor_manage,
+    two_factor_setup,
+    two_factor_verify,
+    web_manifest,
 )
 
 urlpatterns = [
@@ -57,6 +82,9 @@ urlpatterns = [
         BrandedPasswordResetCompleteView.as_view(),
         name="password_reset_complete",
     ),
+    # PWA (v1.12) — must be at origin root to control the whole scope
+    path("manifest.webmanifest", web_manifest, name="web_manifest"),
+    path("sw.js", service_worker, name="service_worker"),
     # Dashboard
     path("", home, name="home"),
     path("database/", all_info, name="all_info"),
@@ -71,12 +99,37 @@ urlpatterns = [
     path("api/history/", history_list, name="history_list"),
     # Support
     path("api/support/submit/", submit_support_ticket, name="submit_support_ticket"),
+    # Google Sheets export (v1.2)
+    path("api/sheets/export/", export_to_sheets, name="export_to_sheets"),
+    # Reports & analytics (v1.7)
+    path("reports/", reports_view, name="reports_view"),
+    path("reports/download.pdf", reports_pdf, name="reports_pdf"),
+    # Two-factor authentication (v1.13)
+    path("two-factor/setup/", two_factor_setup, name="two_factor_setup"),
+    path("two-factor/manage/", two_factor_manage, name="two_factor_manage"),
+    path("two-factor/verify/", two_factor_verify, name="two_factor_verify"),
+    # Parent portal (v1.9) — magic-link auth, session separate from admin
+    path("parent/login/", parent_portal_login, name="parent_portal_login"),
+    path("parent/login/<str:token>/", parent_portal_verify, name="parent_portal_verify"),
+    path("parent/logout/", parent_portal_logout, name="parent_portal_logout"),
+    path("parent/", parent_portal_dashboard, name="parent_portal_dashboard"),
+    path("parent/payments/", parent_portal_payments, name="parent_portal_payments"),
+    path("parent/payments/<int:payment_id>/receipt.pdf", parent_portal_receipt, name="parent_portal_receipt"),
+    path("parent/tax-certificate.pdf", parent_portal_tax_certificate, name="parent_portal_tax_certificate"),
+    path(
+        "parent/payments/<int:payment_id>/pay-online/",
+        create_checkout_link,
+        name="stripe_create_checkout_link",
+    ),
+    # Stripe webhook (v1.11) — CSRF-exempt, called by Stripe's servers
+    path("api/stripe/webhook/", stripe_webhook, name="stripe_webhook"),
     # Testing tools
     path("testing/", testing_tools_view, name="testing_tools"),
     path("api/testing/seed/", api_seed_database, name="api_seed_database"),
     path("api/testing/backlog/create/", api_create_backlog_task, name="api_create_backlog_task"),
     path("api/testing/backlog/<int:task_id>/update/", api_update_backlog_task, name="api_update_backlog_task"),
     path("api/testing/error-email/toggle/", api_toggle_error_email, name="api_toggle_error_email"),
+    path("api/testing/ready/", api_mark_ready, name="api_mark_ready"),
     # Error test pages
     path("400/", test_error_400, name="test_error_400"),
     path("403/", test_error_403, name="test_error_403"),

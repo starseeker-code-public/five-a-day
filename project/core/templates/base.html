@@ -16,6 +16,14 @@
     <link rel="icon" type="image/png" sizes="32x32" href="{% static 'favicon-32x32.png' %}">
     <link rel="apple-touch-icon" sizes="180x180" href="{% static 'apple-touch-icon.png' %}">
 
+    <!-- PWA (v1.12) -->
+    <link rel="manifest" href="{% url 'web_manifest' %}">
+    <meta name="theme-color" content="#6d28d9">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
+    <meta name="apple-mobile-web-app-title" content="Five a Day">
+
     <!-- Open Graph — Facebook, Instagram (via FB), WhatsApp, Telegram, LinkedIn, Discord, Slack … -->
     <meta property="og:type" content="website">
     <meta property="og:site_name" content="Five a Day eVolution">
@@ -61,10 +69,30 @@
     }
     </script>
 
+    <!-- Theme (light/dark): apply the class before first paint to avoid a flash.
+         An explicit user choice (localStorage) always wins; otherwise the
+         DEFAULT is time-based — light from 10:00–16:59, dark the rest of the day. -->
+    <script>
+    (function () {
+        try {
+            var stored = localStorage.getItem('theme');
+            var dark;
+            if (stored === 'dark' || stored === 'light') {
+                dark = stored === 'dark';
+            } else {
+                var h = new Date().getHours();
+                dark = !(h >= 10 && h < 17);
+            }
+            if (dark) document.documentElement.classList.add('dark');
+        } catch (e) { /* default light */ }
+    })();
+    </script>
+
     <!-- Tailwind CSS (CDN) -->
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
     tailwind.config = {
+        darkMode: 'class',
         theme: {
             extend: {
                 colors: {
@@ -87,6 +115,9 @@
 
     <!-- App custom styles (sidebar, icons) -->
     <link rel="stylesheet" href="{% static 'css/app.css' %}">
+
+    <!-- Dark theme overrides (inert unless html.dark is set) -->
+    <link rel="stylesheet" href="{% static 'css/theme.css' %}">
 
     {% block extra_css %}{% endblock %}
 </head>
@@ -114,10 +145,18 @@
                         <span class="material-symbols-outlined mx-auto sidebar-icon">people</span>
                         <span class="hidden sidebar-text">Estudiantes</span>
                     </a>
+                    <a href="{% url 'waiting_list' %}" class="sidebar-link w-full flex items-center gap-3 px-2 py-3 rounded-md {% if request.resolver_match.url_name == 'waiting_list' %}active-sidebar-link bg-primary-200 text-primary-700{% else %}text-neutral-600{% endif %} font-medium hover:bg-primary-100 hover:text-primary-700 transition-all duration-200">
+                        <span class="material-symbols-outlined mx-auto sidebar-icon">hourglass_top</span>
+                        <span class="hidden sidebar-text">Lista de Espera</span>
+                    </a>
                     {% if is_admin_user %}
                     <a href="{% url 'payments_list' %}" class="sidebar-link w-full flex items-center gap-3 px-2 py-3 rounded-md {% if request.resolver_match.url_name == 'payments_list' or request.resolver_match.url_name == 'create_payment' or request.resolver_match.url_name == 'payment_detail_view' or request.resolver_match.url_name == 'update_payment' %}active-sidebar-link bg-primary-200 text-primary-700{% else %}text-neutral-600{% endif %} font-medium hover:bg-primary-100 hover:text-primary-700 transition-all duration-200">
                         <span class="material-symbols-outlined mx-auto sidebar-icon">payment</span>
                         <span class="hidden sidebar-text">Pagos</span>
+                    </a>
+                    <a href="{% url 'expenses_list' %}" class="sidebar-link w-full flex items-center gap-3 px-2 py-3 rounded-md {% if request.resolver_match.url_name == 'expenses_list' %}active-sidebar-link bg-primary-200 text-primary-700{% else %}text-neutral-600{% endif %} font-medium hover:bg-primary-100 hover:text-primary-700 transition-all duration-200">
+                        <span class="material-symbols-outlined mx-auto sidebar-icon">receipt_long</span>
+                        <span class="hidden sidebar-text">Gastos</span>
                     </a>
                     <a href="{% url 'schedule_view' %}" class="sidebar-link w-full flex items-center gap-3 px-2 py-3 rounded-md {% if request.resolver_match.url_name == 'schedule_view' or request.resolver_match.url_name == 'fun_friday_view' %}active-sidebar-link bg-primary-200 text-primary-700{% else %}text-neutral-600{% endif %} font-medium hover:bg-primary-100 hover:text-primary-700 transition-all duration-200">
                         <span class="material-symbols-outlined mx-auto sidebar-icon">calendar_month</span>
@@ -138,21 +177,25 @@
                         <span class="hidden sidebar-text">Gestión</span>
                     </a>
                     {% if is_admin_user %}
+                    <a href="{% url 'reports_view' %}" class="sidebar-link w-full flex items-center gap-3 px-2 py-3 rounded-md {% if request.resolver_match.url_name == 'reports_view' %}active-sidebar-link bg-primary-200 text-primary-700{% else %}text-neutral-600{% endif %} font-medium hover:bg-primary-100 hover:text-primary-700 transition-all duration-200">
+                        <span class="material-symbols-outlined mx-auto sidebar-icon">bar_chart</span>
+                        <span class="hidden sidebar-text">Informes</span>
+                    </a>
                     <a href="{% url 'all_info' %}" class="sidebar-link w-full flex items-center gap-3 px-2 py-3 rounded-md {% if request.resolver_match.url_name == 'all_info' %}active-sidebar-link bg-primary-200 text-primary-700{% else %}text-neutral-600{% endif %} font-medium hover:bg-primary-100 hover:text-primary-700 transition-all duration-200">
                         <span class="material-symbols-outlined mx-auto sidebar-icon">analytics</span>
                         <span class="hidden sidebar-text">Base de Datos</span>
                     </a>
                     {% endif %}
-                    <a href="{% url 'logout' %}" class="sidebar-link w-full flex items-center gap-3 px-2 py-3 rounded-md text-neutral-600 font-medium hover:bg-red-100 hover:text-red-700 transition-all duration-200">
+                    <a href="{% url 'logout' %}" class="sidebar-link w-full flex items-center gap-3 px-2 py-3 rounded-md text-neutral-600 font-medium hover:bg-primary-100 hover:text-primary-700 transition-all duration-200">
                         <span class="material-symbols-outlined mx-auto sidebar-icon">logout</span>
                         <span class="hidden sidebar-text">Cerrar Sesión</span>
                     </a>
-                    <a href="#" id="support-open-btn" class="sidebar-link w-full flex items-center gap-3 px-2 py-3 rounded-md text-neutral-600 font-medium hover:bg-amber-100 hover:text-amber-700 transition-all duration-200">
+                    <a href="#" id="support-open-btn" class="sidebar-link w-full flex items-center gap-3 px-2 py-3 rounded-md text-neutral-600 font-medium hover:bg-primary-100 hover:text-primary-700 transition-all duration-200">
                         <span class="material-symbols-outlined mx-auto sidebar-icon">help</span>
                         <span class="hidden sidebar-text">¿Necesitas ayuda?</span>
                     </a>
                     {% if show_testing_tools %}
-                    <a href="{% url 'testing_tools' %}" class="sidebar-link w-full flex items-center gap-3 px-2 py-3 rounded-md {% if request.resolver_match.url_name == 'testing_tools' %}active-sidebar-link bg-cyan-200 text-cyan-700{% else %}text-neutral-600{% endif %} font-medium hover:bg-cyan-100 hover:text-cyan-700 transition-all duration-200">
+                    <a href="{% url 'testing_tools' %}" class="sidebar-link w-full flex items-center gap-3 px-2 py-3 rounded-md {% if request.resolver_match.url_name == 'testing_tools' %}active-sidebar-link bg-primary-200 text-primary-700{% else %}text-neutral-600{% endif %} font-medium hover:bg-primary-100 hover:text-primary-700 transition-all duration-200">
                         <span class="material-symbols-outlined mx-auto sidebar-icon">info</span>
                         <span class="hidden sidebar-text">Testing</span>
                     </a>
@@ -185,7 +228,7 @@
                 <div class="flex items-center gap-3">
                     <!-- History Log -->
                     <div class="relative" id="history-container">
-                        <button id="history-btn" class="p-3 rounded-full text-neutral-700 bg-primary-100 transition-all duration-200" title="Historial">
+                        <button id="history-btn" class="w-11 h-11 inline-flex items-center justify-center rounded-full text-neutral-700 bg-primary-100 hover:bg-primary-200 transition-all duration-200" title="Historial">
                             <span class="material-symbols-outlined">article</span>
                         </button>
                         {% if history_count > 0 %}
@@ -213,7 +256,7 @@
                     </div>
                     <!-- Notifications Bell -->
                     <div class="relative" id="notif-container">
-                        <button id="notif-btn" class="p-3 rounded-full text-neutral-800 bg-primary-100 transition-all duration-200">
+                        <button id="notif-btn" class="w-11 h-11 inline-flex items-center justify-center rounded-full text-neutral-800 bg-primary-100 hover:bg-primary-200 transition-all duration-200">
                             <span class="material-symbols-outlined">notifications</span>
                         </button>
                         {% if notifications_count > 0 %}
@@ -256,6 +299,12 @@
                             {% endif %}
                         </div>
                     </div>
+                    <!-- Theme toggle (light / dark) -->
+                    <button id="theme-toggle-btn" type="button" title="Cambiar tema claro/oscuro" aria-label="Cambiar tema claro/oscuro"
+                            class="w-11 h-11 inline-flex items-center justify-center rounded-full text-neutral-800 bg-primary-100 hover:bg-primary-200 transition-all duration-200">
+                        <span class="material-symbols-outlined theme-icon-light">dark_mode</span>
+                        <span class="material-symbols-outlined theme-icon-dark">light_mode</span>
+                    </button>
                     {% block header_actions %}
                     <a href="{% url 'parent_create' %}" class="header-action-btn bg-primary-500 hover:bg-primary-600 text-white px-6 py-3 rounded-md flex items-center gap-2 transition-all duration-200 transform hover:scale-105 hover:shadow-md text-base font-semibold leading-none no-underline">
                         <span class="material-symbols-outlined text-xl">school</span> Nuevo Estudiante
@@ -369,6 +418,21 @@
     <!-- Global scripts -->
     <script src="{% static 'js/support.js' %}"></script>
     <script src="{% static 'js/base.js' %}"></script>
+    <script src="{% static 'js/theme.js' %}"></script>
+
+    <!-- PWA (v1.12) — register the service worker after the page loads so the
+         registration never blocks the first paint. Silently degrades on browsers
+         that don't support service workers. -->
+    <script>
+    if ("serviceWorker" in navigator) {
+        window.addEventListener("load", function () {
+            navigator.serviceWorker.register("/sw.js").catch(function (err) {
+                // Registration failures are cosmetic — the app works without it.
+                console.debug("SW registration failed:", err);
+            });
+        });
+    }
+    </script>
 
     {% block extra_js %}{% endblock %}
 </body>

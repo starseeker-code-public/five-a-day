@@ -4,7 +4,9 @@
 const STUDENT_ID = window.STUDENT_ID;
 
 function getCsrf() {
-    return document.cookie.split(';').map(c=>c.trim()).find(c=>c.startsWith('csrftoken='))?.split('=')[1]||'';
+    return document.querySelector('[name=csrfmiddlewaretoken]')?.value
+        || document.cookie.split(';').map(c=>c.trim()).find(c=>c.startsWith('csrftoken='))?.split('=')[1]
+        || '';
 }
 
 function addFunFriday() {

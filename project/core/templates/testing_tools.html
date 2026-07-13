@@ -101,7 +101,8 @@
 <div class="px-4 py-6" id="testing-page"
      data-seed-url="{% url 'api_seed_database' %}"
      data-backlog-create-url="{% url 'api_create_backlog_task' %}"
-     data-toggle-error-url="{% url 'api_toggle_error_email' %}">
+     data-toggle-error-url="{% url 'api_toggle_error_email' %}"
+     data-ready-url="{% url 'api_mark_ready' %}">
 
     <div class="mb-8">
         <div class="flex items-center gap-3 mb-2">
@@ -126,6 +127,11 @@
                     <h2 class="text-lg font-bold text-neutral-800">Proyecto</h2>
                     <p class="text-xs text-neutral-500">Datos en tiempo real del servidor y git</p>
                 </div>
+                <a href="https://github.com/starseeker-code-public/five-a-day#five-a-day-evolution"
+                   target="_blank" rel="noopener" title="Documentación del proyecto (GitHub)"
+                   class="qa-card-icon bg-indigo-100 no-underline ml-auto" style="width:2.5rem;height:2.5rem;">
+                    <span class="material-symbols-outlined text-indigo-600">code</span>
+                </a>
             </div>
 
             <div class="grid grid-cols-1 md:grid-cols-2 gap-x-8">
@@ -144,7 +150,7 @@
                     <p class="text-xs font-semibold text-neutral-400 uppercase tracking-wider mb-1">Ultimo commit</p>
                     <div class="qa-info-row"><span class="qa-info-label">Rama</span><span class="qa-info-value">{{ git.branch|default:"—" }}</span></div>
                     <div class="qa-info-row"><span class="qa-info-label">Commit</span><span class="qa-info-value" title="{{ git.commit_id_full|default:'' }}">{{ git.commit_id|default:"—" }}</span></div>
-                    <div class="qa-info-row"><span class="qa-info-label">Mensaje</span><span class="qa-info-value" style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="{{ git.commit_message|default:'' }}">{{ git.commit_message|default:"—" }}</span></div>
+                    <div class="qa-info-row" style="flex-direction:column;align-items:flex-start;gap:2px;"><span class="qa-info-label">Mensaje</span><span class="qa-info-value" style="white-space:normal;word-break:break-word;text-align:left;">{{ git.commit_message|default:"—" }}</span></div>
                     <div class="qa-info-row"><span class="qa-info-label">Autor</span><span class="qa-info-value">{{ git.commit_author|default:"—" }}</span></div>
                     <div class="qa-info-row"><span class="qa-info-label">Fecha</span><span class="qa-info-value">{{ git.commit_date|default:"—" }}</span></div>
                 </div>
@@ -152,13 +158,13 @@
         </div>
 
         <!-- TARJETAS COMPACTAS (columna derecha) -->
-        <div class="flex flex-col gap-6">
+        <div class="flex flex-col gap-4">
 
             <!-- Reporte de errores -->
-            <div class="qa-card">
+            <div class="qa-card" style="padding:1.1rem 1.25rem;">
                 <div class="flex items-center justify-between">
                     <div class="flex items-center gap-3">
-                        <div class="qa-card-icon bg-rose-100">
+                        <div class="qa-card-icon bg-rose-100" style="width:2.5rem;height:2.5rem;">
                             <span class="material-symbols-outlined text-rose-600">report</span>
                         </div>
                         <div>
@@ -178,30 +184,59 @@
                 </div>
             </div>
 
-            <!-- Version del entorno -->
-            <div class="qa-card">
-                <div class="flex items-center gap-3">
-                    <div class="qa-card-icon bg-violet-100">
-                        <span class="material-symbols-outlined text-violet-600">deployed_code</span>
-                    </div>
-                    <div>
-                        <h2 class="text-sm font-bold text-neutral-800">Entorno de pruebas</h2>
-                        <p class="text-xs text-neutral-500">Rama <strong>{{ git.branch|default:"—" }}</strong> &middot; v{{ app_version }} &middot; {{ environment }}</p>
-                    </div>
-                </div>
+            <!-- Documentación (GitHub) + Correo temporal -->
+            <div class="flex gap-4">
+                <a href="https://github.com/starseeker-code-public/five-a-day#five-a-day-evolution"
+                   target="_blank" rel="noopener" title="Documentación (GitHub)"
+                   class="qa-card no-underline flex flex-col items-center justify-center gap-1"
+                   style="padding:1rem;width:5.5rem;flex-shrink:0;">
+                    <span class="material-symbols-outlined text-indigo-600" style="font-size:2rem;">code</span>
+                    <span class="text-[11px] font-semibold text-neutral-600">GitHub</span>
+                </a>
+                <a href="https://tempmail.lol/es/" target="_blank" rel="noopener" title="Correo temporal"
+                   class="qa-card no-underline flex items-center justify-center gap-2 flex-1" style="padding:1rem;">
+                    <span class="material-symbols-outlined text-cyan-600" style="font-size:1.75rem;">alternate_email</span>
+                    <span class="text-sm font-bold text-neutral-800">Correo temporal</span>
+                </a>
             </div>
 
-            <!-- Admin -->
-            <div class="qa-card">
-                <div class="flex items-center gap-3">
-                    <div class="qa-card-icon bg-amber-100">
-                        <span class="material-symbols-outlined text-amber-600">admin_panel_settings</span>
+            <!-- Admin / Drive / Google Cloud (big icons) -->
+            <div class="flex gap-4">
+                <a href="/admin/" title="Panel de administración"
+                   class="qa-card no-underline flex flex-col items-center justify-center gap-1 flex-1" style="padding:1rem;">
+                    <span class="material-symbols-outlined text-amber-600" style="font-size:2rem;">admin_panel_settings</span>
+                    <span class="text-[11px] font-semibold text-neutral-600">Admin</span>
+                </a>
+                {# TODO: replace with the real Google Drive folder URL #}
+                <a href="https://drive.google.com/" target="_blank" rel="noopener" title="Google Drive"
+                   class="qa-card no-underline flex flex-col items-center justify-center gap-1 flex-1" style="padding:1rem;">
+                    <span class="material-symbols-outlined text-emerald-600" style="font-size:2rem;">hard_drive</span>
+                    <span class="text-[11px] font-semibold text-neutral-600">Drive</span>
+                </a>
+                <a href="https://console.cloud.google.com/" target="_blank" rel="noopener" title="Google Cloud Platform"
+                   class="qa-card no-underline flex flex-col items-center justify-center gap-1 flex-1" style="padding:1rem;">
+                    <span class="material-symbols-outlined text-blue-600" style="font-size:2rem;">cloud</span>
+                    <span class="text-[11px] font-semibold text-neutral-600">GCP</span>
+                </a>
+            </div>
+
+            <!-- ¿Listo para desplegar? -->
+            <div class="qa-card" style="padding:1.1rem 1.25rem;">
+                <div class="flex items-center justify-between gap-3">
+                    <div class="flex items-center gap-3">
+                        <div class="qa-card-icon bg-emerald-100" style="width:2.5rem;height:2.5rem;">
+                            <span class="material-symbols-outlined text-emerald-600">rocket_launch</span>
+                        </div>
+                        <div>
+                            <h2 class="text-sm font-bold text-neutral-800">¿Listo para desplegar?</h2>
+                            <p class="text-xs text-neutral-500">Avisa al soporte que esta versión está lista</p>
+                        </div>
                     </div>
-                    <div>
-                        <h2 class="text-sm font-bold text-neutral-800">Panel de administracion</h2>
-                        <a href="/admin/" class="text-xs text-cyan-600 hover:underline">/admin/ &rarr;</a>
-                    </div>
+                    <button id="ready-ship-btn" class="circle-btn bg-emerald-600 hover:bg-emerald-700" title="Marcar como listo y enviar aviso">
+                        <span class="material-symbols-outlined text-[22px]">check</span>
+                    </button>
                 </div>
+                <p id="ready-ship-msg" class="text-xs mt-2 hidden"></p>
             </div>
 
         </div>
@@ -235,14 +270,13 @@
                     El comando de siembra crea un conjunto completo de datos de prueba para ejercitar cada funcionalidad sin tener que ingresar datos manualmente:
                 </p>
                 <ul class="text-sm text-neutral-600 space-y-1 ml-4 list-disc">
-                    <li><strong>3 profesores</strong> y <strong>5 grupos</strong> (Starters A/B, Movers, Flyers, Adultos)</li>
-                    <li><strong>6 padres</strong> con DNI, telefono, email e IBAN</li>
-                    <li><strong>12 alumnos</strong> vinculados a padres, asignados a grupos</li>
-                    <li><strong>3 adultos</strong> con sus propios datos de contacto</li>
-                    <li><strong>1 alumno inactivo</strong> (baja — para probar filtros)</li>
-                    <li><strong>Matriculas activas</strong> con planes de pago mensual y trimestral</li>
-                    <li><strong>Pagos</strong> en distintos estados: completados, pendientes y vencidos</li>
-                    <li><strong>Horarios</strong>, <strong>tareas pendientes</strong> y <strong>entradas en el historial</strong></li>
+                    <li><strong>4 profesores</strong> (los 2 admin + 2 adicionales) y <strong>8+ grupos</strong></li>
+                    <li><strong>15 padres</strong> con DNI, teléfono, email e IBAN (incluye hermanos)</li>
+                    <li><strong>20 alumnos</strong> — 3 adultos, hermanos con mismo padre, + 1 inactivo</li>
+                    <li><strong>Matrículas</strong> mensuales y trimestrales, con descuento de hermano, cheque de idiomas y alumnos recurrentes</li>
+                    <li><strong>Pagos</strong> en todos los estados con importes coherentes (matrícula/mensual/trimestral pendientes y 1 vencido)</li>
+                    <li><strong>Gastos</strong> realistas (material, fotocopias…) para Informes y Gastos</li>
+                    <li><strong>Horarios</strong>, <strong>tareas</strong> e <strong>historial</strong></li>
                 </ul>
             </div>
             <div>
@@ -267,18 +301,19 @@
 
         <!-- Formulario nueva tarea -->
         <div class="bg-gray-50 rounded-xl p-4 mb-4">
-            <div class="grid grid-cols-1 md:grid-cols-12 gap-3">
-                <input type="text" id="backlog-title" placeholder="Titulo del error o tarea..." maxlength="300"
-                       class="md:col-span-5 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-cyan-300 focus:border-cyan-400 outline-none">
+            <div class="grid grid-cols-1 md:grid-cols-12 gap-3 items-center">
+                <input type="text" id="backlog-title" placeholder="Titulo..." maxlength="300"
+                       class="md:col-span-3 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-primary-300 focus:border-primary-400 outline-none">
                 <input type="text" id="backlog-desc" placeholder="Descripcion (cuanto mas detalle, mejor)" maxlength="500"
-                       class="md:col-span-4 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-cyan-300 focus:border-cyan-400 outline-none">
-                <select id="backlog-priority" class="md:col-span-1 px-2 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-cyan-300 outline-none">
+                       class="md:col-span-7 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-primary-300 focus:border-primary-400 outline-none">
+                <select id="backlog-priority" class="md:col-span-1 px-2 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-primary-300 outline-none">
                     <option value="low">Baja</option>
                     <option value="medium" selected>Media</option>
                     <option value="high">Alta</option>
                 </select>
-                <button id="backlog-add-btn" class="md:col-span-2 px-4 py-2 bg-cyan-600 text-white rounded-lg font-semibold text-sm hover:bg-cyan-700 transition-colors flex items-center justify-center gap-1">
-                    <span class="material-symbols-outlined text-[18px]">add</span> Crear
+                <button id="backlog-add-btn" title="Crear tarea"
+                        class="md:col-span-1 justify-self-end w-9 h-9 bg-primary-500 text-white rounded-lg hover:bg-primary-600 transition-colors inline-flex items-center justify-center">
+                    <span class="material-symbols-outlined text-[18px]">add</span>
                 </button>
             </div>
             <p id="backlog-error" class="text-red-600 text-xs mt-2 hidden"></p>
@@ -371,6 +406,26 @@
     document.getElementById('seed-reset-btn')?.addEventListener('click', () => {
         if (confirm('Esto borrara TODOS los datos y los re-sembrara. ¿Continuar?')) seed(true);
     });
+
+    // ── ¿Listo para desplegar? ──────────────────────
+    const readyBtn = document.getElementById('ready-ship-btn');
+    const readyMsg = document.getElementById('ready-ship-msg');
+    if (readyBtn) {
+        readyBtn.addEventListener('click', () => {
+            if (!confirm('¿Marcar esta versión como LISTA y avisar al soporte por email?')) return;
+            readyBtn.disabled = true;
+            readyMsg.classList.remove('hidden');
+            readyMsg.style.color = '#6b7280';
+            readyMsg.textContent = 'Enviando aviso...';
+            post(page.dataset.readyUrl, {})
+                .then(data => {
+                    readyMsg.style.color = data.success ? '#16a34a' : '#dc2626';
+                    readyMsg.textContent = data.success ? ('✓ ' + data.message) : ('Error: ' + data.message);
+                })
+                .catch(err => { readyMsg.style.color = '#dc2626'; readyMsg.textContent = 'Error: ' + err; })
+                .finally(() => { readyBtn.disabled = false; });
+        });
+    }
 
     // ── Backlog ─────────────────────────────────────
     const backlogList = document.getElementById('backlog-list');

@@ -57,6 +57,29 @@ class TestFunFridayForm:
         )
         assert response.status_code == 302  # redirects to home
 
+    def test_send_all_schedules_for_monday_1430(self, authenticated_client, student_with_parent):
+        """The real announcement is scheduled for 14:30 on the Monday of the target Friday's week."""
+        friday = date(2026, 5, 15)
+        expected_monday = friday - timedelta(days=friday.weekday())
+        with patch("comms.tasks.send_fun_friday_emails_task.apply_async") as mock_async:
+            response = authenticated_client.post(
+                reverse("fun_friday_form"),
+                {
+                    "event_date": friday.isoformat(),
+                    "start_time": "17:00",
+                    "end_time": "18:30",
+                    "activity_description": "<b>Crafts</b>",
+                    "min_age": "5",
+                    "max_age": "12",
+                    "meeting_point": "Main entrance",
+                },
+            )
+        assert response.status_code == 302
+        assert mock_async.called
+        eta = mock_async.call_args.kwargs["eta"]
+        assert eta.date() == expected_monday
+        assert (eta.hour, eta.minute) == (14, 30)
+
 
 class TestPaymentReminderForm:
     def test_get_renders_form(self, authenticated_client):
@@ -364,8 +387,8 @@ class TestFunFridayExtra:
         assert response.status_code == 200
 
     def test_send_all_with_email_failures(self, authenticated_client, student_with_parent):
-        """Exceptions during send don't break the form."""
-        with patch("core.views.app_forms.send_fun_friday_email", side_effect=Exception("SMTP down")):
+        """Exceptions during send (in the scheduled task) don't break the form."""
+        with patch("comms.services.email_functions.send_fun_friday_email", side_effect=Exception("SMTP down")):
             next_friday = date.today() + timedelta(days=(4 - date.today().weekday()) % 7 or 7)
             response = authenticated_client.post(
                 reverse("fun_friday_form"),

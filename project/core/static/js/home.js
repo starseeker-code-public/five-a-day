@@ -67,10 +67,14 @@ document.addEventListener('DOMContentLoaded', function () {
     });
 
     function getCsrfToken() {
-        return document.cookie.split(';')
-            .map(c => c.trim())
-            .find(c => c.startsWith('csrftoken='))
-            ?.split('=')[1] || '';
+        // Prefer the hidden {% csrf_token %} input (always in the DOM) so this
+        // works even when the csrftoken cookie is HttpOnly (DEBUG=False).
+        return document.querySelector('[name=csrfmiddlewaretoken]')?.value
+            || document.cookie.split(';')
+                .map(c => c.trim())
+                .find(c => c.startsWith('csrftoken='))
+                ?.split('=')[1]
+            || '';
     }
 
     function showError(msg) {

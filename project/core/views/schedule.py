@@ -6,6 +6,7 @@ from django.shortcuts import get_object_or_404, render
 from django.views.decorators.http import require_http_methods
 
 from core.models import FunFridayAttendance, HistoryLog, ScheduleSlot
+from core.schedule_utils import slot_time_range
 from core.views.students import get_last_friday, get_next_friday
 from students.models import Group, Student
 
@@ -35,16 +36,9 @@ def schedule_view(request):
         )
 
     saved = ScheduleSlot.objects.select_related("group").all()
-    ROW_STARTS = ["16:10", "17:40", "19:10"]
-    ROW_ENDS = ["17:30", "19:00", "20:30"]
-    FRI_START = "16:00"
-    FRI_END = "17:20"
     slots_data = []
     for s in saved:
-        if s.day == 4:
-            start, end = FRI_START, FRI_END
-        else:
-            start, end = ROW_STARTS[s.row], ROW_ENDS[s.row]
+        start, end = slot_time_range(s.row, s.day)
         slots_data.append(
             {"row": s.row, "day": s.day, "col": s.col, "group_id": s.group_id, "start": start, "end": end}
         )

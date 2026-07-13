@@ -65,6 +65,11 @@ class TodoItem(models.Model):
         return self.due_date < date.today()
 
 
+# v1.10 — the immutable audit trail lives in a sibling module so this file
+# stays focused on the user-visible core models.
+from core.audit_models import AuditLog  # noqa: E402,F401
+
+
 class HistoryLog(models.Model):
     """Stores up to 1000 history log entries for user actions."""
 
@@ -79,6 +84,12 @@ class HistoryLog(models.Model):
         ("payment_created", "Pago creado"),
         ("email_sent", "Email enviado"),
         ("schedule_updated", "Horario actualizado"),
+        # v1.1 — Waiting list & group capacity
+        ("waiting_list_added", "Añadido a lista de espera"),
+        ("waiting_list_assigned", "Asignado desde lista de espera"),
+        ("waiting_list_spot_open", "Hueco disponible"),
+        # v1.2 — Google Sheets integration
+        ("sheets_exported", "Exportación a Google Sheets"),
     ]
 
     action = models.CharField(max_length=30, choices=ACTION_CHOICES)

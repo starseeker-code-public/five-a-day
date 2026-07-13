@@ -107,13 +107,24 @@ class TestTodayNotifications:
 
 class TestContextProcessorsUnauthed:
     def test_unauthenticated_returns_empty(self, client):
-        """Unauthenticated request → context processor returns zeros, no queries."""
+        """Unauthenticated request → context processor returns the same shape
+        as an authenticated one. Uses `mock.patch` on `date.today()` so the
+        assertion doesn't become fragile on Fridays (Fun Friday auto-adds a
+        scheduled-app notification) or the 1st of the month (monthly job)."""
+        from datetime import date
+        from unittest.mock import patch
+
         from core.context_processors import today_notifications
 
         rf = RequestFactory()
         req = rf.get("/")
         req.session = {}
-        ctx = today_notifications(req)
+        # Pick a Tuesday that isn't the 1st, guaranteeing no scheduled apps
+        # will fire.
+        with patch("core.context_processors.date") as mock_date:
+            mock_date.today.return_value = date(2026, 7, 7)  # Tuesday, 7th
+            mock_date.side_effect = lambda *a, **kw: date(*a, **kw)
+            ctx = today_notifications(req)
         assert ctx["notifications_count"] == 0
 
     def test_unauthenticated_no_query(self, client):

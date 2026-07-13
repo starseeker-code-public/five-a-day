@@ -9,7 +9,16 @@ DATE_INPUT_FORMATS = ["%Y-%m-%d", "%d/%m/%Y"]
 class StudentForm(ModelForm):
     class Meta:
         model = Student
-        fields = ["first_name", "last_name", "birth_date", "school", "allergies", "gdpr_signed", "group"]
+        fields = [
+            "first_name",
+            "last_name",
+            "birth_date",
+            "school",
+            "allergies",
+            "gdpr_signed",
+            "group",
+            "is_waiting",
+        ]
         widgets = {
             "first_name": forms.TextInput(attrs={"class": "form-control", "placeholder": "Nombre"}),
             "last_name": forms.TextInput(attrs={"class": "form-control", "placeholder": "Apellidos"}),
@@ -18,6 +27,7 @@ class StudentForm(ModelForm):
             "allergies": forms.Textarea(attrs={"class": "form-control", "rows": 3, "placeholder": "Alergias"}),
             "gdpr_signed": forms.CheckboxInput(attrs={"class": "form-check-input"}),
             "group": forms.Select(attrs={"class": "form-control"}),
+            "is_waiting": forms.CheckboxInput(attrs={"class": "form-check-input"}),
         }
         labels = {
             "first_name": "Nombre",
@@ -27,6 +37,7 @@ class StudentForm(ModelForm):
             "allergies": "Alergias",
             "gdpr_signed": "GDPR Firmado",
             "group": "Grupo",
+            "is_waiting": "En lista de espera",
         }
 
     def __init__(self, *args, **kwargs):

@@ -36,6 +36,24 @@ app.conf.beat_schedule = {
         "schedule": crontab(hour=9, minute=0, day_of_week=1),
         "options": {"queue": "emails"},
     },
+    # v1.4 — Monthly payment generation on the 1st at 06:00
+    "generate-monthly-payments": {
+        "task": "billing.tasks.generate_monthly_payments_task",
+        "schedule": crontab(hour=6, minute=0, day_of_month=1),
+        "options": {"queue": "celery"},
+    },
+    # v1.5 — Materialize recurring expense templates on the 1st at 06:30
+    "materialize-recurring-expenses": {
+        "task": "billing.tasks.materialize_recurring_expenses_task",
+        "schedule": crontab(hour=6, minute=30, day_of_month=1),
+        "options": {"queue": "celery"},
+    },
+    # v1.4 — Monthly report on the 28th at 20:00
+    "send-monthly-report": {
+        "task": "comms.tasks.send_monthly_report_task",
+        "schedule": crontab(hour=20, minute=0, day_of_month=28),
+        "options": {"queue": "emails"},
+    },
 }
 
 app.conf.timezone = "Europe/Madrid"

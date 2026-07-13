@@ -164,15 +164,24 @@ def create_payment(request):
             student_id = request.POST.get("student_id")
             parent_id = request.POST.get("parent_id")
 
-            # Validate student and parent exist
+            # Validate student exists
             student = get_object_or_404(Student, id=student_id)
-            parent = get_object_or_404(Parent, id=parent_id)
 
-            # Validate relationship
-            if not student.parents.filter(id=parent_id).exists():
+            # Parent is optional for adult students (they have no parent/tutor).
+            # For everyone else a parent is required and must be related.
+            parent = None
+            if parent_id:
+                parent = get_object_or_404(Parent, id=parent_id)
+                if not student.parents.filter(id=parent_id).exists():
+                    messages.error(
+                        request,
+                        "El padre/tutor seleccionado no está asociado con este estudiante.",
+                    )
+                    return redirect("payments_list")
+            elif not student.is_adult:
                 messages.error(
                     request,
-                    "El padre/tutor seleccionado no está asociado con este estudiante.",
+                    "Debe seleccionar un padre/tutor para este estudiante.",
                 )
                 return redirect("payments_list")
 
@@ -264,6 +273,18 @@ def payment_detail_view(request, payment_id):
     }
 
     return render(request, "payments/payment_detail.html", context)
+
+
+@require_http_methods(["GET"])
+def payment_receipt_pdf(request, payment_id):
+    """Stream a payment-receipt PDF (v1.3)."""
+    from billing.services.pdf_service import generate_payment_receipt
+
+    payment = get_object_or_404(Payment.objects.select_related("student", "parent"), id=payment_id)
+    pdf_bytes = generate_payment_receipt(payment)
+    response = HttpResponse(pdf_bytes, content_type="application/pdf")
+    response["Content-Disposition"] = f'attachment; filename="recibo-{payment.id}.pdf"'
+    return response
 
 
 @require_http_methods(["POST"])

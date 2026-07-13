@@ -196,22 +196,26 @@ class Command(BaseCommand):
         ]
         parents = Parent.objects.filter(email__isnull=False, children__active=True).distinct()
         recipient_emails = [p.email for p in parents if p.email]
-        success = send_fun_friday_email(
-            recipients=recipient_emails,
-            day_name=DAYS_ES[event_date.weekday()],
-            day_number=event_date.day,
-            month=MONTHS_ES[event_date.month - 1],
-            start_time=start_time,
-            end_time=end_time,
-            activity_description=options["activity"],
-            minimum_age=options.get("min_age", 4),
-            maximum_age=options.get("max_age", 12),
-            meeting_point=options.get("meeting_point"),
-            event_image_path=options.get("event_image"),
-        )
-        self.stdout.write(
-            self.style.SUCCESS(f"Enviado a {len(recipient_emails)} padres") if success else self.style.ERROR("Error")
-        )
+        # Send one email per parent. Previously the whole list was passed as
+        # `recipients=...` which put every family's address in the `To:` header
+        # of a single message — GDPR breach + enumeration leak. Loop instead.
+        sent = 0
+        for email in recipient_emails:
+            if send_fun_friday_email(
+                recipients=email,
+                day_name=DAYS_ES[event_date.weekday()],
+                day_number=event_date.day,
+                month=MONTHS_ES[event_date.month - 1],
+                start_time=start_time,
+                end_time=end_time,
+                activity_description=options["activity"],
+                minimum_age=options.get("min_age", 4),
+                maximum_age=options.get("max_age", 12),
+                meeting_point=options.get("meeting_point"),
+                event_image_path=options.get("event_image"),
+            ):
+                sent += 1
+        self.stdout.write(self.style.SUCCESS(f"Enviado a {sent}/{len(recipient_emails)} padres"))
 
     def send_payment_reminder_emails(self, options):
         if not options.get("month"):
@@ -219,20 +223,23 @@ class Command(BaseCommand):
         DAYS_ES = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
         parents = Parent.objects.filter(email__isnull=False, children__active=True).exclude(email="").distinct()
         recipient_emails = list(parents.values_list("email", flat=True))
-        success = send_payment_reminder_email(
-            recipients=recipient_emails,
-            payment_start_day_name=DAYS_ES[0],
-            payment_start_day_number=int(options.get("payment_start", 1)),
-            payment_end_day_name=DAYS_ES[4],
-            payment_end_day_number=int(options.get("payment_end", 5)),
-            month=options["month"],
-            iban_number=options.get("iban", ""),
-            reduced_price_cheque_idioma=options.get("cheque_idioma_price", "40"),
-            telephone_number_bizum=options.get("bizum_phone", ""),
-        )
-        self.stdout.write(
-            self.style.SUCCESS(f"Enviado a {len(recipient_emails)} padres") if success else self.style.ERROR("Error")
-        )
+        # Per-parent loop — see send_fun_friday_emails for the "batch in To:"
+        # bug this replaces.
+        sent = 0
+        for email in recipient_emails:
+            if send_payment_reminder_email(
+                recipients=email,
+                payment_start_day_name=DAYS_ES[0],
+                payment_start_day_number=int(options.get("payment_start", 1)),
+                payment_end_day_name=DAYS_ES[4],
+                payment_end_day_number=int(options.get("payment_end", 5)),
+                month=options["month"],
+                iban_number=options.get("iban", ""),
+                reduced_price_cheque_idioma=options.get("cheque_idioma_price", "40"),
+                telephone_number_bizum=options.get("bizum_phone", ""),
+            ):
+                sent += 1
+        self.stdout.write(self.style.SUCCESS(f"Enviado a {sent}/{len(recipient_emails)} padres"))
 
     def send_vacation_closure_emails(self, options):
         for field in ("reason", "start", "end", "reopen"):
@@ -258,21 +265,29 @@ class Command(BaseCommand):
         ]
         parents = Parent.objects.filter(email__isnull=False, children__active=True).exclude(email="").distinct()
         recipient_emails = list(parents.values_list("email", flat=True))
-        success = send_vacation_closure_email(
-            recipients=recipient_emails,
-            start_closure_day_name=DAYS_ES[start_date.weekday()],
-            start_closure_day_number=start_date.day,
-            end_closure_day_name=DAYS_ES[end_date.weekday()],
-            end_closure_day_number=end_date.day,
-            month_closure=MONTHS_ES[start_date.month - 1],
-            closure_reason=options["reason"],
-            reopening_day_name=DAYS_ES[reopen_date.weekday()],
-            reopening_day_number=reopen_date.day,
-            month_reopening=MONTHS_ES[reopen_date.month - 1],
-        )
-        self.stdout.write(
-            self.style.SUCCESS(f"Enviado a {len(recipient_emails)} padres") if success else self.style.ERROR("Error")
-        )
+        # Per-parent loop — see send_fun_friday_emails for the "batch in To:"
+        # bug this replaces.
+        sent = 0
+        for email in recipient_emails:
+            if send_vacation_closure_email(
+                recipients=email,
+                start_closure_day_name=DAYS_ES[start_date.weekday()],
+                start_closure_day_number=start_date.day,
+                end_closure_day_name=DAYS_ES[end_date.weekday()],
+                end_closure_day_number=end_date.day,
+                month_closure=MONTHS_ES[start_date.month - 1],
+                # The end month can differ from the start month (Christmas
+                # closure = Dec 23 → Jan 3). Pass both so the template can
+                # render "23 de diciembre" and "3 de enero" correctly instead
+                # of collapsing to a single month.
+                month_closure_end=MONTHS_ES[end_date.month - 1],
+                closure_reason=options["reason"],
+                reopening_day_name=DAYS_ES[reopen_date.weekday()],
+                reopening_day_number=reopen_date.day,
+                month_reopening=MONTHS_ES[reopen_date.month - 1],
+            ):
+                sent += 1
+        self.stdout.write(self.style.SUCCESS(f"Enviado a {sent}/{len(recipient_emails)} padres"))
 
     def send_tax_certificate_email_cmd(self, options):
         if not options.get("year"):

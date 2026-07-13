@@ -52,7 +52,13 @@ def get_payments_for_last_two_school_years():
             "student__enrollments",
             Prefetch("student__group__teacher"),
         )
-        .order_by("-created_at")
+        # Break ties on `created_at` with the PK — SQLite only stores
+        # sub-second timestamps at millisecond resolution, so two rows
+        # created inside the same test fixture end up with identical
+        # timestamps and the ordering becomes non-deterministic. Adding
+        # `-id` as a secondary key gives us stable "most recent first"
+        # ordering on both SQLite and PostgreSQL.
+        .order_by("-created_at", "-id")
     )
 
 
@@ -70,5 +76,5 @@ def get_all_payments_unrestricted():
             "student__enrollments",
             Prefetch("student__group__teacher"),
         )
-        .order_by("-created_at")
+        .order_by("-created_at", "-id")  # tie-break — see helper above
     )

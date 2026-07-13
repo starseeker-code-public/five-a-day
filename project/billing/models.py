@@ -153,6 +153,18 @@ class SiteConfiguration(models.Model):
         validators=[MinValueValidator(Decimal("0.00"))],
         verbose_name="Solo 3 semanas (%)",
     )
+    # v1.13 — returning-student enrollment discount. Flat euros knocked off
+    # the one-time enrollment fee when a student re-enrols in a later
+    # academic year. Auto-detected by EnrollmentService (any prior
+    # Enrollment for the same student, any status, any earlier academic
+    # year). Stacks with sibling + language-cheque discounts.
+    returning_student_enrollment_discount = models.DecimalField(
+        max_digits=8,
+        decimal_places=2,
+        default=Decimal("20.00"),
+        validators=[MinValueValidator(Decimal("0.00"))],
+        verbose_name="Estudiante recurrente (€ fijo sobre la matrícula)",
+    )
 
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -196,6 +208,7 @@ class SiteConfiguration(models.Model):
                 "half_month_discount": constants.HALF_MONTH_DISCOUNT[0],
                 "one_week_discount": constants.ONE_WEEK_DISCOUNT[0],
                 "three_week_discount": constants.THREE_WEEK_DISCOUNT[0],
+                "returning_student_enrollment_discount": constants.RETURNING_STUDENT_ENROLLMENT_DISCOUNT,
             },
         )
         return config
@@ -329,6 +342,20 @@ class Payment(models.Model):
     concept = models.CharField(max_length=200)
     reference_number = models.CharField(max_length=50, blank=True)  # Bank reference, receipt number, etc.
 
+    # v1.11 — Stripe reconciliation
+    stripe_session_id = models.CharField(
+        max_length=200,
+        blank=True,
+        db_index=True,
+        help_text="Stripe Checkout session id; populated when a payment link is issued.",
+    )
+    stripe_payment_intent = models.CharField(
+        max_length=200,
+        blank=True,
+        db_index=True,
+        help_text="Stripe PaymentIntent id; populated when the webhook fires on session completion.",
+    )
+
     observations = models.TextField(blank=True)
     document_url = models.URLField(blank=True)
 
@@ -376,3 +403,77 @@ class Payment(models.Model):
         if self.is_overdue:
             return (date.today() - self.due_date).days
         return 0
+
+
+# ============================================================================
+# EXPENSE TRACKING (v1.5)
+# ============================================================================
+
+
+class Expense(models.Model):
+    """
+    A single academy expense (rent, supplies, salaries, utilities, other).
+
+    Recurring expenses are represented by `is_recurring=True` on a template row
+    that carries `recurring_day` (1-28). A monthly Celery Beat job materialises
+    concrete Expense rows from those templates so historical reporting stays
+    honest — the template itself is never counted twice.
+    """
+
+    EXPENSE_CATEGORY_CHOICES = [
+        ("rent", "Alquiler"),
+        ("salaries", "Salarios"),
+        ("supplies", "Material"),
+        ("utilities", "Suministros"),
+        ("marketing", "Marketing"),
+        ("software", "Software / Suscripciones"),
+        ("insurance", "Seguros"),
+        ("taxes", "Impuestos"),
+        ("other", "Otros"),
+    ]
+
+    description = models.CharField(max_length=200)
+    category = models.CharField(max_length=20, choices=EXPENSE_CATEGORY_CHOICES, default="other")
+    amount = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        validators=[MinValueValidator(Decimal("0.01"))],
+    )
+    expense_date = models.DateField(default=date.today)
+    notes = models.TextField(blank=True)
+
+    is_recurring = models.BooleanField(default=False)
+    recurring_day = models.PositiveSmallIntegerField(
+        null=True,
+        blank=True,
+        help_text="Day of the month (1–28) when a recurring template should materialise a concrete Expense.",
+    )
+    # Link back to the template row when the record was auto-generated.
+    generated_from = models.ForeignKey(
+        "self",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="generated_children",
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "expenses"
+        ordering = ["-expense_date", "-created_at"]
+        indexes = [
+            models.Index(fields=["expense_date"]),
+            models.Index(fields=["category"]),
+            models.Index(fields=["is_recurring"]),
+        ]
+
+    def __str__(self):
+        return f"{self.description} — {self.amount}€ ({self.get_category_display()})"
+
+    def clean(self):
+        if self.is_recurring and not self.recurring_day:
+            raise ValidationError("Recurring expenses must set recurring_day (1–28).")
+        if self.recurring_day and not (1 <= self.recurring_day <= 28):
+            raise ValidationError("recurring_day must be between 1 and 28.")

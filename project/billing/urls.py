@@ -2,11 +2,15 @@ from django.urls import path
 
 from core.views import (
     api_get_teachers,
+    create_expense,
     create_group,
     create_payment,
     create_teacher,
     deactivate_payment,
+    delete_expense,
     delete_payment,
+    # Expenses (v1.5)
+    expenses_list,
     export_database_excel,
     export_payments,
     # Management
@@ -14,6 +18,7 @@ from core.views import (
     get_payment_details,
     language_cheque_students,
     payment_detail_view,
+    payment_receipt_pdf,
     payment_statistics,
     # Payments
     payments_list,
@@ -33,6 +38,7 @@ urlpatterns = [
     path("payments/", payments_list, name="payments_list"),
     path("payments/create/", create_payment, name="create_payment"),
     path("payments/<int:payment_id>/", payment_detail_view, name="payment_detail_view"),
+    path("payments/<int:payment_id>/receipt.pdf", payment_receipt_pdf, name="payment_receipt_pdf"),
     path("payments/<int:payment_id>/update/", update_payment, name="update_payment"),
     path("payments/<int:payment_id>/delete/", delete_payment, name="delete_payment"),
     path(
@@ -78,4 +84,10 @@ urlpatterns = [
     path("api/teachers/", api_get_teachers, name="api_get_teachers"),
     path("api/teachers/create/", create_teacher, name="create_teacher"),
     path("api/groups/create/", create_group, name="create_group"),
+    # ============================================================================
+    # EXPENSES (v1.5)
+    # ============================================================================
+    path("expenses/", expenses_list, name="expenses_list"),
+    path("expenses/create/", create_expense, name="create_expense"),
+    path("expenses/<int:expense_id>/delete/", delete_expense, name="delete_expense"),
 ]

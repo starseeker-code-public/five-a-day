@@ -1,0 +1,13 @@
+{% extends 'emails/base_email.html' %}
+{% block title %}Recibo de pago · Five a Day{% endblock %}
+{% block content %}
+<h2 style="color:#6d28d9;">¡Pago recibido!</h2>
+<p>Hemos recibido correctamente tu pago para <strong>{{ student_name }}</strong>. Gracias.</p>
+<table style="border-collapse:collapse; margin: 16px 0; width: 100%; max-width: 480px;">
+    <tr><td style="padding:6px 12px; background:#f5f5f5; font-weight:bold;">Concepto</td><td style="padding:6px 12px;">{{ concept }}</td></tr>
+    <tr><td style="padding:6px 12px; background:#f5f5f5; font-weight:bold;">Importe</td><td style="padding:6px 12px;">{{ amount }} €</td></tr>
+    <tr><td style="padding:6px 12px; background:#f5f5f5; font-weight:bold;">Fecha</td><td style="padding:6px 12px;">{{ payment_date }}</td></tr>
+</table>
+<p>Adjunto encontrarás el recibo en PDF para tus archivos.</p>
+<p style="color:#999; font-size:11px; margin-top:32px;">Si tienes cualquier duda sobre este cobro, contacta con nosotros respondiendo a este correo.</p>
+{% endblock %}

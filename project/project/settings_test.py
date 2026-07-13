@@ -67,3 +67,7 @@ SECURE_HSTS_INCLUDE_SUBDOMAINS = False
 SECURE_HSTS_PRELOAD = False
 SESSION_COOKIE_SECURE = False
 CSRF_COOKIE_SECURE = False
+
+# v1.10 — the rate limiter uses a shared cache. Disable it in tests so counts
+# from previous tests don't leak and cause 429 responses on later ones.
+RATELIMIT_ENABLE = False

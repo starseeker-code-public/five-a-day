@@ -1,0 +1,11 @@
+{% extends 'parent_portal/base_portal.html' %}
+{% block title %}Revisa tu email · Portal Five a Day{% endblock %}
+{% block content %}
+<div class="max-w-md mx-auto bg-white rounded-lg shadow p-8 mt-8 text-center">
+    <div class="text-5xl mb-4">📧</div>
+    <h1 class="text-2xl font-bold text-neutral-800 mb-3">Revisa tu email</h1>
+    <p class="text-neutral-600 mb-2">Si el email <strong>{{ email }}</strong> pertenece a un padre/madre registrado, en unos segundos recibirás un enlace de acceso.</p>
+    <p class="text-neutral-500 text-sm">El enlace es válido durante 30 minutos.</p>
+    <a href="{% url 'parent_portal_login' %}" class="inline-block mt-6 text-primary-700 hover:text-primary-900 no-underline">Volver</a>
+</div>
+{% endblock %}

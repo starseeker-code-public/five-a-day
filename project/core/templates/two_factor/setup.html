@@ -1,0 +1,41 @@
+{% extends 'base.html' %}
+{% block title %}Configurar 2FA · Five a Day{% endblock %}
+{% block page_title %}Configurar autenticación en dos pasos{% endblock %}
+{% block page_subtitle %}Escanea el QR con tu app de autenticación (Google Authenticator, Authy, 1Password…){% endblock %}
+
+{% block content %}
+<div class="max-w-2xl mx-auto bg-white rounded-lg shadow p-8">
+    <h2 class="text-xl font-semibold text-neutral-800 mb-4">1. Escanea el QR</h2>
+    <div class="flex items-center gap-6 mb-6">
+        <img src="data:image/png;base64,{{ qr_png_base64 }}" alt="2FA QR" width="220" height="220" class="border border-neutral-200 rounded">
+        <div class="text-sm text-neutral-600">
+            <p class="mb-2">Si no puedes escanear, introduce este secreto manualmente:</p>
+            <code class="block bg-neutral-100 px-3 py-2 rounded font-mono text-xs break-all">{{ secret }}</code>
+            <p class="mt-3 text-xs text-neutral-500">Cuenta: <strong>{{ teacher.email }}</strong></p>
+        </div>
+    </div>
+
+    {% if backup_codes %}
+    <h2 class="text-xl font-semibold text-neutral-800 mb-2 mt-8">2. Guarda tus códigos de respaldo</h2>
+    <p class="text-sm text-neutral-600 mb-3">Se muestran <strong>una única vez</strong>. Guárdalos en un lugar seguro — te permiten entrar si pierdes el teléfono. Cada código sirve una sola vez.</p>
+    <div class="bg-amber-50 border border-amber-200 rounded p-4 mb-6 font-mono text-sm grid grid-cols-2 gap-2">
+        {% for code in backup_codes %}
+            <div class="bg-white px-3 py-1.5 rounded border border-neutral-200">{{ code }}</div>
+        {% endfor %}
+    </div>
+    {% endif %}
+
+    <h2 class="text-xl font-semibold text-neutral-800 mb-2 mt-8">3. Confirma con un código</h2>
+    <p class="text-sm text-neutral-600 mb-4">Introduce el código de 6 dígitos que muestra tu app para activar 2FA en tu cuenta.</p>
+    <form method="post" class="flex items-center gap-3">
+        {% csrf_token %}
+        <input type="text" name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]*"
+               maxlength="6" required autofocus
+               class="flex-1 px-4 py-2 border border-neutral-300 rounded-md font-mono text-lg tracking-widest"
+               placeholder="000000">
+        <button type="submit" class="px-4 py-2 bg-primary-500 hover:bg-primary-600 text-white rounded-md font-medium">
+            Activar 2FA
+        </button>
+    </form>
+</div>
+{% endblock %}
