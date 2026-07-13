@@ -13,6 +13,41 @@
 </a>
 {% endblock %}
 
+{% block help_content %}
+<p>La sección <strong>Gastos</strong> registra y clasifica lo que gasta la academia (alquiler, material, fotocopias, etc.) para poder calcular el beneficio. Es una sección solo para administradores y trabaja siempre sobre un <strong>mes concreto</strong>.</p>
+
+<h4 style="font-weight:700;margin-top:1rem;">El resumen del mes</h4>
+<p>Las tres tarjetas de arriba muestran, para el mes seleccionado: los <strong>ingresos</strong> (dinero cobrado), los <strong>gastos</strong> y el <strong>beneficio neto</strong> (ingresos menos gastos), en verde si es positivo y en rojo si es negativo.</p>
+
+<h4 style="font-weight:700;margin-top:1rem;">Elegir el periodo</h4>
+<p>En el bloque <strong>Filtros</strong> eliges el <strong>mes</strong>, el <strong>año</strong> y, si quieres, una <strong>categoría</strong>. Pulsa <strong>Aplicar</strong> para recargar la vista con ese periodo.</p>
+
+<h4 style="font-weight:700;margin-top:1rem;">Registrar un gasto</h4>
+<p>En el bloque <strong>Nuevo gasto</strong> rellena la descripción, la categoría, el importe, la fecha y unas notas opcionales, y pulsa <strong>Guardar</strong>.</p>
+<p style="margin-top:0.4rem;">Si el gasto se repite, marca la casilla <strong>Recurrente</strong>. Se despliegan las opciones de frecuencia:</p>
+<ul style="list-style:disc;margin:0.4rem 0 0 1.25rem;line-height:1.7;">
+    <li><strong>Mensual</strong>: indica el día del mes (1 a 28) en que se repite.</li>
+    <li><strong>Anual</strong>: indica el día y el mes.</li>
+    <li><strong>Semanal</strong>: marca los días de la semana en que ocurre.</li>
+</ul>
+<p style="margin-top:0.4rem;">Un gasto recurrente crea una <strong>plantilla</strong> que va generando los gastos por sí sola en las fechas indicadas.</p>
+
+<h4 style="font-weight:700;margin-top:1rem;">La tabla y las plantillas</h4>
+<ul style="list-style:disc;margin:0.4rem 0 0 1.25rem;line-height:1.7;">
+    <li>La tabla lista los gastos del periodo; los generados por una plantilla llevan la etiqueta <strong>(recurrente)</strong>. El icono de la papelera elimina un gasto (pide confirmación).</li>
+    <li>Más abajo, <strong>Plantillas recurrentes</strong> muestra las reglas activas con su frecuencia. Borrar una plantilla detiene la generación futura de ese gasto.</li>
+</ul>
+
+<h4 style="font-weight:700;margin-top:1rem;">Recibos</h4>
+<p>El botón <strong>Consultar recibos</strong> (cabecera) abre la carpeta de Google Drive donde se guardan los justificantes.</p>
+
+<h4 style="font-weight:700;margin-top:1rem;">Consejos</h4>
+<ul style="list-style:disc;margin:0.4rem 0 0 1.25rem;line-height:1.7;">
+    <li>Configura como recurrentes los gastos fijos (alquiler, seguros…) y te olvidas de anotarlos cada mes.</li>
+    <li>Categorizar bien los gastos mejora la calidad de los Informes.</li>
+</ul>
+{% endblock %}
+
 {% block content %}
 <div class="mb-6">
     <div class="flex items-center gap-3 mb-2">
@@ -88,13 +123,64 @@
                 <label class="block text-xs text-neutral-500">Fecha</label>
                 <input type="date" name="expense_date" value="{{ month }}-{{ year }}" class="w-full px-2 py-1 border border-neutral-300 rounded-md text-sm">
             </div>
-            <div>
+            <div class="md:col-span-2">
                 <label class="block text-xs text-neutral-500 flex items-center gap-2">
-                    <input type="checkbox" name="is_recurring" class="form-check-input">
+                    <input type="checkbox" name="is_recurring" id="is_recurring" class="form-check-input">
                     Recurrente
                 </label>
-                <input type="number" name="recurring_day" min="1" max="28" placeholder="Día (1-28)" class="w-full px-2 py-1 border border-neutral-300 rounded-md text-sm mt-1">
             </div>
+
+            <div class="md:col-span-2 hidden" id="recurring-fields">
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-3 p-3 bg-neutral-50 rounded-md">
+                    <div>
+                        <label class="block text-xs text-neutral-500">Frecuencia</label>
+                        <select name="recurring_frequency" id="recurring_frequency" class="w-full px-2 py-1 border border-neutral-300 rounded-md text-sm">
+                            {% for value, label in frequencies %}
+                                <option value="{{ value }}">{{ label }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    {# Monthly + yearly: day of month #}
+                    <div id="freq-day">
+                        <label class="block text-xs text-neutral-500">Día del mes (1-28)</label>
+                        <input type="number" name="recurring_day" min="1" max="28" placeholder="Día (1-28)" class="w-full px-2 py-1 border border-neutral-300 rounded-md text-sm">
+                    </div>
+
+                    {# Yearly only: month #}
+                    <div id="freq-month" class="hidden">
+                        <label class="block text-xs text-neutral-500">Mes</label>
+                        <select name="recurring_month" class="w-full px-2 py-1 border border-neutral-300 rounded-md text-sm">
+                            <option value="1">Enero</option>
+                            <option value="2">Febrero</option>
+                            <option value="3">Marzo</option>
+                            <option value="4">Abril</option>
+                            <option value="5">Mayo</option>
+                            <option value="6">Junio</option>
+                            <option value="7">Julio</option>
+                            <option value="8">Agosto</option>
+                            <option value="9">Septiembre</option>
+                            <option value="10">Octubre</option>
+                            <option value="11">Noviembre</option>
+                            <option value="12">Diciembre</option>
+                        </select>
+                    </div>
+
+                    {# Weekly only: weekday checkboxes #}
+                    <div id="freq-weekdays" class="md:col-span-2 hidden">
+                        <label class="block text-xs text-neutral-500 mb-1">Días de la semana</label>
+                        <div class="flex flex-wrap gap-3">
+                            {% for value, label in weekday_choices %}
+                            <label class="flex items-center gap-1 text-sm text-neutral-700">
+                                <input type="checkbox" name="recurring_weekdays" value="{{ value }}" class="form-check-input">
+                                {{ label }}
+                            </label>
+                            {% endfor %}
+                        </div>
+                    </div>
+                </div>
+            </div>
+
             <div class="md:col-span-2">
                 <label class="block text-xs text-neutral-500">Notas</label>
                 <textarea name="notes" rows="2" class="w-full px-2 py-1 border border-neutral-300 rounded-md text-sm"></textarea>
@@ -163,7 +249,7 @@
             <tr>
                 <th class="py-2 text-left">Descripción</th>
                 <th class="py-2 text-center">Categoría</th>
-                <th class="py-2 text-center">Día</th>
+                <th class="py-2 text-center">Frecuencia</th>
                 <th class="py-2 text-right">Importe</th>
                 <th></th>
             </tr>
@@ -173,7 +259,7 @@
             <tr>
                 <td class="py-2">{{ t.description }}</td>
                 <td class="py-2 text-center">{{ t.get_category_display }}</td>
-                <td class="py-2 text-center">Día {{ t.recurring_day }}</td>
+                <td class="py-2 text-center">{{ t.recurring_summary }}</td>
                 <td class="py-2 text-right">{{ t.amount|floatformat:2 }} €</td>
                 <td class="py-2 text-center">
                     <form method="post" action="{% url 'delete_expense' t.id %}" onsubmit="return confirm('¿Eliminar plantilla?')" class="inline">
@@ -187,4 +273,9 @@
     </table>
 </div>
 {% endif %}
+
+{% block extra_js %}
+{% load static %}
+<script src="{% static 'js/expenses.js' %}"></script>
+{% endblock %}
 {% endblock %}

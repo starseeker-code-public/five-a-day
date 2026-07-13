@@ -20,7 +20,7 @@ Built to centralize student records, automate billing cycles, and streamline par
 ### Project Status
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v1.13.8-brightgreen?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-v1.14.0-brightgreen?style=flat-square" alt="Version">
   &nbsp;|&nbsp;
   <a href="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml?query=branch%3Amain"><img src="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml/badge.svg?branch=main&style=flat-square" alt="CI main"></a>
   &nbsp;|&nbsp;
@@ -41,9 +41,9 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 | Version | Date | Description |
 |---------|------|-------------|
-| **v1.13.8** | 2026-07-12 | Dark theme, Testing redesign, QA admin-only, richer seeder |
-| v1.13.7 | 2026-07-11 | Service worker network-first (fixes stale CSS/theme after navigation) |
-| v1.13.6 | 2026-07-11 | Single violet theme (light=dark), Fun Friday email scheduling |
+| **v1.14.0** | 2026-07-12 | Comprehensive in-app help guides for every view; dark-theme fixes |
+| v1.13.11 | 2026-07-12 | Keyboard nav hotkeys, per-view help "?" panels, CI-secret docs |
+| v1.13.10 | 2026-07-12 | CI deploy emails, recurring-expense frequencies, backlog screenshots |
 
 ---
 
@@ -143,8 +143,83 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 ## Version History & Roadmap
 
-<details id="v1138" open>
-<summary><strong>v1.13.8 — Dark theme, Testing redesign, QA admin-only, richer seeder (current)</strong></summary>
+<details id="v1140" open>
+<summary><strong>v1.14.0 — Comprehensive in-app help guides (current)</strong></summary>
+
+**In-app help**
+
+- Every main view (Home, Students, Waiting list, Schedule, Payments, Expenses, Apps, Management, Reports, Database) **and** the Testing panel now has a genuinely thorough Spanish guide behind its bottom-left "?" button — each walks through every section, button, filter and the typical workflow, with role differences and tips (the modal scrolls). Home's guide also documents the keyboard shortcuts.
+- The Testing guide explains how to **simulate a non-admin teacher** by logging in as the seeded `test@test.com` account (the password is not printed — the repo is public).
+
+**Dark theme**
+
+- Fixed the confirmation modal's **Cancelar** button, which was barely legible in dark mode (now uses the themed `primary` utilities instead of an inline dark-violet colour).
+
+This release caps the rapid v1.13.x iteration (dark theme, testing-dashboard redesign, admin-only QA, richer seeder, non-admin UX, recurring-expense frequencies, CI deploy emails, keyboard nav) with a complete self-service help layer.
+
+</details>
+
+<details id="v11311">
+<summary><strong>v1.13.11 — Keyboard nav hotkeys + per-view help panels</strong></summary>
+
+**Keyboard quick-nav**
+
+- Number keys jump between sections (only outside text fields): <kbd>0</kbd> Home, <kbd>1</kbd> Students, <kbd>2</kbd> Waiting list, <kbd>3</kbd> Schedule, <kbd>4</kbd> Payments, <kbd>5</kbd> Expenses, <kbd>6</kbd> Apps, <kbd>7</kbd> Management, <kbd>8</kbd> Reports, <kbd>9</kbd> Database. Implemented via `data-hotkey` on the sidebar links (so hidden admin-only links are inert for non-admins). Small number badges are shown on each sidebar icon (CSS `::after`).
+
+**Per-view help**
+
+- Every main view (+ `/testing/`) has a small **"?"** button in the bottom-left corner opening a modal that explains the view's features in plain language; Home's help also lists the keyboard shortcuts. Content lives in each template's `{% block help_content %}`; the button only appears when the page provides help.
+
+**Docs**
+
+- Added the new CI deploy-email secrets (`TESTING_NOTIFY_EMAILS`, `TESTING_URL`, `SUPPORT_EMAIL`, `PRODUCTION_URL`) to the README's Required GitHub Secrets table.
+
+</details>
+
+<details id="v11310">
+<summary><strong>v1.13.10 — CI deploy emails, recurring-expense frequencies, backlog screenshots</strong></summary>
+
+**CI deploy notifications**
+
+- The **development → testing** auto-merge now emails support + the two admin teachers a friendly, readable notice: what changed, a prominent **"Open testing environment"** button (the testing URL), and the technical details (old→new version, tags, merge commit) at the end. Recipients come from the `TESTING_NOTIFY_EMAILS` secret (falls back to `OWNER_EMAILS`); URL from `TESTING_URL`.
+- The **production** (`main`) notification now also goes to `SUPPORT_EMAIL` (alongside `hellofiveaday@gmail.com`), with the same readable format (old→new version, optional `PRODUCTION_URL` button, deploy steps).
+
+**Recurring expenses**
+
+- Recurring expenses now support **monthly** (day-of-month), **yearly** (day + month) and **weekly** (any subset of weekdays — each Monday, Monday+Tuesday, … or every day). New `recurring_frequency` / `recurring_month` / `recurring_weekdays` fields (migration `billing/0006`); weekly/yearly materialise via a new daily Celery-beat task (`materialize_recurring_expenses_daily_task`, idempotent). The expenses form gained the frequency selector + weekday checkboxes.
+
+**Testing dashboard**
+
+- The **¿Listo para desplegar?** check now opens a styled **confirmation modal** before emailing.
+- Backlog tickets can include a **screenshot** — it is **attached to the notification email and never stored** (max 5 MB, images only) to keep storage in check.
+- In the testing environment, the help modal shows a banner pointing testers to the dedicated **Testing panel** (with a direct link); the help form is meant for production.
+
+</details>
+
+<details id="v1139">
+<summary><strong>v1.13.9 — Non-admin teacher UX, teacher-admin lock, backlog housekeeping</strong></summary>
+
+**Non-admin teachers**
+
+- Home hides all financial widgets from non-admin teachers (*Pagos pendientes*, *Ingresos del mes*, the pending-payments modal, and the *Nuevo Pago* button) via `{% if is_admin_user %}`.
+- Non-admin teachers can now **view** the schedule (`schedule_view` added to the middleware whitelist); the edit toggle is hidden for them and `save_schedule_slot` stays admin-only, so the schedule is read-only for non-admins.
+
+**Teacher admin lock**
+
+- Teachers created from the management page are **always non-admin** (`create_teacher` forces `admin=False`; the "Administrador" checkbox is removed). Only the seeded teachers (`TEACHER_SEED_*`) and the superuser are admins; an admin promotes others via `/admin/`.
+
+**Backlog housekeeping**
+
+- Marking a QA backlog task **done** emails the admin teachers a summary. Done tasks are **auto-deleted after 30 days** by a new daily Celery-beat task (`core.tasks.cleanup_done_backlog_tasks`).
+
+**UI**
+
+- Login page title now animates to a legible lavender in dark mode (was near-black). Sidebar nav icons are vertically **centered** instead of pinned to the bottom.
+
+</details>
+
+<details id="v1138">
+<summary><strong>v1.13.8 — Dark theme, Testing redesign, QA admin-only, richer seeder</strong></summary>
 
 **Theme (light + dark)**
 
@@ -1637,7 +1712,7 @@ five-a-day/
 │   │   ├── urls.py               11 URL patterns
 │   │   └── management/commands/  send_email, test_all_emails
 │   │
-│   ├── tests/                    pytest suite (965 tests, 96 % coverage) — unit/ + integration/
+│   ├── tests/                    pytest suite (985 tests, 96 % coverage) — unit/ + integration/
 │   ├── templates/registration/   Password-reset templates (form, done, confirm, complete + email body)
 │   ├── templates/admin/          Django admin overrides (branded theme)
 │   └── conftest.py               Shared fixtures (models + authenticated_client)
@@ -2526,7 +2601,11 @@ Configure at **Settings → Secrets and variables → Actions**:
 | `GH_PAT` | auto-merge.yml | Fine-grained Personal Access Token. Pushes to `testing` and creates PRs *while triggering downstream CI* (which the default `GITHUB_TOKEN` cannot do). Permissions: Contents RW, Pull requests RW, Checks R, Metadata R |
 | `EMAIL_HOST_USER` | auto-merge.yml, notify-production.yml | Gmail address used to send notification emails |
 | `EMAIL_SECRET` | auto-merge.yml, notify-production.yml | Gmail App Password — can be the same one the application uses for transactional email |
-| `OWNER_EMAILS` | auto-merge.yml | Comma-separated recipient list for the `development → testing` merge notification |
+| `OWNER_EMAILS` | auto-merge.yml | Comma-separated fallback recipient list for the `development → testing` merge notification (used when `TESTING_NOTIFY_EMAILS` is unset) |
+| `TESTING_NOTIFY_EMAILS` | auto-merge.yml | Comma-separated recipients for the `development → testing` deploy email — support + the two admin teachers. Preferred over `OWNER_EMAILS` |
+| `TESTING_URL` | auto-merge.yml | Base URL of the testing environment, used for the "Open testing environment" button (falls back to the testing VM IP) |
+| `SUPPORT_EMAIL` | notify-production.yml | Support address added (alongside `hellofiveaday@gmail.com`) to the production deploy email |
+| `PRODUCTION_URL` | notify-production.yml | Optional — base URL of production; if set, adds an "Open production" button to the production email |
 | `CODECOV_TOKEN` | ci.yml | Optional — only needed for private repos. Public repos push coverage anonymously |
 
 **Rotate `GH_PAT` annually.** Without it, the auto-merge falls back to the default `GITHUB_TOKEN`, which cannot trigger CI on PRs it creates — breaking the pipeline silently.
@@ -2571,7 +2650,7 @@ make up                        # Start Docker (PostgreSQL + Redis + Django + Cel
 1. Work on `development` (or a short-lived branch off `development`)
 2. Make changes following the conventions below
 3. Run `make pc-run` — Ruff + mypy + bandit all pass, offers to auto-bump the patch version on success, and auto-stages `uv.lock` if regenerated
-4. Run `make test` — all 965 tests must pass (PostgreSQL via Docker, parallel, with coverage)
+4. Run `make test` — all 985 tests must pass (PostgreSQL via Docker, parallel, with coverage)
 5. `git commit` with a message like `v1.0.6 - Short description` (version comes first — conventions match every other commit in the project)
 6. `git push origin development`
 7. CI runs automatically on your push (see [CI/CD](#cicd--github-actions))

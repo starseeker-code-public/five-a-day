@@ -328,6 +328,15 @@
             border-color: rgba(63,53,89,0.9);
             box-shadow: 0 8px 40px rgba(0,0,0,0.45), 0 1.5px 6px rgba(0,0,0,0.3);
         }
+        /* Title animates to a near-black violet in light mode — unreadable on
+           dark, so run a lighter keyframe that ends in a legible lavender. */
+        @keyframes titleColorizeDark {
+            0%   { fill: #4c1d95; }
+            50%  { fill: #7c3aed; }
+            100% { fill: #c4b5fd; }
+        }
+        html.dark .title-text { animation-name: titleColorizeDark; }
+        html.dark .title-block p { color: #b9a5f5; }
         html.dark .card-heading { color: #c4b5fd; }
         html.dark .card-sub { color: #a78bfa; }
         html.dark .field label { color: #c4b5fd; }

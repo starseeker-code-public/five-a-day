@@ -4,8 +4,9 @@
 // ── Global edit-mode flag (must be global for onclick= to work) ──
 var scheduleEditMode = false;
 function toggleEditMode() {
-    scheduleEditMode = !scheduleEditMode;
     const btn = document.getElementById('edit-toggle-btn');
+    if (!btn) return;  // non-admin teachers: read-only schedule, no edit control
+    scheduleEditMode = !scheduleEditMode;
     btn.style.background = scheduleEditMode ? '#e0f2fe' : 'var(--sched-surface)';
     btn.querySelector('.material-symbols-outlined').style.color = scheduleEditMode ? '#0284c7' : 'var(--sched-ink)';
     btn.title = scheduleEditMode ? 'Salir de edición' : 'Editar horario';

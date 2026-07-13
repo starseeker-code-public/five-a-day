@@ -12,6 +12,41 @@
 </a>
 {% endblock %}
 
+{% block help_content %}
+<p><strong>Informes</strong> reúne las métricas de salud de la academia: cuánto se ingresa, cuánto queda por cobrar, si se retiene a los alumnos y cómo están de llenos los grupos. Es una sección solo para administradores.</p>
+
+<h4 style="font-weight:700;margin-top:1rem;">Elegir el periodo</h4>
+<p>Arriba eliges el <strong>mes</strong> y el <strong>año</strong> y pulsas <strong>Actualizar</strong>. Las cuatro tarjetas y la tasa de cobro se refieren a ese mes; la retención y el resumen anual dan una visión más amplia.</p>
+
+<h4 style="font-weight:700;margin-top:1rem;">Las métricas del mes</h4>
+<ul style="list-style:disc;margin:0.4rem 0 0 1.25rem;line-height:1.7;">
+    <li><strong>Ingresos</strong>: dinero cobrado en el mes.</li>
+    <li><strong>Pendiente</strong>: importe aún por cobrar.</li>
+    <li><strong>Gastos</strong>: gastos registrados en el mes.</li>
+    <li><strong>Beneficio neto</strong>: ingresos menos gastos (verde si es positivo, rojo si es negativo).</li>
+</ul>
+
+<h4 style="font-weight:700;margin-top:1rem;">Indicadores clave</h4>
+<ul style="list-style:disc;margin:0.4rem 0 0 1.25rem;line-height:1.7;">
+    <li><strong>Tasa de cobro</strong>: porcentaje del dinero esperado que ya se ha cobrado, con las cifras exactas debajo.</li>
+    <li><strong>Retención (12 meses)</strong>: de los alumnos que ya llevaban más de un año, cuántos siguen activos. Mide la fidelidad de las familias.</li>
+</ul>
+
+<h4 style="font-weight:700;margin-top:1rem;">Ocupación por grupo</h4>
+<p>La tabla muestra, por grupo, la profesora, la ocupación (matriculados frente al cupo y su porcentaje) y cuántos alumnos hay en lista de espera. Te ayuda a decidir dónde abrir plazas o crear grupos nuevos.</p>
+
+<h4 style="font-weight:700;margin-top:1rem;">Resumen anual</h4>
+<p>Al final, una tabla mes a mes con ingresos, gastos y neto del año, y los totales anuales arriba. Ideal para ver la evolución del curso.</p>
+
+<h4 style="font-weight:700;margin-top:1rem;">Descargar en PDF</h4>
+<p>El botón <strong>Descargar PDF</strong> (cabecera) genera el informe del mes seleccionado en un documento para guardar o compartir.</p>
+
+<h4 style="font-weight:700;margin-top:1rem;">Consejos</h4>
+<ul style="list-style:disc;margin:0.4rem 0 0 1.25rem;line-height:1.7;">
+    <li>Para que los datos sean fiables, mantén al día los cobros (Pagos) y los gastos (Gastos) del mes.</li>
+</ul>
+{% endblock %}
+
 {% block content %}
 <div class="mb-6">
     <div class="flex items-center gap-3 mb-2">

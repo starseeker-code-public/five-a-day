@@ -30,11 +30,21 @@ jobs:
           AUTHOR=$(git log -1 --format="%an" "$SHA")
           FILES_CHANGED=$(git diff --stat HEAD~1 HEAD | tail -1 || echo "unknown")
 
+          extract_version() {
+            git show "$1:pyproject.toml" 2>/dev/null \
+              | grep -E '^[[:space:]]*version[[:space:]]*=' | head -1 \
+              | sed -E 's/.*version[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/'
+          }
+          NEW_VERSION=$(extract_version HEAD)
+          OLD_VERSION=$(extract_version HEAD~1)
+
           {
             echo "short_sha=$SHORT_SHA"
             echo "message=$MESSAGE"
             echo "author=$AUTHOR"
             echo "files_changed=$FILES_CHANGED"
+            echo "new_version=$NEW_VERSION"
+            echo "old_version=${OLD_VERSION:-$NEW_VERSION}"
           } >> "$GITHUB_OUTPUT"
 
       - name: Create release tag on main
@@ -82,38 +92,45 @@ jobs:
           username: ${{ secrets.EMAIL_HOST_USER }}
           password: ${{ secrets.EMAIL_SECRET }}
           from: "Five a Day CI <${{ secrets.EMAIL_HOST_USER }}>"
-          to: hellofiveaday@gmail.com
-          subject: "[Five a Day] New commit on main — production deploy ready"
+          # hellofiveaday (the academy inbox) + support (set the SUPPORT_EMAIL secret).
+          to: hellofiveaday@gmail.com${{ secrets.SUPPORT_EMAIL && format(', {0}', secrets.SUPPORT_EMAIL) || '' }}
+          subject: "[Five a Day] v${{ steps.info.outputs.new_version }} lista para producción"
           html_body: |
-            <h2>New commit on <code>main</code> (production)</h2>
-            <p>A new commit has landed on the <code>main</code> branch. Production deploy is ready when you are.</p>
-
-            <table cellpadding="6" style="border-collapse: collapse; font-family: sans-serif;">
-              <tr><td><strong>Release tag</strong></td><td><code>${{ steps.tag.outputs.tag }}</code> (${{ steps.tag.outputs.created == 'true' && 'newly created' || 'already existed — no version bump on this push' }})</td></tr>
-              <tr><td><strong>Commit</strong></td><td><code>${{ steps.info.outputs.message }}</code></td></tr>
-              <tr><td><strong>Author</strong></td><td>${{ steps.info.outputs.author }}</td></tr>
-              <tr><td><strong>SHA</strong></td><td><code>${{ steps.info.outputs.short_sha }}</code></td></tr>
-              <tr><td><strong>Files changed</strong></td><td>${{ steps.info.outputs.files_changed }}</td></tr>
-              <tr><td><strong>Repository</strong></td><td>${{ github.repository }}</td></tr>
-            </table>
-
-            <p style="margin-top: 1em;">
-              <a href="https://github.com/${{ github.repository }}/commit/${{ github.sha }}" style="padding: 8px 16px; background: #6b46c1; color: white; text-decoration: none; border-radius: 4px;">View commit →</a>
-            </p>
-
-            <hr>
-            <h3>Next steps</h3>
-            <ol>
-              <li>Verify CI is green on this commit</li>
-              <li>Deploy to Cloud Run:
-                <pre style="background: #f4f4f4; padding: 8px;">gcloud builds submit --tag $IMAGE .
+            <div style="font-family: sans-serif; color:#1f2937; max-width:640px;">
+              <h2 style="color:#6d28d9;">✅ Nueva versión lista para producción</h2>
+              <p style="font-size:15px; line-height:1.6;">
+                La versión <strong>v${{ steps.info.outputs.new_version }}</strong>
+                (antes <strong>v${{ steps.info.outputs.old_version }}</strong>) acaba de llegar a la rama
+                <strong>producción</strong> (<code>main</code>). Novedad principal:
+                <em>${{ steps.info.outputs.message }}</em>. El despliegue a producción está listo cuando queráis.
+              </p>
+              ${{ secrets.PRODUCTION_URL && format('<p style="text-align:center; margin:24px 0;"><a href="{0}" style="padding:12px 28px; background:#6d28d9; color:#fff; text-decoration:none; border-radius:8px; font-weight:600; font-size:15px;">Abrir producción →</a></p>', secrets.PRODUCTION_URL) || '' }}
+              <hr style="border:none; border-top:1px solid #e5e7eb; margin:24px 0;">
+              <h3 style="color:#6b7280; font-size:12px; text-transform:uppercase; letter-spacing:0.05em;">Detalles técnicos</h3>
+              <table cellpadding="6" style="border-collapse: collapse; font-family: sans-serif; font-size:13px;">
+                <tr><td><strong>Entorno</strong></td><td>Producción (main)</td></tr>
+                <tr><td><strong>Versión</strong></td><td><code>${{ steps.info.outputs.old_version }}</code> → <code>${{ steps.info.outputs.new_version }}</code></td></tr>
+                <tr><td><strong>Etiqueta de release</strong></td><td><code>${{ steps.tag.outputs.tag }}</code> (${{ steps.tag.outputs.created == 'true' && 'recién creada' || 'ya existía — sin cambio de versión' }})</td></tr>
+                <tr><td><strong>Commit</strong></td><td><code>${{ steps.info.outputs.message }}</code></td></tr>
+                <tr><td><strong>Autor</strong></td><td>${{ steps.info.outputs.author }}</td></tr>
+                <tr><td><strong>SHA</strong></td><td><code>${{ steps.info.outputs.short_sha }}</code></td></tr>
+                <tr><td><strong>Archivos cambiados</strong></td><td>${{ steps.info.outputs.files_changed }}</td></tr>
+                <tr><td><strong>Repositorio</strong></td><td>${{ github.repository }}</td></tr>
+              </table>
+              <p style="margin-top:16px;">
+                <a href="https://github.com/${{ github.repository }}/commit/${{ github.sha }}" style="padding:8px 16px; background:#6b46c1; color:#fff; text-decoration:none; border-radius:4px; font-size:13px;">Ver commit →</a>
+              </p>
+              <hr style="border:none; border-top:1px solid #e5e7eb; margin:16px 0;">
+              <h3 style="font-size:13px; color:#374151;">Pasos de despliegue</h3>
+              <ol style="font-size:13px; color:#4b5563;">
+                <li>Verificar que CI está en verde en este commit.</li>
+                <li>Desplegar en Cloud Run:
+                  <pre style="background:#f4f4f4; padding:8px; font-size:12px;">gcloud builds submit --tag $IMAGE .
             gcloud run deploy fiveaday --image=$IMAGE --region=europe-southwest1</pre>
-              </li>
-              <li>Run migrations if the schema changed:
-                <pre style="background: #f4f4f4; padding: 8px;">gcloud run jobs execute fiveaday-migrate --region=europe-southwest1 --wait</pre>
-              </li>
-            </ol>
-
-            <p style="color: #666; font-size: 12px;">
-              Sent automatically by the notify-production workflow on every push to <code>main</code>.
-            </p>
+                </li>
+                <li>Ejecutar migraciones si cambió el esquema:
+                  <pre style="background:#f4f4f4; padding:8px; font-size:12px;">gcloud run jobs execute fiveaday-migrate --region=europe-southwest1 --wait</pre>
+                </li>
+              </ol>
+              <p style="color:#9ca3af; font-size:12px;">Enviado automáticamente por el workflow notify-production en cada push a <code>main</code>.</p>
+            </div>

@@ -137,32 +137,32 @@
             </div>
             <div class="sidebar-fixed-links">
                 <nav class="space-y-0">
-                    <a href="{% url 'home' %}" class="sidebar-link w-full flex items-center gap-3 px-2 py-3 rounded-md {% if request.resolver_match.url_name == 'home' %}active-sidebar-link bg-primary-200 text-primary-700{% else %}text-neutral-600{% endif %} font-medium hover:bg-primary-100 hover:text-primary-700 transition-all duration-200">
+                    <a href="{% url 'home' %}" data-hotkey="0" class="sidebar-link w-full flex items-center gap-3 px-2 py-3 rounded-md {% if request.resolver_match.url_name == 'home' %}active-sidebar-link bg-primary-200 text-primary-700{% else %}text-neutral-600{% endif %} font-medium hover:bg-primary-100 hover:text-primary-700 transition-all duration-200">
                         <span class="material-symbols-outlined mx-auto sidebar-icon">dashboard</span>
                         <span class="hidden sidebar-text">Panel Principal</span>
                     </a>
-                    <a href="{% url 'students_list' %}" class="sidebar-link w-full flex items-center gap-3 px-2 py-3 rounded-md {% if request.resolver_match.url_name == 'students_list' or request.resolver_match.url_name == 'student_create' or request.resolver_match.url_name == 'student_detail' or request.resolver_match.url_name == 'student_update' %}active-sidebar-link bg-primary-200 text-primary-700{% else %}text-neutral-600{% endif %} font-medium hover:bg-primary-100 hover:text-primary-700 transition-all duration-200">
+                    <a href="{% url 'students_list' %}" data-hotkey="1" class="sidebar-link w-full flex items-center gap-3 px-2 py-3 rounded-md {% if request.resolver_match.url_name == 'students_list' or request.resolver_match.url_name == 'student_create' or request.resolver_match.url_name == 'student_detail' or request.resolver_match.url_name == 'student_update' %}active-sidebar-link bg-primary-200 text-primary-700{% else %}text-neutral-600{% endif %} font-medium hover:bg-primary-100 hover:text-primary-700 transition-all duration-200">
                         <span class="material-symbols-outlined mx-auto sidebar-icon">people</span>
                         <span class="hidden sidebar-text">Estudiantes</span>
                     </a>
-                    <a href="{% url 'waiting_list' %}" class="sidebar-link w-full flex items-center gap-3 px-2 py-3 rounded-md {% if request.resolver_match.url_name == 'waiting_list' %}active-sidebar-link bg-primary-200 text-primary-700{% else %}text-neutral-600{% endif %} font-medium hover:bg-primary-100 hover:text-primary-700 transition-all duration-200">
+                    <a href="{% url 'waiting_list' %}" data-hotkey="2" class="sidebar-link w-full flex items-center gap-3 px-2 py-3 rounded-md {% if request.resolver_match.url_name == 'waiting_list' %}active-sidebar-link bg-primary-200 text-primary-700{% else %}text-neutral-600{% endif %} font-medium hover:bg-primary-100 hover:text-primary-700 transition-all duration-200">
                         <span class="material-symbols-outlined mx-auto sidebar-icon">hourglass_top</span>
                         <span class="hidden sidebar-text">Lista de Espera</span>
                     </a>
-                    {% if is_admin_user %}
-                    <a href="{% url 'payments_list' %}" class="sidebar-link w-full flex items-center gap-3 px-2 py-3 rounded-md {% if request.resolver_match.url_name == 'payments_list' or request.resolver_match.url_name == 'create_payment' or request.resolver_match.url_name == 'payment_detail_view' or request.resolver_match.url_name == 'update_payment' %}active-sidebar-link bg-primary-200 text-primary-700{% else %}text-neutral-600{% endif %} font-medium hover:bg-primary-100 hover:text-primary-700 transition-all duration-200">
-                        <span class="material-symbols-outlined mx-auto sidebar-icon">payment</span>
-                        <span class="hidden sidebar-text">Pagos</span>
-                    </a>
-                    <a href="{% url 'expenses_list' %}" class="sidebar-link w-full flex items-center gap-3 px-2 py-3 rounded-md {% if request.resolver_match.url_name == 'expenses_list' %}active-sidebar-link bg-primary-200 text-primary-700{% else %}text-neutral-600{% endif %} font-medium hover:bg-primary-100 hover:text-primary-700 transition-all duration-200">
-                        <span class="material-symbols-outlined mx-auto sidebar-icon">receipt_long</span>
-                        <span class="hidden sidebar-text">Gastos</span>
-                    </a>
-                    <a href="{% url 'schedule_view' %}" class="sidebar-link w-full flex items-center gap-3 px-2 py-3 rounded-md {% if request.resolver_match.url_name == 'schedule_view' or request.resolver_match.url_name == 'fun_friday_view' %}active-sidebar-link bg-primary-200 text-primary-700{% else %}text-neutral-600{% endif %} font-medium hover:bg-primary-100 hover:text-primary-700 transition-all duration-200">
+                    <a href="{% url 'schedule_view' %}" data-hotkey="3" class="sidebar-link w-full flex items-center gap-3 px-2 py-3 rounded-md {% if request.resolver_match.url_name == 'schedule_view' %}active-sidebar-link bg-primary-200 text-primary-700{% else %}text-neutral-600{% endif %} font-medium hover:bg-primary-100 hover:text-primary-700 transition-all duration-200">
                         <span class="material-symbols-outlined mx-auto sidebar-icon">calendar_month</span>
                         <span class="hidden sidebar-text">Horario</span>
                     </a>
-                    <a href="{% url 'apps' %}" class="sidebar-link w-full flex items-center gap-3 px-2 py-3 rounded-md {% if request.resolver_match.url_name == 'apps' or request.resolver_match.url_name == 'fun_friday_form' %}active-sidebar-link bg-primary-200 text-primary-700{% else %}text-neutral-600{% endif %} font-medium hover:bg-primary-100 hover:text-primary-700 transition-all duration-200">
+                    {% if is_admin_user %}
+                    <a href="{% url 'payments_list' %}" data-hotkey="4" class="sidebar-link w-full flex items-center gap-3 px-2 py-3 rounded-md {% if request.resolver_match.url_name == 'payments_list' or request.resolver_match.url_name == 'create_payment' or request.resolver_match.url_name == 'payment_detail_view' or request.resolver_match.url_name == 'update_payment' %}active-sidebar-link bg-primary-200 text-primary-700{% else %}text-neutral-600{% endif %} font-medium hover:bg-primary-100 hover:text-primary-700 transition-all duration-200">
+                        <span class="material-symbols-outlined mx-auto sidebar-icon">payment</span>
+                        <span class="hidden sidebar-text">Pagos</span>
+                    </a>
+                    <a href="{% url 'expenses_list' %}" data-hotkey="5" class="sidebar-link w-full flex items-center gap-3 px-2 py-3 rounded-md {% if request.resolver_match.url_name == 'expenses_list' %}active-sidebar-link bg-primary-200 text-primary-700{% else %}text-neutral-600{% endif %} font-medium hover:bg-primary-100 hover:text-primary-700 transition-all duration-200">
+                        <span class="material-symbols-outlined mx-auto sidebar-icon">receipt_long</span>
+                        <span class="hidden sidebar-text">Gastos</span>
+                    </a>
+                    <a href="{% url 'apps' %}" data-hotkey="6" class="sidebar-link w-full flex items-center gap-3 px-2 py-3 rounded-md {% if request.resolver_match.url_name == 'apps' or request.resolver_match.url_name == 'fun_friday_form' %}active-sidebar-link bg-primary-200 text-primary-700{% else %}text-neutral-600{% endif %} font-medium hover:bg-primary-100 hover:text-primary-700 transition-all duration-200">
                         <span class="material-symbols-outlined mx-auto sidebar-icon">apps</span>
                         <span class="hidden sidebar-text">Aplicaciones</span>
                     </a>
@@ -172,16 +172,16 @@
                         <span class="hidden sidebar-text">Fun Friday</span>
                     </a>
                     {% endif %}
-                    <a href="{% url 'management' %}" class="sidebar-link w-full flex items-center gap-3 px-2 py-3 rounded-md {% if request.resolver_match.url_name == 'management' %}active-sidebar-link bg-primary-200 text-primary-700{% else %}text-neutral-600{% endif %} font-medium hover:bg-primary-100 hover:text-primary-700 transition-all duration-200">
+                    <a href="{% url 'management' %}" data-hotkey="7" class="sidebar-link w-full flex items-center gap-3 px-2 py-3 rounded-md {% if request.resolver_match.url_name == 'management' %}active-sidebar-link bg-primary-200 text-primary-700{% else %}text-neutral-600{% endif %} font-medium hover:bg-primary-100 hover:text-primary-700 transition-all duration-200">
                         <span class="material-symbols-outlined mx-auto sidebar-icon">settings</span>
                         <span class="hidden sidebar-text">Gestión</span>
                     </a>
                     {% if is_admin_user %}
-                    <a href="{% url 'reports_view' %}" class="sidebar-link w-full flex items-center gap-3 px-2 py-3 rounded-md {% if request.resolver_match.url_name == 'reports_view' %}active-sidebar-link bg-primary-200 text-primary-700{% else %}text-neutral-600{% endif %} font-medium hover:bg-primary-100 hover:text-primary-700 transition-all duration-200">
+                    <a href="{% url 'reports_view' %}" data-hotkey="8" class="sidebar-link w-full flex items-center gap-3 px-2 py-3 rounded-md {% if request.resolver_match.url_name == 'reports_view' %}active-sidebar-link bg-primary-200 text-primary-700{% else %}text-neutral-600{% endif %} font-medium hover:bg-primary-100 hover:text-primary-700 transition-all duration-200">
                         <span class="material-symbols-outlined mx-auto sidebar-icon">bar_chart</span>
                         <span class="hidden sidebar-text">Informes</span>
                     </a>
-                    <a href="{% url 'all_info' %}" class="sidebar-link w-full flex items-center gap-3 px-2 py-3 rounded-md {% if request.resolver_match.url_name == 'all_info' %}active-sidebar-link bg-primary-200 text-primary-700{% else %}text-neutral-600{% endif %} font-medium hover:bg-primary-100 hover:text-primary-700 transition-all duration-200">
+                    <a href="{% url 'all_info' %}" data-hotkey="9" class="sidebar-link w-full flex items-center gap-3 px-2 py-3 rounded-md {% if request.resolver_match.url_name == 'all_info' %}active-sidebar-link bg-primary-200 text-primary-700{% else %}text-neutral-600{% endif %} font-medium hover:bg-primary-100 hover:text-primary-700 transition-all duration-200">
                         <span class="material-symbols-outlined mx-auto sidebar-icon">analytics</span>
                         <span class="hidden sidebar-text">Base de Datos</span>
                     </a>
@@ -328,6 +328,26 @@
 
     {% block modals %}{% endblock %}
 
+    <!-- Per-view help ("?" bottom-left). The button is revealed by base.js only
+         when the page fills the help_content block; content is copied into the modal. -->
+    <div id="view-help-content" style="display:none;">{% block help_content %}{% endblock %}</div>
+    <button id="view-help-btn" type="button" title="Ayuda de esta sección" aria-label="Ayuda de esta sección">
+        <span class="material-symbols-outlined">help</span>
+    </button>
+    <div id="view-help-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:55;align-items:center;justify-content:center;padding:1rem;">
+        <div class="bg-white rounded-2xl w-full max-w-lg" style="max-height:80vh;overflow-y:auto;box-shadow:0 12px 48px rgba(0,0,0,0.25);">
+            <div class="flex items-center justify-between p-5 border-b border-neutral-100">
+                <h2 class="text-lg font-bold text-neutral-800 flex items-center gap-2">
+                    <span class="material-symbols-outlined text-primary-600">help</span> Ayuda de esta sección
+                </h2>
+                <button type="button" id="view-help-close" class="p-1.5 rounded-full hover:bg-neutral-100 transition-colors flex items-center justify-center">
+                    <span class="material-symbols-outlined text-neutral-500">close</span>
+                </button>
+            </div>
+            <div id="view-help-modal-body" class="p-6 text-sm text-neutral-700 leading-relaxed"></div>
+        </div>
+    </div>
+
     <!-- Support Modal -->
     <div id="support-modal" class="hidden fixed inset-0 bg-black/50 z-50 items-center justify-center p-4" style="display: none;">
         <div class="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden">
@@ -344,6 +364,17 @@
 
             <!-- Step 1: Category -->
             <div id="support-step-category" class="p-6">
+                {% if show_testing_tools %}
+                <a href="{% url 'testing_tools' %}" class="block no-underline mb-4 p-4 rounded-xl bg-cyan-50 border border-cyan-200 hover:bg-cyan-100 transition-colors">
+                    <div class="flex items-center gap-3">
+                        <span class="material-symbols-outlined text-cyan-600">science</span>
+                        <div>
+                            <p class="text-sm font-semibold text-cyan-800">Estás en el entorno de pruebas</p>
+                            <p class="text-xs text-cyan-700">Para reportar errores o sugerencias mientras pruebas, usa mejor el <strong>Panel de Testing</strong> — está hecho para eso y el equipo lo revisa directamente. Toca aquí para abrirlo →</p>
+                        </div>
+                    </div>
+                </a>
+                {% endif %}
                 <p class="text-neutral-600 text-sm mb-4 text-center">Selecciona el tipo de incidencia:</p>
                 <div class="grid grid-cols-2 gap-3">
                     <button type="button" class="support-category-btn group p-4 rounded-xl bg-blue-50 hover:bg-blue-100 border-2 border-transparent hover:border-blue-400 transition-all duration-200 flex flex-col items-center gap-2" data-category="interfaz">

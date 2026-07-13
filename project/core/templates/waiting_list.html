@@ -12,6 +12,39 @@
 </a>
 {% endblock %}
 
+{% block help_content %}
+<p>La <strong>Lista de espera</strong> gestiona a los alumnos que quieren entrar pero todavía no tienen plaza en su grupo. Se ordena por antigüedad: el primero que se apuntó es el primero en asignarse cuando queda un hueco.</p>
+
+<h4 style="font-weight:700;margin-top:1rem;">Ocupación de los grupos</h4>
+<p>Arriba, una tarjeta por grupo muestra de un vistazo cómo está de lleno:</p>
+<ul style="list-style:disc;margin:0.4rem 0 0 1.25rem;line-height:1.7;">
+    <li>Ocupación actual frente al cupo máximo (por ejemplo <strong>7/8</strong>), y cuántas plazas quedan libres.</li>
+    <li><strong>Completo</strong> en rojo cuando no quedan plazas; <strong>Sin cupo</strong> si al grupo no se le ha fijado un máximo.</li>
+    <li>Cuántos alumnos hay esperando para ese grupo.</li>
+</ul>
+
+<h4 style="font-weight:700;margin-top:1rem;">La tabla de espera</h4>
+<p>Cada fila muestra el alumno, su edad, el <strong>grupo preferido</strong> (con aviso de si está completo o tiene huecos), los padres/tutores y la fecha en la que entró en espera. El nombre y el icono del ojo abren su ficha completa.</p>
+
+<h4 style="font-weight:700;margin-top:1rem;">Asignar a un grupo</h4>
+<ul style="list-style:disc;margin:0.4rem 0 0 1.25rem;line-height:1.7;">
+    <li>Cuando se libera una plaza, pulsa <strong>Asignar</strong> en la fila del alumno: pasa a ser alumno activo de su grupo y se le generan la matrícula y los pagos del curso.</li>
+    <li>Si el grupo está completo, el botón aparece atenuado y no se puede pulsar: primero hay que liberar una plaza (por ejemplo, dando de baja a otro alumno).</li>
+</ul>
+
+<h4 style="font-weight:700;margin-top:1rem;">Añadir y filtrar</h4>
+<ul style="list-style:disc;margin:0.4rem 0 0 1.25rem;line-height:1.7;">
+    <li>El botón <strong>Añadir a la espera</strong> (cabecera) abre el formulario para registrar a un alumno nuevo directamente en la lista de espera.</li>
+    <li>El desplegable <strong>Filtrar por grupo preferido</strong> reduce la lista a un solo grupo; usa <strong>Limpiar</strong> para volver a verlos todos.</li>
+</ul>
+
+<h4 style="font-weight:700;margin-top:1rem;">Consejos</h4>
+<ul style="list-style:disc;margin:0.4rem 0 0 1.25rem;line-height:1.7;">
+    <li>Respeta el orden de antigüedad para ser justos con las familias que llevan más tiempo esperando.</li>
+    <li>Esta sección la pueden usar también los profesores sin permisos de administrador.</li>
+</ul>
+{% endblock %}
+
 {% block content %}
 <div class="mb-8">
     <div class="flex items-center gap-3 mb-2">

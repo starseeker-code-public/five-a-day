@@ -10,9 +10,11 @@
 {% endblock %}
 
 {% block header_actions %}
+{% if is_admin_user %}
 <a href="{% url 'create_payment' %}" class="header-action-btn bg-primary-500 hover:bg-primary-600 text-white px-6 py-3 rounded-md flex items-center gap-2 transition-all duration-200 transform hover:scale-105 hover:shadow-md text-base font-semibold leading-none no-underline">
     <span class="material-symbols-outlined text-[20px]">payment</span> Nuevo Pago
 </a>
+{% endif %}
 {% endblock %}
 
 {% block extra_css %}
@@ -35,9 +37,54 @@
 </style>
 {% endblock %}
 
+{% block help_content %}
+<p>El <strong>Panel Principal</strong> es la pantalla de inicio y resume el estado de la academia de un vistazo. Es lo primero que ves al entrar y te lleva directamente a lo que necesita tu atención hoy: cumpleaños, emails programados, tareas y (para administradores) el dinero pendiente e ingresado este mes.</p>
+
+<h4 style="font-weight:700;margin-top:1rem;">Las tarjetas de resumen</h4>
+<p>En la parte superior hay una fila de tarjetas. Cada una muestra un número grande y un pequeño detalle debajo:</p>
+<ul style="list-style:disc;margin:0.4rem 0 0 1.25rem;line-height:1.7;">
+    <li><strong>Pagos pendientes</strong> (solo administradores): cuántos cobros quedan por hacer y los primeros nombres. Pulsa el número rojo de estudiantes para abrir la lista completa del mes, o el enlace <strong>Recordatorio</strong> para enviar el aviso de pago.</li>
+    <li><strong>Cumpleaños</strong>: los alumnos que cumplen años este mes, con el día y la edad que cumplen. Si hay alguno hoy, aparece destacado.</li>
+    <li><strong>Emails</strong>: los envíos automáticos programados para este mes (Fun Friday, recordatorios, etc.). Cada nombre es un enlace que te lleva a su formulario. Si tienes tareas vencidas, se avisa aquí en rojo.</li>
+    <li><strong>Ingresos del mes</strong> (solo administradores): lo cobrado frente a lo esperado este mes.</li>
+    <li><strong>Lista de espera</strong>: cuántos alumnos esperan plaza y qué grupos tienen huecos libres. El número es un enlace directo a la lista de espera.</li>
+</ul>
+
+<h4 style="font-weight:700;margin-top:1rem;">La lista de tareas</h4>
+<p>Debajo de las tarjetas tienes una lista de tareas pendientes compartida por el equipo:</p>
+<ul style="list-style:disc;margin:0.4rem 0 0 1.25rem;line-height:1.7;">
+    <li>Escribe la tarea en el cuadro de texto y elige cuándo vence: <strong>Hoy</strong>, <strong>Esta semana</strong> o una <strong>Fecha</strong> concreta (aparece un calendario). Pulsa el botón <strong>+</strong> para añadirla.</li>
+    <li>Marca la casilla de una tarea para darla por completada; desaparece de la lista.</li>
+    <li>Las tareas cuya fecha ya pasó se muestran en <strong>rojo</strong> para que no se te escapen.</li>
+</ul>
+
+<h4 style="font-weight:700;margin-top:1rem;">Otros detalles</h4>
+<ul style="list-style:disc;margin:0.4rem 0 0 1.25rem;line-height:1.7;">
+    <li>El botón <strong>Nuevo Pago</strong> de la cabecera (solo administradores) te lleva directo a registrar un cobro sin pasar por la sección de Pagos.</li>
+    <li>La frase que aparece bajo el título cambia en cada visita: es solo un toque de inspiración para el día.</li>
+</ul>
+
+<p style="margin-top:1rem;"><strong>Atajos de teclado</strong> (funcionan fuera de las cajas de texto). El número aparece sobre cada icono del menú lateral:</p>
+<ul style="list-style:disc; margin:0.5rem 0 0 1.25rem; line-height:1.9;">
+    <li><kbd>0</kbd> Panel · <kbd>1</kbd> Estudiantes · <kbd>2</kbd> Lista de espera · <kbd>3</kbd> Horario</li>
+    <li><kbd>4</kbd> Pagos · <kbd>5</kbd> Gastos · <kbd>6</kbd> Aplicaciones · <kbd>7</kbd> Gestión</li>
+    <li><kbd>8</kbd> Informes · <kbd>9</kbd> Base de datos</li>
+</ul>
+
+<h4 style="font-weight:700;margin-top:1rem;">Según tu perfil</h4>
+<p>Si has entrado como <strong>profesor sin permisos de administrador</strong>, las tarjetas de dinero (Pagos pendientes e Ingresos del mes) y el botón Nuevo Pago no aparecen, y el menú lateral solo muestra las secciones que puedes usar (Estudiantes, Lista de espera, Horario y Gestión en modo lectura). Los cumpleaños, los emails, la lista de espera y las tareas sí son visibles para todos.</p>
+
+<h4 style="font-weight:700;margin-top:1rem;">Consejos</h4>
+<ul style="list-style:disc;margin:0.4rem 0 0 1.25rem;line-height:1.7;">
+    <li>Empieza el día por aquí: repasa cumpleaños y tareas vencidas antes de nada.</li>
+    <li>Usa las tareas para no olvidar gestiones (llamar a un padre, pedir un GDPR firmado…). Al ser compartidas, todo el equipo ve lo mismo.</li>
+</ul>
+{% endblock %}
+
 {% block content %}
 <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
-    <!-- CARD 1: Pagos pendientes -->
+    <!-- CARD 1: Pagos pendientes (admin only — financial data) -->
+    {% if is_admin_user %}
     <div class="bg-white rounded-lg p-6 border-l-4 border-primary-500 hover:shadow-md transition-all duration-200">
         <div class="flex justify-between items-start">
             <div class="flex-1 text-center">
@@ -67,6 +114,7 @@
             {% endif %}
         </div>
     </div>
+    {% endif %}
 
     <!-- CARD 2: Cumpleaños -->
     <div class="bg-white rounded-lg p-6 border-l-4 border-primary-400 hover:shadow-md transition-all duration-200">
@@ -126,7 +174,8 @@
         </div>
     </div>
 
-    <!-- CARD 4: Ingresos del mes -->
+    <!-- CARD 4: Ingresos del mes (admin only — financial data) -->
+    {% if is_admin_user %}
     <div class="bg-white rounded-lg p-6 border-l-4 border-primary-300 hover:shadow-md transition-all duration-200">
         <div class="flex justify-between items-start">
             <div class="flex-1 text-center">
@@ -145,6 +194,7 @@
             <span class="text-neutral-500">{{ expected_revenue|floatformat:0 }}€</span> esperado
         </div>
     </div>
+    {% endif %}
 
     <!-- CARD 4b: Lista de Espera / Capacidad de grupos -->
     <div class="bg-white rounded-lg p-6 col-span-1 md:col-span-2 lg:col-span-4 border-l-4 border-amber-400 hover:shadow-md transition-all duration-200">
@@ -267,7 +317,8 @@
     </div>
 </div>
 
-<!-- Pending Students Modal -->
+<!-- Pending Students Modal (admin only — financial data) -->
+{% if is_admin_user %}
 <div id="pending-modal" style="display:none;position:fixed;inset:0;background-color:rgba(0,0,0,0.5);z-index:50;align-items:center;justify-content:center;padding:1rem;">
     <div class="bg-white rounded-xl shadow-2xl overflow-hidden" style="width:fit-content;min-width:240px;max-width:min(380px,90vw);">
         <div class="px-6 text-white flex justify-between items-center" style="background:linear-gradient(to right,#c4b5fd,#8b5cf6);padding-top:16px;padding-bottom:16px;gap:2rem;">
@@ -291,6 +342,7 @@
         </ul>
     </div>
 </div>
+{% endif %}
 
 {% load static %}
 <script>document.body.dataset.createTodoUrl = '{% url "create_todo" %}';</script>

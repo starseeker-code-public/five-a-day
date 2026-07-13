@@ -96,6 +96,48 @@
 </style>
 {% endblock %}
 
+{% block help_content %}
+<p>El <strong>Panel de Testing</strong> es el centro de control del entorno de pruebas: sirve para validar la aplicación y reportar incidencias durante el desarrollo. Solo es accesible para <strong>profesores administradores</strong> en el entorno de testing; el resto de usuarios ni siquiera ve el icono en el menú y recibe un 404 si intenta entrar a <code>/testing/</code>.</p>
+
+<h4 style="font-weight:700;margin-top:1rem;">Proyecto</h4>
+<p>La tarjeta principal muestra, en tiempo real, información del servidor y de git: <strong>versión</strong> de la aplicación, <strong>entorno</strong>, estado de <em>debug</em>, versiones de Python y Django, base de datos, hora y zona horaria del servidor, y los datos del <strong>último commit</strong> (rama, hash, mensaje, autor y fecha). Los iconos de código enlazan con la documentación del proyecto en GitHub.</p>
+
+<h4 style="font-weight:700;margin-top:1rem;">Datos de prueba</h4>
+<p>El comando de siembra rellena la base de datos con un juego de datos realista para poder ejercitar todas las funcionalidades sin teclear nada a mano (profesores, grupos, padres con hermanos, alumnos —incluidos adultos e inactivos—, matrículas con descuentos, pagos en todos los estados, gastos, horarios, tareas e historial):</p>
+<ul style="list-style:disc;margin:0.4rem 0 0 1.25rem;line-height:1.7;">
+    <li>El botón <strong>play</strong> (verde) siembra los datos sin borrar los existentes (es idempotente).</li>
+    <li>El botón <strong>restart</strong> (rojo) <strong>borra todos los datos generados por el comando y vuelve a sembrar</strong>; pide confirmación.</li>
+    <li>El resultado del comando aparece en la consola negra de la derecha.</li>
+</ul>
+
+<h4 style="font-weight:700;margin-top:1rem;">Backlog</h4>
+<p>Registra errores, sugerencias o tareas de prueba. Escribe un <strong>título</strong> y una <strong>descripción</strong> (cuanto más detalle, mejor), elige la <strong>prioridad</strong> (Baja / Media / Alta) y pulsa <strong>+</strong>. Cada tarea creada se <strong>envía por email</strong> al equipo de desarrollo.</p>
+<ul style="list-style:disc;margin:0.4rem 0 0 1.25rem;line-height:1.7;">
+    <li>Puedes adjuntar una <strong>captura de pantalla</strong> (máx. 5&nbsp;MB): viaja en el email pero <strong>no se guarda</strong> en el servidor.</li>
+    <li>El botón de tick verde marca una tarea como <strong>hecha</strong>; también se notifica por email.</li>
+</ul>
+
+<h4 style="font-weight:700;margin-top:1rem;">Reporte de errores</h4>
+<p>El interruptor <strong>Reporte de errores</strong> activa o desactiva el envío automático de errores por email al soporte. Úsalo para no inundar de correos mientras haces pruebas ruidosas.</p>
+
+<h4 style="font-weight:700;margin-top:1rem;">¿Listo para desplegar?</h4>
+<p>El botón de tick verde envía —tras confirmar— un aviso por email al soporte y a los profesores administradores de que <strong>esta versión está validada y lista para desplegar</strong>.</p>
+
+<h4 style="font-weight:700;margin-top:1rem;">Accesos rápidos</h4>
+<p>Enlaces directos a Admin de Django, Google Drive, Google Cloud, la documentación en GitHub y un servicio de correo temporal (útil para probar altas y emails con direcciones desechables).</p>
+
+<h4 style="font-weight:700;margin-top:1rem;">Probar como profesor NO administrador</h4>
+<p>Buena parte de la app cambia según el perfil, así que conviene probarla también con una cuenta sin permisos de administrador. Hay una sembrada para esto:</p>
+<ul style="list-style:disc;margin:0.4rem 0 0 1.25rem;line-height:1.7;">
+    <li>Cierra sesión y vuelve a entrar con la cuenta <strong><code>test@test.com</code></strong> (John Doe), usando <strong>la contraseña de pruebas</strong> (la misma que comparten las cuentas de profesor sembradas).</li>
+    <li>Como profesor no administrador verás un <strong>menú lateral reducido</strong>: solo Panel, Estudiantes, Lista de espera, Horario y Gestión (esta última en <strong>solo lectura</strong>).</li>
+    <li>El <strong>Horario</strong> es de solo lectura (sin lápiz de edición) y en el <strong>Panel Principal</strong> desaparecen las tarjetas de dinero (pagos pendientes e ingresos).</li>
+    <li>No tendrás acceso a <strong>Pagos, Gastos, Aplicaciones, Informes ni Base de datos</strong>, ni a este panel de <strong>Testing</strong> (<code>/testing/</code> devuelve 404).</li>
+    <li>Sí conservas la gestión completa de alumnos: matricular, editar fichas, lista de espera y marcar la asistencia a Fun Friday.</li>
+    <li>Para volver a tu perfil, cierra sesión y entra de nuevo con tu cuenta de administrador.</li>
+</ul>
+{% endblock %}
+
 {% block content %}
 {% csrf_token %}
 <div class="px-4 py-6" id="testing-page"
@@ -316,6 +358,14 @@
                     <span class="material-symbols-outlined text-[18px]">add</span>
                 </button>
             </div>
+            <div class="mt-2 flex items-center gap-2">
+                <label for="backlog-screenshot" class="inline-flex items-center gap-1 text-xs text-neutral-500 cursor-pointer hover:text-primary-600">
+                    <span class="material-symbols-outlined text-[16px]">attach_file</span>
+                    Captura de pantalla (opcional)
+                </label>
+                <input type="file" id="backlog-screenshot" accept="image/*" class="text-xs text-neutral-500">
+                <span class="text-[11px] text-neutral-400">Se adjunta al email, no se guarda. Máx. 5&nbsp;MB.</span>
+            </div>
             <p id="backlog-error" class="text-red-600 text-xs mt-2 hidden"></p>
         </div>
 
@@ -339,6 +389,21 @@
             {% empty %}
             <p class="text-sm text-neutral-400 text-center py-6" id="backlog-empty">No hay tareas. Crea una arriba.</p>
             {% endfor %}
+        </div>
+    </div>
+</div>
+
+<!-- Confirmation modal for "¿Listo para desplegar?" -->
+<div id="ready-confirm-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:60;align-items:center;justify-content:center;padding:1rem;">
+    <div class="qa-card" style="max-width:26rem;width:100%;text-align:center;">
+        <div class="qa-card-icon bg-emerald-100" style="margin:0 auto 1rem;">
+            <span class="material-symbols-outlined text-emerald-600">rocket_launch</span>
+        </div>
+        <h2 class="text-lg font-bold text-neutral-800 mb-1">¿Marcar esta versión como lista?</h2>
+        <p class="text-sm text-neutral-500 mb-5">Se enviará un correo al soporte y a los profesores administradores avisando de que <strong>v{{ app_version }}</strong> está lista para desplegar.</p>
+        <div class="flex gap-3 justify-center">
+            <button type="button" id="ready-cancel-btn" class="px-5 py-2 rounded-full text-sm font-semibold bg-primary-100 text-primary-700 hover:bg-primary-200">Cancelar</button>
+            <button type="button" id="ready-confirm-btn" class="px-5 py-2 rounded-full text-sm font-semibold text-white bg-emerald-600 hover:bg-emerald-700">Sí, marcar como lista</button>
         </div>
     </div>
 </div>
@@ -407,25 +472,35 @@
         if (confirm('Esto borrara TODOS los datos y los re-sembrara. ¿Continuar?')) seed(true);
     });
 
-    // ── ¿Listo para desplegar? ──────────────────────
+    // ── ¿Listo para desplegar? (con confirmación) ──────────────────────
     const readyBtn = document.getElementById('ready-ship-btn');
     const readyMsg = document.getElementById('ready-ship-msg');
-    if (readyBtn) {
-        readyBtn.addEventListener('click', () => {
-            if (!confirm('¿Marcar esta versión como LISTA y avisar al soporte por email?')) return;
-            readyBtn.disabled = true;
-            readyMsg.classList.remove('hidden');
-            readyMsg.style.color = '#6b7280';
-            readyMsg.textContent = 'Enviando aviso...';
-            post(page.dataset.readyUrl, {})
-                .then(data => {
-                    readyMsg.style.color = data.success ? '#16a34a' : '#dc2626';
-                    readyMsg.textContent = data.success ? ('✓ ' + data.message) : ('Error: ' + data.message);
-                })
-                .catch(err => { readyMsg.style.color = '#dc2626'; readyMsg.textContent = 'Error: ' + err; })
-                .finally(() => { readyBtn.disabled = false; });
-        });
+    const readyModal = document.getElementById('ready-confirm-modal');
+    const readyConfirm = document.getElementById('ready-confirm-btn');
+    const readyCancel = document.getElementById('ready-cancel-btn');
+
+    function openReadyModal() { if (readyModal) readyModal.style.display = 'flex'; }
+    function closeReadyModal() { if (readyModal) readyModal.style.display = 'none'; }
+
+    function sendReady() {
+        closeReadyModal();
+        readyBtn.disabled = true;
+        readyMsg.classList.remove('hidden');
+        readyMsg.style.color = '#6b7280';
+        readyMsg.textContent = 'Enviando aviso...';
+        post(page.dataset.readyUrl, {})
+            .then(data => {
+                readyMsg.style.color = data.success ? '#16a34a' : '#dc2626';
+                readyMsg.textContent = data.success ? ('✓ ' + data.message) : ('Error: ' + data.message);
+            })
+            .catch(err => { readyMsg.style.color = '#dc2626'; readyMsg.textContent = 'Error: ' + err; })
+            .finally(() => { readyBtn.disabled = false; });
     }
+
+    if (readyBtn) readyBtn.addEventListener('click', openReadyModal);
+    if (readyConfirm) readyConfirm.addEventListener('click', sendReady);
+    if (readyCancel) readyCancel.addEventListener('click', closeReadyModal);
+    if (readyModal) readyModal.addEventListener('click', (e) => { if (e.target === readyModal) closeReadyModal(); });
 
     // ── Backlog ─────────────────────────────────────
     const backlogList = document.getElementById('backlog-list');
@@ -438,15 +513,34 @@
         const description = descInput.value.trim();
         const priority = document.getElementById('backlog-priority').value;
         const errorEl = document.getElementById('backlog-error');
+        const shotInput = document.getElementById('backlog-screenshot');
+        const shot = shotInput && shotInput.files ? shotInput.files[0] : null;
 
         if (!title) {
             errorEl.textContent = 'El titulo es obligatorio.';
             errorEl.classList.remove('hidden');
             return;
         }
+        if (shot && shot.size > 5 * 1024 * 1024) {
+            errorEl.textContent = 'La imagen supera los 5 MB.';
+            errorEl.classList.remove('hidden');
+            return;
+        }
         errorEl.classList.add('hidden');
 
-        post(page.dataset.backlogCreateUrl, {title, description, priority})
+        // multipart so the screenshot (if any) rides along — it is attached to
+        // the notification email and NOT stored server-side.
+        const fd = new FormData();
+        fd.append('title', title);
+        fd.append('description', description);
+        fd.append('priority', priority);
+        if (shot) fd.append('screenshot', shot);
+
+        fetch(page.dataset.backlogCreateUrl, {
+            method: 'POST',
+            headers: {'X-CSRFToken': getCsrfToken()},
+            body: fd,
+        }).then(r => r.json())
             .then(data => {
                 if (!data.success) {
                     errorEl.textContent = data.message;
@@ -472,6 +566,7 @@
                 backlogList.insertBefore(item, backlogList.firstChild);
                 titleInput.value = '';
                 descInput.value = '';
+                if (shotInput) shotInput.value = '';
             })
             .catch(() => {
                 errorEl.textContent = 'Error en la peticion.';

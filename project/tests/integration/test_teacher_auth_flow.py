@@ -115,10 +115,10 @@ class TestNonAdminTeacherMiddleware:
         assert response.status_code == 302
         assert response.url == reverse("home")
 
-    def test_non_admin_blocked_from_schedule(self, non_admin_client):
+    def test_non_admin_can_access_schedule(self, non_admin_client):
+        # Non-admin teachers may VIEW the schedule (save_schedule_slot stays admin-only).
         response = non_admin_client.get("/schedule/")
-        assert response.status_code == 302
-        assert response.url == reverse("home")
+        assert response.status_code == 200
 
     def test_non_admin_blocked_from_all_info(self, non_admin_client):
         response = non_admin_client.get("/database/")

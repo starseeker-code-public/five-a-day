@@ -91,13 +91,16 @@ def create_teacher(request):
                 status=400,
             )
 
+        # Teachers created here are ALWAYS non-admin. Only the seeded teachers
+        # (TEACHER_SEED_*) and the superuser/admin profile are admins; an
+        # existing admin can promote a teacher afterwards via /admin/.
         teacher = Teacher.objects.create(
             first_name=data["first_name"],
             last_name=data["last_name"],
             email=data["email"],
             phone=data.get("phone", ""),
             active=True,
-            admin=data.get("admin", False),
+            admin=False,
         )
 
         HistoryLog.log("teacher_created", f"Profesor creado: {teacher.full_name}", icon="person_add")

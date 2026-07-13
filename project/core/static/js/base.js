@@ -137,4 +137,33 @@
             e.stopPropagation();
         });
     }
+
+    /* ── Keyboard quick-nav: number keys → sidebar links (data-hotkey) ────── */
+    /* Only fires outside text fields and without modifier keys. A hotkey only
+       works if its link is present in the DOM (so hidden admin-only links are
+       inert for non-admin teachers). */
+    document.addEventListener('keydown', function (e) {
+        if (e.ctrlKey || e.metaKey || e.altKey) return;
+        const t = e.target;
+        const tag = t && t.tagName ? t.tagName.toLowerCase() : '';
+        if (tag === 'input' || tag === 'textarea' || tag === 'select' || (t && t.isContentEditable)) return;
+        if (!/^[0-9]$/.test(e.key)) return;
+        const link = document.querySelector('.sidebar-link[data-hotkey="' + e.key + '"]');
+        if (link && link.href) { e.preventDefault(); window.location.href = link.href; }
+    });
+
+    /* ── Per-view help ("?" button, bottom-left) ──────────────────────────── */
+    const helpContent = document.getElementById('view-help-content');
+    const helpBtn = document.getElementById('view-help-btn');
+    const helpModal = document.getElementById('view-help-modal');
+    if (helpBtn && helpModal && helpContent && helpContent.innerHTML.trim() !== '') {
+        const body = document.getElementById('view-help-modal-body');
+        if (body) body.innerHTML = helpContent.innerHTML;
+        helpBtn.style.display = 'flex';  // revealed only when the page provides help
+        const closeHelp = () => { helpModal.style.display = 'none'; };
+        helpBtn.addEventListener('click', () => { helpModal.style.display = 'flex'; });
+        document.getElementById('view-help-close')?.addEventListener('click', closeHelp);
+        helpModal.addEventListener('click', (e) => { if (e.target === helpModal) closeHelp(); });
+        document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeHelp(); });
+    }
 })();

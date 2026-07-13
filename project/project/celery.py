@@ -42,10 +42,16 @@ app.conf.beat_schedule = {
         "schedule": crontab(hour=6, minute=0, day_of_month=1),
         "options": {"queue": "celery"},
     },
-    # v1.5 — Materialize recurring expense templates on the 1st at 06:30
+    # v1.5 — Materialize MONTHLY recurring expense templates on the 1st at 06:30
     "materialize-recurring-expenses": {
         "task": "billing.tasks.materialize_recurring_expenses_task",
         "schedule": crontab(hour=6, minute=30, day_of_month=1),
+        "options": {"queue": "celery"},
+    },
+    # Materialize WEEKLY + YEARLY recurring expense templates — daily at 06:15
+    "materialize-recurring-expenses-daily": {
+        "task": "billing.tasks.materialize_recurring_expenses_daily_task",
+        "schedule": crontab(hour=6, minute=15),
         "options": {"queue": "celery"},
     },
     # v1.4 — Monthly report on the 28th at 20:00
@@ -53,6 +59,12 @@ app.conf.beat_schedule = {
         "task": "comms.tasks.send_monthly_report_task",
         "schedule": crontab(hour=20, minute=0, day_of_month=28),
         "options": {"queue": "emails"},
+    },
+    # QA backlog housekeeping — delete tasks done for >30 days, daily at 07:00
+    "cleanup-done-backlog-tasks": {
+        "task": "core.tasks.cleanup_done_backlog_tasks",
+        "schedule": crontab(hour=7, minute=0),
+        "options": {"queue": "celery"},
     },
 }
 
