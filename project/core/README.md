@@ -8,6 +8,7 @@ The `core` app is the "everything else" app — it owns the dashboard, authentic
 | ----- | ----- | ------- |
 | **ScheduleSlot** | `schedule_slots` | Weekly schedule grid (row, day, col) with group FK |
 | **FunFridayAttendance** | `fun_friday_attendance` | Tracks student attendance on Fun Fridays |
+| **FunFridayScheduledSend** | `fun_friday_scheduled_sends` | Persisted Fun Friday announcements awaiting their scheduled send time (drained by `comms.tasks.send_due_fun_friday_emails_task`) |
 | **TodoItem** | `todo_items` | Dashboard task list with due dates |
 | **HistoryLog** | `history_logs` | Audit trail of user actions (auto-capped at 1,000 with guarded single-query cleanup) |
 
@@ -52,6 +53,9 @@ Student, payment, management, and email app routes live in `students/urls.py`, `
 
 - **`seed_testdata`** — populates the QA database with 3 teachers, 5 groups, 6 parents, 12 child students, 3 adult students, 1 inactive student, active enrollments, payments in various states, schedule slots, todo items, and history log entries. Flags: `--reset` (wipe first), `--small` (6 children only). Also callable from the `/testing/` dashboard via AJAX.
 - **`seed_teachers`** — idempotently creates Teacher rows + linked `auth.User` accounts from `TEACHER_SEED_<N>_*` env vars (N starts at 1, iteration stops at the first missing `FIRST_NAME`). Each block sets `FIRST_NAME`, `LAST_NAME`, `EMAIL` (used as the login username), and optionally `PHONE`, `ADMIN` (defaults to false), and `PASSWORD`. If `PASSWORD` is omitted the linked user gets `unusable_password` and must activate via `/password-reset/`. Re-running the command updates name/phone/admin flags and syncs the linked user but never overwrites a password an admin later changed. Runs automatically on container start when `DJANGO_ENV` is `testing` or `production` (see `entrypoint.sh`); no-op in development.
+- **`cleanup_backlog_tasks`** — wraps `core.tasks.cleanup_done_backlog_tasks`: deletes QA backlog tasks marked done for more than `--days` days (default 30). For external schedulers; QA/testing environment only.
+- **`export_to_sheets`** — exports students and/or payments snapshots to Google Sheets (`--students / --payments / --academic-year / --students-sheet / --payments-sheet`). No-op when the Sheets integration is unconfigured.
+- **`reset_two_factor <email>`** — wipes a Teacher's TOTP secret + backup codes (recovery when both phone and codes are lost).
 
 ## Templates
 

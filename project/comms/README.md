@@ -48,9 +48,14 @@ All tasks have retry logic (3 retries, exponential backoff):
 | `send_payment_reminders` | Weekly payment reminder batch | Celery Beat |
 | `send_generic_email_task` | Generic email dispatcher | Manual |
 | `send_enrollment_confirmation_task` | Enrollment confirmation with attachments (uses `student.gender` field) | On enrollment |
-| `send_fun_friday_emails_task` | Fun Friday announcement to all parents | Scheduled via `apply_async(eta=…)` for 14:30 the Monday of the target Friday's week |
+| `send_fun_friday_emails_task` | Fun Friday announcement to all parents (immediate) | Direct/manual sends |
+| `send_due_fun_friday_emails_task` | Drains due `FunFridayScheduledSend` rows (idempotent — rows are marked `sent_at`) | Celery Beat (daily 14:30) / `send_due_fun_friday_emails` command |
 
 Without Redis, Celery runs in eager mode (synchronous, same process).
+
+> **Fun Friday scheduling** does NOT use `apply_async(eta=…)` — the ETA is silently ignored
+> in eager mode (production has no worker). The form persists a `core.FunFridayScheduledSend`
+> row scheduled for Monday 14:30 of the event week; the drain task sends due rows on time.
 
 ## Management Commands
 
@@ -70,6 +75,19 @@ python manage.py test_all_emails                     # Send one test of each ema
 python manage.py test_all_emails --only fun_friday,birthday
 python manage.py test_all_emails --list              # List available templates
 python manage.py test_all_emails --to admin@test.com
+```
+
+### Beat-task wrappers (for external schedulers)
+
+Production runs no Celery Beat process (Cloud Run) — each periodic task has a thin
+command wrapper that runs it synchronously via `.apply()`, so Cloud Scheduler → Cloud
+Run Jobs (or plain cron) can trigger it. See `DEPLOYMENT.md` for the schedule table.
+
+```bash
+python manage.py send_birthday_emails            # daily 08:00 batch
+python manage.py send_payment_reminders          # weekly Monday 09:00 batch
+python manage.py send_monthly_report             # 28th 20:00 (--recipient overrides SUPPORT_EMAIL)
+python manage.py send_due_fun_friday_emails      # daily 14:30 — drains due FunFridayScheduledSend rows
 ```
 
 ## URL Patterns (comms/urls.py)

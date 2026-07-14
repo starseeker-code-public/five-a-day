@@ -58,27 +58,59 @@ class TestFunFridayForm:
         assert response.status_code == 302  # redirects to home
 
     def test_send_all_schedules_for_monday_1430(self, authenticated_client, student_with_parent):
-        """The real announcement is scheduled for 14:30 on the Monday of the target Friday's week."""
-        friday = date(2026, 5, 15)
+        """The real announcement persists a FunFridayScheduledSend for 14:30 on the Monday of the target week."""
+        from django.utils import timezone
+
+        from core.models import FunFridayScheduledSend
+
+        friday = timezone.localdate() + timedelta(days=(4 - timezone.localdate().weekday()) % 7 + 14)
         expected_monday = friday - timedelta(days=friday.weekday())
-        with patch("comms.tasks.send_fun_friday_emails_task.apply_async") as mock_async:
+        response = authenticated_client.post(
+            reverse("fun_friday_form"),
+            {
+                "event_date": friday.isoformat(),
+                "start_time": "17:00",
+                "end_time": "18:30",
+                "activity_description": "<b>Crafts</b>",
+                "min_age": "5",
+                "max_age": "12",
+                "meeting_point": "Main entrance",
+            },
+        )
+        assert response.status_code == 302
+        scheduled = FunFridayScheduledSend.objects.get()
+        local_send_at = timezone.localtime(scheduled.scheduled_for)
+        assert local_send_at.date() == expected_monday
+        assert (local_send_at.hour, local_send_at.minute) == (14, 30)
+        assert scheduled.sent_at is None  # future send — nothing goes out yet
+        assert scheduled.recipients  # parent emails captured
+
+    def test_send_all_past_monday_drains_immediately(self, authenticated_client, student_with_parent):
+        """An event created after its Monday-14:30 slot is sent right away (eager drain)."""
+        from django.utils import timezone
+
+        from core.models import FunFridayScheduledSend
+
+        # Last week's Friday — its Monday-14:30 slot is guaranteed to be in the past
+        past_friday = timezone.localdate() - timedelta(days=7)
+        with patch(
+            "comms.tasks._send_fun_friday_batch", return_value={"status": "success", "sent": 1, "total": 1}
+        ) as mock_batch:
             response = authenticated_client.post(
                 reverse("fun_friday_form"),
                 {
-                    "event_date": friday.isoformat(),
+                    "event_date": past_friday.isoformat(),
                     "start_time": "17:00",
                     "end_time": "18:30",
                     "activity_description": "<b>Crafts</b>",
                     "min_age": "5",
                     "max_age": "12",
-                    "meeting_point": "Main entrance",
                 },
             )
         assert response.status_code == 302
-        assert mock_async.called
-        eta = mock_async.call_args.kwargs["eta"]
-        assert eta.date() == expected_monday
-        assert (eta.hour, eta.minute) == (14, 30)
+        assert mock_batch.called
+        scheduled = FunFridayScheduledSend.objects.get()
+        assert scheduled.sent_at is not None
 
 
 class TestPaymentReminderForm:

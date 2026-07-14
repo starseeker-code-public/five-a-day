@@ -613,11 +613,40 @@ def send_fun_friday_emails_task(
     maximum_age=None,
     meeting_point=None,
 ):
-    """Send the Fun Friday announcement to every recipient.
+    """Send the Fun Friday announcement to every recipient immediately.
 
-    Scheduled (via ``apply_async(eta=...)``) for 14:30 on the Monday of the
-    target Friday's week — not sent immediately. See ``fun_friday_form``.
+    Kept for direct/manual sends; the scheduled path persists a
+    ``FunFridayScheduledSend`` row that ``send_due_fun_friday_emails_task``
+    drains at the right moment (``apply_async(eta=...)`` is NOT used — the
+    ETA is silently ignored under ``CELERY_TASK_ALWAYS_EAGER=True``).
     """
+    return _send_fun_friday_batch(
+        recipients=recipients,
+        day_name=day_name,
+        day_number=day_number,
+        month=month,
+        start_time=start_time,
+        end_time=end_time,
+        activity_description=activity_description,
+        minimum_age=minimum_age,
+        maximum_age=maximum_age,
+        meeting_point=meeting_point,
+    )
+
+
+def _send_fun_friday_batch(
+    recipients: list,
+    day_name: str,
+    day_number: int,
+    month: str,
+    start_time: str,
+    end_time: str,
+    activity_description: str,
+    minimum_age=None,
+    maximum_age=None,
+    meeting_point=None,
+) -> dict:
+    """Send one Fun Friday announcement batch. Shared by the direct task and the drain task."""
     from comms.services.email_functions import send_fun_friday_email
 
     sent = 0
@@ -641,3 +670,42 @@ def send_fun_friday_emails_task(
 
     logger.info("Fun Friday emails sent: %d/%d", sent, len(recipients))
     return {"status": "success", "sent": sent, "total": len(recipients)}
+
+
+@shared_task(name="comms.tasks.send_due_fun_friday_emails_task", bind=True)
+def send_due_fun_friday_emails_task(self):
+    """Send every ``FunFridayScheduledSend`` whose scheduled time has passed.
+
+    Idempotent: rows are marked ``sent_at`` and never re-sent. Runs via
+    Celery Beat (daily 14:30) in dev/testing and via the
+    ``send_due_fun_friday_emails`` management command in production.
+    """
+    from django.utils import timezone
+
+    from core.models import FunFridayScheduledSend
+
+    due = FunFridayScheduledSend.objects.filter(sent_at__isnull=True, scheduled_for__lte=timezone.now())
+
+    processed = 0
+    sent_total = 0
+    for scheduled in due:
+        result = _send_fun_friday_batch(
+            recipients=scheduled.recipients,
+            day_name=scheduled.day_name,
+            day_number=scheduled.day_number,
+            month=scheduled.month,
+            start_time=scheduled.start_time,
+            end_time=scheduled.end_time,
+            activity_description=scheduled.activity_description,
+            minimum_age=scheduled.minimum_age,
+            maximum_age=scheduled.maximum_age,
+            meeting_point=scheduled.meeting_point,
+        )
+        scheduled.sent_at = timezone.now()
+        scheduled.save(update_fields=["sent_at", "updated_at"])
+        processed += 1
+        sent_total += result["sent"]
+
+    if processed:
+        logger.info("Fun Friday drain: %d scheduled send(s) processed, %d email(s) sent", processed, sent_total)
+    return {"status": "success", "processed": processed, "sent": sent_total}
