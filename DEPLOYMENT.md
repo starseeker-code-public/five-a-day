@@ -134,6 +134,21 @@ docker compose up -d --build
 
 ## 3. Production (Cloud Run + Cloud SQL)
 
+> **Database rollout plan (Neon first, then Cloud SQL):** the production database will
+> initially be prototyped on [Neon](https://neon.tech) (serverless PostgreSQL, free tier)
+> instead of Cloud SQL — the app is agnostic, it only sees `DATABASE_URL`. Once the whole
+> production stack is verified working end-to-end, we will migrate to the Cloud SQL
+> instance described below **before introducing any real data**, so the switch is a plain
+> `DATABASE_URL` swap with no data migration. Notes for the Neon phase:
+>
+> - Use Neon's **direct** (non-pooled) connection string — `settings.py` uses
+>   `CONN_MAX_AGE=600`, which doesn't mix with Neon's transaction-mode PgBouncer pooler.
+> - Neon's closest region is AWS Frankfurt (`eu-central-1`); consider deploying Cloud Run
+>   in `europe-west3` during this phase and moving it to `europe-southwest1` alongside
+>   the Cloud SQL migration.
+> - Skip the "Create Cloud SQL instance" step below until the migration; everything else
+>   in this section applies unchanged.
+
 ### Architecture
 
 ```
