@@ -48,6 +48,45 @@ class FunFridayAttendance(models.Model):
         return f"{self.student} - {self.date}"
 
 
+class FunFridayScheduledSend(models.Model):
+    """A Fun Friday announcement persisted until its scheduled send time.
+
+    Replaces the old ``apply_async(eta=...)`` approach, which silently sends
+    immediately under ``CELERY_TASK_ALWAYS_EAGER=True`` (production on Cloud
+    Run has no Celery worker). Rows are drained by
+    ``comms.tasks.send_due_fun_friday_emails_task`` — via Celery Beat in
+    dev/testing and via the ``send_due_fun_friday_emails`` management command
+    (Cloud Scheduler → Cloud Run Job) in production.
+    """
+
+    recipients = models.JSONField(default=list)  # list of email addresses
+    day_name = models.CharField(max_length=20)
+    day_number = models.PositiveSmallIntegerField()
+    month = models.CharField(max_length=20)
+    start_time = models.CharField(max_length=5)
+    end_time = models.CharField(max_length=5)
+    activity_description = models.TextField()
+    minimum_age = models.PositiveSmallIntegerField(null=True, blank=True)
+    maximum_age = models.PositiveSmallIntegerField(null=True, blank=True)
+    meeting_point = models.CharField(max_length=255, null=True, blank=True)
+    scheduled_for = models.DateTimeField(db_index=True)
+    sent_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "fun_friday_scheduled_sends"
+        ordering = ["scheduled_for"]
+
+    def __str__(self):
+        status = "sent" if self.sent_at else "pending"
+        return f"Fun Friday {self.day_name} {self.day_number} {self.month} ({status})"
+
+    @property
+    def is_due(self) -> bool:
+        return self.sent_at is None and self.scheduled_for <= timezone.now()
+
+
 class TodoItem(models.Model):
     text = models.CharField(max_length=500)
     due_date = models.DateField()

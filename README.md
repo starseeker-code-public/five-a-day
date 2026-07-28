@@ -20,7 +20,7 @@ Built to centralize student records, automate billing cycles, and streamline par
 ### Project Status
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v1.14.0-brightgreen?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-v1.14.2-brightgreen?style=flat-square" alt="Version">
   &nbsp;|&nbsp;
   <a href="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml?query=branch%3Amain"><img src="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml/badge.svg?branch=main&style=flat-square" alt="CI main"></a>
   &nbsp;|&nbsp;
@@ -41,9 +41,9 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 | Version | Date | Description |
 |---------|------|-------------|
-| **v1.14.0** | 2026-07-12 | Comprehensive in-app help guides for every view; dark-theme fixes |
-| v1.13.11 | 2026-07-12 | Keyboard nav hotkeys, per-view help "?" panels, CI-secret docs |
-| v1.13.10 | 2026-07-12 | CI deploy emails, recurring-expense frequencies, backlog screenshots |
+| **v1.14.2** | 2026-07-14 | Beat-task command wrappers + persisted Fun Friday sends |
+| v1.14.1 | 2026-07-12 | Email restyle + dark-mode emails |
+| v1.14.0 | 2026-07-12 | Comprehensive in-app help guides for every view |
 
 ---
 
@@ -143,8 +143,39 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 ## Version History & Roadmap
 
-<details id="v1140" open>
-<summary><strong>v1.14.0 — Comprehensive in-app help guides (current)</strong></summary>
+<details id="v1142" open>
+<summary><strong>v1.14.2 — Beat-task command wrappers + persisted Fun Friday sends (current)</strong></summary>
+
+**Production-readiness: periodic tasks without Celery Beat**
+
+- Every Celery Beat task now has a thin **management-command wrapper** that runs it synchronously via `.apply()`, so Cloud Scheduler → Cloud Run Jobs (or plain cron) can trigger them in production, where no Beat process exists: `send_birthday_emails`, `send_payment_reminders`, `send_monthly_report` (`--recipient`), `materialize_recurring_expenses` (`--daily`, `--month/--year`, `--date`), and `cleanup_backlog_tasks` (`--days`). `DEPLOYMENT.md` gains the full command ↔ cron schedule table for the Cloud Scheduler setup.
+
+**Fun Friday sends survive eager mode**
+
+- Fun Friday announcements were queued with `apply_async(eta=Monday 14:30)` — under `CELERY_TASK_ALWAYS_EAGER=True` (production has no Celery worker) the ETA is silently ignored and the email went out **immediately**. The form now persists a **`FunFridayScheduledSend`** row (new `core` model, migration `core/0005`) and the new `send_due_fun_friday_emails_task` drains due rows idempotently (marks `sent_at`, never re-sends) — via Celery Beat daily at 14:30 in dev/testing and the `send_due_fun_friday_emails` command in production. Announcements created after their Monday slot drain immediately.
+
+**Testing**
+
+- 23 new tests: the six command wrappers, the `FunFridayScheduledSend` model + drain task, the new Beat-schedule entry, and the form's persist / immediate-drain paths. Suite at **1,008 tests, 95% coverage**.
+
+</details>
+
+<details id="v1141">
+<summary><strong>v1.14.1 — Email restyle + dark-mode emails</strong></summary>
+
+**Transactional email overhaul**
+
+- All 17 transactional email templates (enrollment child/adult, payment receipt, receipts for enrollment/quarterly/adult, payment reminders, Fun Friday, birthday, vacation closure, tax certificate, monthly + admin reports, newsletter, parent magic link, password reset) were **restyled to match the `welcome_student` reference** — consistent violet headings, rounded info cards, coloured callouts and table dividers — while preserving every template variable and the shared signature/legal footer.
+- `welcome_student.html` was aligned to the app's violet palette (`#6d28d9`) and gained a **WhatsApp CTA** (`wa.me/34613481141`, 613 481 141) inside its "¿Tienes alguna pregunta?" box.
+
+**Dark-mode emails**
+
+- `base_email.html` now ships an inline `@media (prefers-color-scheme: dark)` stylesheet (plus a `color-scheme` meta) so emails render in a dark violet theme that mirrors the webapp — targeting the inline hex values with attribute selectors, the same technique `theme.css` uses for the app. The signature/footer **content** is unchanged; only its dark rendering was added.
+
+</details>
+
+<details id="v1140">
+<summary><strong>v1.14.0 — Comprehensive in-app help guides</strong></summary>
 
 **In-app help**
 
@@ -1252,6 +1283,14 @@ erDiagram
         date date
     }
 
+    FunFridayScheduledSend {
+        int id PK
+        json recipients
+        text activity_description
+        datetime scheduled_for
+        datetime sent_at
+    }
+
     Teacher ||--o{ Group : "teaches"
     Group ||--o{ Student : "contains"
     Student }o--o{ Parent : "has parents"
@@ -1653,7 +1692,8 @@ five-a-day/
 │   │   └── wsgi.py / asgi.py
 │   │
 │   ├── core/                     Dashboard, Auth, Schedule, Utilities, Cross-cutting
-│   │   ├── models.py             TodoItem, HistoryLog, FunFridayAttendance, ScheduleSlot, QAConfiguration
+│   │   ├── models.py             TodoItem, HistoryLog, FunFridayAttendance, ScheduleSlot,
+│   │   │                         QAConfiguration, FunFridayScheduledSend (v1.14.2)
 │   │   ├── audit_models.py       AuditLog (v1.10 — immutable per-model change trail)
 │   │   ├── audit_signals.py      Signal receivers + AuditActorMiddleware (contextvar-based actor)
 │   │   ├── rate_limit.py         Cache-backed IP rate limiter (v1.10)
@@ -1674,7 +1714,7 @@ five-a-day/
 │   │   │                         two_factor/ (v1.13), plus expenses/reports/waiting_list
 │   │   ├── static/               CSS (app.css) + JS (14 modules) + images
 │   │   └── management/commands/  seed_teachers, seed_testdata, export_to_sheets (v1.2),
-│   │                             reset_two_factor (v1.13), plus 2 more
+│   │                             reset_two_factor (v1.13), cleanup_backlog_tasks (v1.14.2)
 │   │
 │   ├── students/                 People Management
 │   │   ├── models.py             Student, Parent, StudentParent, Teacher, Group.
@@ -1700,7 +1740,7 @@ five-a-day/
 │   │   ├── exports.py            Excel/CSV builders
 │   │   ├── admin.py              Payment + Enrollment + Expense admin
 │   │   ├── urls.py               23 URL patterns
-│   │   └── management/commands/  generate_payments
+│   │   └── management/commands/  generate_payments, materialize_recurring_expenses (v1.14.2)
 │   │
 │   ├── comms/                    Communications
 │   │   ├── services/             email_service (EmailService singleton),
@@ -1708,11 +1748,13 @@ five-a-day/
 │   │   │                         sms_service (v1.8 — Twilio, lazy import)
 │   │   ├── tasks.py              12 Celery tasks — welcome, birthday (all parents, v1.13
 │   │   │                         localdate), payment reminders (email + SMS dedup),
-│   │   │                         monthly report, magic link (v1.9), payment receipt (v1.11)
+│   │   │                         monthly report, magic link (v1.9), payment receipt (v1.11),
+│   │   │                         Fun Friday drain (v1.14.2)
 │   │   ├── urls.py               11 URL patterns
-│   │   └── management/commands/  send_email, test_all_emails
+│   │   └── management/commands/  send_email, test_all_emails, plus 4 Beat-task wrappers
+│   │                             (v1.14.2 — birthday, reminders, report, Fun Friday drain)
 │   │
-│   ├── tests/                    pytest suite (985 tests, 96 % coverage) — unit/ + integration/
+│   ├── tests/                    pytest suite (1,008 tests, 95 % coverage) — unit/ + integration/
 │   ├── templates/registration/   Password-reset templates (form, done, confirm, complete + email body)
 │   ├── templates/admin/          Django admin overrides (branded theme)
 │   └── conftest.py               Shared fixtures (models + authenticated_client)
@@ -1760,10 +1802,10 @@ Dashboard, authentication, scheduling, and shared utilities. Owns all views and 
 
 | Component | Details |
 |-----------|---------|
-| **Models** | TodoItem, HistoryLog (1000-entry cap), FunFridayAttendance, ScheduleSlot |
+| **Models** | TodoItem, HistoryLog (1000-entry cap), FunFridayAttendance, FunFridayScheduledSend, ScheduleSlot |
 | **Views** | 14 modules: auth, password_reset, dashboard, students, parents, payments, management, app_forms, schedule, fun_friday_attendance, todos, support, errors, testing_tools |
 | **Middleware** | SimpleAuthMiddleware — two layers: session auth (public allow-list incl. `/password-reset/`) + non-admin teacher URL-name whitelist |
-| **Templates** | base.html (layout), 15+ page templates, 13 email templates, error pages, plus `templates/registration/` for the password-reset flow |
+| **Templates** | base.html (layout), 15+ page templates, 18 email templates (common violet style + dark-mode support), error pages, plus `templates/registration/` for the password-reset flow |
 | **Static** | app.css (sidebar/icons), 13 JS modules, logo |
 | **Commands** | seed_teachers (Teacher + auth.User from env vars), seed_testdata (in billing) |
 
@@ -1911,7 +1953,7 @@ Hub page listing all 10 email communication tools. Each follows a consistent pat
 
 | App | Email Template | Recipients | Trigger |
 |-----|---------------|------------|---------|
-| Fun Friday | `fun_friday.html` | Parents with active non-adult students | Weekly, manual |
+| Fun Friday | `fun_friday.html` | Parents with active non-adult students | Weekly, manual — persisted as `FunFridayScheduledSend`, sent Monday 14:30 of the event week |
 | Payment Reminder | `payment_reminder.html` | Parents with active students | Monthly, manual |
 | Vacation Closure | `vacation_closure.html` | All parents | Manual |
 | Tax Certificate | `tax_certificate.html` | Parents with completed payments in year | Yearly (April) |
@@ -1967,9 +2009,9 @@ Public flow at `/password-reset/...` that lets a teacher recover access without 
 
 | Metric | Value |
 |--------|-------|
-| **Total tests** | 623 |
-| **Test files** | 36 (19 unit + 17 integration) |
-| **Coverage** | 96% |
+| **Total tests** | 1,008 |
+| **Test files** | 70 (44 unit + 26 integration) |
+| **Coverage** | 95% |
 | **Coverage thresholds** | **≥ 90%** (target, no warning) / **75-89%** (CI warning, pre-commit still blocks below 75) / **< 75%** (CI fails, pre-commit rejects the commit) |
 | **Runtime** | ~19 seconds (8 parallel workers via pytest-xdist) |
 | **Database** | PostgreSQL (same as production) — **always use `make test`** |
@@ -2023,10 +2065,12 @@ Within each file, related tests are grouped into classes. Where a large file abs
 | [`unit/test_email_functions.py`](project/tests/unit/test_email_functions.py) | 17 | All convenience wrappers (`send_birthday_email`, `send_welcome_email`, `send_payment_reminder`, `send_monthly_report`, `send_enrollment_confirmation_email`, `send_quarterly_receipt_email`, `send_fun_friday_email`, `send_vacation_closure_email`, `send_tax_certificate_email`, `send_all_tax_certificates`) plus tax-certificate PDF generation branches |
 | [`unit/test_context_processors.py`](project/tests/unit/test_context_processors.py) | 13 | `today_notifications`: expected keys, todos due today vs other day, scheduled apps on Friday vs Monday, monthly apps excluded on day 15, history count, unauthenticated early-return |
 | [`unit/test_constants.py`](project/tests/unit/test_constants.py) | 13 | Pure functions: `calculate_discount` (flat/percentage/invalid/edge), `get_monthly_fee_by_schedule`, `get_enrollment_fee` |
+| [`unit/test_beat_commands.py`](project/tests/unit/test_beat_commands.py) | 12 | The Beat-task management-command wrappers (v1.14.2): each command runs its task synchronously via `.apply()`, `--recipient`/`--month`/`--year`/`--date`/`--days` forwarding, `materialize_recurring_expenses` flag validation (`--daily` vs monthly), real backlog-cleanup run (old done task deleted, fresh survives) |
 | [`unit/test_transactions.py`](project/tests/unit/test_transactions.py) | 10 | Query helpers: `get_active_students`, `get_payments_for_last_two_school_years`, `get_all_payments_unrestricted` — ordering, select_related, school-year filtering |
 | [`unit/test_teacher_user_sync.py`](project/tests/unit/test_teacher_user_sync.py) | 10 | `Teacher.ensure_user()` (create + link + sync + password) and the `post_save` mirror signal (`admin` → `is_staff`/`is_superuser`, email/name/username sync) |
 | [`unit/test_forms.py`](project/tests/unit/test_forms.py) | 9 | `EnrollmentForm` validation + `create_enrollment()` delegation to `EnrollmentService` (quarterly, monthly full/part, manual amount, sibling checkbox, adult, below-minimum rejection) |
 | [`unit/test_seed_teachers_command.py`](project/tests/unit/test_seed_teachers_command.py) | 8 | `manage.py seed_teachers`: creation, idempotent update, password-persistence rule (no overwrite once a teacher has a usable password), gap-stop iteration, missing-field skip |
+| [`unit/test_fun_friday_scheduling.py`](project/tests/unit/test_fun_friday_scheduling.py) | 8 | `FunFridayScheduledSend.is_due` semantics + `send_due_fun_friday_emails_task` drain: due rows sent + marked `sent_at`, future rows skipped, idempotent re-run never re-sends, end-to-end send through the real email backend |
 | [`unit/test_student_forms.py`](project/tests/unit/test_student_forms.py) | 7 | `StudentForm` + `ParentForm` validation: future birth date rejected, DNI minimum length, required fields, both date formats |
 | [`unit/test_exports.py`](project/tests/unit/test_exports.py) | 7 | Excel workbook generation via `openpyxl`: Students, Enrollments, Payments sheets + combined workbook; empty-database edge case |
 | [`unit/test_payment_helpers.py`](project/tests/unit/test_payment_helpers.py) | 7 | `parse_date_value` (6 formats including invalid) + `payment_detail` AJAX helper called directly via `RequestFactory` |
@@ -2040,7 +2084,7 @@ Within each file, related tests are grouped into classes. Where a large file abs
 
 | File | Count | Coverage |
 | --- | --- | --- |
-| [`integration/test_app_form_views.py`](project/tests/integration/test_app_form_views.py) | 97 | Every email form GET page, POST `action=preview` (JSON HTML), `test_send` with/without EMAIL_TEST_* env vars, main send-to-parents for every form (fun_friday, payment_reminder, vacation_closure, tax_certificate, monthly_report, birthday, receipts × 3, newsletter, enrollment/welcome), invalid-date fallbacks, missing-field errors, no-parents-with-email edge cases, per-recipient exception swallowing, welcome_form redirect |
+| [`integration/test_app_form_views.py`](project/tests/integration/test_app_form_views.py) | 98 | Every email form GET page, POST `action=preview` (JSON HTML), `test_send` with/without EMAIL_TEST_* env vars, main send-to-parents for every form (fun_friday, payment_reminder, vacation_closure, tax_certificate, monthly_report, birthday, receipts × 3, newsletter, enrollment/welcome), Fun Friday persist-for-Monday-14:30 + immediate drain when the slot passed (v1.14.2), invalid-date fallbacks, missing-field errors, no-parents-with-email edge cases, per-recipient exception swallowing, welcome_form redirect |
 | [`integration/test_views.py`](project/tests/integration/test_views.py) | 54 | Cross-cutting top-level HTTP coverage: auth flow, dashboard, `all_info`, student/parent list + detail + create + search, payment list + create + detail + CRUD + stats + CSV + validation, todos + history API, management admin, email form pages (parametrized), enrollment API, error pages (parametrized), schedule, Fun Friday, support |
 | [`integration/test_payment_views.py`](project/tests/integration/test_payment_views.py) | 37 | All HTTP payment endpoints: list (search, stats), create (+ invalid parent + unexpected exception), detail-view (+ 404), update (JSON + FormData + all error branches), delete (success + exception 500), deactivate (success + exception 400), quick-complete (success + invalid method + broken JSON), get-details (success + exception), search payments/parents (short query + hits), validate student-parent (all branches), export DB to Excel |
 | [`integration/test_student_views.py`](project/tests/integration/test_student_views.py) | 23 | `StudentListView` (search, exclude inactive, context), `StudentDetailView` (parents visible, 404), `StudentCreateView` (form + adult mode + success + full POST + error paths including invalid parent, existing-parent mode, create_sibling flag, email-task swallow), `search_students` JSON endpoint (results + short-query empty) |
@@ -2060,21 +2104,41 @@ Within each file, related tests are grouped into classes. Where a large file abs
 
 ### Coverage Report
 
-Live snapshot from the last full run (`make test coverage`):
+Live snapshot from the last full run (`make test`) — files below 100% coverage:
 
-| Suite | Count | Notes |
-|-------|-------|-------|
-| Unit tests (`project/tests/unit/`) | ~570 | Models, services, tasks, helpers, template rendering |
-| Integration tests (`project/tests/integration/`) | ~380 | Views, middleware, auth flows, portal + webhook endpoints |
-| **Total** | **955+** | All green on PostgreSQL AND SQLite (pre-existing ordering flakes fixed in v1.13) |
+| File | Stmts | Miss | Cover | Missing lines |
+| --- | --- | --- | --- | --- |
+| `billing/models.py` | 210 | 22 | 90% | 295-305, 388, 393, 525-551, 564, 566, 578 |
+| `billing/services/enrollment_service.py` | 86 | 5 | 94% | 137, 147-150, 180 |
+| `billing/services/payment_service.py` | 90 | 3 | 97% | 39, 42, 49 |
+| `billing/services/stripe_service.py` | 102 | 3 | 97% | 139-140, 168 |
+| `billing/tasks.py` | 33 | 5 | 85% | 40-45 |
+| `comms/services/email_service.py` | 62 | 1 | 98% | 57 |
+| `comms/services/sms_service.py` | 49 | 3 | 94% | 56, 61-62 |
+| `comms/tasks.py` | 237 | 3 | 99% | 383, 474, 623 |
+| `core/audit_models.py` | 25 | 1 | 96% | 66 |
+| `core/audit_signals.py` | 94 | 6 | 94% | 112, 118, 134, 145-146, 151 |
+| `core/context_processors.py` | 31 | 1 | 97% | 22 |
+| `core/middleware.py` | 81 | 5 | 94% | 52-53, 167, 212-213 |
+| `core/models.py` | 116 | 4 | 97% | 48, 100, 197, 217 |
+| `core/schedule_utils.py` | 24 | 9 | 62% | 23, 35, 40-46 |
+| `core/services/google_sheets_service.py` | 99 | 9 | 91% | 74-76, 112-118 |
+| `core/transactions.py` | 19 | 1 | 95% | 28 |
+| `core/views/app_forms.py` | 613 | 45 | 93% | 50, 137-139, 151-153, 167-170, … |
+| `core/views/auth.py` | 166 | 18 | 89% | 44-47, 178, 182-198, 249, 284, 336-345 |
+| `core/views/dashboard.py` | 114 | 6 | 95% | 103-110, 151, 167 |
+| `core/views/expenses.py` | 83 | 6 | 93% | 52, 55-56, 84, 102-103 |
+| `core/views/parent_portal.py` | 100 | 3 | 97% | 142, 169, 189 |
+| `core/views/parents.py` | 26 | 3 | 88% | 24-29 |
+| `core/views/payments.py` | 239 | 7 | 97% | 181-186, 341-342, 370-371 |
+| `core/views/students.py` | 325 | 12 | 96% | 54-55, 104, 168, 214-215, 348, 356, 572, 575-577 |
+| `core/views/testing_tools.py` | 145 | 19 | 87% | 138, 140, 229, 247-248, 271-315 |
+| `core/views/two_factor.py` | 90 | 9 | 90% | 38, 49-50, 170-172, 177-178, 193 |
+| `core/views/waiting_list.py` | 108 | 7 | 94% | 95-99, 153, 283 |
+| `students/models.py` | 206 | 3 | 99% | 311, 327-328 |
+| `students/parent_portal_models.py` | 41 | 1 | 98% | 44 |
 
-Total coverage is **~96 %** across ~4,200 statements. Coverage is enforced at three levels: pre-commit hook (≥ 75 %), CI hard floor (≥ 75 %), and CI warning (< 90 %). The remaining uncovered lines are mostly:
-
-- `core/views/app_forms.py` — rare error branches in admin-facing email forms (44 uncovered / 615 stmts)
-- `core/views/auth.py` — OAuth-only branches that require a real Google response (15 uncovered)
-- Defensive exception fallbacks that are hard to trigger without breaking DB connectivity
-
-**53+ files** have 100 % coverage (services, models, migrations, tasks). New v1.13 code (`two_factor_service`, `two_factor` views, `returning_student` fee logic) has explicit happy-path + error-path tests for every branch.
+**54 files** have 100% coverage (skipped above). Total coverage: **95%** across 4,702 statements. Coverage is **very good**. Coverage is enforced at three levels: pre-commit hook (≥ 75%), CI hard floor (≥ 75%), and CI warning (< 90%).
 
 ---
 
@@ -2100,6 +2164,7 @@ All migrations were regenerated from scratch during the v1.0.0 multi-app split.
 | `core` | `0002` | UniqueConstraint for FunFridayAttendance and ScheduleSlot | `core.0001`, `students.0002` |
 | `core` | `0003_qa_backlog_and_config` | QA backlog model and config fields | `core.0002` |
 | `core` | `0004_add_audit_log` | `AuditLog` model + expanded HistoryLog action choices (v1.10) | `core.0003` |
+| `core` | `0005_funfridayscheduledsend` | `FunFridayScheduledSend` — persisted scheduled Fun Friday announcements (v1.14.2) | `core.0004` |
 | `comms` | — | (no models) | — |
 
 ```bash
@@ -2650,7 +2715,7 @@ make up                        # Start Docker (PostgreSQL + Redis + Django + Cel
 1. Work on `development` (or a short-lived branch off `development`)
 2. Make changes following the conventions below
 3. Run `make pc-run` — Ruff + mypy + bandit all pass, offers to auto-bump the patch version on success, and auto-stages `uv.lock` if regenerated
-4. Run `make test` — all 985 tests must pass (PostgreSQL via Docker, parallel, with coverage)
+4. Run `make test` — all 1,008 tests must pass (PostgreSQL via Docker, parallel, with coverage)
 5. `git commit` with a message like `v1.0.6 - Short description` (version comes first — conventions match every other commit in the project)
 6. `git push origin development`
 7. CI runs automatically on your push (see [CI/CD](#cicd--github-actions))

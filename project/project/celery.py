@@ -60,6 +60,13 @@ app.conf.beat_schedule = {
         "schedule": crontab(hour=20, minute=0, day_of_month=28),
         "options": {"queue": "emails"},
     },
+    # Fun Friday announcements — drain due FunFridayScheduledSend rows daily at
+    # 14:30 (rows are scheduled for Monday 14:30, so this fires them on time)
+    "send-due-fun-friday-emails": {
+        "task": "comms.tasks.send_due_fun_friday_emails_task",
+        "schedule": crontab(hour=14, minute=30),
+        "options": {"queue": "emails"},
+    },
     # QA backlog housekeeping — delete tasks done for >30 days, daily at 07:00
     "cleanup-done-backlog-tasks": {
         "task": "core.tasks.cleanup_done_backlog_tasks",

@@ -68,6 +68,17 @@ python manage.py generate_payments --dry-run    # Preview only
 
 Generates pending payments for all active enrollments. Monthly students get one per month (Sep-Jun). Quarterly students get one per quarter (Oct, Jan, Apr). Skips if payment already exists for that period.
 
+### `materialize_recurring_expenses`
+
+```bash
+python manage.py materialize_recurring_expenses                    # Monthly templates (1st-of-month job)
+python manage.py materialize_recurring_expenses --month 3 --year 2027
+python manage.py materialize_recurring_expenses --daily            # Weekly + yearly templates (daily job)
+python manage.py materialize_recurring_expenses --daily --date 2027-03-15
+```
+
+Wraps the two recurring-expense Celery tasks (`materialize_recurring_expenses_task` / `_daily_task`) so external schedulers (Cloud Scheduler → Cloud Run Jobs in production) can run them without Celery Beat. Both paths are idempotent.
+
 ## URL Patterns (billing/urls.py)
 
 Payment CRUD, enrollment API, management panel, search/statistics, CSV/Excel export. 20 URL patterns total.

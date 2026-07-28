@@ -134,6 +134,21 @@ docker compose up -d --build
 
 ## 3. Production (Cloud Run + Cloud SQL)
 
+> **Database rollout plan (Neon first, then Cloud SQL):** the production database will
+> initially be prototyped on [Neon](https://neon.tech) (serverless PostgreSQL, free tier)
+> instead of Cloud SQL — the app is agnostic, it only sees `DATABASE_URL`. Once the whole
+> production stack is verified working end-to-end, we will migrate to the Cloud SQL
+> instance described below **before introducing any real data**, so the switch is a plain
+> `DATABASE_URL` swap with no data migration. Notes for the Neon phase:
+>
+> - Use Neon's **direct** (non-pooled) connection string — `settings.py` uses
+>   `CONN_MAX_AGE=600`, which doesn't mix with Neon's transaction-mode PgBouncer pooler.
+> - Neon's closest region is AWS Frankfurt (`eu-central-1`); consider deploying Cloud Run
+>   in `europe-west3` during this phase and moving it to `europe-southwest1` alongside
+>   the Cloud SQL migration.
+> - Skip the "Create Cloud SQL instance" step below until the migration; everything else
+>   in this section applies unchanged.
+
 ### Architecture
 
 ```
@@ -314,7 +329,26 @@ gcloud run jobs execute fiveaday-migrate --region=$REGION --wait
 ### Celery Beat → Cloud Scheduler
 
 Each Celery Beat periodic task becomes a Cloud Scheduler job that triggers a Cloud Run Job running a
-Django management command. This requires no changes to the existing management commands.
+Django management command. Every Beat task has a command wrapper (they run the task synchronously
+via `.apply()` — Cloud Run Jobs need `CELERY_TASK_ALWAYS_EAGER=True` so nested `.delay()` calls also
+run inline):
+
+| Beat task | Management command | Schedule (Europe/Madrid) | Cron |
+|---|---|---|---|
+| `generate_monthly_payments_task` | `generate_payments` | 1st of month, 06:00 | `0 6 1 * *` |
+| `materialize_recurring_expenses_daily_task` | `materialize_recurring_expenses --daily` | daily, 06:15 | `15 6 * * *` |
+| `materialize_recurring_expenses_task` | `materialize_recurring_expenses` | 1st of month, 06:30 | `30 6 1 * *` |
+| `send_birthday_emails_task` | `send_birthday_emails` | daily, 08:00 | `0 8 * * *` |
+| `send_payment_reminders` | `send_payment_reminders` | Mondays, 09:00 | `0 9 * * 1` |
+| `send_due_fun_friday_emails_task` | `send_due_fun_friday_emails` | daily, 14:30 | `30 14 * * *` |
+| `send_monthly_report_task` | `send_monthly_report` | 28th of month, 20:00 | `0 20 28 * *` |
+| `cleanup_done_backlog_tasks` | `cleanup_backlog_tasks` | QA/testing env only — skip in production | — |
+
+> **Fun Friday announcements** are NOT sent with `apply_async(eta=...)` (the ETA is silently
+> ignored in eager mode, which would send immediately). The form persists a
+> `FunFridayScheduledSend` row scheduled for Monday 14:30 of the event week; the
+> `send_due_fun_friday_emails` job drains due rows and marks them sent (idempotent). If the
+> Monday slot already passed when the event is created, the app drains immediately on its own.
 
 #### Step 1 — Create a reusable Cloud Run Job per task
 
@@ -324,21 +358,25 @@ gcloud run jobs create fiveaday-generate-payments \
   --image=$IMAGE \
   --region=$REGION \
   --add-cloudsql-instances=$PROJECT_ID:$REGION:fiveaday-db \
-  --set-env-vars="DATABASE_URL=..." \
+  --set-env-vars="DATABASE_URL=...,DJANGO_ENV=production,DJANGO_DEBUG=False,CELERY_TASK_ALWAYS_EAGER=True" \
   --command="python" \
   --args="project/manage.py,generate_payments"
 
-# Example: send birthday emails
+# Example: send birthday emails (email-sending jobs also need the email secrets)
 gcloud run jobs create fiveaday-birthday-emails \
   --image=$IMAGE \
   --region=$REGION \
   --add-cloudsql-instances=$PROJECT_ID:$REGION:fiveaday-db \
-  --set-env-vars="DATABASE_URL=..." \
+  --set-env-vars="DATABASE_URL=...,DJANGO_ENV=production,DJANGO_DEBUG=False,CELERY_TASK_ALWAYS_EAGER=True" \
+  --set-secrets="EMAIL_HOST_USER=EMAIL_HOST_USER:latest,EMAIL_SECRET=EMAIL_SECRET:latest" \
   --command="python" \
   --args="project/manage.py,send_birthday_emails"
+
+# Commands with flags pass them as extra args, e.g. the daily expense materializer:
+#   --args="project/manage.py,materialize_recurring_expenses,--daily"
 ```
 
-Repeat for each periodic task. Reuse the same `--image` and `--add-cloudsql-instances` flags.
+Repeat for each row of the table. Reuse the same `--image` and `--add-cloudsql-instances` flags.
 
 #### Step 2 — Schedule each job with Cloud Scheduler
 

@@ -187,35 +187,39 @@ Esta semana haremos manualidades creativas con materiales reciclados.
             messages.warning(request, "⚠️ No hay padres con email para enviar")
             return redirect("home")
 
-        # Don't send now — schedule the announcement for 14:30 on the MONDAY of
-        # the target Friday's week (e.g. a Friday on the 17th → Monday the 13th
-        # at 14:30). If that moment has already passed, Celery sends it ASAP.
+        # Don't send now — persist the announcement scheduled for 14:30 on the
+        # MONDAY of the target Friday's week (e.g. a Friday on the 17th →
+        # Monday the 13th at 14:30). A DB row (not apply_async(eta=...)) so it
+        # survives eager mode: send_due_fun_friday_emails_task drains due rows
+        # (Celery Beat in dev/testing, Cloud Scheduler job in production). If
+        # the moment has already passed, drain immediately.
         import datetime as _dt
 
         from django.utils import timezone as _tz
 
-        from comms.tasks import send_fun_friday_emails_task
+        from comms.tasks import send_due_fun_friday_emails_task
+        from core.models import FunFridayScheduledSend
 
         monday = event_date - timedelta(days=event_date.weekday())
         send_at = _dt.datetime.combine(monday, _dt.time(14, 30))
         if _tz.is_naive(send_at):
             send_at = _tz.make_aware(send_at, _tz.get_current_timezone())
 
-        send_fun_friday_emails_task.apply_async(
-            kwargs={
-                "recipients": parent_emails,
-                "day_name": day_name,
-                "day_number": event_date.day,
-                "month": month_name,
-                "start_time": start_time,
-                "end_time": end_time,
-                "activity_description": activity_description,
-                "minimum_age": min_age_int,
-                "maximum_age": max_age_int,
-                "meeting_point": meeting_point if meeting_point else None,
-            },
-            eta=send_at,
+        FunFridayScheduledSend.objects.create(
+            recipients=parent_emails,
+            day_name=day_name,
+            day_number=event_date.day,
+            month=month_name,
+            start_time=start_time,
+            end_time=end_time,
+            activity_description=activity_description,
+            minimum_age=min_age_int,
+            maximum_age=max_age_int,
+            meeting_point=meeting_point if meeting_point else None,
+            scheduled_for=send_at,
         )
+        if send_at <= _tz.now():
+            send_due_fun_friday_emails_task.delay()
 
         HistoryLog.log(
             "email_scheduled",
