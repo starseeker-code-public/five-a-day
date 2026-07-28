@@ -699,7 +699,7 @@ wheels = [
 
 [[package]]
 name = "five-a-day"
-version = "1.14.2"
+version = "1.14.3"
 source = { editable = "." }
 dependencies = [
     { name = "celery" },
@@ -758,7 +758,7 @@ requires-dist = [
     { name = "django-debug-toolbar", specifier = ">=6.0.0" },
     { name = "django-environ", specifier = ">=0.12.0,<1" },
     { name = "django-extensions", specifier = ">=4.1" },
-    { name = "django-filter", specifier = ">=25.1,<26" },
+    { name = "django-filter", specifier = ">=25.1,<27" },
     { name = "django-gsheets", specifier = ">=0.0.10,<1" },
     { name = "django-redis", specifier = ">=6.0.0,<7" },
     { name = "django-storages", specifier = ">=1.14.6,<2" },

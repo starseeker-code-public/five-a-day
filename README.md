@@ -20,7 +20,7 @@ Built to centralize student records, automate billing cycles, and streamline par
 ### Project Status
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v1.14.2-brightgreen?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-v1.14.3-brightgreen?style=flat-square" alt="Version">
   &nbsp;|&nbsp;
   <a href="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml?query=branch%3Amain"><img src="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml/badge.svg?branch=main&style=flat-square" alt="CI main"></a>
   &nbsp;|&nbsp;
@@ -41,9 +41,9 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 | Version | Date | Description |
 |---------|------|-------------|
-| **v1.14.2** | 2026-07-14 | Beat-task command wrappers + persisted Fun Friday sends |
+| **v1.14.3** | 2026-07-28 | Dependency bumps + main-branch history reconciliation |
+| v1.14.2 | 2026-07-14 | Beat-task command wrappers + persisted Fun Friday sends |
 | v1.14.1 | 2026-07-12 | Email restyle + dark-mode emails |
-| v1.14.0 | 2026-07-12 | Comprehensive in-app help guides for every view |
 
 ---
 
@@ -143,8 +143,23 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 ## Version History & Roadmap
 
-<details id="v1142" open>
-<summary><strong>v1.14.2 — Beat-task command wrappers + persisted Fun Friday sends (current)</strong></summary>
+<details id="v1143" open>
+<summary><strong>v1.14.3 — Dependency bumps + main-branch history reconciliation (current)</strong></summary>
+
+**Dependency updates (Dependabot)**
+
+- `dawidd6/action-send-mail` v17 → **v18** in the deploy-notification workflows (#32)
+- `ossf/scorecard-action` 2.4.0 → **2.4.4** in the Scorecard supply-chain workflow (#33)
+- `django-filter` constraint relaxed from `>=25.1,<26` to `>=25.1,<27` (#31)
+
+**Branch-history reconciliation**
+
+- `main` had accumulated squash-merge commits (up to v1.0.10) that were not ancestors of `testing`/`development`, so the `testing` → `main` release PR reported merge conflicts (`base.html`, `settings.py`, `pyproject.toml`, `uv.lock`, admin templates, favicons). `main` was merged into `development` with the `ours` strategy — a content-verified no-op (main's tree was byte-identical to development's own v1.0.10 commit) that records `main` as an ancestor, so future `testing` → `main` PRs merge cleanly.
+
+</details>
+
+<details id="v1142">
+<summary><strong>v1.14.2 — Beat-task command wrappers + persisted Fun Friday sends</strong></summary>
 
 **Production-readiness: periodic tasks without Celery Beat**
 
@@ -2682,7 +2697,7 @@ Configure at **Settings → Secrets and variables → Actions**:
 | `development → testing` merged + PR opened to `main` | `OWNER_EMAILS` (secret) | auto-merge.yml |
 | New commit on `main` (production ready to deploy) | `hellofiveaday@gmail.com` (hardcoded) | notify-production.yml |
 
-Both use Gmail SMTP via the `dawidd6/action-send-mail@v17` action. Emails include HTML formatting, links to the commit/PR, and actionable next steps.
+Both use Gmail SMTP via the `dawidd6/action-send-mail@v18` action. Emails include HTML formatting, links to the commit/PR, and actionable next steps.
 
 ### Dependabot
 
