@@ -22,6 +22,8 @@ from dataclasses import dataclass
 
 from django.conf import settings
 
+from comms.log_safe import safe_log
+
 logger = logging.getLogger(__name__)
 
 
@@ -70,8 +72,12 @@ class SmsService:
             msg = client.messages.create(body=body, from_=self.from_number, to=to)
             return SmsResult(success=True, to=to, message_sid=getattr(msg, "sid", ""))
         except Exception as e:  # noqa: BLE001 — network / API failure surfaces as result
-            logger.warning("SMS send failed to %s: %s", to, e)
-            return SmsResult(success=False, to=to, error=str(e))
+            # `to` is caller-supplied (a Parent.phone, ultimately typed in by an
+            # admin) and the Twilio error text is remote input, so neither is
+            # safe to interpolate raw. `SmsResult.error` gets the same treatment
+            # because callers surface it in responses.
+            logger.warning("SMS send failed to %s: %s", safe_log(to), safe_log(e))
+            return SmsResult(success=False, to=to, error=safe_log(e))
 
     def send_to_parent(self, parent, body: str) -> SmsResult:
         """

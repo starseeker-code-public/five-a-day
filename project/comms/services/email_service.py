@@ -15,19 +15,9 @@ from django.conf import settings
 from django.core.mail import EmailMultiAlternatives
 from django.template.loader import render_to_string
 
+from comms.log_safe import safe_log
+
 logger = logging.getLogger(__name__)
-
-
-def _safe_log(value: object, max_len: int = 200) -> str:
-    """Single-line, length-capped rendering of a value bound for a log record.
-
-    Mirrors ``core.log_safe.safe_log``; duplicated rather than imported because
-    ``comms`` must not depend on ``core`` (see CLAUDE.md dependency flow).
-    """
-    text = str(value)
-    for char in ("\r\n", "\r", "\n", "\v", "\f", "\x1b"):
-        text = text.replace(char, " ")
-    return text[:max_len] + "..." if len(text) > max_len else text
 
 
 def get_email_config():
@@ -155,11 +145,11 @@ class EmailService:
             # Enviar email
             email.send(fail_silently=fail_silently)
 
-            logger.info("Email '%s' enviado a %s destinatario(s)", _safe_log(template_name), len(recipients))
+            logger.info("Email '%s' enviado a %s destinatario(s)", safe_log(template_name), len(recipients))
             return True
 
         except Exception:
-            logger.exception("Error enviando email de plantilla '%s'", _safe_log(template_name))
+            logger.exception("Error enviando email de plantilla '%s'", safe_log(template_name))
             if not fail_silently:
                 raise
             return False

@@ -36,6 +36,22 @@ Convenience functions for each email type. Each wraps `email_service.send_email(
 
 The **newsletter** and **enrollment receipt** templates do not have dedicated convenience functions — they are triggered directly from the `/apps/newsletter/` and receipt form views in `core/views/app_forms.py`, which call `email_service.send_email()` inline with per-recipient context.
 
+## Logging Helper (`comms/log_safe.py`)
+
+`safe_log(value, max_len=200)` — single-line, length-capped rendering for anything
+user-controlled that is about to be formatted into a log record or handed back to a
+caller. Used by `email_service` (the email template name) and `sms_service` (the
+destination number and the Twilio error, in the log *and* in `SmsResult.error`,
+which callers surface in responses).
+
+It is a deliberate near-copy of `core/log_safe.py` rather than an import: `comms`
+must not depend on `core` (see the dependency flow in [CLAUDE.md](../../CLAUDE.md)),
+and duplicating ten stdlib-only lines is cheaper than inverting that.
+
+**Caveat (v1.14.6):** this makes the code safe but does *not* clear CodeQL's
+`py/log-injection`, which treats `str.replace` as taint-preserving. Where a value
+can be coerced (an integer id) or simply left out of the record, prefer that.
+
 ## Celery Tasks (`comms/tasks.py`)
 
 All tasks have retry logic (3 retries, exponential backoff):
