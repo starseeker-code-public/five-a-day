@@ -18,6 +18,18 @@ from django.template.loader import render_to_string
 logger = logging.getLogger(__name__)
 
 
+def _safe_log(value: object, max_len: int = 200) -> str:
+    """Single-line, length-capped rendering of a value bound for a log record.
+
+    Mirrors ``core.log_safe.safe_log``; duplicated rather than imported because
+    ``comms`` must not depend on ``core`` (see CLAUDE.md dependency flow).
+    """
+    text = str(value)
+    for char in ("\r\n", "\r", "\n", "\v", "\f", "\x1b"):
+        text = text.replace(char, " ")
+    return text[:max_len] + "..." if len(text) > max_len else text
+
+
 def get_email_config():
     """
     Obtiene la configuracion de email desde settings/variables de entorno.
@@ -143,11 +155,11 @@ class EmailService:
             # Enviar email
             email.send(fail_silently=fail_silently)
 
-            logger.info(f"Email '{subject}' enviado a {len(recipients)} destinatario(s)")
+            logger.info("Email '%s' enviado a %s destinatario(s)", _safe_log(subject), len(recipients))
             return True
 
         except Exception as e:
-            logger.error(f"Error enviando email '{subject}': {str(e)}")
+            logger.error("Error enviando email '%s': %s", _safe_log(subject), _safe_log(e))
             if not fail_silently:
                 raise
             return False

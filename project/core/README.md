@@ -45,6 +45,10 @@ Student, payment, management, and email app routes live in `students/urls.py`, `
 - **`QAErrorEmailMiddleware`** (`middleware.py`) — in the QA environment, catches unhandled exceptions and emails them to `SUPPORT_EMAIL` with the full traceback. Toggleable via the `/testing/` dashboard.
 - **`qa_access_required`** (`decorators.py`) — reusable gate for `/testing/` views and endpoints. Returns 404 (not 403) unless `DJANGO_ENV=testing`, `DEBUG=False`, and the request is made by a logged-in Teacher (admin or not; resolved via `_request_teacher`). `testing_tools` + the QA API endpoints are on the non-admin whitelist so non-admin teachers can reach them too.
 
+## Logging Helpers
+
+- **`safe_log(value, max_len=200)`** (`log_safe.py`, v1.14.4) — single-line, length-capped rendering of anything user-controlled that is about to be formatted into a log record. Strips `CR`/`LF`/`VT`/`FF`/`ESC` so an attacker-supplied field can't forge extra log lines (CodeQL `py/log-injection`) or smuggle terminal escapes into a tailed log, and truncates at 200 chars so one field can't flood the log. Stdlib-only leaf module — no Django, no models — so any app can import it without a cycle. **Use it for every log call whose value comes from a request** (headers, query string, form body, URL captures). `comms/services/email_service.py` carries a module-private twin (`_safe_log`) instead of importing this, because `comms` must not depend on `core`.
+
 ## Context Processor
 
 - **`today_notifications()`** (`context_processors.py`) — injects sidebar/dashboard data into every template. In addition to `notifications_today_*` and `history_count`, it now exposes two role flags used to gate admin-only UI: **`is_admin_user`** (true for everyone except linked non-admin Teachers — dev basic-auth, OAuth, and admin Teachers all qualify) and **`is_non_admin_teacher`** (true when the session user is a linked Teacher with `admin=False`). Templates use `{% if is_admin_user %}` to hide Payments / Apps / Database from non-admin teachers and to make the Management page read-only.
@@ -102,6 +106,7 @@ Tests for core components live in `project/tests/`:
 | File | What it tests |
 | ---- | ------------- |
 | `test_context_processors.py` | `today_notifications()` — key presence, todo filtering, scheduled app logic, history count, support email, `is_admin_user` / `is_non_admin_teacher` flags |
+| `test_log_safe.py` | `safe_log()` — line-break and `ESC` stripping, non-string coercion, truncation marker, `max_len` override, boundary at exactly the limit |
 | `test_middleware.py` | `SimpleAuthMiddleware` — public paths (static, health, login, oauth, password-reset), redirect behavior, authenticated sessions |
 | `test_teacher_user_sync.py` | `Teacher.ensure_user()` (create + reuse + password set) and the `post_save` mirror signal (admin → is_staff/is_superuser, email/name sync) |
 | `test_seed_teachers_command.py` | `manage.py seed_teachers` — creation from env vars, idempotent updates, password persistence rule, gap-stop behaviour |

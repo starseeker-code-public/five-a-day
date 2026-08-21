@@ -13,6 +13,7 @@ from django.views.decorators.http import require_http_methods
 
 from billing.models import Payment
 from billing.services.stripe_service import StripeError, get_stripe_service
+from core.log_safe import safe_log
 
 logger = logging.getLogger(__name__)
 
@@ -57,9 +58,12 @@ def create_checkout_link(request, payment_id: int):
             cancel_url=cancel_url,
             customer_email=payment.parent.email if payment.parent else None,
         )
-    except StripeError as e:
-        logger.exception("Stripe checkout creation failed for payment=%s", payment_id)
-        return JsonResponse({"success": False, "error": str(e)}, status=502)
+    except StripeError:
+        logger.exception("Stripe checkout creation failed for payment=%s", safe_log(payment_id))
+        return JsonResponse(
+            {"success": False, "error": "No se pudo iniciar el pago con tarjeta."},
+            status=502,
+        )
 
     return JsonResponse({"success": True, "url": session.url, "session_id": session.id})
 

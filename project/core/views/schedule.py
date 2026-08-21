@@ -1,4 +1,5 @@
 import json
+import logging
 
 from django.db import models
 from django.http import JsonResponse
@@ -9,6 +10,8 @@ from core.models import FunFridayAttendance, HistoryLog, ScheduleSlot
 from core.schedule_utils import slot_time_range
 from core.views.students import get_last_friday, get_next_friday
 from students.models import Group, Student
+
+logger = logging.getLogger(__name__)
 
 
 def schedule_view(request):
@@ -81,8 +84,9 @@ def save_schedule_slot(request):
         )
 
         return JsonResponse({"success": True})
-    except Exception as e:
-        return JsonResponse({"success": False, "error": str(e)}, status=400)
+    except Exception:
+        logger.exception("Error saving schedule slot")
+        return JsonResponse({"success": False, "error": "No se pudo guardar el horario."}, status=400)
 
 
 def fun_friday_view(request):

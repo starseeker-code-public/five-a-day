@@ -46,7 +46,7 @@ class TestTodayNotifications:
     def test_friday_apps_included_on_friday(self, mock_date, request_obj):
         # 2026-04-17 is a Friday
         mock_date.today.return_value = date(2026, 4, 17)
-        mock_date.side_effect = lambda *args, **kw: date(*args, **kw)
+        mock_date.side_effect = date
         ctx = today_notifications(request_obj)
         app_names = [a["name"] for a in ctx["notifications_today_apps"]]
         assert "Fun Friday" in app_names
@@ -55,7 +55,7 @@ class TestTodayNotifications:
     def test_friday_apps_excluded_on_monday(self, mock_date, request_obj):
         # 2026-04-13 is a Monday
         mock_date.today.return_value = date(2026, 4, 13)
-        mock_date.side_effect = lambda *args, **kw: date(*args, **kw)
+        mock_date.side_effect = date
         ctx = today_notifications(request_obj)
         app_names = [a["name"] for a in ctx["notifications_today_apps"]]
         assert "Fun Friday" not in app_names
@@ -63,7 +63,7 @@ class TestTodayNotifications:
     @patch("core.context_processors.date")
     def test_monthly_apps_on_day_1(self, mock_date, request_obj):
         mock_date.today.return_value = date(2026, 5, 1)
-        mock_date.side_effect = lambda *args, **kw: date(*args, **kw)
+        mock_date.side_effect = date
         ctx = today_notifications(request_obj)
         app_names = [a["name"] for a in ctx["notifications_today_apps"]]
         assert "Pago Mensual" in app_names
@@ -71,7 +71,7 @@ class TestTodayNotifications:
     @patch("core.context_processors.date")
     def test_monthly_apps_excluded_on_day_15(self, mock_date, request_obj):
         mock_date.today.return_value = date(2026, 5, 15)
-        mock_date.side_effect = lambda *args, **kw: date(*args, **kw)
+        mock_date.side_effect = date
         ctx = today_notifications(request_obj)
         app_names = [a["name"] for a in ctx["notifications_today_apps"]]
         assert "Pago Mensual" not in app_names
@@ -123,7 +123,7 @@ class TestContextProcessorsUnauthed:
         # will fire.
         with patch("core.context_processors.date") as mock_date:
             mock_date.today.return_value = date(2026, 7, 7)  # Tuesday, 7th
-            mock_date.side_effect = lambda *a, **kw: date(*a, **kw)
+            mock_date.side_effect = date
             ctx = today_notifications(req)
         assert ctx["notifications_count"] == 0
 

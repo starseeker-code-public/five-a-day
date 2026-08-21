@@ -50,6 +50,10 @@ class QAErrorEmailMiddleware:
             try:
                 body_preview = request.body[:500].decode("utf-8", errors="replace")
             except Exception:
+                # Best-effort only. `request.body` raises if the stream was
+                # already consumed (file uploads, streaming parsers); the error
+                # report is still worth sending without the body preview, and
+                # this handler must never raise while handling an exception.
                 pass
 
             subject = f"[ERROR] {type(exception).__name__} at {path}"

@@ -1,4 +1,5 @@
 import json
+import logging
 from datetime import datetime
 
 from django.http import JsonResponse
@@ -6,6 +7,8 @@ from django.shortcuts import get_object_or_404
 from django.views.decorators.http import require_http_methods
 
 from core.models import HistoryLog, TodoItem
+
+logger = logging.getLogger(__name__)
 
 
 @require_http_methods(["POST"])
@@ -35,8 +38,9 @@ def create_todo(request):
                 },
             }
         )
-    except (ValueError, json.JSONDecodeError) as e:
-        return JsonResponse({"success": False, "error": str(e)}, status=400)
+    except (ValueError, json.JSONDecodeError):
+        logger.exception("Error creating todo")
+        return JsonResponse({"success": False, "error": "Datos de tarea inválidos."}, status=400)
 
 
 @require_http_methods(["POST"])

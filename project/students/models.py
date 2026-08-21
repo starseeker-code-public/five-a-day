@@ -312,8 +312,9 @@ class StudentParent(models.Model):
 
 
 # v1.9 — parent portal magic-link tokens. Kept in a sibling module so the
-# top-level student data model stays focused.
-from students.parent_portal_models import ParentSessionToken  # noqa: E402,F401
+# top-level student data model stays focused. Re-exported here (and named in
+# `__all__`) so `from students.models import ParentSessionToken` keeps working.
+from students.parent_portal_models import ParentSessionToken  # noqa: E402
 
 
 @receiver(pre_save, sender=Student)
@@ -340,3 +341,15 @@ def _notify_group_spot_freed(sender, instance, created, **kwargs):
     from core.views.waiting_list import notify_capacity_freed
 
     notify_capacity_freed(instance)
+
+
+# Public model surface of this module, including the `ParentSessionToken`
+# re-export above.
+__all__ = [
+    "Group",
+    "Parent",
+    "ParentSessionToken",
+    "Student",
+    "StudentParent",
+    "Teacher",
+]

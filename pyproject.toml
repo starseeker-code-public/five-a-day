@@ -1,6 +1,6 @@
 [project]
 name = "five-a-day"
-version = "1.14.3"
+version = "1.14.4"
 description = "Five a Day management software"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -8,7 +8,9 @@ authors = [
     { name = "Joaquin Hernandez Martinez", email = "proyecto_noether@outlook.com" },
 ]
 dependencies = [
-    "django>=5.2.15",
+    # Upper-bounded at the next major so a Django 7 never lands unreviewed
+    # (this was the only unbounded dependency). PYSEC-2026-3717 fixed in 6.0.8.
+    "django>=6.0.8,<7",
     "pandas>=2.3.1,<4",
     "django-filter>=25.1,<27",
     "djangorestframework>=3.16.1,<4",
@@ -32,9 +34,13 @@ dependencies = [
     "idna>=3.15",
     "urllib3>=2.7.0",
     # Transitive via django-gsheets → google-api-python-client → google-auth.
-    # GHSA-537c-gmf6-5ccf fixed in 48.0.1.
-    "cryptography>=48.0.1",
-    "reportlab>=5.0.0",
+    # GHSA-537c-gmf6-5ccf fixed in 48.0.1; GHSA-g6cj-pr64-35w5 (PKCS#7
+    # Bleichenbacher oracle, high) fixed in 50.0.0.
+    "cryptography>=50.0.0,<51",
+    "reportlab>=5.0.0,<6",
+    # Transitive via django (sqlparse powers the SQL formatter used by
+    # django-debug-toolbar). PYSEC-2026-3696/3697/3698/3699 fixed in 0.6.0.
+    "sqlparse>=0.6.0,<1",
     "pyotp>=2.10.0",
     "qrcode>=8.2",
 ]
@@ -54,8 +60,8 @@ dev = [
     "coverage-badge>=1.1",
     "pip-audit>=2.7",
     # Transitive via pip-audit → pip-api; pinned to patched range (CVE-2026-3219,
-    # CVE-2026-6357, PYSEC-2026-196 all fixed in 26.1+; 26.1.2 covers all three).
-    "pip>=26.1.2",
+    # CVE-2026-6357, PYSEC-2026-196 fixed in 26.1+; PYSEC-2026-3721 in 26.2).
+    "pip>=26.2",
 ]
 
 [build-system]
