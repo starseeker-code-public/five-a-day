@@ -41,7 +41,7 @@ def add_fun_friday_attendance(request, student_id):
         obj, created = FunFridayAttendance.objects.get_or_create(student=student, date=parsed_date)
         return JsonResponse({"success": True, "created": created, "date": str(parsed_date)})
     except Exception:
-        logger.exception("Error adding Fun Friday attendance for student %s", student_id)
+        logger.exception("Error adding Fun Friday attendance for student %d", int(student_id))
         return JsonResponse({"success": False, "error": "Fecha inválida o error al guardar."}, status=400)
 
 
@@ -55,5 +55,5 @@ def remove_fun_friday_attendance(request, student_id):
         deleted, _ = FunFridayAttendance.objects.filter(student=student, date=parsed_date).delete()
         return JsonResponse({"success": True, "deleted": deleted > 0})
     except Exception:
-        logger.exception("Error removing Fun Friday attendance for student %s", student_id)
+        logger.exception("Error removing Fun Friday attendance for student %d", int(student_id))
         return JsonResponse({"success": False, "error": "Fecha inválida o error al borrar."}, status=400)

@@ -9,14 +9,13 @@ Run's multi-instance setup without any code change.
 
 from __future__ import annotations
 
+import ipaddress
 import logging
 from functools import wraps
 
 from django.conf import settings
 from django.core.cache import cache
 from django.http import HttpResponse
-
-from core.log_safe import safe_log
 
 logger = logging.getLogger(__name__)
 
@@ -25,10 +24,20 @@ DEFAULT_LIMIT = 5
 
 
 def _client_ip(request) -> str:
+    """Best-effort client IP, validated to a literal address.
+
+    `X-Forwarded-For` is client-supplied and this value becomes both a cache
+    key and a log record, so it is parsed through `ipaddress` rather than
+    trusted verbatim: that rejects anything containing a separator, a line
+    break, or arbitrary text, and normalises the representation so the same
+    client can't occupy several rate-limit buckets.
+    """
     fwd = request.META.get("HTTP_X_FORWARDED_FOR")
-    if fwd:
-        return fwd.split(",")[0].strip()
-    return request.META.get("REMOTE_ADDR", "unknown")
+    raw = fwd.split(",")[0].strip() if fwd else request.META.get("REMOTE_ADDR", "")
+    try:
+        return ipaddress.ip_address(raw).compressed
+    except ValueError:
+        return "unknown"
 
 
 def _cache_key(scope: str, ip: str) -> str:
@@ -82,7 +91,7 @@ def rate_limit(
                 logger.info(
                     "rate limit exceeded: scope=%s ip=%s current=%s",
                     scope,
-                    safe_log(_client_ip(request)),
+                    _client_ip(request),
                     current,
                 )
                 return HttpResponse(

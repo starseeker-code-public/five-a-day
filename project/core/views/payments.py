@@ -13,7 +13,6 @@ from django.views.decorators.http import require_http_methods
 
 from billing import constants
 from billing.models import Payment
-from core.log_safe import safe_log
 from core.models import HistoryLog
 from students.models import Parent, Student
 
@@ -354,16 +353,26 @@ def update_payment(request, payment_id):
             }
         )
 
-    except (InvalidOperation, ValidationError) as e:
+    except InvalidOperation:
+        # A Decimal parse failure. Its str() is internal noise ("[<class
+        # 'decimal.ConversionSyntax'>]"), useless to the user and the last
+        # exception text still reaching a response from this view.
+        logger.exception("Invalid amount submitted for payment %d", int(payment_id))
+        error_msg = "El importe introducido no es válido."
         if request.content_type == "application/json":
-            return JsonResponse(
-                {"success": False, "error": str(e)},
-                status=400,
-            )
-        messages.error(request, str(e))
+            return JsonResponse({"success": False, "error": error_msg}, status=400)
+        messages.error(request, error_msg)
+        return redirect("payments_list")
+    except ValidationError as e:
+        # `messages` is Django's user-facing validation text -- written to be
+        # shown, unlike a raw exception repr.
+        error_msg = " ".join(e.messages)
+        if request.content_type == "application/json":
+            return JsonResponse({"success": False, "error": error_msg}, status=400)
+        messages.error(request, error_msg)
         return redirect("payments_list")
     except Exception:
-        logger.exception("Error updating payment %s", safe_log(payment_id))
+        logger.exception("Error updating payment %d", int(payment_id))
         error_msg = "Error al actualizar el pago. Inténtalo de nuevo."
         if request.content_type == "application/json":
             return JsonResponse({"success": False, "error": error_msg}, status=500)
@@ -390,7 +399,7 @@ def delete_payment(request, payment_id):
         )
 
     except Exception:
-        logger.exception("Error deleting payment %s", safe_log(payment_id))
+        logger.exception("Error deleting payment %d", int(payment_id))
 
         return JsonResponse(
             {"success": False, "error": "Error al eliminar el pago."},
@@ -412,7 +421,7 @@ def deactivate_payment(request, payment_id):
         return JsonResponse({"success": True, "message": "Pago desactivado exitosamente."})
 
     except Exception:
-        logger.exception("Error deactivating payment %s", safe_log(payment_id))
+        logger.exception("Error deactivating payment %d", int(payment_id))
         return JsonResponse(
             {"success": False, "message": "Error al desactivar el pago."},
             status=400,
@@ -456,7 +465,7 @@ def quick_complete_payment(request, payment_id):
         )
 
     except Exception:
-        logger.exception("Error completing payment %s", safe_log(payment_id))
+        logger.exception("Error completing payment %d", int(payment_id))
         return JsonResponse(
             {"success": False, "error": "Error al completar el pago."},
             status=500,
@@ -497,7 +506,7 @@ def get_payment_details(request, payment_id):
         )
 
     except Exception:
-        logger.exception("Error fetching payment details for %s", safe_log(payment_id))
+        logger.exception("Error fetching payment details for %d", int(payment_id))
         return JsonResponse(
             {
                 "success": False,

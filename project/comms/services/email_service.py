@@ -155,11 +155,11 @@ class EmailService:
             # Enviar email
             email.send(fail_silently=fail_silently)
 
-            logger.info("Email '%s' enviado a %s destinatario(s)", _safe_log(subject), len(recipients))
+            logger.info("Email '%s' enviado a %s destinatario(s)", _safe_log(template_name), len(recipients))
             return True
 
-        except Exception as e:
-            logger.error("Error enviando email '%s': %s", _safe_log(subject), _safe_log(e))
+        except Exception:
+            logger.exception("Error enviando email de plantilla '%s'", _safe_log(template_name))
             if not fail_silently:
                 raise
             return False

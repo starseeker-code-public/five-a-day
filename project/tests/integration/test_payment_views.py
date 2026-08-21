@@ -177,6 +177,34 @@ class TestUpdatePayment:
         )
         assert response.status_code == 400
 
+    def test_invalid_amount_does_not_leak_decimal_internals(
+        self, authenticated_client, pending_payment, student_with_parent, parent
+    ):
+        """v1.14.5 — the InvalidOperation branch returns a written-for-humans
+        message instead of `str(exc)`, which was Decimal's internal
+        `[<class 'decimal.ConversionSyntax'>]` repr.
+
+        A linked student/parent pair is required: the parent-association
+        ValidationError is raised before the amount is parsed, so a bare
+        `{"amount": ...}` payload never reaches `Decimal()`.
+        """
+        response = authenticated_client.post(
+            self._url(pending_payment.id),
+            data=json.dumps(
+                {
+                    "student_id": student_with_parent.id,
+                    "parent_id": parent.id,
+                    "amount": "not-a-number",
+                }
+            ),
+            content_type="application/json",
+        )
+        assert response.status_code == 400
+        error = response.json()["error"]
+        assert error == "El importe introducido no es válido."
+        for leak in ("ConversionSyntax", "decimal", "Traceback", "class '"):
+            assert leak not in error
+
     def test_json_invalid_date_returns_400(self, authenticated_client, pending_payment):
         response = authenticated_client.post(
             self._url(pending_payment.id),

@@ -20,7 +20,7 @@ Built to centralize student records, automate billing cycles, and streamline par
 ### Project Status
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v1.14.4-brightgreen?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-v1.14.5-brightgreen?style=flat-square" alt="Version">
   &nbsp;|&nbsp;
   <a href="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml?query=branch%3Amain"><img src="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml/badge.svg?branch=main&style=flat-square" alt="CI main"></a>
   &nbsp;|&nbsp;
@@ -41,9 +41,9 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 | Version | Date | Description |
 |---------|------|-------------|
-| **v1.14.4** | 2026-08-21 | Code-scanning cleanup + CVE dependency bumps |
+| **v1.14.5** | 2026-08-21 | Log-injection remediation + CodeQL scoping |
+| v1.14.4 | 2026-08-21 | Code-scanning cleanup + CVE dependency bumps |
 | v1.14.3 | 2026-07-28 | Dependency bumps + main-branch history reconciliation |
-| v1.14.2 | 2026-07-14 | Beat-task command wrappers + persisted Fun Friday sends |
 
 ---
 
@@ -144,8 +144,47 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 ## Version History & Roadmap
 
-<details id="v1144" open>
-<summary><strong>v1.14.4 — Code-scanning cleanup + CVE dependency bumps (current)</strong></summary>
+<details id="v1145" open>
+<summary><strong>v1.14.5 — Log-injection remediation + CodeQL scoping (current)</strong></summary>
+
+Follow-up to v1.14.4. That release cut open CodeQL alerts from 46 to 16, but the
+`safe_log()` sanitizer introduced there **did not** satisfy CodeQL's
+`py/log-injection` query: the query treats `str.replace` as taint-preserving, so
+stripping `CR`/`LF` makes the code genuinely safe without clearing the alert.
+Worse, the `logger.exception(...)` calls added to fix stack-trace exposure
+introduced seven *new* log-injection alerts of their own. This release closes
+that out properly.
+
+**Log injection — coerce instead of sanitize (9 alerts)**
+
+- Every id logged in an error path arrives through an `<int:...>` URL converter, so `logger.exception("... %d", int(payment_id))` is a runtime no-op that breaks the taint outright — far stronger than scrubbing a string. Applied in `payments.py` (5 sites), `stripe_views.py`, `fun_friday_attendance.py` (2 sites) and `waiting_list.py`.
+- `safe_log()` and `core/log_safe.py` are retained: still the right tool for values that genuinely are free-form text.
+
+**Log injection — stop logging the value (4 alerts)**
+
+- `rate_limit._client_ip()` now parses `X-Forwarded-For` through `ipaddress` and falls back to `"unknown"`. The header is client-supplied and fed **both** a cache key and a log record, so a malformed value could pollute the rate-limit key space as well as the log; addresses are also normalised so one client can't occupy several buckets by varying the textual form.
+- The parent portal no longer logs the address on an unregistered-email login attempt. That endpoint exists specifically to not reveal whether an email is registered, and the log was leaking exactly that.
+- `EmailService` logs `template_name` (developer-controlled) instead of `subject` (built from user input by some callers) — also more useful for ops, since it names the email.
+
+**Stack-trace exposure (1 alert)**
+
+- `update_payment`'s combined `except (InvalidOperation, ValidationError)` is split. `InvalidOperation` was returning Decimal's internal `[<class 'decimal.ConversionSyntax'>]` repr to the browser; it now returns "El importe introducido no es válido." `ValidationError` keeps `e.messages`, which is Django's written-for-humans validation text.
+
+**CodeQL scoping (2 alerts)**
+
+- Inline `# codeql[query-id]` suppression comments are **not honoured** by this setup, so the two added in v1.14.4 were removed rather than left implying a handled alert.
+- New `.github/codeql/codeql-config.yml` moves the query suite and adds `paths-ignore` for `scripts/` (operator utilities, never shipped in the image, never in a request path — `generate_secure_password.py` prints a secret by design) and `project/project/settings_test.py` (the Django settings star-import can't be enumerated).
+
+**Tests — 1,058 passing, 95.49 % coverage**
+
+- `test_schedule_utils.py` (27 tests) takes `core/schedule_utils.py` from 62 % to full coverage: row/day band mapping, the Friday override, duplicate-column collapsing, day ordering, out-of-range days, and group isolation. It feeds both the schedule view and the welcome email, so a regression there misinforms parents.
+- `test_rate_limit.py` gains IPv4/IPv6 normalisation, malformed-header rejection (including CR/LF payloads) and the empty-header fallback.
+- Writing the payment test surfaced a **latent bug in the existing suite**: `test_json_invalid_amount_returns_400` was passing on a 400 from the *parent-association* check and never reached `Decimal()`, so the amount-parsing branch was untested. The new test posts a linked student/parent pair to actually exercise it.
+
+</details>
+
+<details id="v1144">
+<summary><strong>v1.14.4 — Code-scanning cleanup + CVE dependency bumps</strong></summary>
 
 Clears every open CodeQL alert on the branch and the three red checks on PR #36
 (Lint / Dependency review / Trivy). No user-visible behaviour changes beyond
@@ -1824,7 +1863,7 @@ five-a-day/
 │   │   └── management/commands/  send_email, test_all_emails, plus 4 Beat-task wrappers
 │   │                             (v1.14.2 — birthday, reminders, report, Fun Friday drain)
 │   │
-│   ├── tests/                    pytest suite (1,019 tests, 95 % coverage) — unit/ + integration/
+│   ├── tests/                    pytest suite (1,058 tests, 95 % coverage) — unit/ + integration/
 │   ├── templates/registration/   Password-reset templates (form, done, confirm, complete + email body)
 │   ├── templates/admin/          Django admin overrides (branded theme)
 │   └── conftest.py               Shared fixtures (models + authenticated_client)
