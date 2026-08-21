@@ -20,7 +20,7 @@ Built to centralize student records, automate billing cycles, and streamline par
 ### Project Status
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v1.14.5-brightgreen?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-v1.14.6-brightgreen?style=flat-square" alt="Version">
   &nbsp;|&nbsp;
   <a href="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml?query=branch%3Amain"><img src="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml/badge.svg?branch=main&style=flat-square" alt="CI main"></a>
   &nbsp;|&nbsp;
@@ -41,9 +41,9 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 | Version | Date | Description |
 |---------|------|-------------|
-| **v1.14.5** | 2026-08-21 | Log-injection remediation + CodeQL scoping |
+| **v1.14.6** | 2026-08-21 | SMS log-injection fix + shared comms log helper |
+| v1.14.5 | 2026-08-21 | Log-injection remediation + CodeQL scoping |
 | v1.14.4 | 2026-08-21 | Code-scanning cleanup + CVE dependency bumps |
-| v1.14.3 | 2026-07-28 | Dependency bumps + main-branch history reconciliation |
 
 ---
 
@@ -144,8 +144,30 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 ## Version History & Roadmap
 
-<details id="v1145" open>
-<summary><strong>v1.14.5 — Log-injection remediation + CodeQL scoping (current)</strong></summary>
+<details id="v1146" open>
+<summary><strong>v1.14.6 — SMS log-injection fix + shared comms log helper (current)</strong></summary>
+
+Closes the two Copilot review threads that were blocking the v1.14.5 release PR
+(`main-protection` requires review-thread resolution).
+
+**SMS log injection**
+
+- `SmsService.send()` logged the destination number and the raw Twilio exception verbatim, and handed `str(e)` back in `SmsResult.error` — which callers surface in responses. The number originates from an admin-typed `Parent.phone` and the error text is remote input, so both are now passed through `safe_log()`, in the log record *and* in the returned result.
+- 4 new tests: CR/LF stripped from the returned error, 200-char cap, the log record staying single-line for a forged phone number, and the existing message still readable.
+
+**One log helper per app, not per module**
+
+- New `comms/log_safe.py`. v1.14.5 had put a module-private `_safe_log` twin inside `email_service.py`; `sms_service.py` needing the same thing made that the second copy, so it is now one helper shared within `comms`. It stays a deliberate near-copy of `core/log_safe.py` rather than an import, because `comms` must not depend on `core`.
+- Its docstring records that `safe_log()` makes code safe but does **not** clear CodeQL's `py/log-injection`, and points to coercion or omission as the stronger fix.
+
+**Deferred, now tracked**
+
+- Copilot also flagged `comms/tasks.py` importing `core.schedule_utils`, which reverses the documented dependency flow. It is pre-existing, there is a second identical violation at `comms/tasks.py:685` (`core.models.FunFridayScheduledSend`), and fixing only the flagged one would leave the codebase inconsistent with itself — so it is recorded as known debt in [CLAUDE.md](CLAUDE.md) (and the maintainer's local `docs/TODO.md`) as its own piece of work rather than rushed into a release. Both imports are lazy and function-body, so there is no import cycle today; the cost is coupling.
+
+</details>
+
+<details id="v1145">
+<summary><strong>v1.14.5 — Log-injection remediation + CodeQL scoping</strong></summary>
 
 Follow-up to v1.14.4. That release cut open CodeQL alerts from 46 to 16, but the
 `safe_log()` sanitizer introduced there **did not** satisfy CodeQL's

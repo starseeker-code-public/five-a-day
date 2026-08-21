@@ -1,11 +1,16 @@
 """Unit tests for the Twilio SMS service (v1.8)."""
 
+import logging
 from unittest.mock import MagicMock, patch
 
 import pytest
 from django.test import override_settings
 
 from comms.services.sms_service import SmsResult, SmsService, get_sms_service
+
+CR = "\r"
+LF = "\n"
+BREAK = CR + LF
 
 pytestmark = pytest.mark.django_db
 
@@ -60,6 +65,50 @@ class TestSend:
                 r = svc.send("+34600111222", "hi")
         assert r.success is False
         assert "api down" in r.error
+
+    def test_error_is_sanitised_before_reaching_the_result(self):
+        """v1.14.6 — the Twilio error is remote input and `SmsResult.error` is
+        surfaced in responses, so line terminators must not survive."""
+        forged = "denied" + BREAK + "INFO forged log line"
+        with override_settings(
+            TWILIO_ACCOUNT_SID="AC1",
+            TWILIO_AUTH_TOKEN="secret",
+            TWILIO_FROM_NUMBER="+1234567890",
+        ):
+            svc = SmsService()
+            with patch.object(svc, "_get_client", side_effect=RuntimeError(forged)):
+                r = svc.send("+34600111222", "hi")
+        assert r.success is False
+        assert CR not in r.error
+        assert LF not in r.error
+        assert len(r.error.splitlines()) == 1
+        assert "denied" in r.error
+
+    def test_long_error_is_length_capped(self):
+        with override_settings(
+            TWILIO_ACCOUNT_SID="AC1",
+            TWILIO_AUTH_TOKEN="secret",
+            TWILIO_FROM_NUMBER="+1234567890",
+        ):
+            svc = SmsService()
+            with patch.object(svc, "_get_client", side_effect=RuntimeError("x" * 500)):
+                r = svc.send("+34600111222", "hi")
+        assert r.error.endswith("...")
+        assert len(r.error) == 203
+
+    def test_phone_number_is_sanitised_in_the_log(self, caplog):
+        """`to` comes from an admin-typed Parent.phone, so it can't be logged raw."""
+        with override_settings(
+            TWILIO_ACCOUNT_SID="AC1",
+            TWILIO_AUTH_TOKEN="secret",
+            TWILIO_FROM_NUMBER="+1234567890",
+        ):
+            svc = SmsService()
+            with patch.object(svc, "_get_client", side_effect=RuntimeError("boom")):
+                with caplog.at_level(logging.WARNING):
+                    svc.send("+34600111222" + BREAK + "WARNING forged", "hi")
+        for record in caplog.records:
+            assert len(record.getMessage().splitlines()) == 1
 
 
 class TestSendToParent:
