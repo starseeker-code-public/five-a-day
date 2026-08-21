@@ -1,3 +1,4 @@
+import logging
 from datetime import date
 
 from django.contrib import messages
@@ -14,6 +15,8 @@ from billing.models import Enrollment, Payment, SiteConfiguration, current_acade
 from core.models import FunFridayAttendance, HistoryLog
 from students.forms import StudentForm
 from students.models import Group, Parent, Student
+
+logger = logging.getLogger(__name__)
 
 # ============================================================================
 # PARENT AND STUDENT MANAGEMENT - Parent-First Flow
@@ -607,8 +610,9 @@ def student_detail(request, student_id):
 
         return JsonResponse(student_data)
 
-    except Exception as e:
-        return JsonResponse({"error": str(e)}, status=500)
+    except Exception:
+        logger.exception("Error building student payload for student %s", student_id)
+        return JsonResponse({"error": "No se pudieron cargar los datos del alumno."}, status=500)
 
 
 def update_student(request, student_id):

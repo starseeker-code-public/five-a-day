@@ -8,13 +8,10 @@ exactly once, without polluting model import time.
 from __future__ import annotations
 
 import contextvars
-import logging
 from typing import Any
 
 from django.db.models.signals import post_delete, post_save, pre_save
 from django.dispatch import receiver
-
-logger = logging.getLogger(__name__)
 
 # Actor propagated from the middleware. `contextvars.ContextVar` is
 # request-local under WSGI + async-safe under ASGI — safer than threadlocals.

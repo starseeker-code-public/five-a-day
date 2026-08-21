@@ -1,9 +1,12 @@
 import json
+import logging
 from datetime import datetime
 
 from django.conf import settings
 from django.http import JsonResponse
 from django.views.decorators.http import require_http_methods
+
+logger = logging.getLogger(__name__)
 
 
 @require_http_methods(["POST"])
@@ -79,8 +82,9 @@ Vista actual:   {current_url}
 
     except json.JSONDecodeError:
         return JsonResponse({"success": False, "message": "Datos inválidos"}, status=400)
-    except Exception as e:
+    except Exception:
+        logger.exception("Error sending support ticket")
         return JsonResponse(
-            {"success": False, "message": f"Error al enviar ticket: {str(e)}"},
+            {"success": False, "message": "Error al enviar el ticket. Inténtalo de nuevo."},
             status=500,
         )

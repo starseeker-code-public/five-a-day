@@ -20,7 +20,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # NOTA: Usa `make version x.y.z` para actualizar ambos sitios a la vez:
 #   - pyproject.toml (campo version)
 #   - README.md (badge y tabla de versiones — gestionado por la skill update-readme)
-APP_VERSION = os.getenv("APP_VERSION", "1.14.2")
+APP_VERSION = os.getenv("APP_VERSION", "1.14.4")
 
 # ============================================================================
 # SECURITY SETTINGS
@@ -327,10 +327,11 @@ CELERY_TASK_ROUTES = {
     "comms.tasks.send_*": {"queue": "emails"},
 }
 
-# Eager mode when no broker is configured (Cloud Run, tests, CI).
-if not CELERY_BROKER_URL:
-    CELERY_TASK_ALWAYS_EAGER = True
-    CELERY_TASK_EAGER_PROPAGATES = True
+# Eager mode when no broker is configured (Cloud Run, tests, CI). Assigned
+# unconditionally — Celery reads these via `config_from_object`, so they must
+# exist as plain module-level settings either way.
+CELERY_TASK_ALWAYS_EAGER = not CELERY_BROKER_URL
+CELERY_TASK_EAGER_PROPAGATES = not CELERY_BROKER_URL
 
 # ============================================================================
 # GOOGLE SHEETS INTEGRATION (v1.2)

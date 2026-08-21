@@ -105,8 +105,9 @@ class TodoItem(models.Model):
 
 
 # v1.10 — the immutable audit trail lives in a sibling module so this file
-# stays focused on the user-visible core models.
-from core.audit_models import AuditLog  # noqa: E402,F401
+# stays focused on the user-visible core models. Re-exported here (and named in
+# `__all__`) so `from core.models import AuditLog` keeps working.
+from core.audit_models import AuditLog  # noqa: E402
 
 
 class HistoryLog(models.Model):
@@ -220,3 +221,17 @@ class QAConfiguration(models.Model):
     def get_config(cls):
         config, _ = cls.objects.get_or_create(pk=1)
         return config
+
+
+# Public model surface of this module, including the sibling-module
+# re-export above.
+__all__ = [
+    "AuditLog",
+    "BacklogTask",
+    "FunFridayAttendance",
+    "FunFridayScheduledSend",
+    "HistoryLog",
+    "QAConfiguration",
+    "ScheduleSlot",
+    "TodoItem",
+]

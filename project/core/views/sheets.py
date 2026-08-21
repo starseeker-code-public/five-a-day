@@ -10,7 +10,8 @@ from core.services.google_sheets_service import get_service
 @require_http_methods(["POST"])
 def export_to_sheets(request):
     """
-    Trigger a Sheets export from the UI. Accepts ?target=students|payments|both.
+    Trigger a Sheets export from the UI. POST-only; reads `target` from the
+    form body (`students` | `payments` | `both`, default `both`).
     Returns 503 when the integration isn't configured so the frontend can
     surface a specific message rather than a generic error.
     """

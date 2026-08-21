@@ -25,4 +25,8 @@ def generate_password(length=32):
 
 if __name__ == "__main__":
     length = int(sys.argv[1]) if len(sys.argv) > 1 else 32
-    print(generate_password(length))
+    # Writing the generated secret to stdout is the entire purpose of this
+    # developer utility — it is never imported by the app and never runs in a
+    # request path, so there is no log to leak into. Piped straight into
+    # `gcloud secrets versions add` or a .env file by the operator.
+    print(generate_password(length))  # codeql[py/clear-text-logging-sensitive-data]

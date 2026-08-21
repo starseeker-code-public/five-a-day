@@ -17,7 +17,6 @@ the service still produces sensible output on a fresh install.
 
 from __future__ import annotations
 
-import logging
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import date
@@ -29,8 +28,6 @@ from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import mm
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
-
-logger = logging.getLogger(__name__)
 
 _PRIMARY_COLOR = colors.HexColor("#4F46E5")
 _HEADER_TEXT_COLOR = colors.white

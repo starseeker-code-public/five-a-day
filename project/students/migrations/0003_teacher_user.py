@@ -1,3 +1,4 @@
+import django.db.models.deletion
 from django.conf import settings
 from django.db import migrations, models
 
@@ -16,7 +17,7 @@ class Migration(migrations.Migration):
                 blank=True,
                 help_text="Django auth user — login identity + hashed password for this teacher.",
                 null=True,
-                on_delete=models.deletion.SET_NULL,
+                on_delete=django.db.models.deletion.SET_NULL,
                 related_name="teacher",
                 to=settings.AUTH_USER_MODEL,
             ),

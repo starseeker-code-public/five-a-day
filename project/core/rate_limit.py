@@ -16,6 +16,8 @@ from django.conf import settings
 from django.core.cache import cache
 from django.http import HttpResponse
 
+from core.log_safe import safe_log
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_WINDOW_SECONDS = 60
@@ -77,7 +79,12 @@ def rate_limit(
                 current = 1
 
             if current > limit:
-                logger.info("rate limit exceeded: scope=%s ip=%s current=%s", scope, _client_ip(request), current)
+                logger.info(
+                    "rate limit exceeded: scope=%s ip=%s current=%s",
+                    scope,
+                    safe_log(_client_ip(request)),
+                    current,
+                )
                 return HttpResponse(
                     "⚠️ Demasiados intentos. Prueba de nuevo en un minuto.",
                     status=429,

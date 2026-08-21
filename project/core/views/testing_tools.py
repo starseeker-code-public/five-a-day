@@ -4,6 +4,7 @@ error-reporting toggle.
 """
 
 import json
+import logging
 import subprocess
 import sys
 from datetime import datetime
@@ -17,6 +18,8 @@ from django.views.decorators.http import require_http_methods
 
 from core.decorators import qa_access_required
 from core.models import BacklogTask, QAConfiguration
+
+logger = logging.getLogger(__name__)
 
 VALID_PRIORITIES = {"low", "medium", "high"}
 
@@ -102,8 +105,12 @@ def api_seed_database(request):
         call_command(*args, **kwargs)
         output = out.getvalue()
         return JsonResponse({"success": True, "message": output})
-    except Exception as e:
-        return JsonResponse({"success": False, "message": str(e)}, status=500)
+    except Exception:
+        logger.exception("seed_testdata command failed")
+        return JsonResponse(
+            {"success": False, "message": "El comando de seed ha fallado. Revisa los logs."},
+            status=500,
+        )
 
 
 @qa_access_required
@@ -259,8 +266,12 @@ def api_toggle_error_email(request):
         config.error_email_enabled = bool(enabled)
         config.save()
         return JsonResponse({"success": True, "enabled": config.error_email_enabled})
-    except Exception as e:
-        return JsonResponse({"success": False, "message": str(e)}, status=500)
+    except Exception:
+        logger.exception("Error toggling QA error-email setting")
+        return JsonResponse(
+            {"success": False, "message": "No se pudo guardar la preferencia."},
+            status=500,
+        )
 
 
 @qa_access_required
@@ -309,7 +320,11 @@ def api_mark_ready(request):
             recipient_list=[support_email],
             fail_silently=False,
         )
-    except Exception as e:  # noqa: BLE001 — surface the send failure to the UI
-        return JsonResponse({"success": False, "message": f"Error al enviar: {e}"}, status=500)
+    except Exception:  # noqa: BLE001 — surface a send failure to the UI, details to the log
+        logger.exception("Error sending the 'ready to ship' notification")
+        return JsonResponse(
+            {"success": False, "message": "Error al enviar el aviso. Revisa los logs."},
+            status=500,
+        )
 
     return JsonResponse({"success": True, "message": f"Enviado a {support_email}"})

@@ -11,6 +11,7 @@ from django.contrib.auth import logout as _django_logout
 from django.shortcuts import redirect, render
 from django.urls import reverse
 
+from core.log_safe import safe_log
 from core.rate_limit import rate_limit
 
 if TYPE_CHECKING:
@@ -285,7 +286,14 @@ def google_oauth_callback(request):
 
     state = request.session.get("google_oauth_state")
     if not state or state != request.GET.get("state"):
-        _oauth_log.warning("OAuth state mismatch: session=%s, param=%s", state, request.GET.get("state"))
+        # Log only whether each side was present -- the state value is a
+        # CSRF token (sensitive) and attacker-controlled on the query-string
+        # side, so it must not reach the log verbatim.
+        _oauth_log.warning(
+            "OAuth state mismatch: session_state_present=%s, param_state_present=%s",
+            bool(state),
+            bool(request.GET.get("state")),
+        )
         messages.error(request, "Estado OAuth inválido. Inténtalo de nuevo.")
         return redirect("login")
 
@@ -298,7 +306,9 @@ def google_oauth_callback(request):
     parsed = urllib.parse.urlparse(callback_uri)
     query = request.META.get("QUERY_STRING", "")
     authorization_response = urllib.parse.urlunparse(parsed._replace(query=query))
-    _oauth_log.info("OAuth callback → authorization_response=%s", authorization_response)
+    # Built from the raw QUERY_STRING, so it is attacker-controlled -- strip
+    # line breaks before it reaches the log.
+    _oauth_log.info("OAuth callback → authorization_response=%s", safe_log(authorization_response))
 
     try:
         flow.fetch_token(authorization_response=authorization_response)
@@ -324,7 +334,7 @@ def google_oauth_callback(request):
 
     # Backend-only check — email never exposed to frontend
     if user_email.lower() != allowed_email.lower():
-        _oauth_log.warning("OAuth email mismatch: got=%s expected=%s", user_email, allowed_email)
+        _oauth_log.warning("OAuth email mismatch: got=%s expected=%s", safe_log(user_email), allowed_email)
         messages.error(request, "❌ Esta cuenta de Google no tiene acceso.")
         return redirect("login")
 

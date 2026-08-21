@@ -52,8 +52,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     && rm -rf /var/lib/apt/lists/*
 
-# Create non-root user
-RUN useradd -m -u 1000 django && \
+# Create non-root user. UID and GID are pinned so the numeric `USER 1000:1000`
+# below is unambiguous (hadolint DL3066 - a name-based USER can't be resolved by
+# the host, which matters for Cloud Run / K8s runAsNonRoot checks).
+RUN groupadd -g 1000 django && \
+    useradd -m -u 1000 -g 1000 django && \
     mkdir -p /app /app/staticfiles /app/mediafiles && \
     chown -R django:django /app
 
@@ -70,8 +73,9 @@ COPY --chown=django:django . .
 COPY --chown=django:django entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
 
-# Switch to non-root user
-USER django
+# Switch to non-root user - numeric to satisfy hadolint DL3066.
+# 1000:1000 is the django user/group created in the runtime stage above.
+USER 1000:1000
 
 EXPOSE 8000
 

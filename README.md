@@ -20,7 +20,7 @@ Built to centralize student records, automate billing cycles, and streamline par
 ### Project Status
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v1.14.2-brightgreen?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-v1.14.4-brightgreen?style=flat-square" alt="Version">
   &nbsp;|&nbsp;
   <a href="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml?query=branch%3Amain"><img src="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml/badge.svg?branch=main&style=flat-square" alt="CI main"></a>
   &nbsp;|&nbsp;
@@ -41,9 +41,9 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 | Version | Date | Description |
 |---------|------|-------------|
-| **v1.14.2** | 2026-07-14 | Beat-task command wrappers + persisted Fun Friday sends |
-| v1.14.1 | 2026-07-12 | Email restyle + dark-mode emails |
-| v1.14.0 | 2026-07-12 | Comprehensive in-app help guides for every view |
+| **v1.14.4** | 2026-08-21 | Code-scanning cleanup + CVE dependency bumps |
+| v1.14.3 | 2026-07-28 | Dependency bumps + main-branch history reconciliation |
+| v1.14.2 | 2026-07-14 | Beat-task command wrappers + persisted Fun Friday sends |
 
 ---
 
@@ -107,6 +107,7 @@ Built to centralize student records, automate billing cycles, and streamline par
     - [Infrastructure \& Deployment](#infrastructure--deployment-1)
       - [Docker](#docker)
       - [Google Cloud Run](#google-cloud-run)
+      - [Cold-start behaviour on Cloud Run](#cold-start-behaviour-on-cloud-run)
     - [Secrets Management](#secrets-management)
     - [Email Security](#email-security)
     - [Data Protection \& Input Validation](#data-protection--input-validation)
@@ -143,8 +144,76 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 ## Version History & Roadmap
 
-<details id="v1142" open>
-<summary><strong>v1.14.2 — Beat-task command wrappers + persisted Fun Friday sends (current)</strong></summary>
+<details id="v1144" open>
+<summary><strong>v1.14.4 — Code-scanning cleanup + CVE dependency bumps (current)</strong></summary>
+
+Clears every open CodeQL alert on the branch and the three red checks on PR #36
+(Lint / Dependency review / Trivy). No user-visible behaviour changes beyond
+AJAX error messages, which are now generic instead of echoing Python exceptions.
+
+**Stack-trace exposure (22 sites, medium)**
+
+- AJAX endpoints across `payments`, `management`, `testing_tools`, `students`, `schedule`, `support`, `todos`, `fun_friday_attendance`, `waiting_list` and `stripe_views` returned `str(e)` in their JSON error payload, leaking exception text (and, for DB/integrity errors, table and column names) to the browser.
+- Each catch-all now logs the full traceback server-side with `logger.exception(...)` and returns a fixed Spanish message. Genuine validation errors (`ValidationError`, `InvalidOperation`) still surface their own user-facing text — only the catch-alls were changed.
+- Eight view modules gained a module-level `logger`.
+
+**Log injection (7 sites, medium)**
+
+- New `core/log_safe.py` with `safe_log()` — strips `CR`/`LF`/`VT`/`FF`/`ESC` and caps length at 200 chars, so an attacker-supplied value can't forge extra log records or smuggle terminal escapes into a tailed log.
+- Applied to the client IP in `rate_limit`, the submitted email in the parent portal, the path-supplied payment id in `payments` + `stripe_views`, and the OAuth `authorization_response` in `auth`.
+- `comms/services/email_service.py` carries a module-private twin (`_safe_log`) rather than importing from `core`, keeping the documented app dependency direction intact. Its two f-string log calls also became lazy `%s` calls.
+- 11 unit tests in `tests/unit/test_log_safe.py`.
+
+**Sensitive data in logs (2 sites, high)**
+
+- The OAuth state-mismatch warning logged both state values verbatim; it now logs only `session_state_present` / `param_state_present` booleans. The state is a CSRF token, and the query-string side is attacker-controlled — this one line was both a `clear-text-logging` and a `log-injection` hit.
+- `scripts/generate_secure_password.py` keeps printing the generated secret (that is the tool's entire purpose) with an explanatory comment and a `codeql[...]` suppression.
+
+**Note-level alerts (15)**
+
+- Four bare `except: pass` blocks (`middleware`, `waiting_list`, `app_forms` ×2) documented with why swallowing is correct.
+- Dead `logger` globals removed from `billing/services/pdf_service.py` and `core/audit_signals.py`, along with their now-unused `logging` imports.
+- `core/models.py` and `students/models.py` declare `__all__`, so the `AuditLog` / `ParentSessionToken` sibling-module re-exports read as intentional instead of unused imports.
+- `CELERY_TASK_ALWAYS_EAGER` / `CELERY_TASK_EAGER_PROPAGATES` are now assigned unconditionally (`= not CELERY_BROKER_URL`) rather than inside an `if`.
+- Five `lambda *args, **kw: date(*args, **kw)` mock side-effects in `test_context_processors.py` collapsed to plain `date`.
+- The intentional settings star-import in `settings_test.py` documented + suppressed.
+
+**Copilot review comments**
+
+- `django` was the only unbounded dependency — now `>=6.0.8,<7`, so a Django 7 can never land unreviewed while the 6.x line stays open.
+- Lock moved to **Django 6.1**; full suite verified green on it. 6.1 deprecates the whole `EMAIL_*` settings family in favour of `MAILERS`, and `EmailMessage.send(fail_silently=...)` — 56 `RemovedInDjango70Warning`s now surface in the test run. Nothing breaks before 7.0, and the `<7` bound is what keeps that migration a deliberate, scheduled piece of work rather than a surprise.
+- `sheets.py`'s docstring advertised a `?target=` query param on a POST-only endpoint that reads the form body; corrected.
+- `students/migrations/0003_teacher_user.py` used `models.deletion.SET_NULL`. That resolves fine at runtime (importing `django.db.models` registers the `deletion` submodule), so the migration was never broken — but it now uses the explicit `django.db.models.deletion` path every other migration in the repo uses.
+
+**CVE dependency bumps (Lint / Dependency review / Trivy)**
+
+- `cryptography` 49.0.0 → **50.0.0** — GHSA-g6cj-pr64-35w5, PKCS#7 `EnvelopedData` Bleichenbacher oracle (high). This was the alert failing Dependency review.
+- `django` 6.0.7 → **6.1** — clears PYSEC-2026-3717 (fixed in 6.0.8).
+- `sqlparse` 0.5.5 → **0.6.0** — PYSEC-2026-3696/3697/3698/3699.
+- `pip` 26.1.2 → **26.2.1** — PYSEC-2026-3721.
+- `reportlab` gained a `<6` bound. `uv run pip-audit` now reports no known vulnerabilities.
+
+Suite at **1,019 tests, 95 % coverage**.
+
+</details>
+
+<details id="v1143">
+<summary><strong>v1.14.3 — Dependency bumps + main-branch history reconciliation</strong></summary>
+
+**Dependency updates (Dependabot)**
+
+- `dawidd6/action-send-mail` v17 → **v18** in the deploy-notification workflows (#32)
+- `ossf/scorecard-action` 2.4.0 → **2.4.4** in the Scorecard supply-chain workflow (#33)
+- `django-filter` constraint relaxed from `>=25.1,<26` to `>=25.1,<27` (#31)
+
+**Branch-history reconciliation**
+
+- `main` had accumulated squash-merge commits (up to v1.0.10) that were not ancestors of `testing`/`development`, so the `testing` → `main` release PR reported merge conflicts (`base.html`, `settings.py`, `pyproject.toml`, `uv.lock`, admin templates, favicons). `main` was merged into `development` with the `ours` strategy — a content-verified no-op (main's tree was byte-identical to development's own v1.0.10 commit) that records `main` as an ancestor, so future `testing` → `main` PRs merge cleanly.
+
+</details>
+
+<details id="v1142">
+<summary><strong>v1.14.2 — Beat-task command wrappers + persisted Fun Friday sends</strong></summary>
 
 **Production-readiness: periodic tasks without Celery Beat**
 
@@ -1697,6 +1766,7 @@ five-a-day/
 │   │   ├── audit_models.py       AuditLog (v1.10 — immutable per-model change trail)
 │   │   ├── audit_signals.py      Signal receivers + AuditActorMiddleware (contextvar-based actor)
 │   │   ├── rate_limit.py         Cache-backed IP rate limiter (v1.10)
+│   │   ├── log_safe.py           safe_log() — CR/LF-stripping log sanitizer (v1.14.4)
 │   │   ├── views/                22 view modules — auth, password_reset, dashboard,
 │   │   │                         students, parents, payments, management, app_forms,
 │   │   │                         schedule, fun_friday_attendance, todos, support,
@@ -1754,7 +1824,7 @@ five-a-day/
 │   │   └── management/commands/  send_email, test_all_emails, plus 4 Beat-task wrappers
 │   │                             (v1.14.2 — birthday, reminders, report, Fun Friday drain)
 │   │
-│   ├── tests/                    pytest suite (1,008 tests, 95 % coverage) — unit/ + integration/
+│   ├── tests/                    pytest suite (1,019 tests, 95 % coverage) — unit/ + integration/
 │   ├── templates/registration/   Password-reset templates (form, done, confirm, complete + email body)
 │   ├── templates/admin/          Django admin overrides (branded theme)
 │   └── conftest.py               Shared fixtures (models + authenticated_client)
@@ -2270,12 +2340,50 @@ Full deployment walkthrough in [DEPLOYMENT.md](DEPLOYMENT.md). Security-relevant
 | Decision | Implementation |
 |----------|---------------|
 | Secret Manager | All credentials (`DJANGO_SECRET_KEY`, `LOGIN_*`, `EMAIL_SECRET`, `POSTGRES_*`, `GOOGLE_*`) injected at startup from GCP Secret Manager |
-| Cloud SQL Auth Proxy | PostgreSQL connection goes through the proxy — no public IP on the database |
+| Cloud SQL Auth Proxy | PostgreSQL connection goes through the IAM-authenticated proxy socket mounted by Cloud Run (`/cloudsql/...`). The instance keeps a public IP but has **zero authorized networks**, so the proxy is the only reachable path — no VPC connector needed |
 | Autoscaling | min=0 (cold starts acceptable) or min=1 (~$7/mo) for always-warm, max=2 instances |
 | Probes | Startup probe + liveness probe on `/health/` |
 | TLS | Managed automatically by Cloud Run (custom domain + Google-managed certificate) |
 | SSL enforced | `SECURE_SSL_REDIRECT=True`, all cookie secure flags enabled when `DEBUG=False` |
 | Strict cookies | `SESSION_COOKIE_SAMESITE=Strict`, `CSRF_COOKIE_SAMESITE=Strict`, `CSRF_COOKIE_HTTPONLY=True` |
+
+#### Cold-start behaviour on Cloud Run
+
+`entrypoint.sh` runs `migrate` unconditionally on container start, and
+`collectstatic --noinput --clear` whenever `DJANGO_ENV` is `testing` or `production`.
+In Docker (dev) and on the testing VM that happens once per `docker compose up`.
+**On Cloud Run with `min-instances=0` it happens on every cold start**, because each new
+container executes the entrypoint from scratch.
+
+| Effect | Detail |
+|--------|--------|
+| Slow first request | The morning's first hit waits for container pull + `migrate` + a full `collectstatic --clear` before Gunicorn binds — roughly 20-40 s, versus 5-10 s for a bare cold start |
+| Redundant DB round trip | `migrate` opens a Cloud SQL connection and inspects `django_migrations` on every boot, even when nothing is pending |
+| Concurrent-migration risk | With `max-instances` > 1, two containers can cold-start at the same moment and run `migrate` concurrently. Django holds no cross-process migration lock; PostgreSQL DDL locks usually serialise it safely, but a failed/partial apply is possible. Low probability, not zero |
+| Wasted static rebuild | `--clear` wipes and regenerates `/app/staticfiles` (hashed + compressed by `CompressedManifestStaticFilesStorage`) on every boot, producing byte-identical output each time |
+
+**This is accepted for the initial production rollout.** Four known users, effectively one
+cold start per morning, and no schema churn between deploys. It is recorded here so it stays
+a deliberate trade-off rather than a surprise during an incident.
+
+**Mitigations available today, no code change:**
+
+- `--min-instances=1` — removes cold starts entirely, ~$7/month (see [DEPLOYMENT.md](DEPLOYMENT.md#slow-cold-starts))
+- Startup CPU boost — free, shortens the startup window
+- `--max-instances=1` — eliminates the concurrent-migration window at the cost of throughput
+
+**Planned fix** (tracked, not yet implemented):
+
+1. Move `collectstatic` into the Dockerfile build stage so `staticfiles/` ships baked into the
+   image, and drop it from `entrypoint.sh`. Note the build then needs a dummy `DJANGO_SECRET_KEY`
+   at `RUN` time, since `settings.py` refuses to import with the dev default when `DEBUG=False`.
+2. Gate `migrate` behind a `RUN_MIGRATIONS_ON_START` env var — default `false` on Cloud Run, where
+   the dedicated `fiveaday-migrate` Cloud Run Job is the single, serialised place migrations apply.
+3. Leave both steps enabled in development and testing, where running them on every `up` is the
+   convenient behaviour.
+
+Together these cut the production cold start to container pull + Gunicorn boot, and make schema
+changes an explicit, one-at-a-time operation.
 
 ### Secrets Management
 
@@ -2682,7 +2790,7 @@ Configure at **Settings → Secrets and variables → Actions**:
 | `development → testing` merged + PR opened to `main` | `OWNER_EMAILS` (secret) | auto-merge.yml |
 | New commit on `main` (production ready to deploy) | `hellofiveaday@gmail.com` (hardcoded) | notify-production.yml |
 
-Both use Gmail SMTP via the `dawidd6/action-send-mail@v17` action. Emails include HTML formatting, links to the commit/PR, and actionable next steps.
+Both use Gmail SMTP via the `dawidd6/action-send-mail@v18` action. Emails include HTML formatting, links to the commit/PR, and actionable next steps.
 
 ### Dependabot
 

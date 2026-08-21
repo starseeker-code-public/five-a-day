@@ -9,7 +9,10 @@ If PostgreSQL is not available, falls back to SQLite for CI or quick local runs.
 
 import os
 
-from project.settings import *  # noqa: F401, F403
+# A star-import is the documented Django pattern for a settings overlay: the
+# module must expose every base setting as a module-level global for
+# `DJANGO_SETTINGS_MODULE` to work. Enumerating them is not maintainable.
+from project.settings import *  # noqa: F401, F403  # codeql[py/polluting-import]
 
 # Try to use PostgreSQL (matches production). Fall back to SQLite if unavailable.
 _test_db_engine = os.getenv("TEST_DB_ENGINE", "postgresql")

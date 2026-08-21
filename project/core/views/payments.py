@@ -13,6 +13,7 @@ from django.views.decorators.http import require_http_methods
 
 from billing import constants
 from billing.models import Payment
+from core.log_safe import safe_log
 from core.models import HistoryLog
 from students.models import Parent, Student
 
@@ -361,13 +362,12 @@ def update_payment(request, payment_id):
             )
         messages.error(request, str(e))
         return redirect("payments_list")
-    except Exception as e:
+    except Exception:
+        logger.exception("Error updating payment %s", safe_log(payment_id))
+        error_msg = "Error al actualizar el pago. Inténtalo de nuevo."
         if request.content_type == "application/json":
-            return JsonResponse(
-                {"success": False, "error": f"Error al actualizar el pago: {str(e)}"},
-                status=500,
-            )
-        messages.error(request, f"Error al actualizar el pago: {str(e)}")
+            return JsonResponse({"success": False, "error": error_msg}, status=500)
+        messages.error(request, error_msg)
         return redirect("payments_list")
 
 
@@ -389,11 +389,11 @@ def delete_payment(request, payment_id):
             }
         )
 
-    except Exception as e:
-        logger.exception("Error deleting payment %s", payment_id)
+    except Exception:
+        logger.exception("Error deleting payment %s", safe_log(payment_id))
 
         return JsonResponse(
-            {"success": False, "error": f"Error al eliminar el pago: {str(e)}"},
+            {"success": False, "error": "Error al eliminar el pago."},
             status=500,
         )
 
@@ -411,9 +411,10 @@ def deactivate_payment(request, payment_id):
 
         return JsonResponse({"success": True, "message": "Pago desactivado exitosamente."})
 
-    except Exception as e:
+    except Exception:
+        logger.exception("Error deactivating payment %s", safe_log(payment_id))
         return JsonResponse(
-            {"success": False, "message": f"Error al desactivar el pago: {str(e)}"},
+            {"success": False, "message": "Error al desactivar el pago."},
             status=400,
         )
 
@@ -454,9 +455,10 @@ def quick_complete_payment(request, payment_id):
             }
         )
 
-    except Exception as e:
+    except Exception:
+        logger.exception("Error completing payment %s", safe_log(payment_id))
         return JsonResponse(
-            {"success": False, "error": f"Error al completar el pago: {str(e)}"},
+            {"success": False, "error": "Error al completar el pago."},
             status=500,
         )
 
@@ -494,11 +496,12 @@ def get_payment_details(request, payment_id):
             }
         )
 
-    except Exception as e:
+    except Exception:
+        logger.exception("Error fetching payment details for %s", safe_log(payment_id))
         return JsonResponse(
             {
                 "success": False,
-                "error": f"Error al obtener los detalles del pago: {str(e)}",
+                "error": "Error al obtener los detalles del pago.",
             },
             status=500,
         )
@@ -692,5 +695,6 @@ def validate_student_parent(request):
 
     except json.JSONDecodeError:
         return JsonResponse({"valid": False, "message": "Invalid JSON data"}, status=400)
-    except Exception as e:
-        return JsonResponse({"valid": False, "message": str(e)}, status=400)
+    except Exception:
+        logger.exception("Error validating payment payload")
+        return JsonResponse({"valid": False, "message": "Datos de pago inválidos."}, status=400)

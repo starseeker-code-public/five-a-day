@@ -8,6 +8,7 @@ kicks the admin over to the standard update form to finalise the enrollment.
 """
 
 import calendar
+import logging
 from datetime import date
 
 from django.contrib import messages
@@ -21,6 +22,8 @@ from billing.models import Payment, SiteConfiguration
 from billing.services.enrollment_service import EnrollmentService
 from core.models import HistoryLog
 from students.models import Group, Student
+
+logger = logging.getLogger(__name__)
 
 
 def _waiting_students_qs():
@@ -42,6 +45,8 @@ def waiting_list_view(request):
         try:
             qs = qs.filter(group_id=int(group_filter))
         except ValueError:
+            # Non-numeric ?group= in a hand-edited URL: ignore the filter and
+            # show the unfiltered list rather than 500-ing on a bad query param.
             pass
 
     students = list(qs)
@@ -174,8 +179,9 @@ def assign_from_waiting_list(request, student_id):
                 f"Asignado desde lista de espera: {student.full_name} → {target_group.group_name}",
                 icon="person_add",
             )
-    except Exception as e:  # noqa: BLE001 — surface any failure to the user
-        error_msg = f"Error al asignar al estudiante: {e}"
+    except Exception:  # noqa: BLE001 — surface a failure to the user, details to the log
+        logger.exception("Error assigning student %s from the waiting list", student_id)
+        error_msg = "Error al asignar al estudiante. Revisa los datos e inténtalo de nuevo."
         if request.headers.get("X-Requested-With") == "XMLHttpRequest":
             return JsonResponse({"success": False, "error": error_msg}, status=500)
         messages.error(request, f"❌ {error_msg}")

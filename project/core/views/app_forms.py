@@ -1188,6 +1188,9 @@ def enrollment_form(request):
                         if _s.group:
                             _ctx["group_name"] = _s.group.group_name
                     except Exception:
+                        # Preview/test-send only: a stale student id just means
+                        # the placeholder names stay in `_ctx`. Never block the
+                        # preview over it.
                         pass
                 if action == "preview":
                     return JsonResponse({"html": render_to_string("emails/welcome_student.html", _ctx)})
@@ -1217,6 +1220,8 @@ def enrollment_form(request):
                         _s = Student.objects.get(id=_student_id)
                         _student_name = _s.full_name
                     except Exception:
+                        # Preview/test-send only: fall back to the placeholder
+                        # name if the student id no longer resolves.
                         pass
                 _template = "enrollment_child" if _etype == "child" else "enrollment_adult"
                 _ctx = {"student": _student_name, "genero": _gender, "academic_year": _ay, "month": _month}
