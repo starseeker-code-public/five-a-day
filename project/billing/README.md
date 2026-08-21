@@ -9,14 +9,16 @@ The `billing` app owns all financial logic: pricing configuration, enrollment pl
 | **SiteConfiguration** | `site_configuration` | Singleton (pk=1). All pricing: enrollment fees, monthly fees, discount percentages/amounts |
 | **EnrollmentType** | `enrollment_types` | name (monthly, quarterly, adults, special), display_name, base amounts |
 | **Enrollment** | `enrollments` | FK to Student + EnrollmentType. schedule_type, payment_modality, discounts, amounts, status, academic_year. Indexed on `academic_year` for payment generation queries. |
-| **Payment** | `payments` | FK to Student + Parent + Enrollment. amount, type, method, status, due_date, payment_date |
+| **Payment** | `payments` | FK to Student + Parent + Enrollment. amount, type, method, status, due_date, payment_date, stripe_session_id / stripe_payment_intent (v1.11). **`parent` is nullable** — adult students have no guardian. There is no `active` field; soft-delete was never implemented, so never filter on `active=True`. |
+| **Expense** | `expenses` | description, category, amount, expense_date, notes + recurrence: is_recurring, recurring_frequency (`monthly` / `weekly` / `yearly`), recurring_day (1-28), recurring_month, recurring_weekdays (CSV of ints 0-6, Monday=0), generated_from (self-FK). v1.5 |
 
 ### Key Business Rules
 
-- **SiteConfiguration** is a singleton — `get_config()` uses `get_or_create()` (race-condition safe), seeded from `billing/constants.py`
+- **SiteConfiguration** is a singleton — `get_config()` uses `get_or_create()` (race-condition safe), seeded from `billing/constants.py`. Always read pricing through it; `constants.py` values are seeds only. Includes `returning_student_enrollment_discount` (v1.13).
 - **One active enrollment per student** — enforced by UniqueConstraint on `(student)` where `status='active'`
 - **Payment.is_overdue** — True when status is pending and due_date < today
 - **Enrollment.is_paid** / **remaining_amount** — calculated from completed payment totals via shared `_total_paid()` helper (single query path)
+- **Expense.clean()** validates per cadence — `monthly` needs `recurring_day`; `yearly` needs `recurring_day` + `recurring_month`; `weekly` needs `recurring_weekdays`. Materialisation is idempotent on `generated_from` + the exact `expense_date`.
 
 ### Helper Functions (in models.py)
 
@@ -31,6 +33,7 @@ The `billing` app owns all financial logic: pricing configuration, enrollment pl
 - `create_enrollment(student, enrollment_data, is_adult)` — creates an Enrollment within `transaction.atomic()` with proper pricing and discounts. Raises `ValueError` if required EnrollmentType is missing.
 - `_resolve_plan(config, data, ...)` — determines enrollment type, base amount, schedule type, payment modality
 - `_apply_discounts(config, base, ...)` — applies sibling and language cheque discounts
+- `is_returning_student(student)` / returning-student enrollment discount (v1.13) — a student who previously had an enrollment pays a reduced enrollment fee
 
 ### PaymentService (`billing/services/payment_service.py`)
 
@@ -48,6 +51,29 @@ The `billing` app owns all financial logic: pricing configuration, enrollment pl
 - `get_monthly_fee(schedule_type)` — fee by full_time/part_time/adult_group
 - `get_enrollment_fee(is_adult)` — child vs adult enrollment fee
 - `calculate_quarterly_price()` — 3 months * full_time - discount%
+
+### ExpenseService (`billing/services/expense_service.py`)
+
+- `monthly_totals(month, year)` — per-category expense aggregation for the expenses page and the reports dashboard
+- `materialize_recurring(month, year)` — spawns real expense rows from **monthly** recurring templates (Beat: 1st of the month, 06:30)
+- `materialize_recurring_for_date(target_date)` — spawns rows from **weekly** (`recurring_weekdays`) and **yearly** templates (Beat: daily 06:15)
+- Both are idempotent — they match on `generated_from` + the exact `expense_date`, so a re-run never double-creates
+
+### PdfService (`billing/services/pdf_service.py`)
+
+- `generate_payment_receipt(payment)` — single-payment receipt PDF (v1.3, reportlab)
+- `generate_quarterly_summary(...)` — quarterly statement
+- `generate_tax_certificate(...)` — annual certificate for a parent's tax return
+- Academy details come from the `ACADEMY_*` env vars, with a fallback when unset
+
+### StripeService (`billing/services/stripe_service.py`)
+
+Implemented directly against the Stripe REST API with `httpx` — **no Stripe SDK dependency** (v1.11).
+
+- `is_configured()` — true only when `STRIPE_SECRET_KEY` is set; gates the parent-portal "Pagar online" button
+- `create_checkout_session(payment)` — returns a hosted Checkout URL
+- `verify_webhook_signature(payload, header)` — HMAC check against `STRIPE_WEBHOOK_SECRET`. **Required in production**: with the secret unset the webhook view skips verification entirely, so any HTTP client could mark payments as paid
+- `apply_webhook_event(event)` — replay-safe; marks the payment completed and records `stripe_payment_intent`
 
 ## Constants (billing/constants.py)
 
@@ -79,9 +105,23 @@ python manage.py materialize_recurring_expenses --daily --date 2027-03-15
 
 Wraps the two recurring-expense Celery tasks (`materialize_recurring_expenses_task` / `_daily_task`) so external schedulers (Cloud Scheduler → Cloud Run Jobs in production) can run them without Celery Beat. Both paths are idempotent.
 
+## Celery Tasks (billing/tasks.py)
+
+| Task | Beat schedule | Command wrapper |
+| ---- | ------------- | --------------- |
+| `generate_monthly_payments_task` | 1st of month, 06:00 | `manage.py generate_payments` |
+| `materialize_recurring_expenses_task` | 1st of month, 06:30 | `manage.py materialize_recurring_expenses` |
+| `materialize_recurring_expenses_daily_task` | daily, 06:15 | `manage.py materialize_recurring_expenses --daily` |
+
+Production runs no Beat process (Cloud Run, `CELERY_TASK_ALWAYS_EAGER=True`) — Cloud Scheduler
+triggers Cloud Run Jobs that call the management-command wrappers instead. Never schedule with
+`apply_async(eta=...)` or `countdown`: under eager mode the delay is ignored and the task runs
+immediately.
+
 ## URL Patterns (billing/urls.py)
 
-Payment CRUD, enrollment API, management panel, search/statistics, CSV/Excel export. 20 URL patterns total.
+Payment CRUD, enrollment API, management panel, expenses, reports, search/statistics, Stripe
+endpoints, CSV/Excel export. **23 URL patterns** total.
 
 ## Cross-App Communication
 

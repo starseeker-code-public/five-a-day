@@ -82,4 +82,9 @@ EXPOSE 8000
 ENTRYPOINT ["/app/entrypoint.sh"]
 
 # Default: Gunicorn (production)
-CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--workers", "4", "--timeout", "120", "project.wsgi:application"]
+# --chdir project is required: manage.py lives at /app/project/manage.py and the Django
+# package at /app/project/project/, so `project.wsgi` only resolves with /app/project as
+# the working directory. Without it Gunicorn dies with
+# `ModuleNotFoundError: No module named 'project.wsgi'` — which never showed up locally
+# because dev uses runserver and docker-compose.testing.yml overrides this command.
+CMD ["gunicorn", "--chdir", "project", "--bind", "0.0.0.0:8000", "--workers", "4", "--timeout", "120", "--access-logfile", "-", "--error-logfile", "-", "project.wsgi:application"]

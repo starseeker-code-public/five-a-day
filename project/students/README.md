@@ -6,11 +6,12 @@ The `students` app owns all people-related models: students, parents, teachers, 
 
 | Model | Table | Key Fields | Relationships |
 | ----- | ----- | ---------- | ------------- |
-| **Teacher** | `teachers` | first_name, last_name, email (unique), phone, active, admin, user (OneToOne → `auth.User`) | Has many Groups; linked to a Django auth user for login |
-| **Group** | `groups` | group_name (unique), color (hex), active | FK to Teacher; has many Students |
-| **Parent** | `parents` | first_name, last_name, dni (unique), phone, email, iban | M2M to Students via StudentParent |
-| **Student** | `students` | first_name, last_name, birth_date, gender (m/f), is_adult, school, allergies, gdpr_signed, active | FK to Group; M2M to Parents |
+| **Teacher** | `teachers` | first_name, last_name, email (unique), phone, active, admin, user (OneToOne → `auth.User`), two_factor_secret / _enabled / _backup_codes (v1.13) | Has many Groups; linked to a Django auth user for login |
+| **Group** | `groups` | group_name (unique), color (hex), max_students (v1.1 capacity), active | FK to Teacher; has many Students |
+| **Parent** | `parents` | first_name, last_name, dni (unique), phone, email, iban, sms_opt_in (v1.8) | M2M to Students via StudentParent |
+| **Student** | `students` | first_name, last_name, birth_date, gender (m/f), is_adult, school, allergies, gdpr_signed, active, is_waiting / waiting_since (v1.1), withdrawal_date / withdrawal_reason | FK to Group; M2M to Parents |
 | **StudentParent** | `student_parents` | student, parent | Through table for Student-Parent M2M |
+| **ParentSessionToken** | `parent_session_tokens` | parent, token (hashed), expires_at, used_at — in `parent_portal_models.py` (v1.9) | FK to Parent; single-use magic-link token for the parent portal |
 
 ### Key Properties
 
@@ -19,6 +20,9 @@ The `students` app owns all people-related models: students, parents, teachers, 
 - `Student.gender` — 'm' or 'f' (used in enrollment confirmation emails)
 - `Parent.full_name` — "{first_name} {last_name}"
 - `Teacher.full_name` — "{first_name} {last_name}"
+- `Group.max_students` / capacity properties — occupancy and free seats, used by the waiting list (v1.1)
+- `Student.is_waiting` / `waiting_since` — waiting students are excluded from the main student list (v1.1)
+- `ParentSessionToken.consume()` — single-use redemption under `SELECT FOR UPDATE`, so a magic link can't be redeemed twice concurrently (v1.9)
 
 ### Teacher → auth.User link
 
@@ -26,7 +30,7 @@ Each Teacher can be linked to a Django `auth.User` via a nullable `OneToOneField
 
 - **`Teacher.ensure_user(password=None)`** — idempotent helper that get-or-creates the linked User (username = email), syncs first_name / last_name / email, mirrors `Teacher.admin` onto `is_staff` + `is_superuser`, and optionally sets a hashed password. Omitting the password leaves the user with `unusable_password` so they must use `/password-reset/` to activate the account.
 - **`post_save` signal** — when an existing Teacher is updated, the signal mirrors email/name/admin flags onto the linked User so the two records never drift.
-- **Migration** — `0003_teacher_user` adds the FK as `null=True, on_delete=SET_NULL` so existing Teachers remain valid without a linked User.
+- **Migration** — `0003_teacher_user` adds the FK as `null=True, on_delete=SET_NULL` so existing Teachers remain valid without a linked User. The app is at **7 migrations**, through `0007_add_teacher_two_factor`.
 
 Dev environment (`DJANGO_ENV=development`) keeps using the legacy env-var basic-auth via `LOGIN_USERNAME` / `LOGIN_PASSWORD` and never touches Teacher login; the linked User is only required in testing/production.
 
@@ -50,6 +54,9 @@ Dev environment (`DJANGO_ENV=development`) keeps using the legacy env-var basic-
 | `parents/create/` | ParentCreateView | `parent_create` |
 | `students/` | StudentListView | `students_list` |
 | `students/create/` | StudentCreateView | `student_create` |
+| `students/waiting/` | waiting_list_view | `waiting_list` |
+| `students/waiting/<id>/assign/` | assign_from_waiting_list | `assign_from_waiting_list` |
+| `students/<id>/waiting/add/` | add_to_waiting_list | `add_to_waiting_list` |
 | `students/<id>/` | StudentDetailView | `student_detail` |
 | `students/<id>/update/` | StudentUpdateView | `student_update` |
 | `api/students/<id>/fun-friday/toggle/` | toggle_fun_friday_this_week | `toggle_fun_friday_this_week` |

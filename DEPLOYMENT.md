@@ -2,13 +2,28 @@
 
 Five a Day runs on three environments with different cost and complexity trade-offs.
 
+**Live URLs**
+
+| Environment | URL |
+|-------------|-----|
+| Production  | <https://fiveaday-332600671945.europe-southwest1.run.app/login/> |
+| Testing (QA)| <http://34.26.130.187:8000/> |
+| Development | <http://localhost:8000/> |
+
+Production went live in **v1.14.7**. That release also carried the fix that made it boot:
+the image's Gunicorn `CMD` needs `--chdir project`, because `manage.py` lives at
+`/app/project/manage.py` and the settings package at `/app/project/project/`, so
+`project.wsgi` does not resolve from `/app`. Development uses `runserver` and the testing VM
+overrides the command, so production was the only environment that ran the image's own `CMD`
+— it failed there with `ModuleNotFoundError: No module named 'project.wsgi'`.
+
 ---
 
 ## Environments at a Glance
 
 |                   | Development         | Testing                        | Production                  |
 |-------------------|---------------------|--------------------------------|-----------------------------|
-| **Where**         | Local machine       | GCP Compute Engine (free tier) | GCP Cloud Run               |
+| **Where**         | Local machine       | GCP Compute Engine (free tier) | GCP Cloud Run (`europe-southwest1`) |
 | **Database**      | Docker (PostgreSQL) | Docker (PostgreSQL)            | Cloud SQL (PostgreSQL 16)   |
 | **Celery**        | Docker (full stack) | Docker (full stack)            | Eager mode + Cloud Scheduler|
 | **Static files**  | Django runserver    | WhiteNoise                     | WhiteNoise                  |
@@ -134,8 +149,15 @@ docker compose up -d --build
 
 ## 3. Production (Cloud Run + Cloud SQL)
 
-> **Database rollout plan (Neon first, then Cloud SQL):** the production database will
-> initially be prototyped on [Neon](https://neon.tech) (serverless PostgreSQL, free tier)
+> **STATUS (v1.14.7):** Cloud Run is live in `europe-southwest1`. Which database backend is
+> actually attached — Neon or Cloud SQL — is whatever `DATABASE_URL` points at on the live
+> service; confirm with
+> `gcloud run services describe fiveaday --region=europe-southwest1 --format='value(spec.template.spec.containers[0].env)'`
+> and update this section once the Cloud SQL migration has happened (or delete the plan below
+> if it already has).
+>
+> **Database rollout plan (Neon first, then Cloud SQL):** the production database was
+> initially to be prototyped on [Neon](https://neon.tech) (serverless PostgreSQL, free tier)
 > instead of Cloud SQL — the app is agnostic, it only sees `DATABASE_URL`. Once the whole
 > production stack is verified working end-to-end, we will migrate to the Cloud SQL
 > instance described below **before introducing any real data**, so the switch is a plain
@@ -280,10 +302,10 @@ gcloud run deploy fiveaday \
   --add-cloudsql-instances=$PROJECT_ID:$REGION:fiveaday-db \
   --set-env-vars="DJANGO_ENV=production" \
   --set-env-vars="DJANGO_DEBUG=False" \
-  --set-env-vars="DJANGO_ALLOWED_HOSTS=fiveaday-XXXXX-ew.a.run.app" \
+  --set-env-vars="DJANGO_ALLOWED_HOSTS=fiveaday-332600671945.europe-southwest1.run.app" \
   --set-env-vars="DATABASE_URL=postgres://fiveaday_user:PASSWORD@/fiveaday_db?host=/cloudsql/$PROJECT_ID:$REGION:fiveaday-db" \
   --set-env-vars="CELERY_TASK_ALWAYS_EAGER=True" \
-  --set-env-vars="GOOGLE_REDIRECT_URI=https://fiveaday-XXXXX-ew.a.run.app/auth/google/callback/" \
+  --set-env-vars="GOOGLE_REDIRECT_URI=https://fiveaday-332600671945.europe-southwest1.run.app/auth/google/callback/" \
   --set-env-vars="TEACHER_SEED_1_ADMIN=True" \
   --set-secrets="DJANGO_SECRET_KEY=DJANGO_SECRET_KEY:latest" \
   --set-secrets="EMAIL_HOST_USER=EMAIL_HOST_USER:latest" \
@@ -296,9 +318,41 @@ gcloud run deploy fiveaday \
   --set-secrets="TEACHER_SEED_1_PASSWORD=TEACHER_SEED_1_PASSWORD:latest"
 ```
 
+**Optional env vars / secrets** — omit any feature you are not using; each one is dormant and
+harmless when unset. Add them to the same `gcloud run deploy` invocation:
+
+```bash
+  # Support + QA error mail
+  --set-secrets="SUPPORT_EMAIL=SUPPORT_EMAIL:latest" \
+  # Restrict Google login to a single address (defaults to EMAIL_HOST_USER)
+  --set-secrets="GOOGLE_ALLOWED_EMAIL=GOOGLE_ALLOWED_EMAIL:latest" \
+  # Prefilled into the payment-reminder email forms
+  --set-secrets="ACADEMY_IBAN=ACADEMY_IBAN:latest" \
+  --set-secrets="ACADEMY_IBAN_HOLDER=ACADEMY_IBAN_HOLDER:latest" \
+  --set-secrets="ACADEMY_PHONE=ACADEMY_PHONE:latest" \
+  # Stripe (v1.11) — STRIPE_WEBHOOK_SECRET is REQUIRED if STRIPE_SECRET_KEY is set,
+  # otherwise the webhook skips signature verification entirely
+  --set-secrets="STRIPE_SECRET_KEY=STRIPE_SECRET_KEY:latest" \
+  --set-secrets="STRIPE_PUBLISHABLE_KEY=STRIPE_PUBLISHABLE_KEY:latest" \
+  --set-secrets="STRIPE_WEBHOOK_SECRET=STRIPE_WEBHOOK_SECRET:latest" \
+  # Twilio SMS (v1.8) — opt-in parents only
+  --set-secrets="TWILIO_ACCOUNT_SID=TWILIO_ACCOUNT_SID:latest" \
+  --set-secrets="TWILIO_AUTH_TOKEN=TWILIO_AUTH_TOKEN:latest" \
+  --set-secrets="TWILIO_FROM_NUMBER=TWILIO_FROM_NUMBER:latest" \
+  # Google Sheets export (v1.2) — inline JSON is the Secret Manager-friendly form
+  --set-secrets="GOOGLE_SHEETS_SERVICE_ACCOUNT_JSON=GOOGLE_SHEETS_SERVICE_ACCOUNT_JSON:latest" \
+  --set-env-vars="GOOGLE_SHEETS_SPREADSHEET_ID=<doc-id>" \
+  # Needed only behind a proxy or a custom domain
+  --set-env-vars="CSRF_TRUSTED_ORIGINS=https://fiveaday-332600671945.europe-southwest1.run.app" \
+  --set-env-vars="LOG_LEVEL=INFO"
+```
+
+Additional teachers are numbered blocks — `TEACHER_SEED_2_*`, `TEACHER_SEED_3_*`, and so on.
+Iteration stops at the first missing `FIRST_NAME`, so the numbers must not skip.
+
 > `LOGIN_USERNAME` / `LOGIN_PASSWORD` are dev-only basic-auth credentials. In testing and production, login goes through `auth.User` (Teacher email + hashed password) — set Teachers up via `TEACHER_SEED_*` instead. `SimpleAuthMiddleware` is still in the stack: it enforces session auth in every environment and adds a non-admin Teacher whitelist in testing/production.
 
-After the first deploy, note the Cloud Run URL (e.g., `https://fiveaday-abc123-ew.a.run.app`) and
+After the first deploy, note the Cloud Run URL (production is `https://fiveaday-332600671945.europe-southwest1.run.app`) and
 update:
 - `DJANGO_ALLOWED_HOSTS` with the actual URL
 - `GOOGLE_REDIRECT_URI` with `https://YOUR_URL/auth/google/callback/`
@@ -402,10 +456,10 @@ gcloud scheduler jobs create http fiveaday-generate-payments \
   --message-body="{}" \
   --oauth-service-account-email=$SA
 
-# Schedule: birthday emails daily at 07:00
+# Schedule: birthday emails daily at 08:00 (matches the Beat schedule table above)
 gcloud scheduler jobs create http fiveaday-birthday-emails \
   --location=$REGION \
-  --schedule="0 7 * * *" \
+  --schedule="0 8 * * *" \
   --time-zone="Europe/Madrid" \
   --uri="https://$REGION-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/$PROJECT_ID/jobs/fiveaday-birthday-emails:run" \
   --message-body="{}" \
