@@ -47,7 +47,7 @@ Student, payment, management, and email app routes live in `students/urls.py`, `
 
 ## Logging Helpers
 
-- **`safe_log(value, max_len=200)`** (`log_safe.py`, v1.14.4) — single-line, length-capped rendering of anything user-controlled that is about to be formatted into a log record. Strips `CR`/`LF`/`VT`/`FF`/`ESC` so an attacker-supplied field can't forge extra log lines (CodeQL `py/log-injection`) or smuggle terminal escapes into a tailed log, and truncates at 200 chars so one field can't flood the log. Stdlib-only leaf module — no Django, no models — so any app can import it without a cycle. **Use it for every log call whose value comes from a request** (headers, query string, form body, URL captures). `comms/services/email_service.py` carries a module-private twin (`_safe_log`) instead of importing this, because `comms` must not depend on `core`.
+- **`safe_log(value, max_len=200)`** (`log_safe.py`, v1.14.4) — single-line, length-capped rendering of anything user-controlled that is about to be formatted into a log record. Strips `CR`/`LF`/`VT`/`FF`/`ESC` so an attacker-supplied field can't forge extra log lines (CodeQL `py/log-injection`) or smuggle terminal escapes into a tailed log, and truncates at 200 chars so one field can't flood the log. Stdlib-only leaf module — no Django, no models — so any app can import it without a cycle. **Use it for every log call whose value comes from a request** (headers, query string, form body, URL captures). `comms/services/email_service.py` carries a module-private twin (`_safe_log`) instead of importing this, because `comms` must not depend on `core`. **Note (v1.14.5):** this does not silence CodeQL's `py/log-injection` — the query treats `str.replace` as taint-preserving. For ids, coerce with `int()` and `%d`; for free-form values, prefer not logging them or validating them into a known shape (see `_client_ip`).
 
 ## Context Processor
 
@@ -106,6 +106,7 @@ Tests for core components live in `project/tests/`:
 | File | What it tests |
 | ---- | ------------- |
 | `test_context_processors.py` | `today_notifications()` — key presence, todo filtering, scheduled app logic, history count, support email, `is_admin_user` / `is_non_admin_teacher` flags |
+| `test_schedule_utils.py` | `slot_time_range()` + `get_group_schedule_lines()` — row/day band mapping, Friday override, duplicate-column collapsing, day ordering, out-of-range days, group isolation |
 | `test_log_safe.py` | `safe_log()` — line-break and `ESC` stripping, non-string coercion, truncation marker, `max_len` override, boundary at exactly the limit |
 | `test_middleware.py` | `SimpleAuthMiddleware` — public paths (static, health, login, oauth, password-reset), redirect behavior, authenticated sessions |
 | `test_teacher_user_sync.py` | `Teacher.ensure_user()` (create + reuse + password set) and the `post_save` mirror signal (admin → is_staff/is_superuser, email/name sync) |

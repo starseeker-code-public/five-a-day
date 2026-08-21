@@ -29,4 +29,5 @@ if __name__ == "__main__":
     # developer utility — it is never imported by the app and never runs in a
     # request path, so there is no log to leak into. Piped straight into
     # `gcloud secrets versions add` or a .env file by the operator.
-    print(generate_password(length))  # codeql[py/clear-text-logging-sensitive-data]
+    # `scripts/` is excluded in .github/codeql/codeql-config.yml for this reason.
+    print(generate_password(length))

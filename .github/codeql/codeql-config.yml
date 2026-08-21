@@ -1,0 +1,34 @@
+name: "Five a Day CodeQL config"
+
+# The default setup scans every .py file in the repo with the
+# `security-and-quality` suite. That suite includes code-quality queries that
+# are only meaningful for application code, so it produces alerts on files that
+# are not part of the running web app and never touch a request:
+#
+#   scripts/                      one-off operator utilities. Not copied into the
+#                                 runtime image, not importable by the app.
+#                                 `generate_secure_password.py` exists purely to
+#                                 print a secret to stdout for the operator to
+#                                 paste into Secret Manager, which the
+#                                 `py/clear-text-logging-sensitive-data` query
+#                                 flags by design.
+#   project/project/settings_test.py
+#                                 test-settings overlay. `from project.settings
+#                                 import *` is the documented Django pattern for
+#                                 a settings module and cannot be enumerated, so
+#                                 `py/polluting-import` is a permanent false
+#                                 positive here.
+#
+# Inline `# codeql[query-id]` suppression comments were tried first and are NOT
+# honoured by this setup, so scoping is done here instead. Note that
+# `paths-ignore` only applies to the extracted source, so real application code
+# must never be added to this list -- keep it to non-shipping files.
+# NOTE: inside a config file `queries` must be a LIST of query specs, each with
+# a `uses:` key. A bare string here is parsed character-by-character and the
+# init step dies with "Cannot construct instance of ... UserConfig$QuerySpec".
+queries:
+  - uses: security-and-quality
+
+paths-ignore:
+  - scripts
+  - project/project/settings_test.py

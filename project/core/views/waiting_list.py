@@ -180,7 +180,7 @@ def assign_from_waiting_list(request, student_id):
                 icon="person_add",
             )
     except Exception:  # noqa: BLE001 — surface a failure to the user, details to the log
-        logger.exception("Error assigning student %s from the waiting list", student_id)
+        logger.exception("Error assigning student %d from the waiting list", int(student_id))
         error_msg = "Error al asignar al estudiante. Revisa los datos e inténtalo de nuevo."
         if request.headers.get("X-Requested-With") == "XMLHttpRequest":
             return JsonResponse({"success": False, "error": error_msg}, status=500)

@@ -19,7 +19,6 @@ from django.utils import timezone
 from django.views.decorators.http import require_http_methods
 
 from billing.models import Payment
-from core.log_safe import safe_log
 from core.rate_limit import rate_limit
 from students.models import Parent, ParentSessionToken
 
@@ -76,7 +75,10 @@ def parent_portal_login(request):
             except Exception:  # noqa: BLE001 — never fail the request over email
                 logger.exception("Failed to enqueue magic-link email for parent %s", parent.id)
         else:
-            logger.info("Parent portal login attempted for unknown email: %s", safe_log(email))
+            # Deliberately not logging the address: this endpoint is built to
+            # not reveal whether an email is registered, and the log is a place
+            # that story leaks from.
+            logger.info("Parent portal login attempted for an unregistered email")
 
         return render(
             request,
