@@ -149,27 +149,10 @@ docker compose up -d --build
 
 ## 3. Production (Cloud Run + Cloud SQL)
 
-> **STATUS (v1.14.7):** Cloud Run is live in `europe-southwest1`. Which database backend is
-> actually attached — Neon or Cloud SQL — is whatever `DATABASE_URL` points at on the live
-> service; confirm with
-> `gcloud run services describe fiveaday --region=europe-southwest1 --format='value(spec.template.spec.containers[0].env)'`
-> and update this section once the Cloud SQL migration has happened (or delete the plan below
-> if it already has).
->
-> **Database rollout plan (Neon first, then Cloud SQL):** the production database was
-> initially to be prototyped on [Neon](https://neon.tech) (serverless PostgreSQL, free tier)
-> instead of Cloud SQL — the app is agnostic, it only sees `DATABASE_URL`. Once the whole
-> production stack is verified working end-to-end, we will migrate to the Cloud SQL
-> instance described below **before introducing any real data**, so the switch is a plain
-> `DATABASE_URL` swap with no data migration. Notes for the Neon phase:
->
-> - Use Neon's **direct** (non-pooled) connection string — `settings.py` uses
->   `CONN_MAX_AGE=600`, which doesn't mix with Neon's transaction-mode PgBouncer pooler.
-> - Neon's closest region is AWS Frankfurt (`eu-central-1`); consider deploying Cloud Run
->   in `europe-west3` during this phase and moving it to `europe-southwest1` alongside
->   the Cloud SQL migration.
-> - Skip the "Create Cloud SQL instance" step below until the migration; everything else
->   in this section applies unchanged.
+> **STATUS (v1.14.7):** production is **live** on Cloud Run in `europe-southwest1`, backed by
+> **Cloud SQL** — <https://fiveaday-332600671945.europe-southwest1.run.app/login/>.
+> An earlier plan to prototype the database on Neon before migrating to Cloud SQL was dropped;
+> Cloud SQL is the only production database, and the section below describes it as deployed.
 
 ### Architecture
 

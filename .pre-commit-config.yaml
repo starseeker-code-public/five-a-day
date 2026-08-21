@@ -10,17 +10,22 @@ repos:
     hooks:
       - id: mypy
         name: mypy
-        # django-stubs imports project.settings at load time. Without these env
-        # vars, settings.py's production secret-key guard raises ValueError and
-        # mypy reports "Error constructing plugin instance" — see CLAUDE.md.
-        entry: bash -c 'DJANGO_SETTINGS_MODULE=project.settings DJANGO_DEBUG=True DJANGO_SECRET_KEY=dummy-secret-key-for-static-analysis PYTHONPATH=project uv run mypy project/'
+        # Env comes from tools/static-analysis.env: django-stubs imports
+        # project.settings at load time and needs DJANGO_DEBUG plus a dummy
+        # secret key, or settings.py's production guard raises ValueError and
+        # mypy reports "Error constructing plugin instance" (see CLAUDE.md).
+        # Passed with "uv run --env-file" instead of "bash -c VAR=... " because
+        # on Windows bash resolves to WSL bash, a separate filesystem that
+        # cannot see the Windows uv.exe — the hook died with "uv: command not
+        # found". --env-file is shell-free and behaves the same on Linux CI.
+        entry: uv run --env-file tools/static-analysis.env mypy project/
         language: system
         types: [python]
         pass_filenames: false
 
       - id: bandit
         name: bandit
-        entry: bash -c "PYTHONUTF8=1 uv run bandit -r project/ -c pyproject.toml"
+        entry: uv run --env-file tools/static-analysis.env bandit -r project/ -c pyproject.toml
         language: system
         types: [python]
         pass_filenames: false

@@ -20,7 +20,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # NOTA: Usa `make version x.y.z` para actualizar ambos sitios a la vez:
 #   - pyproject.toml (campo version)
 #   - README.md (badge y tabla de versiones — gestionado por la skill update-readme)
-APP_VERSION = os.getenv("APP_VERSION", "1.14.7")
+APP_VERSION = os.getenv("APP_VERSION", "1.14.8")
 
 # ============================================================================
 # SECURITY SETTINGS
@@ -82,7 +82,14 @@ SESSION_COOKIE_AGE = int(os.getenv("SESSION_COOKIE_AGE", "21600"))  # 6 horas
 # any activity resets the timer, and 6h with no activity auto-logs-out.
 SESSION_SAVE_EVERY_REQUEST = os.getenv("SESSION_SAVE_EVERY_REQUEST", "True").lower() == "true"
 SESSION_COOKIE_HTTPONLY = os.getenv("SESSION_COOKIE_HTTPONLY", "True").lower() == "true"
-SESSION_COOKIE_SAMESITE = os.getenv("SESSION_COOKIE_SAMESITE", "Strict" if not DEBUG else "Lax")
+# Lax, not Strict, in every environment. The Google OAuth callback is a cross-site
+# top-level navigation (accounts.google.com → our domain); under Strict the browser
+# withholds the session cookie on that hop, so `google_oauth_state` is missing when
+# google_oauth_callback compares it and every login dies with "Estado OAuth inválido".
+# Lax still blocks the cookie on cross-site POSTs and subresource requests, which is
+# where the CSRF risk actually lives. It also means arriving from an external link
+# (a payment-reminder email) no longer shows the teacher as logged out.
+SESSION_COOKIE_SAMESITE = os.getenv("SESSION_COOKIE_SAMESITE", "Lax")
 
 # ============================================================================
 # SUPPORT / TICKETING

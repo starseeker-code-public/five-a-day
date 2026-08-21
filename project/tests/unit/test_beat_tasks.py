@@ -1,11 +1,17 @@
 """Unit tests for the v1.4 Celery Beat tasks."""
 
+from datetime import date
+from decimal import Decimal
 from unittest.mock import patch
 
 import pytest
 from django.test import override_settings
 
-from billing.tasks import generate_monthly_payments_task
+from billing.models import Expense
+from billing.tasks import (
+    generate_monthly_payments_task,
+    materialize_recurring_expenses_daily_task,
+)
 from comms.tasks import send_monthly_report_task
 
 pytestmark = pytest.mark.django_db
@@ -28,6 +34,60 @@ class TestGenerateMonthlyPaymentsTask:
         with patch("django.core.management.call_command") as mock_call:
             generate_monthly_payments_task.run()
         assert mock_call.called
+
+
+class TestMaterializeRecurringExpensesDailyTask:
+    """The daily weekly/yearly materialiser (Beat 06:15).
+
+    `test_beat_commands.py` patches `.apply()` to assert the command wiring, so
+    the task body itself never runs there; `test_expenses.py` exercises the
+    service directly. This class covers the task, which is what Beat and the
+    Cloud Run Job actually invoke.
+    """
+
+    @staticmethod
+    def _weekly_template(weekdays: str) -> Expense:
+        return Expense.objects.create(
+            description="Limpieza semanal",
+            category="other",
+            amount=Decimal("30.00"),
+            expense_date=date(2026, 1, 1),
+            is_recurring=True,
+            recurring_frequency="weekly",
+            recurring_weekdays=weekdays,
+        )
+
+    def test_target_date_string_is_parsed_and_used(self):
+        # 2026-03-02 is a Monday (weekday 0).
+        tpl = self._weekly_template("0")
+        result = materialize_recurring_expenses_daily_task.run(target_date="2026-03-02")
+        assert result["status"] == "success"
+        assert result["created"] == 1
+        assert result["date"] == "2026-03-02"
+        assert (
+            Expense.objects.filter(generated_from=tpl, expense_date=date(2026, 3, 2), is_recurring=False).count() == 1
+        )
+
+    def test_non_matching_weekday_creates_nothing(self):
+        self._weekly_template("0")  # Mondays only
+        result = materialize_recurring_expenses_daily_task.run(target_date="2026-03-03")  # Tuesday
+        assert result["created"] == 0
+        assert not Expense.objects.filter(is_recurring=False).exists()
+
+    def test_rerun_is_idempotent(self):
+        """Beat and the Cloud Run Job can both fire on the same day — a second
+        run must not duplicate the generated row."""
+        self._weekly_template("0")
+        first = materialize_recurring_expenses_daily_task.run(target_date="2026-03-02")
+        second = materialize_recurring_expenses_daily_task.run(target_date="2026-03-02")
+        assert first["created"] == 1
+        assert second["created"] == 0
+        assert Expense.objects.filter(expense_date=date(2026, 3, 2), is_recurring=False).count() == 1
+
+    def test_defaults_to_today_when_no_target_date(self):
+        result = materialize_recurring_expenses_daily_task.run()
+        assert result["status"] == "success"
+        assert result["date"] == date.today().isoformat()
 
 
 class TestSendMonthlyReportTask:

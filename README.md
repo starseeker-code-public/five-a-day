@@ -20,7 +20,7 @@ Built to centralize student records, automate billing cycles, and streamline par
 ### Project Status
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v1.14.7-brightgreen?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-v1.14.8-brightgreen?style=flat-square" alt="Version">
   &nbsp;|&nbsp;
   <a href="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml?query=branch%3Amain"><img src="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml/badge.svg?branch=main&style=flat-square" alt="CI main"></a>
   &nbsp;|&nbsp;
@@ -41,9 +41,9 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 | Version | Date | Description |
 |---------|------|-------------|
-| **v1.14.7** | 2026-08-21 | Production Gunicorn fix + full documentation sync |
+| **v1.14.8** | 2026-08-21 | SameSite fix — unbreaks Google OAuth in production |
+| v1.14.7 | 2026-08-21 | Production Gunicorn fix + full documentation sync |
 | v1.14.6 | 2026-08-21 | SMS log-injection fix + shared comms log helper |
-| v1.14.5 | 2026-08-21 | Log-injection remediation + CodeQL scoping |
 
 ---
 
@@ -150,8 +150,33 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 ## Version History & Roadmap
 
-<details id="v1147" open>
-<summary><strong>v1.14.7 — Production Gunicorn fix + full documentation sync (current)</strong></summary>
+<details id="v1148" open>
+<summary><strong>v1.14.8 — SameSite fix: Google OAuth login on Cloud Run (current)</strong></summary>
+
+The first real bug found by using production. Teacher email + password login worked, but every
+Google OAuth attempt bounced straight back to `/login/` with **"Estado OAuth inválido"**.
+
+**Root cause (`project/project/settings.py`)**
+
+- `SESSION_COOKIE_SAMESITE` defaulted to `Strict` whenever `DEBUG=False`.
+- The OAuth round trip ends with Google issuing a redirect to `/auth/google/callback/`. That return is a **cross-site top-level navigation** — the initiator is `accounts.google.com`, the destination is our domain — and `SameSite=Strict` instructs the browser to withhold the cookie on exactly that kind of request.
+- Django therefore received no session cookie, built a fresh empty session, and found no `google_oauth_state` to compare against the `state` query parameter. The CSRF guard in `google_oauth_callback` (`core/views/auth.py`) did its job and rejected the callback.
+- Email + password login was unaffected because it never leaves the site, so the cookie is never asked to survive a cross-site hop.
+
+**Fix**
+
+- `SESSION_COOKIE_SAMESITE` now defaults to `Lax` in every environment. `Lax` permits the cookie on top-level cross-site **GET** navigations — precisely the OAuth callback — while still withholding it on cross-site POSTs and subresource requests, which is where the CSRF risk actually lives. It is also Django's own default.
+- `CSRF_COOKIE_SAMESITE` is deliberately left at `Strict`: the CSRF cookie is not needed on the callback GET, and every form POST is same-site.
+- Side benefit: under `Strict`, arriving from any external link — a payment-reminder email, the CI deploy notification — rendered the teacher as logged out until they clicked something internal. That no longer happens.
+
+**Docs**
+
+- README's three SameSite tables said `Strict` in production; all now say `Lax` for the session cookie and carry the reason inline, so nobody "hardens" it back and silently breaks OAuth.
+- The environment-variable reference splits `SESSION_COOKIE_SAMESITE` and `CSRF_COOKIE_SAMESITE` into separate rows — they no longer share a value.
+
+</details>
+<details id="v1147">
+<summary><strong>v1.14.7 — Production Gunicorn fix + full documentation sync</strong></summary>
 
 Production is **live** on Cloud Run as of this release:
 [https://fiveaday-332600671945.europe-southwest1.run.app/login/](https://fiveaday-332600671945.europe-southwest1.run.app/login/).
@@ -1639,7 +1664,7 @@ DJANGO_ALLOWED_HOSTS=localhost,127.0.0.1
 SECURE_SSL_REDIRECT=False         # True in production (Cloud Run terminates TLS)
 SESSION_COOKIE_SECURE=False       # True in production
 CSRF_COOKIE_SECURE=False          # True in production
-SESSION_COOKIE_SAMESITE=Lax       # Strict in production
+SESSION_COOKIE_SAMESITE=Lax       # Lax everywhere — Strict breaks Google OAuth
 CSRF_COOKIE_HTTPONLY=True
 CSRF_COOKIE_SAMESITE=Lax          # Strict in production
 CSRF_TRUSTED_ORIGINS=             # Comma-separated http(s):// origins for non-localhost hosts
@@ -1904,7 +1929,8 @@ The table below describes every variable in the [.env template](#env-template) a
 | `CSRF_COOKIE_SECURE` | HTTPS-only CSRF cookie | No | `True` |
 | `SESSION_COOKIE_HTTPONLY` | Block JS access to the session cookie | No | `True` |
 | `CSRF_COOKIE_HTTPONLY` | Block JS access to the CSRF cookie — **why AJAX must read the token from the hidden input, not the cookie** | No | `True` when `DEBUG=False` |
-| `SESSION_COOKIE_SAMESITE` / `CSRF_COOKIE_SAMESITE` | SameSite policy | No | `Strict` (`Lax` in dev) |
+| `SESSION_COOKIE_SAMESITE` | Session-cookie SameSite policy. Must stay `Lax` — see below | No | `Lax` |
+| `CSRF_COOKIE_SAMESITE` | CSRF-cookie SameSite policy | No | `Strict` (`Lax` in dev) |
 | `SESSION_SAVE_EVERY_REQUEST` | Refresh the session on every request, making `SESSION_COOKIE_AGE` an inactivity timeout | No | `True` |
 | `CSRF_TRUSTED_ORIGINS` | Comma-separated origins allowed to POST (needed behind a proxy or a custom domain) | No | — |
 | `SECURE_HSTS_SECONDS` | HSTS max-age | No | `31536000` (1 y) |
@@ -2616,7 +2642,7 @@ All cookie flags are enforced via `settings.py` with environment-aware defaults:
 |---------|------------|------------|---------|
 | `SESSION_COOKIE_AGE` | 21600 (6h) | 21600 (6h) | Session lifetime. `SESSION_SAVE_EVERY_REQUEST=True` refreshes it on every request, making this an **inactivity** timeout |
 | `SESSION_COOKIE_HTTPONLY` | `True` | `True` | Prevents JavaScript access to session cookie |
-| `SESSION_COOKIE_SAMESITE` | `Lax` | `Strict` | Prevents cross-site request forgery via session cookies |
+| `SESSION_COOKIE_SAMESITE` | `Lax` | `Lax` | **Not `Strict`.** The Google OAuth callback is a cross-site top-level navigation, and `Strict` withholds the session cookie on that hop — `google_oauth_state` goes missing and every OAuth login fails with "Estado OAuth inválido". `Lax` still blocks cross-site POSTs and subresource requests |
 | `SESSION_COOKIE_SECURE` | `False` | `True` | Requires HTTPS for cookie transmission |
 | `CSRF_COOKIE_HTTPONLY` | `False` | `True` | Prevents JavaScript access to CSRF cookie in production |
 | `CSRF_COOKIE_SAMESITE` | `Lax` | `Strict` | Prevents cross-site CSRF cookie leakage |
@@ -2677,7 +2703,7 @@ Full deployment walkthrough in [DEPLOYMENT.md](DEPLOYMENT.md). Security-relevant
 | Probes | Startup probe + liveness probe on `/health/` |
 | TLS | Managed automatically by Cloud Run (custom domain + Google-managed certificate) |
 | SSL enforced | `SECURE_SSL_REDIRECT=True`, all cookie secure flags enabled when `DEBUG=False` |
-| Strict cookies | `SESSION_COOKIE_SAMESITE=Strict`, `CSRF_COOKIE_SAMESITE=Strict`, `CSRF_COOKIE_HTTPONLY=True` |
+| SameSite cookies | `SESSION_COOKIE_SAMESITE=Lax` (required for the OAuth callback), `CSRF_COOKIE_SAMESITE=Strict`, `CSRF_COOKIE_HTTPONLY=True` |
 
 #### Cold-start behaviour on Cloud Run
 
@@ -2854,7 +2880,7 @@ The testing environment mirrors production:
 | `DEBUG` | `False` | Hides technical details from error pages, same as production |
 | `DJANGO_ENV` | `testing` | Like production (collectstatic, Gunicorn, secure cookies) but enables the `/testing/` dashboard |
 | Server | Gunicorn (2 workers) | Same as production (not Django's development server) |
-| HTTPS cookies | `Secure=True`, `SameSite=Strict` | Same cookie policy as production |
+| HTTPS cookies | `Secure=True`, session `SameSite=Lax`, CSRF `SameSite=Strict` | Same cookie policy as production |
 | HTTPS | Via Nginx reverse proxy (local) or Cloud Run (GCP) | See [HTTPS.md](docs/HTTPS.md) for full setup guide |
 | `SECURE_PROXY_SSL_HEADER` | Trusts `X-Forwarded-Proto` from reverse proxy | Enables Django to detect HTTPS behind Nginx/Cloud Run |
 | Database | PostgreSQL 16 (separate volume) | Isolated from the development database |
@@ -3110,7 +3136,7 @@ Configure at **Settings → Secrets and variables → Actions**:
 | `TESTING_NOTIFY_EMAILS` | auto-merge.yml | Comma-separated recipients for the `development → testing` deploy email — support + the two admin teachers. Preferred over `OWNER_EMAILS` |
 | `TESTING_URL` | auto-merge.yml | Base URL of the testing environment, used for the "Open testing environment" button (falls back to the testing VM IP) |
 | `SUPPORT_EMAIL` | notify-production.yml | Support address added (alongside `hellofiveaday@gmail.com`) to the production deploy email |
-| `PRODUCTION_URL` | notify-production.yml | Optional — base URL of production; if set, adds an "Open production" button to the production email. Production is live, so set it to `https://fiveaday-332600671945.europe-southwest1.run.app` |
+| `PRODUCTION_URL` | notify-production.yml | Base URL of production — adds the "Abrir producción" button to the production email. **Set** (v1.14.7) to `https://fiveaday-332600671945.europe-southwest1.run.app` |
 | `CODECOV_TOKEN` | ci.yml | Optional — only needed for private repos. Public repos push coverage anonymously |
 
 **Rotate `GH_PAT` annually.** Without it, the auto-merge falls back to the default `GITHUB_TOKEN`, which cannot trigger CI on PRs it creates — breaking the pipeline silently.
