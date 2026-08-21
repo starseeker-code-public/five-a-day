@@ -1,4 +1,5 @@
 import json
+import logging
 from datetime import datetime
 
 from django.http import JsonResponse
@@ -8,6 +9,8 @@ from django.views.decorators.http import require_http_methods
 from core.models import FunFridayAttendance
 from core.views.students import get_last_friday, get_next_friday
 from students.models import Student
+
+logger = logging.getLogger(__name__)
 
 
 @require_http_methods(["POST"])
@@ -37,8 +40,9 @@ def add_fun_friday_attendance(request, student_id):
         parsed_date = datetime.strptime(date_str, "%Y-%m-%d").date()
         obj, created = FunFridayAttendance.objects.get_or_create(student=student, date=parsed_date)
         return JsonResponse({"success": True, "created": created, "date": str(parsed_date)})
-    except Exception as e:
-        return JsonResponse({"success": False, "error": str(e)}, status=400)
+    except Exception:
+        logger.exception("Error adding Fun Friday attendance for student %d", int(student_id))
+        return JsonResponse({"success": False, "error": "Fecha inválida o error al guardar."}, status=400)
 
 
 @require_http_methods(["POST"])
@@ -50,5 +54,6 @@ def remove_fun_friday_attendance(request, student_id):
         parsed_date = datetime.strptime(date_str, "%Y-%m-%d").date()
         deleted, _ = FunFridayAttendance.objects.filter(student=student, date=parsed_date).delete()
         return JsonResponse({"success": True, "deleted": deleted > 0})
-    except Exception as e:
-        return JsonResponse({"success": False, "error": str(e)}, status=400)
+    except Exception:
+        logger.exception("Error removing Fun Friday attendance for student %d", int(student_id))
+        return JsonResponse({"success": False, "error": "Fecha inválida o error al borrar."}, status=400)

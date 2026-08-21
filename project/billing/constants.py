@@ -33,6 +33,11 @@ SIBLING_DISCOUNT = (Decimal("5.00"), "percentage")  # Hermanos (5% cada mes)
 HALF_MONTH_DISCOUNT = (Decimal("50.00"), "percentage")  # Medio mes (septiembre)
 ONE_WEEK_DISCOUNT = (Decimal("75.00"), "percentage")  # Solo 1 semana (primer mes)
 THREE_WEEK_DISCOUNT = (Decimal("25.00"), "percentage")  # Solo 3 semanas
+# v1.13 — returning-student enrollment discount (flat euros off the one-time
+# matrícula charge). Applied automatically by EnrollmentService when the
+# student has at least one prior Enrollment for a different academic year.
+# Stacks with sibling + language-cheque.
+RETURNING_STUDENT_ENROLLMENT_DISCOUNT = Decimal("20.00")
 
 
 # ============================================================================

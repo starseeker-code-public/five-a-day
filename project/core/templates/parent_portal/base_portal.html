@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{% block title %}Portal · Five a Day{% endblock %}</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+    body { background: #f8fafc; }
+    .brand { color: #6d28d9; }
+    .brand-bg { background: #6d28d9; }
+    .brand-border { border-color: #6d28d9; }
+</style>
+</head>
+<body class="min-h-screen">
+<header class="bg-white border-b border-neutral-200 p-4">
+    <div class="max-w-4xl mx-auto flex items-center justify-between">
+        <a href="{% url 'parent_portal_dashboard' %}" class="text-2xl font-bold brand no-underline">Five a Day · Portal</a>
+        {% if parent %}
+        <nav class="flex items-center gap-4 text-sm">
+            <a href="{% url 'parent_portal_dashboard' %}" class="text-neutral-700 hover:text-primary-700 no-underline">Inicio</a>
+            <a href="{% url 'parent_portal_payments' %}" class="text-neutral-700 hover:text-primary-700 no-underline">Pagos</a>
+            <a href="{% url 'parent_portal_logout' %}" class="text-red-600 hover:text-red-800 no-underline">Salir</a>
+        </nav>
+        {% endif %}
+    </div>
+</header>
+<main class="max-w-4xl mx-auto p-6">
+    {% if messages %}
+        {% for m in messages %}
+            <div class="mb-4 p-3 rounded-md {% if 'error' in m.tags %}bg-red-100 text-red-700{% else %}bg-green-100 text-green-700{% endif %}">{{ m }}</div>
+        {% endfor %}
+    {% endif %}
+    {% block content %}{% endblock %}
+</main>
+</body>
+</html>

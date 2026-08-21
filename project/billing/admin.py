@@ -9,6 +9,7 @@ from django.utils.html import format_html
 from billing.models import (
     Enrollment,
     EnrollmentType,
+    Expense,
     Payment,
     SiteConfiguration,
 )
@@ -288,3 +289,11 @@ class EnrollmentAdmin(admin.ModelAdmin):
         return format_html('<span style="color: red;">&#10007; Pending (&euro;{})</span>', remaining)
 
     is_paid_display.short_description = "Payment Status"
+
+
+@admin.register(Expense)
+class ExpenseAdmin(admin.ModelAdmin):
+    list_display = ["expense_date", "description", "category", "amount", "is_recurring"]
+    list_filter = ["category", "is_recurring", "expense_date"]
+    search_fields = ["description", "notes"]
+    readonly_fields = ["created_at", "updated_at", "generated_from"]

@@ -164,15 +164,24 @@ def create_payment(request):
             student_id = request.POST.get("student_id")
             parent_id = request.POST.get("parent_id")
 
-            # Validate student and parent exist
+            # Validate student exists
             student = get_object_or_404(Student, id=student_id)
-            parent = get_object_or_404(Parent, id=parent_id)
 
-            # Validate relationship
-            if not student.parents.filter(id=parent_id).exists():
+            # Parent is optional for adult students (they have no parent/tutor).
+            # For everyone else a parent is required and must be related.
+            parent = None
+            if parent_id:
+                parent = get_object_or_404(Parent, id=parent_id)
+                if not student.parents.filter(id=parent_id).exists():
+                    messages.error(
+                        request,
+                        "El padre/tutor seleccionado no está asociado con este estudiante.",
+                    )
+                    return redirect("payments_list")
+            elif not student.is_adult:
                 messages.error(
                     request,
-                    "El padre/tutor seleccionado no está asociado con este estudiante.",
+                    "Debe seleccionar un padre/tutor para este estudiante.",
                 )
                 return redirect("payments_list")
 
@@ -266,6 +275,18 @@ def payment_detail_view(request, payment_id):
     return render(request, "payments/payment_detail.html", context)
 
 
+@require_http_methods(["GET"])
+def payment_receipt_pdf(request, payment_id):
+    """Stream a payment-receipt PDF (v1.3)."""
+    from billing.services.pdf_service import generate_payment_receipt
+
+    payment = get_object_or_404(Payment.objects.select_related("student", "parent"), id=payment_id)
+    pdf_bytes = generate_payment_receipt(payment)
+    response = HttpResponse(pdf_bytes, content_type="application/pdf")
+    response["Content-Disposition"] = f'attachment; filename="recibo-{payment.id}.pdf"'
+    return response
+
+
 @require_http_methods(["POST"])
 def update_payment(request, payment_id):
     """
@@ -332,21 +353,30 @@ def update_payment(request, payment_id):
             }
         )
 
-    except (InvalidOperation, ValidationError) as e:
+    except InvalidOperation:
+        # A Decimal parse failure. Its str() is internal noise ("[<class
+        # 'decimal.ConversionSyntax'>]"), useless to the user and the last
+        # exception text still reaching a response from this view.
+        logger.exception("Invalid amount submitted for payment %d", int(payment_id))
+        error_msg = "El importe introducido no es válido."
         if request.content_type == "application/json":
-            return JsonResponse(
-                {"success": False, "error": str(e)},
-                status=400,
-            )
-        messages.error(request, str(e))
+            return JsonResponse({"success": False, "error": error_msg}, status=400)
+        messages.error(request, error_msg)
         return redirect("payments_list")
-    except Exception as e:
+    except ValidationError as e:
+        # `messages` is Django's user-facing validation text -- written to be
+        # shown, unlike a raw exception repr.
+        error_msg = " ".join(e.messages)
         if request.content_type == "application/json":
-            return JsonResponse(
-                {"success": False, "error": f"Error al actualizar el pago: {str(e)}"},
-                status=500,
-            )
-        messages.error(request, f"Error al actualizar el pago: {str(e)}")
+            return JsonResponse({"success": False, "error": error_msg}, status=400)
+        messages.error(request, error_msg)
+        return redirect("payments_list")
+    except Exception:
+        logger.exception("Error updating payment %d", int(payment_id))
+        error_msg = "Error al actualizar el pago. Inténtalo de nuevo."
+        if request.content_type == "application/json":
+            return JsonResponse({"success": False, "error": error_msg}, status=500)
+        messages.error(request, error_msg)
         return redirect("payments_list")
 
 
@@ -368,11 +398,11 @@ def delete_payment(request, payment_id):
             }
         )
 
-    except Exception as e:
-        logger.exception("Error deleting payment %s", payment_id)
+    except Exception:
+        logger.exception("Error deleting payment %d", int(payment_id))
 
         return JsonResponse(
-            {"success": False, "error": f"Error al eliminar el pago: {str(e)}"},
+            {"success": False, "error": "Error al eliminar el pago."},
             status=500,
         )
 
@@ -390,9 +420,10 @@ def deactivate_payment(request, payment_id):
 
         return JsonResponse({"success": True, "message": "Pago desactivado exitosamente."})
 
-    except Exception as e:
+    except Exception:
+        logger.exception("Error deactivating payment %d", int(payment_id))
         return JsonResponse(
-            {"success": False, "message": f"Error al desactivar el pago: {str(e)}"},
+            {"success": False, "message": "Error al desactivar el pago."},
             status=400,
         )
 
@@ -433,9 +464,10 @@ def quick_complete_payment(request, payment_id):
             }
         )
 
-    except Exception as e:
+    except Exception:
+        logger.exception("Error completing payment %d", int(payment_id))
         return JsonResponse(
-            {"success": False, "error": f"Error al completar el pago: {str(e)}"},
+            {"success": False, "error": "Error al completar el pago."},
             status=500,
         )
 
@@ -473,11 +505,12 @@ def get_payment_details(request, payment_id):
             }
         )
 
-    except Exception as e:
+    except Exception:
+        logger.exception("Error fetching payment details for %d", int(payment_id))
         return JsonResponse(
             {
                 "success": False,
-                "error": f"Error al obtener los detalles del pago: {str(e)}",
+                "error": "Error al obtener los detalles del pago.",
             },
             status=500,
         )
@@ -671,5 +704,6 @@ def validate_student_parent(request):
 
     except json.JSONDecodeError:
         return JsonResponse({"valid": False, "message": "Invalid JSON data"}, status=400)
-    except Exception as e:
-        return JsonResponse({"valid": False, "message": str(e)}, status=400)
+    except Exception:
+        logger.exception("Error validating payment payload")
+        return JsonResponse({"valid": False, "message": "Datos de pago inválidos."}, status=400)

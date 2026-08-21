@@ -22,6 +22,34 @@
 </a>
 {% endblock %}
 
+{% block help_content %}
+<p>La <strong>Base de datos</strong> ofrece la vista más completa de todo lo que hay en el sistema: dos grandes tablas, una de <strong>estudiantes</strong> y otra de <strong>pagos</strong>, con todas sus columnas. Es una sección solo para administradores, pensada para consultar y exportar datos en detalle.</p>
+
+<h4 style="font-weight:700;margin-top:1rem;">Tabla de estudiantes</h4>
+<p>Recoge, por alumno: ID, nombre y apellidos, fecha de nacimiento, edad, colegio, alergias, estado del GDPR, grupo, matrícula (tipo y modalidad), profesora y los datos de contacto de los padres (móvil, email e IBAN). Arriba se indica el total de alumnos registrados.</p>
+
+<h4 style="font-weight:700;margin-top:1rem;">Tabla de pagos</h4>
+<p>Recoge, por pago: ID, estudiante, teléfono, matrícula, tipo y método de pago, cantidad, estado, fechas de vencimiento y de cobro, concepto, número de referencia, notas y la fecha de creación.</p>
+
+<h4 style="font-weight:700;margin-top:1rem;">Moverse por las tablas</h4>
+<ul style="list-style:disc;margin:0.4rem 0 0 1.25rem;line-height:1.7;">
+    <li>Son tablas anchas: <strong>desplázalas en horizontal</strong> para ver todas las columnas.</li>
+    <li>Cada tabla tiene su propio desplegable <strong>Ordenar por</strong> (por fecha, ID, nombre o apellido en estudiantes; por fecha o estudiante en pagos).</li>
+    <li>Cuando hay muchos registros, cada tabla se pagina de forma independiente con los controles de página que aparecen debajo.</li>
+</ul>
+
+<h4 style="font-weight:700;margin-top:1rem;">Exportar y administración avanzada</h4>
+<ul style="list-style:disc;margin:0.4rem 0 0 1.25rem;line-height:1.7;">
+    <li>El botón de <strong>descarga</strong> (junto al orden de estudiantes) exporta los datos a un archivo <strong>Excel</strong>.</li>
+    <li><strong>Admin Django</strong> (cabecera) abre el panel de administración técnico, para consultas o cambios que no están en la interfaz normal. Úsalo con cuidado.</li>
+</ul>
+
+<h4 style="font-weight:700;margin-top:1rem;">Consejos</h4>
+<ul style="list-style:disc;margin:0.4rem 0 0 1.25rem;line-height:1.7;">
+    <li>Para el día a día, es más cómodo trabajar desde Estudiantes o Pagos; esta vista brilla cuando necesitas verlo <em>todo</em> junto o llevártelo a una hoja de cálculo.</li>
+</ul>
+{% endblock %}
+
 {% block content %}
 <div class="mb-8">
     <div class="flex items-center gap-3 mb-2">
@@ -156,19 +184,19 @@
     <div style="margin-top:1.5rem;display:flex;justify-content:center;">
         <nav style="display:flex;align-items:center;gap:0.5rem;">
             {% if students.has_previous %}
-                <a href="?students_page={{ students.previous_page_number }}&students_sort={{ students_sort }}&payments_page={{ payments.number }}&payments_sort={{ payments_sort }}#db-students-section" style="text-decoration:none;width:2.5rem;height:2.5rem;border-radius:9999px;display:inline-flex;align-items:center;justify-content:center;border:1px solid #e5e7eb;background:#fff;color:#525252;font-size:1rem;transition:background 0.2s;" onmouseover="this.style.background='#f5f5f5'" onmouseout="this.style.background='#fff'">‹</a>
+                <a href="?students_page={{ students.previous_page_number }}&students_sort={{ students_sort }}&payments_page={{ payments.number }}&payments_sort={{ payments_sort }}#db-students-section" class="pg-btn" style="font-size:1rem;">‹</a>
             {% endif %}
             {% for num in students.paginator.page_range %}
                 {% if students.number == num %}
-                    <span style="width:2.5rem;height:2.5rem;border-radius:9999px;display:inline-flex;align-items:center;justify-content:center;background:#8b5cf6;color:#fff;font-size:0.875rem;font-weight:700;">{{ num }}</span>
+                    <span class="pg-active">{{ num }}</span>
                 {% elif num > students.number|add:"-3" and num < students.number|add:"3" or num == 1 or num == students.paginator.num_pages %}
-                    <a href="?students_page={{ num }}&students_sort={{ students_sort }}&payments_page={{ payments.number }}&payments_sort={{ payments_sort }}#db-students-section" style="text-decoration:none;width:2.5rem;height:2.5rem;border-radius:9999px;display:inline-flex;align-items:center;justify-content:center;border:1px solid #e5e7eb;background:#fff;color:#525252;font-size:0.875rem;transition:background 0.2s;" onmouseover="this.style.background='#f5f5f5'" onmouseout="this.style.background='#fff'">{{ num }}</a>
+                    <a href="?students_page={{ num }}&students_sort={{ students_sort }}&payments_page={{ payments.number }}&payments_sort={{ payments_sort }}#db-students-section" class="pg-btn">{{ num }}</a>
                 {% elif num == students.number|add:"-3" or num == students.number|add:"3" %}
                     <span style="width:2rem;text-align:center;color:#9ca3af;">…</span>
                 {% endif %}
             {% endfor %}
             {% if students.has_next %}
-                <a href="?students_page={{ students.next_page_number }}&students_sort={{ students_sort }}&payments_page={{ payments.number }}&payments_sort={{ payments_sort }}#db-students-section" style="text-decoration:none;width:2.5rem;height:2.5rem;border-radius:9999px;display:inline-flex;align-items:center;justify-content:center;border:1px solid #e5e7eb;background:#fff;color:#525252;font-size:1rem;transition:background 0.2s;" onmouseover="this.style.background='#f5f5f5'" onmouseout="this.style.background='#fff'">›</a>
+                <a href="?students_page={{ students.next_page_number }}&students_sort={{ students_sort }}&payments_page={{ payments.number }}&payments_sort={{ payments_sort }}#db-students-section" class="pg-btn" style="font-size:1rem;">›</a>
             {% endif %}
         </nav>
     </div>
@@ -280,19 +308,19 @@
     <div style="margin-top:1.5rem;display:flex;justify-content:center;">
         <nav style="display:flex;align-items:center;gap:0.5rem;">
             {% if payments.has_previous %}
-                <a href="?payments_page={{ payments.previous_page_number }}&payments_sort={{ payments_sort }}&students_page={{ students.number }}&students_sort={{ students_sort }}#db-payments-section" style="text-decoration:none;width:2.5rem;height:2.5rem;border-radius:9999px;display:inline-flex;align-items:center;justify-content:center;border:1px solid #e5e7eb;background:#fff;color:#525252;font-size:1rem;transition:background 0.2s;" onmouseover="this.style.background='#f5f5f5'" onmouseout="this.style.background='#fff'">‹</a>
+                <a href="?payments_page={{ payments.previous_page_number }}&payments_sort={{ payments_sort }}&students_page={{ students.number }}&students_sort={{ students_sort }}#db-payments-section" class="pg-btn" style="font-size:1rem;">‹</a>
             {% endif %}
             {% for num in payments.paginator.page_range %}
                 {% if payments.number == num %}
-                    <span style="width:2.5rem;height:2.5rem;border-radius:9999px;display:inline-flex;align-items:center;justify-content:center;background:#8b5cf6;color:#fff;font-size:0.875rem;font-weight:700;">{{ num }}</span>
+                    <span class="pg-active">{{ num }}</span>
                 {% elif num > payments.number|add:"-3" and num < payments.number|add:"3" or num == 1 or num == payments.paginator.num_pages %}
-                    <a href="?payments_page={{ num }}&payments_sort={{ payments_sort }}&students_page={{ students.number }}&students_sort={{ students_sort }}#db-payments-section" style="text-decoration:none;width:2.5rem;height:2.5rem;border-radius:9999px;display:inline-flex;align-items:center;justify-content:center;border:1px solid #e5e7eb;background:#fff;color:#525252;font-size:0.875rem;transition:background 0.2s;" onmouseover="this.style.background='#f5f5f5'" onmouseout="this.style.background='#fff'">{{ num }}</a>
+                    <a href="?payments_page={{ num }}&payments_sort={{ payments_sort }}&students_page={{ students.number }}&students_sort={{ students_sort }}#db-payments-section" class="pg-btn">{{ num }}</a>
                 {% elif num == payments.number|add:"-3" or num == payments.number|add:"3" %}
                     <span style="width:2rem;text-align:center;color:#9ca3af;">…</span>
                 {% endif %}
             {% endfor %}
             {% if payments.has_next %}
-                <a href="?payments_page={{ payments.next_page_number }}&payments_sort={{ payments_sort }}&students_page={{ students.number }}&students_sort={{ students_sort }}#db-payments-section" style="text-decoration:none;width:2.5rem;height:2.5rem;border-radius:9999px;display:inline-flex;align-items:center;justify-content:center;border:1px solid #e5e7eb;background:#fff;color:#525252;font-size:1rem;transition:background 0.2s;" onmouseover="this.style.background='#f5f5f5'" onmouseout="this.style.background='#fff'">›</a>
+                <a href="?payments_page={{ payments.next_page_number }}&payments_sort={{ payments_sort }}&students_page={{ students.number }}&students_sort={{ students_sort }}#db-payments-section" class="pg-btn" style="font-size:1rem;">›</a>
             {% endif %}
         </nav>
     </div>

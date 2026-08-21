@@ -3,7 +3,13 @@ from django.contrib import admin
 from students.models import Group, Parent, Student, StudentParent, Teacher
 
 admin.site.register(Teacher)
-admin.site.register(Group)
+
+
+@admin.register(Group)
+class GroupAdmin(admin.ModelAdmin):
+    list_display = ["group_name", "teacher", "max_students", "enrolled_count", "available_spots", "active"]
+    list_filter = ["active", "teacher"]
+    search_fields = ["group_name"]
 
 
 # Students and parents
@@ -21,16 +27,20 @@ class ParentStudentInline(admin.TabularInline):
 
 @admin.register(Student)
 class StudentAdmin(admin.ModelAdmin):
-    list_display = ["first_name", "last_name", "group", "active", "birth_date"]
-    list_filter = ["group", "active", "gdpr_signed"]
+    list_display = ["first_name", "last_name", "group", "active", "is_waiting", "birth_date"]
+    list_filter = ["group", "active", "is_waiting", "gdpr_signed"]
     search_fields = ["first_name", "last_name"]
     inlines = [StudentParentInline]
+    readonly_fields = ["waiting_since"]
 
     fieldsets = (
         ("Personal Information", {"fields": ("first_name", "last_name", "birth_date")}),
         ("School Information", {"fields": ("school", "group")}),
         ("Health & Preferences", {"fields": ("allergies", "gdpr_signed")}),
-        ("Status", {"fields": ("active", "withdrawal_date", "withdrawal_reason")}),
+        (
+            "Status",
+            {"fields": ("active", "is_waiting", "waiting_since", "withdrawal_date", "withdrawal_reason")},
+        ),
     )
 
 

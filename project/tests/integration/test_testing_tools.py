@@ -2,10 +2,9 @@
 
 All views are protected by @qa_access_required, which requires:
 - settings.IS_TESTING_ENV == True
-- settings.QA_TESTING_USERNAME non-empty
-- request.session["username"] == settings.QA_TESTING_USERNAME
+- the request is made by a logged-in Teacher (admin or not)
 
-Tests use override_settings to satisfy the gate.
+Tests use override_settings + a Teacher-authenticated client to satisfy the gate.
 """
 
 import json
@@ -18,15 +17,27 @@ from django.urls import reverse
 pytestmark = pytest.mark.django_db
 
 
-QA_SETTINGS = override_settings(IS_TESTING_ENV=True, QA_TESTING_USERNAME="qa_user")
+QA_SETTINGS = override_settings(IS_TESTING_ENV=True)
 
 
 @pytest.fixture
-def qa_client(client):
-    """A Django test client with a session user matching QA_TESTING_USERNAME."""
+def qa_client(client, db):
+    """A Django test client authenticated as a logged-in Teacher (QA access)."""
+    from students.models import Teacher
+
+    teacher = Teacher.objects.create(
+        first_name="QA",
+        last_name="Tester",
+        email="qa.tester@fiveaday.test",
+        phone="600000000",
+        active=True,
+        admin=True,
+    )
+    user = teacher.ensure_user(password="qa-pass-123")
+    client.force_login(user)
     session = client.session
     session["is_authenticated"] = True
-    session["username"] = "qa_user"
+    session["username"] = teacher.first_name
     session.save()
     return client
 
@@ -168,20 +179,37 @@ class TestApiCreateBacklogTask:
         )
         assert response.status_code == 400
 
-    @override_settings(IS_TESTING_ENV=True, QA_TESTING_USERNAME="qa_user", SUPPORT_EMAIL="sup@test.com")
+    @override_settings(IS_TESTING_ENV=True, SUPPORT_EMAIL="sup@test.com")
     def test_email_is_sent_when_support_email_configured(self, qa_client):
-        with patch("core.views.testing_tools.send_mail") as mock_mail:
-            qa_client.post(
-                reverse("api_create_backlog_task"),
-                data=json.dumps({"title": "Issue", "description": "", "priority": "medium"}),
-                content_type="application/json",
-            )
-        mock_mail.assert_called_once()
+        from django.core import mail
 
-    @override_settings(IS_TESTING_ENV=True, QA_TESTING_USERNAME="qa_user", SUPPORT_EMAIL="sup@test.com")
+        qa_client.post(
+            reverse("api_create_backlog_task"),
+            data=json.dumps({"title": "Issue", "description": "", "priority": "medium"}),
+            content_type="application/json",
+        )
+        assert len(mail.outbox) == 1
+        assert mail.outbox[0].to == ["sup@test.com"]
+
+    @override_settings(IS_TESTING_ENV=True, SUPPORT_EMAIL="sup@test.com")
+    def test_screenshot_is_attached_to_email_not_stored(self, qa_client):
+        from django.core import mail
+        from django.core.files.uploadedfile import SimpleUploadedFile
+
+        img = SimpleUploadedFile("shot.png", b"\x89PNG\r\n\x1a\n" + b"0" * 64, content_type="image/png")
+        # multipart POST (form-data), not JSON — this is how a screenshot rides along
+        qa_client.post(
+            reverse("api_create_backlog_task"),
+            data={"title": "With shot", "description": "", "priority": "low", "screenshot": img},
+        )
+        assert len(mail.outbox) == 1
+        assert len(mail.outbox[0].attachments) == 1
+        assert mail.outbox[0].attachments[0][0] == "shot.png"
+
+    @override_settings(IS_TESTING_ENV=True, SUPPORT_EMAIL="sup@test.com")
     def test_email_failure_is_swallowed(self, qa_client):
-        """send_mail throwing does not break the task creation."""
-        with patch("core.views.testing_tools.send_mail", side_effect=RuntimeError("smtp down")):
+        """An email send failure does not break task creation."""
+        with patch("django.core.mail.EmailMessage.send", side_effect=RuntimeError("smtp down")):
             response = qa_client.post(
                 reverse("api_create_backlog_task"),
                 data=json.dumps({"title": "Issue", "description": "", "priority": "medium"}),

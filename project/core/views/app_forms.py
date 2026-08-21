@@ -14,7 +14,6 @@ from django.utils.html import strip_tags
 
 from comms.services.email_functions import (
     send_all_tax_certificates,
-    send_fun_friday_email,
     send_monthly_report,
     send_payment_reminder_email,
     send_quarterly_receipt_email,
@@ -188,36 +187,51 @@ Esta semana haremos manualidades creativas con materiales reciclados.
             messages.warning(request, "⚠️ No hay padres con email para enviar")
             return redirect("home")
 
-        success_count = 0
-        error_count = 0
+        # Don't send now — persist the announcement scheduled for 14:30 on the
+        # MONDAY of the target Friday's week (e.g. a Friday on the 17th →
+        # Monday the 13th at 14:30). A DB row (not apply_async(eta=...)) so it
+        # survives eager mode: send_due_fun_friday_emails_task drains due rows
+        # (Celery Beat in dev/testing, Cloud Scheduler job in production). If
+        # the moment has already passed, drain immediately.
+        import datetime as _dt
 
-        for email in parent_emails:
-            try:
-                result = send_fun_friday_email(
-                    recipients=email,
-                    day_name=day_name,
-                    day_number=event_date.day,
-                    month=month_name,
-                    start_time=start_time,
-                    end_time=end_time,
-                    activity_description=activity_description,
-                    minimum_age=min_age_int,
-                    maximum_age=max_age_int,
-                    meeting_point=meeting_point if meeting_point else None,
-                )
-                if result:
-                    success_count += 1
-                else:
-                    error_count += 1
-            except Exception:
-                error_count += 1
+        from django.utils import timezone as _tz
 
-        if success_count > 0:
-            HistoryLog.log("email_sent", f"Fun Friday: {success_count} email(s) enviados", icon="mail")
-            messages.success(request, f"✅ Fun Friday enviado a {success_count} padre(s)")
-        if error_count > 0:
-            messages.warning(request, f"⚠️ {error_count} email(s) no pudieron enviarse")
+        from comms.tasks import send_due_fun_friday_emails_task
+        from core.models import FunFridayScheduledSend
 
+        monday = event_date - timedelta(days=event_date.weekday())
+        send_at = _dt.datetime.combine(monday, _dt.time(14, 30))
+        if _tz.is_naive(send_at):
+            send_at = _tz.make_aware(send_at, _tz.get_current_timezone())
+
+        FunFridayScheduledSend.objects.create(
+            recipients=parent_emails,
+            day_name=day_name,
+            day_number=event_date.day,
+            month=month_name,
+            start_time=start_time,
+            end_time=end_time,
+            activity_description=activity_description,
+            minimum_age=min_age_int,
+            maximum_age=max_age_int,
+            meeting_point=meeting_point if meeting_point else None,
+            scheduled_for=send_at,
+        )
+        if send_at <= _tz.now():
+            send_due_fun_friday_emails_task.delay()
+
+        HistoryLog.log(
+            "email_scheduled",
+            f"Fun Friday ({day_name} {event_date.day} {month_name}): "
+            f"{len(parent_emails)} email(s) programados para el {monday.strftime('%d/%m')} a las 14:30",
+            icon="schedule_send",
+        )
+        messages.success(
+            request,
+            f"✅ Fun Friday programado: {len(parent_emails)} email(s) se enviarán "
+            f"el lunes {monday.strftime('%d/%m')} a las 14:30.",
+        )
         return redirect("home")
 
     # GET - Mostrar formulario con email preview
@@ -459,6 +473,8 @@ def vacation_closure_form(request):
                 "end_closure_day_name": DIAS_ES[_ce.weekday()],
                 "end_closure_day_number": _ce.day,
                 "month_closure": MESES_ES[_cs.month - 1],
+                # end date's month may differ (e.g. Navidad 23 dic → 3 ene)
+                "month_closure_end": MESES_ES[_ce.month - 1],
                 "closure_reason": _reason,
                 "reopening_day_name": DIAS_ES[_ro.weekday()],
                 "reopening_day_number": _ro.day,
@@ -516,6 +532,7 @@ def vacation_closure_form(request):
                         end_closure_day_name=DIAS_ES[closure_end.weekday()],
                         end_closure_day_number=closure_end.day,
                         month_closure=MESES_ES[closure_start.month - 1],
+                        month_closure_end=MESES_ES[closure_end.month - 1],
                         closure_reason=closure_reason,
                         reopening_day_name=DIAS_ES[reopening.weekday()],
                         reopening_day_number=reopening.day,
@@ -543,6 +560,7 @@ def vacation_closure_form(request):
             "end_closure_day_name": "viernes",
             "end_closure_day_number": 3,
             "month_closure": "diciembre",
+            "month_closure_end": "enero",
             "closure_reason": "Navidad",
             "reopening_day_name": "lunes",
             "reopening_day_number": 8,
@@ -1170,6 +1188,9 @@ def enrollment_form(request):
                         if _s.group:
                             _ctx["group_name"] = _s.group.group_name
                     except Exception:
+                        # Preview/test-send only: a stale student id just means
+                        # the placeholder names stay in `_ctx`. Never block the
+                        # preview over it.
                         pass
                 if action == "preview":
                     return JsonResponse({"html": render_to_string("emails/welcome_student.html", _ctx)})
@@ -1199,6 +1220,8 @@ def enrollment_form(request):
                         _s = Student.objects.get(id=_student_id)
                         _student_name = _s.full_name
                     except Exception:
+                        # Preview/test-send only: fall back to the placeholder
+                        # name if the student id no longer resolves.
                         pass
                 _template = "enrollment_child" if _etype == "child" else "enrollment_adult"
                 _ctx = {"student": _student_name, "genero": _gender, "academic_year": _ay, "month": _month}

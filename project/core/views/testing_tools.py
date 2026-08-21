@@ -4,6 +4,7 @@ error-reporting toggle.
 """
 
 import json
+import logging
 import subprocess
 import sys
 from datetime import datetime
@@ -18,6 +19,8 @@ from django.views.decorators.http import require_http_methods
 from core.decorators import qa_access_required
 from core.models import BacklogTask, QAConfiguration
 
+logger = logging.getLogger(__name__)
+
 VALID_PRIORITIES = {"low", "medium", "high"}
 
 
@@ -25,8 +28,11 @@ def _git_info():
     """Return branch + last commit info. Single subprocess call, never raises."""
     fmt = "%H%n%h%n%s%n%an%n%ci"
     try:
+        # `-c safe.directory=*` avoids git's "dubious ownership" refusal when
+        # the repo is owned by a different user than the process (common with
+        # bind mounts / clones done as root). Requires git in the image.
         result = subprocess.run(
-            ["git", "log", "-1", f"--pretty=format:{fmt}"],
+            ["git", "-c", "safe.directory=*", "log", "-1", f"--pretty=format:{fmt}"],
             capture_output=True,
             text=True,
             timeout=5,
@@ -36,7 +42,7 @@ def _git_info():
             return {}
         lines = result.stdout.strip().split("\n")
         branch = subprocess.run(
-            ["git", "branch", "--show-current"],
+            ["git", "-c", "safe.directory=*", "branch", "--show-current"],
             capture_output=True,
             text=True,
             timeout=3,
@@ -99,24 +105,46 @@ def api_seed_database(request):
         call_command(*args, **kwargs)
         output = out.getvalue()
         return JsonResponse({"success": True, "message": output})
-    except Exception as e:
-        return JsonResponse({"success": False, "message": str(e)}, status=500)
+    except Exception:
+        logger.exception("seed_testdata command failed")
+        return JsonResponse(
+            {"success": False, "message": "El comando de seed ha fallado. Revisa los logs."},
+            status=500,
+        )
 
 
 @qa_access_required
 @require_http_methods(["POST"])
 def api_create_backlog_task(request):
-    """Create a backlog task and optionally email it to support."""
+    """Create a backlog task and email it to support.
+
+    An optional screenshot is sent multipart and ATTACHED to the email only —
+    it is never stored on disk or in the DB (deliberate, to avoid image storage
+    spiralling out of control). Max 5 MB, images only.
+    """
     try:
-        data = json.loads(request.body)
-        title = data.get("title", "").strip()
-        description = data.get("description", "").strip()
-        priority = data.get("priority", "medium")
+        # Multipart (so a screenshot can ride along); fall back to JSON.
+        if request.content_type and request.content_type.startswith("multipart/"):
+            title = (request.POST.get("title") or "").strip()
+            description = (request.POST.get("description") or "").strip()
+            priority = request.POST.get("priority", "medium")
+            screenshot = request.FILES.get("screenshot")
+        else:
+            data = json.loads(request.body)
+            title = data.get("title", "").strip()
+            description = data.get("description", "").strip()
+            priority = data.get("priority", "medium")
+            screenshot = None
 
         if not title:
             return JsonResponse({"success": False, "message": "El titulo es obligatorio."}, status=400)
         if priority not in VALID_PRIORITIES:
             return JsonResponse({"success": False, "message": "Prioridad no valida."}, status=400)
+        if screenshot is not None:
+            if screenshot.size > 5 * 1024 * 1024:
+                return JsonResponse({"success": False, "message": "La imagen supera los 5 MB."}, status=400)
+            if not (screenshot.content_type or "").startswith("image/"):
+                return JsonResponse({"success": False, "message": "El adjunto debe ser una imagen."}, status=400)
 
         username = request.session.get("username", "anonymous")
         task = BacklogTask.objects.create(
@@ -126,9 +154,11 @@ def api_create_backlog_task(request):
             created_by=username,
         )
 
-        # Send email to support
+        # Email support — attach the screenshot in-memory (never persisted).
         support_email = getattr(settings, "SUPPORT_EMAIL", None)
         if support_email:
+            from django.core.mail import EmailMessage
+
             subject = f"[BACKLOG][{priority.upper()}] {title}"
             body = (
                 f"Nueva tarea en el backlog de QA\n"
@@ -138,19 +168,22 @@ def api_create_backlog_task(request):
                 f"Creado por:  {username}\n"
                 f"Fecha:       {task.created_at:%Y-%m-%d %H:%M}\n\n"
                 f"Descripcion:\n{description or '(ninguna)'}\n\n"
+                f"{'Se adjunta una captura de pantalla.' if screenshot else ''}\n"
                 f"{'=' * 50}\n"
                 f"Five a Day — Entorno QA\n"
             )
             try:
-                send_mail(
+                email = EmailMessage(
                     subject=subject,
-                    message=body,
+                    body=body,
                     from_email=settings.DEFAULT_FROM_EMAIL,
-                    recipient_list=[support_email],
-                    fail_silently=True,
+                    to=[support_email],
                 )
-            except Exception:
-                pass  # Never block task creation on email failure
+                if screenshot is not None:
+                    email.attach(screenshot.name, screenshot.read(), screenshot.content_type)
+                email.send(fail_silently=True)
+            except Exception:  # noqa: BLE001 — never block task creation on email failure
+                pass
 
         return JsonResponse(
             {
@@ -180,11 +213,46 @@ def api_update_backlog_task(request, task_id):
             return JsonResponse({"success": False, "message": "Estado no valido."}, status=400)
 
         task = BacklogTask.objects.get(pk=task_id)
+        was_done = task.status == "done"
         task.status = new_status
         task.save()
+
+        # When a task is completed, notify the (seeded) admin teachers by email.
+        if new_status == "done" and not was_done:
+            _email_task_done(task)
+
         return JsonResponse({"success": True})
     except BacklogTask.DoesNotExist:
         return JsonResponse({"success": False, "message": "Tarea no encontrada."}, status=404)
+
+
+def _email_task_done(task):
+    """Email the admin teachers that a backlog task was completed (testing env)."""
+    from students.models import Teacher
+
+    recipients = list(Teacher.objects.filter(admin=True, active=True).values_list("email", flat=True))
+    recipients = [e for e in recipients if e]
+    if not recipients:
+        return
+    try:
+        send_mail(
+            subject=f"[BACKLOG][HECHO] {task.title}",
+            message=(
+                f"Una tarea del backlog de QA se ha marcado como HECHA.\n"
+                f"{'=' * 50}\n\n"
+                f"Titulo:      {task.title}\n"
+                f"Prioridad:   {task.priority}\n"
+                f"Creada por:  {task.created_by}\n"
+                f"Fecha:       {task.created_at:%Y-%m-%d %H:%M}\n\n"
+                f"Descripcion:\n{task.description or '(ninguna)'}\n\n"
+                f"{'=' * 50}\nFive a Day — Entorno QA\n"
+            ),
+            from_email=settings.DEFAULT_FROM_EMAIL,
+            recipient_list=recipients,
+            fail_silently=True,
+        )
+    except Exception:  # noqa: BLE001 — never block the status update on email
+        pass
 
 
 @qa_access_required
@@ -198,5 +266,65 @@ def api_toggle_error_email(request):
         config.error_email_enabled = bool(enabled)
         config.save()
         return JsonResponse({"success": True, "enabled": config.error_email_enabled})
-    except Exception as e:
-        return JsonResponse({"success": False, "message": str(e)}, status=500)
+    except Exception:
+        logger.exception("Error toggling QA error-email setting")
+        return JsonResponse(
+            {"success": False, "message": "No se pudo guardar la preferencia."},
+            status=500,
+        )
+
+
+@qa_access_required
+@require_http_methods(["POST"])
+def api_mark_ready(request):
+    """Email SUPPORT_EMAIL that an admin marked this version as ready to ship,
+    with a full snapshot of the version / environment / last-commit info."""
+    support_email = getattr(settings, "SUPPORT_EMAIL", None)
+    if not support_email:
+        return JsonResponse({"success": False, "message": "SUPPORT_EMAIL no está configurado."}, status=500)
+
+    user = getattr(request, "user", None)
+    user_email = getattr(user, "email", "") or request.session.get("username", "desconocido")
+    git = _git_info()
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    subject = f"[READY TO SHIP] v{settings.APP_VERSION} — {user_email}"
+    body = (
+        f"{user_email} ha marcado esta versión como LISTA PARA DESPLEGAR.\n"
+        f"{'=' * 55}\n\n"
+        f"Aplicación\n"
+        f"  Versión:        v{settings.APP_VERSION}\n"
+        f"  Entorno:        {settings.ENVIRONMENT}\n"
+        f"  Debug:          {settings.DEBUG}\n"
+        f"  Python:         {sys.version.split()[0]}\n"
+        f"  Django:         {django.get_version()}\n"
+        f"  Base de datos:  {settings.DATABASES['default'].get('NAME', '—')}\n"
+        f"  Motor BD:       {settings.DATABASES['default']['ENGINE']}\n"
+        f"  Zona horaria:   {settings.TIME_ZONE}\n"
+        f"  Fecha/hora:     {now}\n\n"
+        f"Último commit\n"
+        f"  Rama:     {git.get('branch', '—')}\n"
+        f"  Commit:   {git.get('commit_id_full', '—')}\n"
+        f"  Mensaje:  {git.get('commit_message', '—')}\n"
+        f"  Autor:    {git.get('commit_author', '—')}\n"
+        f"  Fecha:    {git.get('commit_date', '—')}\n\n"
+        f"{'=' * 55}\n"
+        f"Marcado por: {user_email}\n"
+        f"Five a Day — Entorno QA\n"
+    )
+    try:
+        send_mail(
+            subject=subject,
+            message=body,
+            from_email=settings.DEFAULT_FROM_EMAIL,
+            recipient_list=[support_email],
+            fail_silently=False,
+        )
+    except Exception:  # noqa: BLE001 — surface a send failure to the UI, details to the log
+        logger.exception("Error sending the 'ready to ship' notification")
+        return JsonResponse(
+            {"success": False, "message": "Error al enviar el aviso. Revisa los logs."},
+            status=500,
+        )
+
+    return JsonResponse({"success": True, "message": f"Enviado a {support_email}"})

@@ -57,6 +57,61 @@ class TestFunFridayForm:
         )
         assert response.status_code == 302  # redirects to home
 
+    def test_send_all_schedules_for_monday_1430(self, authenticated_client, student_with_parent):
+        """The real announcement persists a FunFridayScheduledSend for 14:30 on the Monday of the target week."""
+        from django.utils import timezone
+
+        from core.models import FunFridayScheduledSend
+
+        friday = timezone.localdate() + timedelta(days=(4 - timezone.localdate().weekday()) % 7 + 14)
+        expected_monday = friday - timedelta(days=friday.weekday())
+        response = authenticated_client.post(
+            reverse("fun_friday_form"),
+            {
+                "event_date": friday.isoformat(),
+                "start_time": "17:00",
+                "end_time": "18:30",
+                "activity_description": "<b>Crafts</b>",
+                "min_age": "5",
+                "max_age": "12",
+                "meeting_point": "Main entrance",
+            },
+        )
+        assert response.status_code == 302
+        scheduled = FunFridayScheduledSend.objects.get()
+        local_send_at = timezone.localtime(scheduled.scheduled_for)
+        assert local_send_at.date() == expected_monday
+        assert (local_send_at.hour, local_send_at.minute) == (14, 30)
+        assert scheduled.sent_at is None  # future send — nothing goes out yet
+        assert scheduled.recipients  # parent emails captured
+
+    def test_send_all_past_monday_drains_immediately(self, authenticated_client, student_with_parent):
+        """An event created after its Monday-14:30 slot is sent right away (eager drain)."""
+        from django.utils import timezone
+
+        from core.models import FunFridayScheduledSend
+
+        # Last week's Friday — its Monday-14:30 slot is guaranteed to be in the past
+        past_friday = timezone.localdate() - timedelta(days=7)
+        with patch(
+            "comms.tasks._send_fun_friday_batch", return_value={"status": "success", "sent": 1, "total": 1}
+        ) as mock_batch:
+            response = authenticated_client.post(
+                reverse("fun_friday_form"),
+                {
+                    "event_date": past_friday.isoformat(),
+                    "start_time": "17:00",
+                    "end_time": "18:30",
+                    "activity_description": "<b>Crafts</b>",
+                    "min_age": "5",
+                    "max_age": "12",
+                },
+            )
+        assert response.status_code == 302
+        assert mock_batch.called
+        scheduled = FunFridayScheduledSend.objects.get()
+        assert scheduled.sent_at is not None
+
 
 class TestPaymentReminderForm:
     def test_get_renders_form(self, authenticated_client):
@@ -364,8 +419,8 @@ class TestFunFridayExtra:
         assert response.status_code == 200
 
     def test_send_all_with_email_failures(self, authenticated_client, student_with_parent):
-        """Exceptions during send don't break the form."""
-        with patch("core.views.app_forms.send_fun_friday_email", side_effect=Exception("SMTP down")):
+        """Exceptions during send (in the scheduled task) don't break the form."""
+        with patch("comms.services.email_functions.send_fun_friday_email", side_effect=Exception("SMTP down")):
             next_friday = date.today() + timedelta(days=(4 - date.today().weekday()) % 7 or 7)
             response = authenticated_client.post(
                 reverse("fun_friday_form"),

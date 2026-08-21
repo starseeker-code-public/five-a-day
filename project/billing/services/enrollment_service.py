@@ -80,6 +80,46 @@ class EnrollmentService:
         return enrollment
 
     @staticmethod
+    def is_returning_student(student, this_academic_year: str | None = None) -> bool:
+        """
+        A "returning student" is one who has at least one prior Enrollment
+        in a *different* (earlier) academic year.
+
+          - Empty enrollments → new student, False
+          - Every enrollment is for `this_academic_year` (i.e. this signup) → False
+          - Any enrollment for a prior year → True
+
+        `this_academic_year` defaults to the current academic year.
+        """
+        if this_academic_year is None:
+            this_academic_year = current_academic_year()
+        return student.enrollments.exclude(academic_year=this_academic_year).exists()
+
+    @staticmethod
+    def compute_enrollment_fee(config, student, is_adult: bool) -> tuple:
+        """
+        Return `(final_fee, returning_discount_applied)` — the enrollment fee
+        for this student, minus the returning-student discount when the
+        student re-enrols in a later academic year.
+
+        Adults are NOT eligible for the returning-student discount (they
+        already have `adult_enrollment_fee` which is a separate rate).
+        """
+        base = config.adult_enrollment_fee if is_adult else config.children_enrollment_fee
+        if is_adult:
+            return base, Decimal("0.00")
+
+        discount = getattr(config, "returning_student_enrollment_discount", Decimal("0.00")) or Decimal("0.00")
+        if discount <= 0:
+            return base, Decimal("0.00")
+
+        if not EnrollmentService.is_returning_student(student):
+            return base, Decimal("0.00")
+
+        final = max(base - discount, Decimal("0.00"))
+        return final, discount
+
+    @staticmethod
     def _resolve_plan(config, data, is_adult, is_special, manual_amount):
         """
         Determine enrollment type, base amount, schedule type, and payment modality.

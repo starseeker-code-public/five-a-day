@@ -1,4 +1,5 @@
 import json
+import logging
 from decimal import Decimal
 
 from django.http import JsonResponse
@@ -9,6 +10,8 @@ from billing import constants
 from billing.models import Enrollment, SiteConfiguration, current_academic_year
 from core.models import HistoryLog
 from students.models import Group, Student, Teacher
+
+logger = logging.getLogger(__name__)
 
 
 def gestion_view(request):
@@ -56,6 +59,8 @@ def update_site_config(request):
             "half_month_discount",
             "one_week_discount",
             "three_week_discount",
+            # v1.13 — returning-student enrollment discount (flat €)
+            "returning_student_enrollment_discount",
         ]:
             if field in data:
                 setattr(config, field, Decimal(str(data[field])))
@@ -65,8 +70,12 @@ def update_site_config(request):
         HistoryLog.log("config_updated", "Precios o descuentos actualizados", icon="tune")
 
         return JsonResponse({"success": True, "message": "Configuración actualizada correctamente"})
-    except Exception as e:
-        return JsonResponse({"success": False, "message": str(e)}, status=400)
+    except Exception:
+        logger.exception("Error updating site configuration")
+        return JsonResponse(
+            {"success": False, "message": "No se pudo actualizar la configuración. Revisa los valores."},
+            status=400,
+        )
 
 
 @require_http_methods(["POST"])
@@ -89,13 +98,16 @@ def create_teacher(request):
                 status=400,
             )
 
+        # Teachers created here are ALWAYS non-admin. Only the seeded teachers
+        # (TEACHER_SEED_*) and the superuser/admin profile are admins; an
+        # existing admin can promote a teacher afterwards via /admin/.
         teacher = Teacher.objects.create(
             first_name=data["first_name"],
             last_name=data["last_name"],
             email=data["email"],
             phone=data.get("phone", ""),
             active=True,
-            admin=data.get("admin", False),
+            admin=False,
         )
 
         HistoryLog.log("teacher_created", f"Profesor creado: {teacher.full_name}", icon="person_add")
@@ -111,8 +123,12 @@ def create_teacher(request):
                 },
             }
         )
-    except Exception as e:
-        return JsonResponse({"success": False, "message": str(e)}, status=400)
+    except Exception:
+        logger.exception("Error creating teacher")
+        return JsonResponse(
+            {"success": False, "message": "No se pudo crear el profesor. Revisa los datos."},
+            status=400,
+        )
 
 
 @require_http_methods(["POST"])
@@ -166,8 +182,12 @@ def create_group(request):
                 },
             }
         )
-    except Exception as e:
-        return JsonResponse({"success": False, "message": str(e)}, status=400)
+    except Exception:
+        logger.exception("Error creating group")
+        return JsonResponse(
+            {"success": False, "message": "No se pudo crear el grupo. Revisa los datos."},
+            status=400,
+        )
 
 
 def api_get_teachers(request):
@@ -213,9 +233,10 @@ def update_enrollment_modality(request, student_id):
             }
         )
 
-    except Exception as e:
+    except Exception:
+        logger.exception("Error changing payment modality")
         return JsonResponse(
-            {"success": False, "error": str(e)},
+            {"success": False, "error": "No se pudo cambiar la modalidad de pago."},
             status=500,
         )
 

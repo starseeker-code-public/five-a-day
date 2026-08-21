@@ -79,13 +79,19 @@ Quarterly amount = 3 months × monthly fee × 0.95 (5% discount).
 
 ## Automatic Payment Generation
 
-At the **start of each payment period**, a pending (due, not paid) payment is automatically created for every enrolled student:
+Pending (due, not paid) periodic payments are created two ways, and the two are kept consistent (idempotent — never duplicated):
+
+**1. At enrollment (whole academic year, up front).** When a student is enrolled (via the create-student flow or waiting-list assignment), in addition to the one-off enrollment fee, `PaymentService.schedule_academic_year_payments()` immediately creates the full academic year of pending periodic payments — monthly (Sep–Jun) or quarterly (Oct/Jan/Apr) — each **due at the end of its period**, starting from the enrollment month (a student joining mid-year is not billed for months before they joined).
+
+**2. Periodically (safety net / late enrollments).** The `generate_payments` management command (run on a schedule) also creates the period's payment for every active enrollment:
 
 - **Monthly students**: A payment is created at the start of each month (September through June).
 - **Quarterly students**: A payment is created at the start of each quarter:
   - October 1 (Q1, covers September–December)
   - January 1 (Q2, covers January–March)
   - April 1 (Q3, covers April–June)
+
+Because both paths match on `(student, payment_type, due-date month/year)` before creating, a student enrolled after the up-front scheduling already ran is never charged twice.
 
 ### Payment Amount Calculation
 

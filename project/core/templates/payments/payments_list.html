@@ -19,6 +19,41 @@
 </a>
 {% endblock %}
 
+{% block help_content %}
+<p>La sección <strong>Pagos</strong> reúne todos los cobros de la academia: matrículas, mensualidades y trimestres. Es una sección solo para administradores. La mayoría de los pagos se crean solos al matricular a un alumno; aquí los consultas, los cobras y creas los puntuales.</p>
+
+<h4 style="font-weight:700;margin-top:1rem;">El resumen de arriba</h4>
+<p>La línea superior totaliza el dinero y el número de pagos en cada situación: <strong>Esperado</strong> (todo lo que debería entrar), <strong>Cobrado</strong> (verde), <strong>Pendiente</strong> (aún no vencido, en ámbar), <strong>Vencido</strong> (rojo, ya pasó la fecha) y el <strong>Total</strong> de pagos en la lista.</p>
+
+<h4 style="font-weight:700;margin-top:1rem;">La tabla de pagos</h4>
+<p>Cada fila muestra el estudiante, el padre/tutor, su email, la cantidad, el método, el <strong>estado</strong>, la fecha de vencimiento y la fecha de cobro. El estado se ve con una etiqueta de color: Completado, Pendiente, Vencido, Fallido, Cancelado o Reembolsado. En los pagos vencidos se indica además cuántos días llevan de retraso.</p>
+<p style="margin-top:0.4rem;">En los alumnos <strong>adultos</strong>, que no tienen tutor, las columnas de padre y email muestran los datos del propio alumno.</p>
+
+<h4 style="font-weight:700;margin-top:1rem;">Marcar un pago como cobrado</h4>
+<p>En los pagos que aún no están completados, pulsa el <strong>icono violeta</strong> de la primera columna: se abre un pequeño menú para elegir el método con el que se ha cobrado (<strong>efectivo</strong>, <strong>transferencia</strong> o <strong>tarjeta</strong>). Al elegirlo, el pago pasa a Completado con la fecha de hoy.</p>
+
+<h4 style="font-weight:700;margin-top:1rem;">Crear un pago nuevo</h4>
+<p>El botón <strong>Nuevo Pago</strong> (cabecera) abre el formulario de cobro. Busca el alumno por su nombre y el padre/tutor se rellena solo (en adultos no hace falta tutor). Elige el tipo (matrícula, mensual, trimestral…), la cantidad y el método.</p>
+
+<h4 style="font-weight:700;margin-top:1rem;">Buscar, filtrar y ordenar</h4>
+<ul style="list-style:disc;margin:0.4rem 0 0 1.25rem;line-height:1.7;">
+    <li><strong>Tipo</strong>: filtra por tipo de pago.</li>
+    <li><strong>Estado</strong>: filtra por situación (pendiente, completado, vencido…).</li>
+    <li><strong>Ordenar</strong>: cambia el orden de la lista (por fecha, etc.).</li>
+    <li><strong>Lupa</strong>: busca por nombre del estudiante.</li>
+</ul>
+<p style="margin-top:0.4rem;">La lista se pagina automáticamente cuando hay muchos pagos; usa los controles de página al final.</p>
+
+<h4 style="font-weight:700;margin-top:1rem;">Ver el detalle y el recibo</h4>
+<p>El icono del ojo abre el detalle del pago, desde donde puedes descargar el <strong>recibo en PDF</strong>.</p>
+
+<h4 style="font-weight:700;margin-top:1rem;">Consejos</h4>
+<ul style="list-style:disc;margin:0.4rem 0 0 1.25rem;line-height:1.7;">
+    <li>Filtra por <strong>Vencido</strong> para ver rápidamente a quién hay que reclamar. Desde el Panel Principal puedes enviar el recordatorio de pago.</li>
+    <li>No hace falta crear a mano las mensualidades: se generan al matricular al alumno.</li>
+</ul>
+{% endblock %}
+
 {% block content %}
 <div class="mb-8">
     <div class="flex items-center gap-3 mb-2">

@@ -1,11 +1,16 @@
 import os
 from pathlib import Path
-from urllib.parse import urlparse
 
 import dj_database_url
 from dotenv import load_dotenv
 
-load_dotenv(Path(__file__).resolve().parent.parent.parent / ".env", override=True)
+# One env file, one source of truth. To switch environments, rename one of
+# .env.development / .env.testing / .env.production to .env before bringing
+# the stack up. Docker-injected process env vars (compose `environment:` or
+# Cloud Run `--set-env-vars`) already live in os.environ and take precedence
+# over the file by dotenv semantics.
+_ENV_ROOT = Path(__file__).resolve().parent.parent.parent
+load_dotenv(_ENV_ROOT / ".env", override=False)
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -15,7 +20,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # NOTA: Usa `make version x.y.z` para actualizar ambos sitios a la vez:
 #   - pyproject.toml (campo version)
 #   - README.md (badge y tabla de versiones — gestionado por la skill update-readme)
-APP_VERSION = os.getenv("APP_VERSION", "1.0.10")
+APP_VERSION = os.getenv("APP_VERSION", "1.14.6")
 
 # ============================================================================
 # SECURITY SETTINGS
@@ -60,25 +65,22 @@ if not DEBUG:
 # ============================================================================
 # ENVIRONMENT
 # ============================================================================
-# DJANGO_ENV controla el comportamiento del entorno
-# Valores permitidos:
-#   - "development": Modo desarrollo (crea superuser automático, sin collectstatic)
-#   - "production": Modo producción (ejecuta collectstatic, sin superuser auto)
-#   - Cualquier otro valor se trata como "development"
-#
-# Uso en el código:
-#   - entrypoint.sh: Verifica si debe crear superuser automático o collectstatic
-#   - settings.py: Define configuraciones según el entorno (actualmente solo lo almacena)
+# DJANGO_ENV: "development" | "testing" | "production". Any other value is
+# treated as development. Consumed by entrypoint.sh (collectstatic + teacher
+# seeding only run for testing/production) and by the QA testing dashboard.
 ENVIRONMENT = os.getenv("DJANGO_ENV", "development")
 
-# QA testing tools — only enabled when DJANGO_ENV=testing and a QA user is configured
+# QA testing tools — only enabled when DJANGO_ENV=testing (DEBUG off). The
+# dashboard is then visible to logged-in ADMIN Teachers (see core.decorators).
 IS_TESTING_ENV = ENVIRONMENT == "testing" and not DEBUG
-QA_TESTING_USERNAME = os.getenv("QA_TESTING_USERNAME", "")
 
 # ============================================================================
 # SESSION CONFIGURATION
 # ============================================================================
-SESSION_COOKIE_AGE = int(os.getenv("SESSION_COOKIE_AGE", "86400"))  # 24 horas por defecto
+SESSION_COOKIE_AGE = int(os.getenv("SESSION_COOKIE_AGE", "21600"))  # 6 horas
+# Re-save the session on every request so the 6h window is INACTIVITY-based:
+# any activity resets the timer, and 6h with no activity auto-logs-out.
+SESSION_SAVE_EVERY_REQUEST = os.getenv("SESSION_SAVE_EVERY_REQUEST", "True").lower() == "true"
 SESSION_COOKIE_HTTPONLY = os.getenv("SESSION_COOKIE_HTTPONLY", "True").lower() == "true"
 SESSION_COOKIE_SAMESITE = os.getenv("SESSION_COOKIE_SAMESITE", "Strict" if not DEBUG else "Lax")
 
@@ -118,6 +120,7 @@ INSTALLED_APPS = [  # https://www.djangoproject.com/
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
     "whitenoise.middleware.WhiteNoiseMiddleware",  # Debe ir después de SecurityMiddleware
+    "core.middleware.NoHtmlCacheMiddleware",  # no-cache on dynamic HTML (fresh asset hashes)
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
@@ -126,6 +129,7 @@ MIDDLEWARE = [
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
     "core.middleware.QAErrorEmailMiddleware",  # QA: email errors to support
     "core.middleware.SimpleAuthMiddleware",  # Middleware de autenticación simple
+    "core.audit_signals.AuditActorMiddleware",  # v1.10: attribute audit rows to the current user
 ]
 
 ROOT_URLCONF = "project.urls"
@@ -151,33 +155,23 @@ WSGI_APPLICATION = "project.wsgi.application"
 # ============================================================================
 # DATABASE CONFIGURATION
 # ============================================================================
-# Prioridad:
-# 1. DATABASE_URL (Render, Heroku, etc.)
-# 2. PostgreSQL con variables de entorno individuales
-# 3. SQLite (desarrollo local)
-
-database_url = os.getenv("DATABASE_URL", "").strip()
-parsed_database_url = urlparse(database_url) if database_url else None
-database_url_host = parsed_database_url.hostname if parsed_database_url else ""
-database_url_has_valid_host = bool(
-    database_url_host and ("." in database_url_host or database_url_host in ("localhost", "127.0.0.1"))
-)
-
-if database_url and not database_url_has_valid_host:
-    database_url = ""
-
-if database_url:
-    # Render, Heroku u otro servicio que use DATABASE_URL
+# Two paths, both PostgreSQL:
+#   1. DATABASE_URL  — Cloud Run via the Cloud SQL Unix socket (the URL ends
+#                      with `?host=/cloudsql/PROJECT:REGION:INSTANCE` and has
+#                      no hostname; dj_database_url handles that shape).
+#   2. POSTGRES_*    — Docker (compose injects POSTGRES_HOST=db) or any other
+#                      Postgres reachable by TCP.
+# SQLite is intentionally not a fallback — the project always uses Postgres.
+if database_url := os.getenv("DATABASE_URL", "").strip():
     DATABASES = {
         "default": dj_database_url.config(
-            default=os.getenv("DATABASE_URL"),
+            default=database_url,
             conn_max_age=600,
             conn_health_checks=True,
-            ssl_require=True if not DEBUG else False,
+            ssl_require=not DEBUG,
         )
     }
-elif os.getenv("DATABASE") == "postgres" or os.getenv("POSTGRES_HOST"):
-    # Docker o servidor PostgreSQL local
+else:
     DATABASES = {
         "default": {
             "ENGINE": "django.db.backends.postgresql",
@@ -187,19 +181,19 @@ elif os.getenv("DATABASE") == "postgres" or os.getenv("POSTGRES_HOST"):
             "HOST": os.getenv("POSTGRES_HOST", "localhost"),
             "PORT": os.getenv("POSTGRES_PORT", "5432"),
             "CONN_MAX_AGE": 600,
-            "OPTIONS": {
-                "connect_timeout": 10,
-            },
+            "OPTIONS": {"connect_timeout": 10},
         }
     }
-else:
-    # SQLite para desarrollo local sin Docker
-    DATABASES = {
-        "default": {
-            "ENGINE": "django.db.backends.sqlite3",
-            "NAME": BASE_DIR / "db.sqlite3",
-        }
-    }
+
+# ============================================================================
+# AUTHENTICATION
+# ============================================================================
+# Django's ModelBackend is the only backend — Teachers authenticate via their
+# linked auth.User (email as username + hashed password). Dev environment and
+# Google OAuth also go through this backend via get_or_create User + login().
+LOGIN_URL = "/login/"
+LOGIN_REDIRECT_URL = "/"
+LOGOUT_REDIRECT_URL = "/login/"
 
 AUTH_PASSWORD_VALIDATORS = [
     {
@@ -275,7 +269,6 @@ LOGGING = {
 # ============================================================================
 STATIC_URL = "/static/"
 STATIC_ROOT = BASE_DIR.parent / "staticfiles"
-STATICFILES_DIRS = [BASE_DIR / "static"]
 
 # Configuración de WhiteNoise para producción
 STORAGES = {
@@ -306,8 +299,9 @@ DEFAULT_FROM_EMAIL = EMAIL_HOST_USER
 # ============================================================================
 # CELERY CONFIGURATION
 # ============================================================================
-# Sin Redis (plan free de Render), usar eager mode (sincrónico)
-# Las tareas se ejecutan inmediatamente en el mismo proceso
+# Docker dev + testing VM: Redis broker (set by docker-compose.yml).
+# Cloud Run: no broker — tasks run synchronously via CELERY_TASK_ALWAYS_EAGER
+# (set automatically below when CELERY_BROKER_URL is unset).
 CELERY_BROKER_URL = os.getenv("CELERY_BROKER_URL", None)
 CELERY_RESULT_BACKEND = os.getenv("CELERY_RESULT_BACKEND", None)
 
@@ -333,7 +327,42 @@ CELERY_TASK_ROUTES = {
     "comms.tasks.send_*": {"queue": "emails"},
 }
 
-# Modo eager cuando no hay broker (plan free)
-if not CELERY_BROKER_URL:
-    CELERY_TASK_ALWAYS_EAGER = True
-    CELERY_TASK_EAGER_PROPAGATES = True
+# Eager mode when no broker is configured (Cloud Run, tests, CI). Assigned
+# unconditionally — Celery reads these via `config_from_object`, so they must
+# exist as plain module-level settings either way.
+CELERY_TASK_ALWAYS_EAGER = not CELERY_BROKER_URL
+CELERY_TASK_EAGER_PROPAGATES = not CELERY_BROKER_URL
+
+# ============================================================================
+# GOOGLE SHEETS INTEGRATION (v1.2)
+# ============================================================================
+# Optional. When both a service-account credential and a spreadsheet id are
+# set, the /api/sheets/export/ endpoint and `manage.py export_to_sheets`
+# command will write student/payment tables to that spreadsheet.
+#
+# One of these two must be set for auth (JSON inline wins if both are set):
+GOOGLE_SHEETS_SERVICE_ACCOUNT_JSON = os.getenv("GOOGLE_SHEETS_SERVICE_ACCOUNT_JSON", "")
+GOOGLE_SHEETS_SERVICE_ACCOUNT_FILE = os.getenv("GOOGLE_SHEETS_SERVICE_ACCOUNT_FILE", "")
+# Target spreadsheet — the doc ID from its URL (…/spreadsheets/d/<ID>/edit).
+# The service account must have Editor access to the sheet.
+GOOGLE_SHEETS_SPREADSHEET_ID = os.getenv("GOOGLE_SHEETS_SPREADSHEET_ID", "")
+
+# ============================================================================
+# TWILIO SMS (v1.8) — OPTIONAL
+# ============================================================================
+# All three must be set for the SMS service to be considered "configured".
+# When any is missing, SmsService.is_configured() returns False and calls
+# resolve to a structured failure so email fallback can kick in.
+TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID", "")
+TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN", "")
+TWILIO_FROM_NUMBER = os.getenv("TWILIO_FROM_NUMBER", "")
+
+# ============================================================================
+# STRIPE PAYMENTS (v1.11) — OPTIONAL
+# ============================================================================
+# When STRIPE_SECRET_KEY is set the parent portal renders a "Pay now" button
+# that creates a Checkout session. STRIPE_WEBHOOK_SECRET is the signing key
+# for the /api/stripe/webhook/ receiver — required in production.
+STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "")
+STRIPE_PUBLISHABLE_KEY = os.getenv("STRIPE_PUBLISHABLE_KEY", "")
+STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")

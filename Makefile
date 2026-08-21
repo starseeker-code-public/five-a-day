@@ -3,16 +3,15 @@
 # ============================================================================
 # Docker and Django shortcuts. Run `make` or `make help` for usage.
 
-.PHONY: help setup build up down restart stop start rebuild dev logs logs-web \
-        logs-db ps stats shell bash migrate makemigrations createsuperuser \
-        collectstatic check dbshell backup restore reset-db test test-local \
-        test-verbose test-coverage test-unit test-integration test-cov-gate test-models test-services test-views \
-        clean clean-all health url send-test-email generate-payments \
-        testing-up testing-down testing-logs testing-seed testing-reset \
-        testing-rebuild testing-shell testing-health \
-        sync lint lint-fix format format-check pre-commit-install pc-run \
-        mypy bandit audit coverage-badge \
-        celery-logs celery-restart celery-status celery-test-task
+.PHONY: help setup build up down restart stop start rebuild dev logs \
+        ps stats shell bash migrate makemigrations createsuperuser \
+        collectstatic check dbshell backup restore reset-db \
+        test test-cov-gate \
+        clean clean-all health url generate-payments generate-payments-dry \
+        sync lint format pre-commit-install pc-run \
+        mypy bandit audit coverage-badge check-deploy \
+        celery-logs celery-restart celery-status celery-test-task \
+        connect-testing
 
 # ============================================================================
 # HELP
@@ -23,109 +22,97 @@ help:
 	@echo "  =========================="
 	@echo ""
 	@echo "  Setup & Build:"
-	@echo "    make setup            Create empty .env (fill in from README.md '.env template')"
-	@echo "    make build            Build Docker images"
-	@echo "    make rebuild          Full rebuild (no cache) + start"
-	@echo "    make rebuild-web      Rebuild only the web image"
+	@echo "    make setup              Create empty .env"
+	@echo "    make build              Build Docker images"
+	@echo "    make rebuild            Full rebuild (no cache) + start"
+	@echo "    make rebuild SERVICE=x  Rebuild only a specific service"
 	@echo ""
 	@echo "  Docker Lifecycle:"
-	@echo "    make up               Start all services (detached)"
-	@echo "    make down             Stop and remove containers"
-	@echo "    make restart          Restart all services"
-	@echo "    make restart-web      Restart only web"
-	@echo "    make restart-db       Restart only database"
-	@echo "    make stop             Stop without removing"
-	@echo "    make start            Start stopped containers"
-	@echo "    make dev              Start in foreground (logs visible)"
-	@echo "    make dev-build        Build + start in foreground"
+	@echo "    make up                 Start all services (detached)"
+	@echo "    make down               Stop and remove containers"
+	@echo "    make restart            Restart all services"
+	@echo "    make restart SERVICE=x  Restart a specific service"
+	@echo "    make stop               Stop without removing"
+	@echo "    make stop SERVICE=x     Stop a specific service"
+	@echo "    make start              Start stopped containers"
+	@echo "    make start SERVICE=x    Start a specific service"
+	@echo "    make dev                Start in foreground (logs visible)"
+	@echo "    make dev BUILD=1        Build + start in foreground"
 	@echo ""
 	@echo "  Monitoring:"
-	@echo "    make logs             Tail logs (all services)"
-	@echo "    make logs-web         Tail web logs only"
-	@echo "    make logs-db          Tail database logs only"
-	@echo "    make ps               Show running services"
-	@echo "    make stats            Show resource usage"
-	@echo "    make health           Full health check (Django + DB)"
-	@echo "    make url              Show access URLs"
+	@echo "    make logs               Tail all logs"
+	@echo "    make logs SERVICE=x     Tail logs for a specific service"
+	@echo "    make ps                 Show running services"
+	@echo "    make stats              Show resource usage"
+	@echo "    make health             Full health check (Django + DB)"
+	@echo "    make url                Show access URLs"
 	@echo ""
 	@echo "  Django:"
-	@echo "    make shell            Django shell inside container"
-	@echo "    make bash             Bash shell inside container"
-	@echo "    make migrate          Apply all migrations"
-	@echo "    make makemigrations   Create migrations (all apps)"
-	@echo "    make createsuperuser  Create Django superuser"
-	@echo "    make collectstatic    Collect static files"
-	@echo "    make check            Run Django system checks"
+	@echo "    make shell              Django shell inside container"
+	@echo "    make bash               Bash shell inside container"
+	@echo "    make migrate            Apply all migrations"
+	@echo "    make makemigrations     Create migrations (all apps)"
+	@echo "    make createsuperuser    Create Django superuser"
+	@echo "    make collectstatic      Collect static files"
+	@echo "    make check              Run Django system checks"
 	@echo ""
 	@echo "  Database:"
-	@echo "    make dbshell          PostgreSQL interactive shell"
-	@echo "    make backup           Dump DB to backups/"
-	@echo "    make restore FILE=x   Restore from SQL file"
-	@echo "    make reset-db         Drop and recreate DB (destructive!)"
+	@echo "    make dbshell            PostgreSQL interactive shell"
+	@echo "    make backup             Dump DB to backups/"
+	@echo "    make restore FILE=x     Restore from SQL file"
+	@echo "    make reset-db           Drop and recreate DB (destructive!)"
 	@echo ""
 	@echo "  Testing:"
-	@echo "    make test             Run all tests (Docker)"
-	@echo "    make test-local       Run all tests (local, no Docker)"
-	@echo "    make test-verbose     Run all tests with verbose output"
-	@echo "    make test-coverage    Run tests with coverage report"
-	@echo "    make test-unit        Run only unit tests"
-	@echo "    make test-integration Run only integration tests"
-	@echo "    make test-models      Run only model tests"
-	@echo "    make test-services    Run only service tests"
-	@echo "    make test-views       Run only view tests"
-	@echo "    make test-fast        Run tests, stop on first failure"
-	@echo ""
-	@echo "  Email:"
-	@echo "    make send-test-email  Send a test birthday email"
-	@echo "    make test-all-emails  Send one test of each email template"
+	@echo "    make test               Run all tests (Docker + coverage)"
+	@echo "    make test unit          Run only unit tests"
+	@echo "    make test integration   Run only integration tests"
+	@echo "    make test coverage      All tests + HTML coverage report"
+	@echo "    make test K=<keyword>   Filter by keyword  (e.g. K=payment)"
+	@echo "    make test ARGS='...'    Pass raw pytest flags through"
 	@echo ""
 	@echo "  Payments:"
 	@echo "    make generate-payments          Generate current month"
 	@echo "    make generate-payments-dry      Preview without creating"
 	@echo ""
-	@echo "  Testing / QA Environment:"
-	@echo "    make testing-up       Start QA environment (production-like)"
-	@echo "    make testing-down     Stop QA environment"
-	@echo "    make testing-rebuild  Full rebuild of QA environment"
-	@echo "    make testing-logs     Tail QA logs"
-	@echo "    make testing-seed     Populate QA database with test data"
-	@echo "    make testing-reset    Wipe QA database and re-seed"
-	@echo "    make testing-shell    Django shell in QA container"
-	@echo "    make testing-health   Health check for QA environment"
-	@echo ""
 	@echo "  Celery (async tasks):"
-	@echo "    make celery-logs      Tail Celery worker + beat logs"
-	@echo "    make celery-restart   Restart worker + beat containers"
-	@echo "    make celery-status    Show Celery worker status"
-	@echo "    make celery-test-task Send a debug task to verify Celery works"
+	@echo "    make celery-logs        Tail Celery worker + beat logs"
+	@echo "    make celery-restart     Restart worker + beat containers"
+	@echo "    make celery-status      Show Celery worker status"
+	@echo "    make celery-test-task   Send a debug task to verify Celery works"
 	@echo ""
 	@echo "  Developer Tooling:"
-	@echo "    make sync             Install all deps (including dev) via uv"
-	@echo "    make lint             Run Ruff linter"
-	@echo "    make lint-fix         Run Ruff linter with auto-fix"
-	@echo "    make format           Format code with Ruff"
-	@echo "    make format-check     Check formatting (no changes)"
-	@echo "    make mypy             Run mypy type checker"
-	@echo "    make bandit           Run bandit security linter"
-	@echo "    make audit            Audit dependencies for vulnerabilities"
-	@echo "    make coverage-badge   Generate coverage.svg badge from last test run"
-	@echo "    make pre-commit-install  Install pre-commit hooks"
-	@echo "    make pc-run   Run pre-commit on all files"
+	@echo "    make sync               Install all deps (including dev) via uv"
+	@echo "    make lint               Check code with Ruff (read-only)"
+	@echo "    make lint FIX=1         Lint and auto-fix issues"
+	@echo "    make format             Format code with Ruff"
+	@echo "    make format DRY=1       Check formatting without applying changes"
+	@echo "    make mypy               Run mypy type checker"
+	@echo "    make bandit             Run bandit security linter"
+	@echo "    make audit              Audit dependencies for vulnerabilities"
+	@echo "    make coverage-badge     Generate coverage.svg badge"
+	@echo "    make pre-commit-install Install pre-commit hooks"
+	@echo "    make pc-run             Run pre-commit on all files"
 	@echo ""
 	@echo "  Cleanup:"
-	@echo "    make clean            Remove stopped containers + prune"
-	@echo "    make clean-all        Remove everything including volumes"
+	@echo "    make clean              Remove stopped containers + prune"
+	@echo "    make clean-all          Remove everything including volumes"
+	@echo ""
+	@echo "  Remote:"
+	@echo "    make connect-testing    SSH into the GCP testing VM (auto-login if needed)"
 	@echo ""
 
 # ============================================================================
 # SETUP
 # ============================================================================
 setup:
-	@if [ ! -f .env ]; then \
-		touch .env; \
-		echo "Created empty .env. Copy the template from README.md (section '.env template') into .env and fill in the blanks."; \
-	else \
+	@if [ -f .env ]; then \
 		echo ".env already exists."; \
+	elif [ -f .env.development ]; then \
+		cp .env.development .env; \
+		echo "Copied .env.development → .env. Edit it if needed, then run 'make up'."; \
+	else \
+		touch .env; \
+		echo "Created empty .env. See README.md (section '.env template') for the variable shape, or create .env.development/.env.testing/.env.production and rename one to .env."; \
 	fi
 
 # ============================================================================
@@ -141,49 +128,38 @@ up:
 down:
 	docker compose down
 
+# Rebuild with no cache. Without SERVICE rebuilds everything; with SERVICE=web
+# only that service is stopped/rebuilt/started.
+rebuild:
+	@if [ -z "$(SERVICE)" ]; then \
+		docker compose down; \
+		docker compose build --no-cache; \
+		docker compose up -d; \
+		echo "Rebuilt and started: http://localhost:8000"; \
+	else \
+		docker compose stop $(SERVICE); \
+		docker compose build --no-cache $(SERVICE); \
+		docker compose up -d $(SERVICE); \
+		echo "Rebuilt service: $(SERVICE)"; \
+	fi
+
 restart:
-	docker compose restart
-
-restart-web:
-	docker compose restart web
-
-restart-db:
-	docker compose restart db
+	docker compose restart $(SERVICE)
 
 stop:
-	docker compose stop
+	docker compose stop $(SERVICE)
 
 start:
-	docker compose start
-
-rebuild:
-	docker compose down
-	docker compose build --no-cache
-	docker compose up -d
-	@echo "Rebuilt and started: http://localhost:8000"
-
-rebuild-web:
-	docker compose stop web
-	docker compose build --no-cache web
-	docker compose up -d web
+	docker compose start $(SERVICE)
 
 dev:
-	docker compose up --remove-orphans
-
-dev-build:
-	docker compose up --build --remove-orphans
+	docker compose up $(if $(BUILD),--build,) --remove-orphans
 
 # ============================================================================
 # MONITORING
 # ============================================================================
 logs:
-	docker compose logs -f
-
-logs-web:
-	docker compose logs -f web
-
-logs-db:
-	docker compose logs -f db
+	docker compose logs -f $(SERVICE)
 
 ps:
 	docker compose ps
@@ -268,74 +244,50 @@ reset-db:
 # ============================================================================
 # TESTING
 # ============================================================================
-# Tests use PostgreSQL by default (requires `make up` for the DB container).
-# Set TEST_DB_ENGINE=sqlite to fall back to SQLite for quick local runs.
+# All tests run inside Docker against PostgreSQL (same engine as production).
+#
+# Usage:
+#   make test                 all tests with coverage
+#   make test unit            tests/unit/ only
+#   make test integration     tests/integration/ only
+#   make test coverage        all tests + HTML report (htmlcov/)
+#   make test K=payment       filter by keyword
+#   make test ARGS='--lf'     pass any raw pytest flag through
 
-# Run all tests inside Docker (uses the container's PostgreSQL)
+ifeq ($(firstword $(MAKECMDGOALS)),test)
+  _SUITE := $(wordlist 2,$(words $(MAKECMDGOALS)),$(MAKECMDGOALS))
+  ifneq ($(_SUITE),)
+    $(eval $(_SUITE):;@:)
+  endif
+endif
+
 test:
 	docker compose exec web uv sync --frozen --no-install-project --quiet
-	docker compose exec -e DJANGO_SETTINGS_MODULE=project.settings_test -e TEST_DB_HOST=db web python -m pytest project/tests/ -v --tb=short -n auto --cov=core --cov=students --cov=billing --cov=comms --cov-report=term-missing
+	@SUITE="$(_SUITE)"; \
+	TEST_PATH="project/tests/"; \
+	EXTRA=""; \
+	case "$$SUITE" in \
+	  unit)        TEST_PATH="project/tests/unit/" ;; \
+	  integration) TEST_PATH="project/tests/integration/" ;; \
+	  coverage)    EXTRA="--cov-report=html" ;; \
+	esac; \
+	[ -n "$(K)" ] && EXTRA="$$EXTRA -k $(K)"; \
+	docker compose exec \
+	  -e DJANGO_SETTINGS_MODULE=project.settings_test \
+	  -e TEST_DB_HOST=db \
+	  web python -m pytest $$TEST_PATH -v --tb=short -n auto \
+	  --cov=core --cov=students --cov=billing --cov=comms \
+	  --cov-report=term-missing $$EXTRA $(ARGS)
 
-# Pre-commit coverage gate: same command as `make test` but fails fast if
-# coverage drops below 75%. Invoked by the pytest-coverage pre-commit hook
-# and safe to run manually. Output is terse (-q) so commit feedback stays
-# readable; full coverage report still prints at the end.
+# Pre-commit coverage gate: fails if coverage drops below 75%.
+# Invoked by the pytest-coverage pre-commit hook; safe to run manually.
 test-cov-gate:
 	@docker compose exec web uv sync --frozen --no-install-project --quiet
 	@docker compose exec -e DJANGO_SETTINGS_MODULE=project.settings_test -e TEST_DB_HOST=db web python -m pytest project/tests/ -q --tb=line -n auto --cov=core --cov=students --cov=billing --cov=comms --cov-fail-under=75
 
-# Run tests locally against the Docker PostgreSQL (default)
-test-local:
-	cd project && TEST_DB_HOST=localhost python -m pytest tests/ -v --tb=short
-
-# Run tests locally with SQLite (no Docker needed)
-test-sqlite:
-	cd project && TEST_DB_ENGINE=sqlite python -m pytest tests/ -v --tb=short
-
-# Verbose output with full tracebacks
-test-verbose:
-	cd project && TEST_DB_HOST=localhost python -m pytest tests/ -v --tb=long -s
-
-# Coverage report
-test-coverage:
-	cd project && TEST_DB_HOST=localhost python -m pytest tests/ --cov=core --cov=students --cov=billing --cov=comms --cov-report=term-missing --cov-report=html
-	@echo "HTML report: project/htmlcov/index.html"
-
-# Run only unit tests (direct calls, no HTTP stack)
-test-unit:
-	cd project && TEST_DB_HOST=localhost python -m pytest tests/unit/ -v --tb=short
-
-# Run only integration tests (Django test client through the middleware chain)
-test-integration:
-	cd project && TEST_DB_HOST=localhost python -m pytest tests/integration/ -v --tb=short
-
-# Run specific test modules
-test-models:
-	cd project && TEST_DB_HOST=localhost python -m pytest tests/unit/test_models.py -v --tb=short
-
-test-services:
-	cd project && TEST_DB_HOST=localhost python -m pytest tests/unit/test_services.py -v --tb=short
-
-test-views:
-	cd project && TEST_DB_HOST=localhost python -m pytest tests/integration/test_views.py -v --tb=short
-
-# Stop on first failure
-test-fast:
-	cd project && TEST_DB_HOST=localhost python -m pytest tests/ -x -v --tb=short
-
-# Run tests matching a keyword (usage: make test-k K=payment)
-test-k:
-	cd project && TEST_DB_HOST=localhost python -m pytest tests/ -v -k "$(K)" --tb=short
-
 # ============================================================================
-# EMAIL & PAYMENTS
+# PAYMENTS
 # ============================================================================
-send-test-email:
-	docker compose exec web python project/manage.py send_email --template happy_birthday --test
-
-test-all-emails:
-	docker compose exec web python project/manage.py test_all_emails --list
-
 generate-payments:
 	docker compose exec web python project/manage.py generate_payments
 
@@ -363,15 +315,13 @@ clean-all:
 # ============================================================================
 # VERSIONING
 # ============================================================================
-# App version is defined in two places:
-#   1. pyproject.toml -> version = "x.y.z"
-#   2. project/settings.py -> APP_VERSION fallback = "x.y.z"
-# This command updates both at once.
-#
+# App version is defined in four places and `make version x.y.z` updates them all:
+#   1. pyproject.toml  -> version = "x.y.z"
+#   2. settings.py     -> APP_VERSION fallback = "x.y.z"
+#   3. README.md       -> badge URL
+#   4. uv.lock         -> regenerated via `uv lock --quiet`
 # Usage: make version x.y.z
 
-# Capture `make version x.y.z` - treat the version number as a goal with an empty recipe
-# so Make doesn't complain about a missing target named "x.y.z".
 ifeq ($(firstword $(MAKECMDGOALS)),version)
   _VERSION_ARG := $(wordlist 2,$(words $(MAKECMDGOALS)),$(MAKECMDGOALS))
   ifneq ($(_VERSION_ARG),)
@@ -415,47 +365,6 @@ version:
 	fi
 
 # ============================================================================
-# TESTING / QA ENVIRONMENT
-# ============================================================================
-# These targets use docker-compose.testing.yml on top of the base file.
-# The QA environment mimics production: DEBUG=False, Gunicorn, HTTPS cookies.
-
-TESTING_COMPOSE = docker compose -f docker-compose.yml -f docker-compose.testing.yml
-
-testing-up:
-	$(TESTING_COMPOSE) up -d --remove-orphans
-	@echo "QA environment started: http://localhost:8000"
-	@echo "Login with credentials from .env.testing (LOGIN_USERNAME / LOGIN_PASSWORD)"
-
-testing-down:
-	$(TESTING_COMPOSE) down
-
-testing-rebuild:
-	$(TESTING_COMPOSE) down
-	$(TESTING_COMPOSE) build --no-cache
-	$(TESTING_COMPOSE) up -d
-	@echo "QA environment rebuilt: http://localhost:8000"
-
-testing-logs:
-	$(TESTING_COMPOSE) logs -f web
-
-testing-seed:
-	$(TESTING_COMPOSE) exec web python project/manage.py seed_testdata
-
-testing-reset:
-	$(TESTING_COMPOSE) exec web python project/manage.py seed_testdata --reset
-
-testing-shell:
-	$(TESTING_COMPOSE) exec web python project/manage.py shell
-
-testing-health:
-	@echo "=== QA Services ==="
-	@$(TESTING_COMPOSE) ps
-	@echo ""
-	@echo "=== Health endpoint ==="
-	@curl -sf http://localhost:8000/health/ 2>/dev/null || echo "(not reachable)"
-
-# ============================================================================
 # CELERY (async tasks + scheduled jobs)
 # ============================================================================
 celery-logs:
@@ -477,16 +386,10 @@ sync:
 	uv sync --no-install-project
 
 lint:
-	uv run --no-project ruff check project/
-
-lint-fix:
-	uv run --no-project ruff check --fix project/
+	uv run --no-project ruff check $(if $(FIX),--fix,) project/
 
 format:
-	uv run --no-project ruff format project/
-
-format-check:
-	uv run --no-project ruff format --check project/
+	uv run --no-project ruff format $(if $(DRY),--check,) project/
 
 mypy:
 	uv run mypy project/
@@ -534,3 +437,18 @@ pc-run:
 # ============================================================================
 check-deploy:
 	docker compose exec web python project/manage.py check --deploy
+
+# ============================================================================
+# REMOTE (gcloud)
+# ============================================================================
+# SSH into the testing VM. Triggers `gcloud auth login` only if no account is
+# currently active; if you're already logged in, it skips straight to SSH.
+connect-testing:
+	@ACTIVE=$$(gcloud auth list --filter=status:ACTIVE --format="value(account)" 2>/dev/null); \
+	if [ -z "$$ACTIVE" ]; then \
+		echo "No active gcloud account. Launching login..."; \
+		gcloud auth login || exit 1; \
+	else \
+		echo "Using gcloud account: $$ACTIVE"; \
+	fi; \
+	gcloud compute ssh --zone "us-east1-c" "fiveaday-testing" --project "five-a-day-evolution"

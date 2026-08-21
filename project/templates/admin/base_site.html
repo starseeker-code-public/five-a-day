@@ -6,7 +6,11 @@
 {% block extrastyle %}
 {{ block.super }}
 <link rel="stylesheet" type="text/css" href="{% static 'css/admin_custom.css' %}">
+<style>html { color-scheme: only light; }</style>
 {% endblock %}
+
+{% comment %}Empty this block to disable Django admin's dark-mode CSS variable overrides.{% endcomment %}
+{% block dark-mode-vars %}{% endblock %}
 
 {% block branding %}
 <div id="branding">

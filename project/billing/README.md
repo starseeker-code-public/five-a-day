@@ -38,6 +38,7 @@ The `billing` app owns all financial logic: pricing configuration, enrollment pl
 - `calculate_monthly_amount(enrollment, config, month)` — monthly payment with discounts + June bonus (delegates to `_get_base_monthly_fee`)
 - `calculate_quarterly_amount(enrollment, config, quarter_due_month)` — 3 months minus quarterly discount (delegates to `_get_base_monthly_fee`)
 - `complete_payment(payment_id)` — marks payment completed with today's date (within `transaction.atomic()`)
+- `schedule_academic_year_payments(enrollment, parent=None)` — on enrollment, creates all pending periodic payments for the academic year: monthly (Sep–Jun) or quarterly (Oct/Jan/Apr), each due at period end, starting at the enrollment month. Idempotent (matches on payment_type + due-date month/year) so the periodic `generate_payments` command never double-creates. Called by `StudentCreateView` and waiting-list assignment. Returns the count created.
 - `should_generate_monthly/quarterly(month)` — academic calendar validation
 - `get_payment_statistics(month, year)` — aggregate pending/completed counts and totals
 
@@ -66,6 +67,17 @@ python manage.py generate_payments --dry-run    # Preview only
 ```
 
 Generates pending payments for all active enrollments. Monthly students get one per month (Sep-Jun). Quarterly students get one per quarter (Oct, Jan, Apr). Skips if payment already exists for that period.
+
+### `materialize_recurring_expenses`
+
+```bash
+python manage.py materialize_recurring_expenses                    # Monthly templates (1st-of-month job)
+python manage.py materialize_recurring_expenses --month 3 --year 2027
+python manage.py materialize_recurring_expenses --daily            # Weekly + yearly templates (daily job)
+python manage.py materialize_recurring_expenses --daily --date 2027-03-15
+```
+
+Wraps the two recurring-expense Celery tasks (`materialize_recurring_expenses_task` / `_daily_task`) so external schedulers (Cloud Scheduler → Cloud Run Jobs in production) can run them without Celery Beat. Both paths are idempotent.
 
 ## URL Patterns (billing/urls.py)
 

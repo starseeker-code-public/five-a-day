@@ -22,7 +22,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           # Use a PAT so that the push and PR creation trigger downstream CI.
@@ -166,6 +166,43 @@ jobs:
           echo "merge_msg=$MERGE_MSG" >> "$GITHUB_OUTPUT"
           echo "Merged with message: $MERGE_MSG"
 
+      - name: Notify on merge conflict
+        if: >
+          always() &&
+          steps.conditions.outputs.should_merge == 'true' &&
+          steps.ci.outputs.passed == 'true' &&
+          steps.merge.conclusion == 'failure'
+        uses: dawidd6/action-send-mail@v18
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          secure: true
+          username: ${{ secrets.EMAIL_HOST_USER }}
+          password: ${{ secrets.EMAIL_SECRET }}
+          from: "Five a Day CI <${{ secrets.EMAIL_HOST_USER }}>"
+          to: ${{ secrets.TESTING_NOTIFY_EMAILS || secrets.OWNER_EMAILS }}
+          subject: "[Five a Day] ⚠️ Auto-merge development → testing falló (conflicto)"
+          html_body: |
+            <div style="font-family: sans-serif; color:#1f2937; max-width:640px;">
+              <h2 style="color:#b91c1c;">⚠️ El auto-merge development → testing ha fallado</h2>
+              <p style="font-size:15px; line-height:1.6;">
+                Se cumplían todas las condiciones (commits nuevos, antigüedad de 24h, versión
+                incrementada a <strong>v${{ steps.conditions.outputs.new_version }}</strong>, CI en verde)
+                pero el <code>git merge</code> de <code>development</code> en <code>testing</code>
+                ha terminado en conflicto y requiere resolución manual.
+              </p>
+              <p style="font-size:14px; color:#4b5563; line-height:1.6;">
+                Este workflow reintentará automáticamente cada hora, pero seguirá fallando hasta que
+                alguien resuelva el conflicto a mano (normalmente con
+                <code>git merge origin/development</code> sobre <code>testing</code> localmente,
+                arreglando los archivos en conflicto y haciendo push).
+              </p>
+              <p style="margin-top:16px;">
+                <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+                   style="padding:8px 16px; background:#b91c1c; color:#fff; text-decoration:none; border-radius:4px; font-size:13px;">Ver el run fallido →</a>
+              </p>
+            </div>
+
       - name: Tag the testing merge commit with the staging tag
         id: tag
         if: steps.merge.conclusion == 'success'
@@ -244,9 +281,9 @@ jobs:
             core.setOutput('url', pr.data.html_url);
             core.setOutput('already_existed', 'false');
 
-      - name: Notify owners by email
+      - name: Notify by email
         if: steps.merge.conclusion == 'success'
-        uses: dawidd6/action-send-mail@v3
+        uses: dawidd6/action-send-mail@v18
         with:
           server_address: smtp.gmail.com
           server_port: 465
@@ -254,26 +291,46 @@ jobs:
           username: ${{ secrets.EMAIL_HOST_USER }}
           password: ${{ secrets.EMAIL_SECRET }}
           from: "Five a Day CI <${{ secrets.EMAIL_HOST_USER }}>"
-          to: ${{ secrets.OWNER_EMAILS }}
-          subject: "[Five a Day] development → testing merged — PR awaiting review"
+          # Set the TESTING_NOTIFY_EMAILS secret to a comma-separated list
+          # (support + the two admin teachers). Falls back to OWNER_EMAILS.
+          to: ${{ secrets.TESTING_NOTIFY_EMAILS || secrets.OWNER_EMAILS }}
+          subject: "[Five a Day] v${{ steps.conditions.outputs.new_version }} ya está en el entorno de pruebas"
           html_body: |
-            <h2>development → testing merged</h2>
-            <p>A new merge has landed on the <code>testing</code> branch and a pull request to <code>main</code> is now awaiting review.</p>
-
-            <table cellpadding="6" style="border-collapse: collapse; font-family: sans-serif;">
-              <tr><td><strong>Version bump</strong></td><td><code>${{ steps.conditions.outputs.old_version }}</code> → <code>${{ steps.conditions.outputs.new_version }}</code></td></tr>
-              <tr><td><strong>Staging tag (on testing)</strong></td><td><code>${{ steps.tag.outputs.tag }}</code> (${{ steps.tag.outputs.created == 'true' && 'newly created' || 'pre-existing' }})</td></tr>
-              <tr><td><strong>Release tag (pending)</strong></td><td><code>v${{ steps.conditions.outputs.new_version }}</code> — will be created on <code>main</code> after the PR merges</td></tr>
-              <tr><td><strong>Merge commit</strong></td><td><code>${{ steps.merge.outputs.merge_msg }}</code></td></tr>
-              <tr><td><strong>Repository</strong></td><td>${{ github.repository }}</td></tr>
-              <tr><td><strong>PR status</strong></td><td>${{ steps.pr.outputs.already_existed == 'true' && 'Updated (PR already existed)' || 'Newly created' }}</td></tr>
-            </table>
-
-            <p style="margin-top: 1em;">
-              <a href="${{ steps.pr.outputs.url }}" style="padding: 8px 16px; background: #6b46c1; color: white; text-decoration: none; border-radius: 4px;">Review PR →</a>
-            </p>
-
-            <hr>
-            <p style="color: #666; font-size: 12px;">
-              Sent automatically by the auto-merge workflow. The PR cannot be merged to main until all CI checks pass and a code owner approves.
-            </p>
+            <div style="font-family: sans-serif; color:#1f2937; max-width:640px;">
+              <h2 style="color:#6d28d9;">🚀 Nueva versión en el entorno de pruebas</h2>
+              <p style="font-size:15px; line-height:1.6;">
+                Acabamos de publicar la versión <strong>v${{ steps.conditions.outputs.new_version }}</strong>
+                (antes <strong>v${{ steps.conditions.outputs.old_version }}</strong>) en el
+                <strong>entorno de pruebas</strong>. Estos son los últimos cambios que ya podéis probar:
+                <em>${{ steps.merge.outputs.merge_msg }}</em>.
+              </p>
+              <p style="text-align:center; margin:24px 0;">
+                <a href="${{ secrets.TESTING_URL || 'http://34.26.130.187:8000' }}"
+                   style="padding:12px 28px; background:#6d28d9; color:#fff; text-decoration:none; border-radius:8px; font-weight:600; font-size:15px;">
+                  Abrir el entorno de pruebas →
+                </a>
+              </p>
+              <p style="font-size:14px; color:#4b5563; line-height:1.6;">
+                Por favor, revisad que todo funcione correctamente. Cuando la versión quede validada se
+                propondrá para producción — ya hay una pull request abierta hacia <code>main</code>
+                esperando revisión.
+              </p>
+              <hr style="border:none; border-top:1px solid #e5e7eb; margin:24px 0;">
+              <h3 style="color:#6b7280; font-size:12px; text-transform:uppercase; letter-spacing:0.05em;">Detalles técnicos</h3>
+              <table cellpadding="6" style="border-collapse:collapse; font-family:sans-serif; font-size:13px;">
+                <tr><td><strong>Entorno</strong></td><td>Pruebas (testing)</td></tr>
+                <tr><td><strong>Versión</strong></td><td><code>${{ steps.conditions.outputs.old_version }}</code> → <code>${{ steps.conditions.outputs.new_version }}</code></td></tr>
+                <tr><td><strong>Commit de fusión</strong></td><td><code>${{ steps.merge.outputs.merge_msg }}</code></td></tr>
+                <tr><td><strong>Etiqueta de staging</strong></td><td><code>${{ steps.tag.outputs.tag }}</code></td></tr>
+                <tr><td><strong>Etiqueta de release (pendiente)</strong></td><td><code>v${{ steps.conditions.outputs.new_version }}</code> — se creará en <code>main</code> al fusionar la PR</td></tr>
+                <tr><td><strong>Repositorio</strong></td><td>${{ github.repository }}</td></tr>
+                <tr><td><strong>URL de pruebas</strong></td><td><a href="${{ secrets.TESTING_URL || 'http://34.26.130.187:8000' }}">${{ secrets.TESTING_URL || 'http://34.26.130.187:8000' }}</a></td></tr>
+              </table>
+              <p style="margin-top:16px;">
+                <a href="${{ steps.pr.outputs.url }}" style="padding:8px 16px; background:#6b46c1; color:#fff; text-decoration:none; border-radius:4px; font-size:13px;">Revisar la PR hacia producción →</a>
+              </p>
+              <hr style="border:none; border-top:1px solid #e5e7eb; margin:16px 0;">
+              <p style="color:#9ca3af; font-size:12px;">
+                Enviado automáticamente por el workflow de auto-merge. La PR no puede fusionarse a main hasta que CI pase y un revisor la apruebe.
+              </p>
+            </div>

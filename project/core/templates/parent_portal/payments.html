@@ -1,0 +1,90 @@
+{% extends 'parent_portal/base_portal.html' %}
+{% block title %}Pagos · Portal Five a Day{% endblock %}
+{% block content %}
+<h1 class="text-2xl font-bold text-neutral-800 mb-4">Historial de pagos · {{ year }}</h1>
+<form method="get" class="flex items-center gap-2 mb-6">
+    <label class="text-sm text-neutral-600">Año</label>
+    <input type="number" name="year" value="{{ year }}" min="2020" max="2100" class="px-2 py-1 border border-neutral-300 rounded-md text-sm w-24">
+    <button class="px-3 py-1 bg-primary-500 hover:bg-primary-600 text-white rounded-md text-sm">Actualizar</button>
+</form>
+
+<div class="bg-white rounded-lg shadow overflow-hidden">
+    <table class="w-full text-sm">
+        <thead class="bg-neutral-50 border-b border-neutral-200">
+            <tr>
+                <th class="py-2 px-4 text-left">Concepto</th>
+                <th class="py-2 px-4 text-left">Alumno</th>
+                <th class="py-2 px-4 text-center">Estado</th>
+                <th class="py-2 px-4 text-right">Importe</th>
+                <th class="py-2 px-4 text-center"></th>
+            </tr>
+        </thead>
+        <tbody class="divide-y divide-neutral-100">
+            {% for p in payments %}
+            <tr>
+                <td class="py-3 px-4">
+                    <div class="text-neutral-800">{{ p.concept }}</div>
+                    <div class="text-xs text-neutral-500">Vence {{ p.due_date|date:"d/m/Y" }}</div>
+                </td>
+                <td class="py-3 px-4">{{ p.student.full_name }}</td>
+                <td class="py-3 px-4 text-center">
+                    {% if p.payment_status == 'completed' %}
+                        <span class="text-green-600 font-medium">Cobrado</span>
+                    {% elif p.payment_status == 'pending' %}
+                        <span class="text-amber-600 font-medium">Pendiente</span>
+                    {% else %}
+                        <span class="text-neutral-400">{{ p.get_payment_status_display }}</span>
+                    {% endif %}
+                </td>
+                <td class="py-3 px-4 text-right font-medium">{{ p.amount|floatformat:2 }} €</td>
+                <td class="py-3 px-4 text-center">
+                    {% if p.payment_status == 'completed' %}
+                    <a href="{% url 'parent_portal_receipt' p.id %}" class="text-primary-700 hover:text-primary-900 no-underline">
+                        Recibo PDF
+                    </a>
+                    {% elif p.payment_status == 'pending' %}
+                    <button type="button"
+                            data-payment-id="{{ p.id }}"
+                            data-url="{% url 'stripe_create_checkout_link' p.id %}"
+                            onclick="payOnline(this)"
+                            class="px-3 py-1 bg-primary-500 hover:bg-primary-600 text-white rounded-md text-xs font-medium">
+                        Pagar online
+                    </button>
+                    {% endif %}
+                </td>
+            </tr>
+            {% empty %}
+            <tr><td colspan="5" class="py-6 text-center text-neutral-400">Sin pagos en {{ year }}.</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+<script>
+function getCsrfToken() {
+    const cookie = document.cookie.split(';').find(c => c.trim().startsWith('csrftoken='));
+    return cookie ? cookie.split('=')[1] : '';
+}
+async function payOnline(btn) {
+    btn.disabled = true;
+    btn.textContent = 'Cargando...';
+    try {
+        const resp = await fetch(btn.dataset.url, {
+            method: 'POST',
+            headers: {'X-CSRFToken': getCsrfToken(), 'X-Requested-With': 'XMLHttpRequest'},
+        });
+        const data = await resp.json();
+        if (data.success && data.url) {
+            window.location.href = data.url;
+        } else {
+            btn.disabled = false;
+            btn.textContent = 'Pagar online';
+            alert(data.error || 'No se pudo iniciar el pago.');
+        }
+    } catch (e) {
+        btn.disabled = false;
+        btn.textContent = 'Pagar online';
+        alert('Error de red.');
+    }
+}
+</script>
+{% endblock %}

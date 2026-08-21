@@ -9,6 +9,9 @@ from core.views import (
     StudentListView,
     StudentUpdateView,
     add_fun_friday_attendance,
+    # Waiting list (v1.1)
+    add_to_waiting_list,
+    assign_from_waiting_list,
     remove_fun_friday_attendance,
     search_parents,
     # Search/validation API
@@ -16,6 +19,7 @@ from core.views import (
     # Fun Friday attendance
     toggle_fun_friday_this_week,
     validate_student_parent,
+    waiting_list_view,
 )
 
 urlpatterns = [
@@ -28,6 +32,18 @@ urlpatterns = [
     # ============================================================================
     path("students/", StudentListView.as_view(), name="students_list"),
     path("students/create/", StudentCreateView.as_view(), name="student_create"),
+    # Waiting list (v1.1)
+    path("students/waiting/", waiting_list_view, name="waiting_list"),
+    path(
+        "students/<int:student_id>/assign/",
+        assign_from_waiting_list,
+        name="assign_from_waiting_list",
+    ),
+    path(
+        "students/<int:student_id>/wait/",
+        add_to_waiting_list,
+        name="add_to_waiting_list",
+    ),
     path("students/<int:student_id>/", StudentDetailView.as_view(), name="student_detail"),
     path(
         "students/<int:student_id>/update/",

@@ -1,5 +1,6 @@
 """Tests for core.decorators — access-control decorators."""
 
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -14,12 +15,18 @@ def rf():
     return RequestFactory()
 
 
-def _make_request(rf, username=None):
+def _make_request(rf, *, authenticated=False, teacher=None):
+    """Build a request whose ``user`` mimics an (un)authenticated Teacher.
+
+    ``qa_access_required`` reads ``request.user`` and its reverse ``teacher``
+    accessor (and ``teacher.admin``), so we attach lightweight stand-ins
+    rather than DB rows.
+    """
     req = rf.get("/")
-    # Attach a dict-like session
-    req.session = {}
-    if username is not None:
-        req.session["username"] = username
+    if not authenticated:
+        req.user = SimpleNamespace(is_authenticated=False)
+    else:
+        req.user = SimpleNamespace(is_authenticated=True, teacher=teacher)
     return req
 
 
@@ -29,43 +36,38 @@ def _view(request):
 
 
 class TestQaAccessRequired:
-    def test_allows_when_all_conditions_met(self, rf):
-        req = _make_request(rf, username="qa_user")
+    def test_allows_admin_teacher_in_testing_env(self, rf):
+        req = _make_request(rf, authenticated=True, teacher=SimpleNamespace(admin=True))
         with patch("core.decorators.settings") as mock_settings:
             mock_settings.IS_TESTING_ENV = True
-            mock_settings.QA_TESTING_USERNAME = "qa_user"
             response = _view(req)
         assert response.status_code == 200
         assert response.content == b"ok"
 
+    def test_404_for_non_admin_teacher(self, rf):
+        req = _make_request(rf, authenticated=True, teacher=SimpleNamespace(admin=False))
+        with patch("core.decorators.settings") as mock_settings:
+            mock_settings.IS_TESTING_ENV = True
+            with pytest.raises(Http404):
+                _view(req)
+
     def test_404_when_not_testing_env(self, rf):
-        req = _make_request(rf, username="qa_user")
+        req = _make_request(rf, authenticated=True, teacher=SimpleNamespace(admin=True))
         with patch("core.decorators.settings") as mock_settings:
             mock_settings.IS_TESTING_ENV = False
-            mock_settings.QA_TESTING_USERNAME = "qa_user"
             with pytest.raises(Http404):
                 _view(req)
 
-    def test_404_when_no_qa_username_configured(self, rf):
-        req = _make_request(rf, username="qa_user")
+    def test_404_when_authenticated_but_not_a_teacher(self, rf):
+        req = _make_request(rf, authenticated=True, teacher=None)
         with patch("core.decorators.settings") as mock_settings:
             mock_settings.IS_TESTING_ENV = True
-            mock_settings.QA_TESTING_USERNAME = ""
             with pytest.raises(Http404):
                 _view(req)
 
-    def test_404_when_session_user_does_not_match(self, rf):
-        req = _make_request(rf, username="someone_else")
+    def test_404_when_anonymous(self, rf):
+        req = _make_request(rf, authenticated=False)
         with patch("core.decorators.settings") as mock_settings:
             mock_settings.IS_TESTING_ENV = True
-            mock_settings.QA_TESTING_USERNAME = "qa_user"
-            with pytest.raises(Http404):
-                _view(req)
-
-    def test_404_when_no_session_user(self, rf):
-        req = _make_request(rf)
-        with patch("core.decorators.settings") as mock_settings:
-            mock_settings.IS_TESTING_ENV = True
-            mock_settings.QA_TESTING_USERNAME = "qa_user"
             with pytest.raises(Http404):
                 _view(req)

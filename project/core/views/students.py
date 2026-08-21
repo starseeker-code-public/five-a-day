@@ -1,3 +1,4 @@
+import logging
 from datetime import date
 
 from django.contrib import messages
@@ -5,7 +6,7 @@ from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.db.models import Q
 from django.http import HttpResponseRedirect, JsonResponse
-from django.shortcuts import get_object_or_404, redirect, render
+from django.shortcuts import get_object_or_404, redirect
 from django.urls import reverse, reverse_lazy
 from django.views.generic import CreateView, DetailView, ListView, UpdateView
 
@@ -14,6 +15,8 @@ from billing.models import Enrollment, Payment, SiteConfiguration, current_acade
 from core.models import FunFridayAttendance, HistoryLog
 from students.forms import StudentForm
 from students.models import Group, Parent, Student
+
+logger = logging.getLogger(__name__)
 
 # ============================================================================
 # PARENT AND STUDENT MANAGEMENT - Parent-First Flow
@@ -45,6 +48,7 @@ class StudentCreateView(CreateView):
         mode = self.request.GET.get("mode", "normal")
         context["creation_mode"] = mode
         context["is_adult_mode"] = mode == "adult"
+        context["is_waiting_mode"] = mode == "waiting"
 
         parent_id = self.request.GET.get("parent_id")
         if parent_id:
@@ -90,12 +94,19 @@ class StudentCreateView(CreateView):
         from comms.tasks import send_welcome_email_task
         from core.models import HistoryLog
 
-        enrollment_form = EnrollmentForm(self.request.POST)
-
-        if not enrollment_form.is_valid():
-            return self.form_invalid(form)
-
+        is_waiting_mode = (
+            self.request.POST.get("is_waiting") in ("on", "true", "1") or self.request.GET.get("mode") == "waiting"
+        )
         is_adult_mode = self.request.POST.get("is_adult_mode") == "true"
+
+        # For waiting-list students we skip the enrollment form entirely — no
+        # plan/discount is chosen until the student is promoted off the list.
+        if not is_waiting_mode:
+            enrollment_form = EnrollmentForm(self.request.POST)
+            if not enrollment_form.is_valid():
+                return self.form_invalid(form)
+        else:
+            enrollment_form = None
 
         try:
             with transaction.atomic():
@@ -105,6 +116,8 @@ class StudentCreateView(CreateView):
                     student.gdpr_signed = True
                     student.email = self.request.POST.get("adult_email", "")
                     student.phone = self.request.POST.get("adult_phone", "")
+                if is_waiting_mode:
+                    student.is_waiting = True
                 student.save()
 
                 parent = None
@@ -124,16 +137,38 @@ class StudentCreateView(CreateView):
                         student.delete()
                         return self.form_invalid(form)
 
+                if is_waiting_mode:
+                    HistoryLog.log(
+                        "waiting_list_added",
+                        f"Nuevo en lista de espera: {student.full_name} — {student.group.group_name}",
+                        icon="hourglass_top",
+                    )
+                    messages.success(
+                        self.request,
+                        f"✅ {student.full_name} añadido/a a la lista de espera.",
+                    )
+                    return HttpResponseRedirect(reverse("waiting_list"))
+
                 # Create enrollment
                 enrollment = enrollment_form.create_enrollment(student, is_adult=is_adult_mode)
 
-                # Create enrollment fee payment (pending, due end of month)
+                # Create enrollment fee payment (pending, due end of month).
+                # Applies the returning-student discount automatically when
+                # the student has any prior Enrollment for an earlier
+                # academic year (v1.13).
+                from billing.services.enrollment_service import EnrollmentService
+
                 config = SiteConfiguration.get_config()
                 today = date.today()
                 last_day = calendar.monthrange(today.year, today.month)[1]
                 due_date = date(today.year, today.month, last_day)
 
-                enrollment_fee = config.adult_enrollment_fee if is_adult_mode else config.children_enrollment_fee
+                enrollment_fee, returning_discount = EnrollmentService.compute_enrollment_fee(
+                    config, student, is_adult=is_adult_mode
+                )
+                concept = f"Matrícula {enrollment.academic_year} — {student.full_name}"
+                if returning_discount:
+                    concept += f" (dto. alumno recurrente −{returning_discount:.2f} €)"
 
                 Payment.objects.create(
                     student=student,
@@ -145,8 +180,15 @@ class StudentCreateView(CreateView):
                     currency="EUR",
                     payment_status="pending",
                     due_date=due_date,
-                    concept=f"Matrícula {enrollment.academic_year} — {student.full_name}",
+                    concept=concept,
                 )
+
+                # Schedule the recurring fees for the rest of the academic year
+                # (monthly Sep–Jun or quarterly Oct/Jan/Apr), each pending and
+                # due at period end. Idempotent vs. the generate_payments cron.
+                from billing.services.payment_service import PaymentService
+
+                PaymentService.schedule_academic_year_payments(enrollment, parent)
 
                 HistoryLog.log(
                     "student_enrolled",
@@ -154,15 +196,28 @@ class StudentCreateView(CreateView):
                     icon="school",
                 )
 
-                # Enqueue welcome email
-                try:
-                    send_welcome_email_task.delay(
-                        parent_id=parent.id if parent else None,
-                        student_id=student.id,
-                        enrollment_id=enrollment.id,
-                    )
-                except Exception:
-                    pass
+                # Enqueue welcome email AFTER the transaction commits.
+                # In Celery eager mode (dev / no Redis) the task runs
+                # synchronously — if we queued inside the atomic block and a
+                # later step raised, the transaction would roll back but the
+                # parent would already have received an email about a student
+                # that never existed. `transaction.on_commit` defers the
+                # dispatch until COMMIT succeeds.
+                _parent_id = parent.id if parent else None
+                _enrollment_id = enrollment.id
+                _student_id = student.id
+
+                def _queue_welcome():
+                    try:
+                        send_welcome_email_task.delay(
+                            parent_id=_parent_id,
+                            student_id=_student_id,
+                            enrollment_id=_enrollment_id,
+                        )
+                    except Exception:
+                        pass  # never fail the request over email dispatch
+
+                transaction.on_commit(_queue_welcome)
 
                 # Redirect to success page with student info
                 from urllib.parse import quote
@@ -204,6 +259,7 @@ class StudentListView(ListView):
         queryset = (
             Student.objects.filter(
                 active=True,
+                is_waiting=False,
                 enrollments__academic_year=academic_year,
             )
             .distinct()
@@ -283,20 +339,28 @@ class StudentUpdateView(UpdateView):
         return context
 
     def form_valid(self, form):
-        enrollment_form = EnrollmentForm(self.request.POST)
+        # Waiting-list students don't have an active enrollment, so we skip the
+        # enrollment form. Once is_waiting is toggled off, a fresh enrollment is
+        # created below.
+        is_waiting_now = form.cleaned_data.get("is_waiting", False)
 
-        if not enrollment_form.is_valid():
-            return self.form_invalid(form)
+        enrollment_form = None
+        if not is_waiting_now:
+            enrollment_form = EnrollmentForm(self.request.POST)
+            if not enrollment_form.is_valid():
+                return self.form_invalid(form)
 
         try:
             with transaction.atomic():
                 student = form.save()
 
-                # Deactivate old enrollment if exists
-                student.enrollments.filter(status="active").update(status="finished")
-
-                # Create new enrollment
-                enrollment_form.create_enrollment(student, is_adult=student.is_adult)
+                if is_waiting_now:
+                    # Cancel any active enrollment — the student is off the roster.
+                    student.enrollments.filter(status="active").update(status="cancelled")
+                else:
+                    # Deactivate old enrollment if exists, then issue the new one.
+                    student.enrollments.filter(status="active").update(status="finished")
+                    enrollment_form.create_enrollment(student, is_adult=student.is_adult)
 
                 messages.success(
                     self.request,
@@ -366,20 +430,25 @@ def get_ff_student_ids(friday_date):
 
 
 def search_students(request):
-    # Get all students with related data
-    students = Student.objects.select_related("group", "group__teacher").prefetch_related("parents").filter(active=True)
+    """AJAX endpoint to search active students by name (JSON).
 
-    # Get all groups and parents for the form
-    groups = Group.objects.filter(active=True).select_related("teacher")
-    parents = Parent.objects.all()
+    Mirrors ``search_parents``: returns ``{"results": [{id, full_name, school}]}``
+    so the create-payment student autocomplete can populate suggestions (and,
+    on selection, auto-fetch the student's parent via ``validate_student_parent``).
+    """
+    query = request.GET.get("q", "").strip()
 
-    context = {
-        "students": students,
-        "groups": groups,
-        "parents": parents,
-    }
+    if len(query) < 2:
+        return JsonResponse({"results": []})
 
-    return render(request, "students.html", context)
+    students = (
+        Student.objects.filter(active=True)
+        .filter(Q(first_name__icontains=query) | Q(last_name__icontains=query))
+        .select_related("group")[:10]
+    )
+
+    results = [{"id": s.id, "full_name": s.full_name, "school": s.school or ""} for s in students]
+    return JsonResponse({"results": results})
 
 
 def handle_student_form(request):
@@ -541,8 +610,9 @@ def student_detail(request, student_id):
 
         return JsonResponse(student_data)
 
-    except Exception as e:
-        return JsonResponse({"error": str(e)}, status=500)
+    except Exception:
+        logger.exception("Error building student payload for student %s", student_id)
+        return JsonResponse({"error": "No se pudieron cargar los datos del alumno."}, status=500)
 
 
 def update_student(request, student_id):

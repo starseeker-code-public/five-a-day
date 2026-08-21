@@ -9,6 +9,9 @@ If PostgreSQL is not available, falls back to SQLite for CI or quick local runs.
 
 import os
 
+# A star-import is the documented Django pattern for a settings overlay: the
+# module must expose every base setting as a module-level global for
+# `DJANGO_SETTINGS_MODULE` to work. Enumerating them is not maintainable.
 from project.settings import *  # noqa: F401, F403
 
 # Try to use PostgreSQL (matches production). Fall back to SQLite if unavailable.
@@ -67,3 +70,7 @@ SECURE_HSTS_INCLUDE_SUBDOMAINS = False
 SECURE_HSTS_PRELOAD = False
 SESSION_COOKIE_SECURE = False
 CSRF_COOKIE_SECURE = False
+
+# v1.10 — the rate limiter uses a shared cache. Disable it in tests so counts
+# from previous tests don't leak and cause 429 responses on later ones.
+RATELIMIT_ENABLE = False

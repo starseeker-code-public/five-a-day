@@ -6,57 +6,294 @@
 {% block content %}
 <div id="content-main">
 
+    <!-- ============================================================
+         WELCOME BANNER
+         ============================================================ -->
     <div class="five-a-day-welcome">
         <img class="welcome-logo"
              src="{% static 'images/logo_white_bg.png' %}"
              alt="Five a Day">
         <div class="welcome-text">
-            <h2>¡Bienvenido/a al panel de gestión!</h2>
+            <h2>¡Bienvenidas, Silvia y Penelope! 👋</h2>
             <p>
-                Desde aquí puedes gestionar estudiantes, familias, matrículas, pagos,
-                horarios y comunicaciones de Five a Day English Academy.
-                Usa el menú de la izquierda o selecciona una sección de abajo.
+                Desde aquí podéis gestionar todo lo de la academia: alumnos, familias,
+                matrículas, pagos, horarios y más. Usad las tarjetas de abajo para
+                ir directamente a lo que necesitéis.
             </p>
         </div>
     </div>
 
-    {% if app_list %}
-        {% for app in app_list %}
-        <div class="app-{{ app.app_label }} module{% if app.app_url in request.path|urlencode %} current-app{% endif %}">
-            <table>
-                <caption>
-                    <a href="{{ app.app_url }}" class="section"
-                       title="{% blocktranslate with name=app.verbose_name %}Modelos de la aplicación {{ name }}{% endblocktranslate %}">
-                        {{ app.verbose_name }}
-                    </a>
-                </caption>
-                {% for model in app.models %}
-                <tr class="model-{{ model.object_name|lower }}{% if model.admin_url in request.path|urlencode %} current-model{% endif %}">
-                    {% if model.admin_url %}
-                        <th scope="row"><a href="{{ model.admin_url }}">{{ model.verbose_name_plural|capfirst }}</a></th>
-                    {% else %}
-                        <th scope="row">{{ model.verbose_name_plural|capfirst }}</th>
-                    {% endif %}
-                    <td>
-                        {% if model.add_url %}
-                            <a href="{{ model.add_url }}" class="addlink">{% trans 'Añadir' %}</a>
-                        {% endif %}
-                        {% if model.admin_url %}
-                            {% if model.view_only %}
-                                <a href="{{ model.admin_url }}" class="viewlink">{% trans 'Ver' %}</a>
-                            {% else %}
-                                <a href="{{ model.admin_url }}" class="changelink">{% trans 'Editar' %}</a>
-                            {% endif %}
-                        {% endif %}
-                    </td>
-                </tr>
-                {% endfor %}
-            </table>
+    <!-- ============================================================
+         SECCIÓN 1 — DATOS
+         (apps: students, billing, core)
+         ============================================================ -->
+    <div class="five-a-day-section">
+        <div class="five-a-day-section-header">
+            <span class="section-icon">📊</span>
+            <h2>Datos</h2>
+            <span class="section-desc">Alumnos, familias, pagos y configuración de la academia</span>
         </div>
-        {% endfor %}
-    {% else %}
-        <p>{% trans "No tienes permisos para ver o editar nada." %}</p>
+        <div class="five-a-day-model-grid">
+            {% for app in app_list %}
+            {% if app.app_label == "students" or app.app_label == "billing" or app.app_label == "core" %}
+                {% for model in app.models %}
+                {% if model.object_name != "SiteConfiguration" and model.object_name != "EnrollmentType" and model.object_name != "StudentParent" %}
+                <div class="model-card">
+                    <span class="card-icon">
+                        {% if model.object_name == "Student" %}🧑‍🎓
+                        {% elif model.object_name == "Parent" %}👨‍👩‍👧
+                        {% elif model.object_name == "Teacher" %}👩‍🏫
+                        {% elif model.object_name == "Group" and app.app_label == "students" %}👥
+                        {% elif model.object_name == "StudentParent" %}🔗
+                        {% elif model.object_name == "Payment" %}💳
+                        {% elif model.object_name == "Enrollment" %}📋
+                        {% elif model.object_name == "EnrollmentType" %}📝
+                        {% elif model.object_name == "SiteConfiguration" %}⚙️
+                        {% elif model.object_name == "HistoryLog" %}📜
+                        {% elif model.object_name == "TodoItem" %}✅
+                        {% elif model.object_name == "ScheduleSlot" %}🗓️
+                        {% elif model.object_name == "FunFridayAttendance" %}🎉
+                        {% else %}📦
+                        {% endif %}
+                    </span>
+                    <div class="card-name">
+                        {% if model.object_name == "Student" %}Alumnos
+                        {% elif model.object_name == "Parent" %}Padres y Tutores
+                        {% elif model.object_name == "Teacher" %}Profesores
+                        {% elif model.object_name == "Group" and app.app_label == "students" %}Grupos
+                        {% elif model.object_name == "StudentParent" %}Vínculos alumno–familiar
+                        {% elif model.object_name == "Payment" %}Pagos
+                        {% elif model.object_name == "Enrollment" %}Matrículas
+                        {% elif model.object_name == "EnrollmentType" %}Tipos de matrícula
+                        {% elif model.object_name == "SiteConfiguration" %}Configuración global
+                        {% elif model.object_name == "HistoryLog" %}Historial de actividad
+                        {% elif model.object_name == "TodoItem" %}Tareas pendientes
+                        {% elif model.object_name == "ScheduleSlot" %}Horarios
+                        {% elif model.object_name == "FunFridayAttendance" %}Fun Friday
+                        {% else %}{{ model.verbose_name_plural|capfirst }}
+                        {% endif %}
+                    </div>
+                    <div class="card-desc">
+                        {% if model.object_name == "Student" %}
+                            Ficha completa de cada alumno: datos personales, grupo y estado de matrícula.
+                        {% elif model.object_name == "Parent" %}
+                            Datos de contacto de los familiares y responsables de los alumnos.
+                        {% elif model.object_name == "Teacher" %}
+                            Ficha de cada profesor y monitor de la academia.
+                        {% elif model.object_name == "Group" and app.app_label == "students" %}
+                            Grupos y clases de la academia: nombre, nivel y horario.
+                        {% elif model.object_name == "StudentParent" %}
+                            Relaciones entre alumnos y sus padres o tutores.
+                        {% elif model.object_name == "Payment" %}
+                            Registro de todos los pagos: cuotas mensuales, matrículas y recibos.
+                        {% elif model.object_name == "Enrollment" %}
+                            Matrículas activas e históricas de cada alumno por año académico.
+                        {% elif model.object_name == "EnrollmentType" %}
+                            Modalidades de inscripción disponibles en la academia.
+                        {% elif model.object_name == "SiteConfiguration" %}
+                            Precios, cuotas, IVA y ajustes generales del sistema. Solo hay un registro.
+                        {% elif model.object_name == "HistoryLog" %}
+                            Registro automático de las acciones realizadas en el sistema.
+                        {% elif model.object_name == "TodoItem" %}
+                            Lista de tareas y recordatorios del equipo de la academia.
+                        {% elif model.object_name == "ScheduleSlot" %}
+                            Configuración de las franjas horarias del cuadrante semanal.
+                        {% elif model.object_name == "FunFridayAttendance" %}
+                            Registro de asistencia a las actividades especiales de los viernes.
+                        {% else %}
+                            Gestión de {{ model.verbose_name_plural }}.
+                        {% endif %}
+                    </div>
+                    <div class="card-actions">
+                        {% if model.admin_url %}
+                        <a href="{{ model.admin_url }}" class="card-btn view-btn">📋 Ver</a>
+                        {% endif %}
+                        {% if model.add_url %}
+                        <a href="{{ model.add_url }}" class="card-btn add-btn">+ Añadir</a>
+                        {% endif %}
+                    </div>
+                </div>
+                {% endif %}
+                {% endfor %}
+            {% endif %}
+            {% endfor %}
+        </div>
+    </div>
+
+    <!-- ============================================================
+         SECCIÓN 1b — DATOS EXTRA
+         (SiteConfiguration, EnrollmentType, StudentParent)
+         ============================================================ -->
+    <div class="five-a-day-section">
+        <div class="five-a-day-section-header">
+            <span class="section-icon">🗂️</span>
+            <h2>Datos extra</h2>
+            <span class="section-desc">Configuración avanzada y tablas de referencia</span>
+        </div>
+        <div class="five-a-day-model-grid">
+            {% for app in app_list %}
+            {% if app.app_label == "students" or app.app_label == "billing" %}
+                {% for model in app.models %}
+                {% if model.object_name == "SiteConfiguration" or model.object_name == "EnrollmentType" or model.object_name == "StudentParent" %}
+                <div class="model-card">
+                    <span class="card-icon">
+                        {% if model.object_name == "SiteConfiguration" %}⚙️
+                        {% elif model.object_name == "EnrollmentType" %}📝
+                        {% elif model.object_name == "StudentParent" %}🔗
+                        {% endif %}
+                    </span>
+                    <div class="card-name">
+                        {% if model.object_name == "SiteConfiguration" %}Configuración global
+                        {% elif model.object_name == "EnrollmentType" %}Tipos de matrícula
+                        {% elif model.object_name == "StudentParent" %}Vínculos alumno–familiar
+                        {% endif %}
+                    </div>
+                    <div class="card-desc">
+                        {% if model.object_name == "SiteConfiguration" %}
+                            Precios, cuotas, IVA y ajustes generales del sistema. Solo hay un registro.
+                        {% elif model.object_name == "EnrollmentType" %}
+                            Modalidades de inscripción disponibles en la academia.
+                        {% elif model.object_name == "StudentParent" %}
+                            Relaciones entre alumnos y sus padres o tutores.
+                        {% endif %}
+                    </div>
+                    <div class="card-actions">
+                        {% if model.admin_url %}
+                        <a href="{{ model.admin_url }}" class="card-btn view-btn">📋 Ver</a>
+                        {% endif %}
+                        {% if model.add_url %}
+                        <a href="{{ model.add_url }}" class="card-btn add-btn">+ Añadir</a>
+                        {% endif %}
+                    </div>
+                </div>
+                {% endif %}
+                {% endfor %}
+            {% endif %}
+            {% endfor %}
+        </div>
+    </div>
+
+    <!-- ============================================================
+         SECCIÓN 2 — GOOGLE SHEETS
+         (app: gsheets)
+         ============================================================ -->
+    {% for app in app_list %}{% if app.app_label == "gsheets" %}
+    <div class="five-a-day-section">
+        <div class="five-a-day-section-header">
+            <span class="section-icon">📗</span>
+            <h2>Google Sheets</h2>
+            <span class="section-desc">Integración con hojas de cálculo de Google</span>
+        </div>
+        <div class="five-a-day-model-grid">
+            {% for model in app.models %}
+            <div class="model-card">
+                <span class="card-icon">
+                    {% if model.object_name == "AccessCredentials" %}🔑
+                    {% else %}📄{% endif %}
+                </span>
+                <div class="card-name">
+                    {% if model.object_name == "AccessCredentials" %}Credenciales Google
+                    {% else %}{{ model.verbose_name_plural|capfirst }}{% endif %}
+                </div>
+                <div class="card-desc">
+                    {% if model.object_name == "AccessCredentials" %}
+                        Token de acceso para la integración con Google Sheets.
+                    {% else %}
+                        Gestión de {{ model.verbose_name_plural }}.
+                    {% endif %}
+                </div>
+                <div class="card-actions">
+                    {% if model.admin_url %}
+                    <a href="{{ model.admin_url }}" class="card-btn view-btn">📋 Ver</a>
+                    {% endif %}
+                    {% if model.add_url %}
+                    <a href="{{ model.add_url }}" class="card-btn add-btn">+ Añadir</a>
+                    {% endif %}
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}{% endfor %}
+
+    <!-- ============================================================
+         SECCIÓN 3 — SEGURIDAD
+         (app: auth)
+         ============================================================ -->
+    {% for app in app_list %}{% if app.app_label == "auth" %}
+    <div class="five-a-day-section">
+        <div class="five-a-day-section-header">
+            <span class="section-icon">🔐</span>
+            <h2>Seguridad</h2>
+            <span class="section-desc">Usuarios y permisos de acceso al panel</span>
+        </div>
+        <div class="five-a-day-model-grid">
+            {% for model in app.models %}
+            <div class="model-card">
+                <span class="card-icon">
+                    {% if model.object_name == "User" %}👤
+                    {% elif model.object_name == "Group" %}🔐
+                    {% else %}🛡️{% endif %}
+                </span>
+                <div class="card-name">
+                    {% if model.object_name == "User" %}Usuarios
+                    {% elif model.object_name == "Group" %}Grupos de permisos
+                    {% else %}{{ model.verbose_name_plural|capfirst }}{% endif %}
+                </div>
+                <div class="card-desc">
+                    {% if model.object_name == "User" %}
+                        Cuentas de acceso al panel de administración.
+                    {% elif model.object_name == "Group" %}
+                        Roles y conjuntos de permisos para los usuarios del panel.
+                    {% else %}
+                        Gestión de {{ model.verbose_name_plural }}.
+                    {% endif %}
+                </div>
+                <div class="card-actions">
+                    {% if model.admin_url %}
+                    <a href="{{ model.admin_url }}" class="card-btn view-btn">📋 Ver</a>
+                    {% endif %}
+                    {% if model.add_url %}
+                    <a href="{{ model.add_url }}" class="card-btn add-btn">+ Añadir</a>
+                    {% endif %}
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}{% endfor %}
+
+    <!-- ============================================================
+         SECCIÓN 4 — OTROS
+         (anything not in the sections above)
+         ============================================================ -->
+    {% for app in app_list %}
+    {% if app.app_label != "students" and app.app_label != "billing" and app.app_label != "core" and app.app_label != "gsheets" and app.app_label != "auth" %}
+    <div class="five-a-day-section">
+        <div class="five-a-day-section-header">
+            <span class="section-icon">🔧</span>
+            <h2>Otros — {{ app.verbose_name }}</h2>
+        </div>
+        <div class="five-a-day-model-grid">
+            {% for model in app.models %}
+            <div class="model-card">
+                <span class="card-icon">📦</span>
+                <div class="card-name">{{ model.verbose_name_plural|capfirst }}</div>
+                <div class="card-desc">Gestión de {{ model.verbose_name_plural }}.</div>
+                <div class="card-actions">
+                    {% if model.admin_url %}
+                    <a href="{{ model.admin_url }}" class="card-btn view-btn">📋 Ver</a>
+                    {% endif %}
+                    {% if model.add_url %}
+                    <a href="{{ model.add_url }}" class="card-btn add-btn">+ Añadir</a>
+                    {% endif %}
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
     {% endif %}
+    {% endfor %}
 
 </div>
 {% endblock %}

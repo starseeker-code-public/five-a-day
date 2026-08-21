@@ -11,7 +11,9 @@
     let currentPage = 1;
 
     function getCsrf() {
-        return document.cookie.split(';').map(c=>c.trim()).find(c=>c.startsWith('csrftoken='))?.split('=')[1]||'';
+        return document.querySelector('[name=csrfmiddlewaretoken]')?.value
+            || document.cookie.split(';').map(c=>c.trim()).find(c=>c.startsWith('csrftoken='))?.split('=')[1]
+            || '';
     }
 
     // Get all data rows (cached once)
@@ -47,12 +49,9 @@
         const nav = document.getElementById('paginationNav');
         if (totalPages <= 1) { nav.innerHTML = ''; return; }
 
-        const btnStyle = 'text-decoration:none;width:2.5rem;height:2.5rem;border-radius:9999px;display:inline-flex;align-items:center;justify-content:center;border:1px solid #e5e7eb;background:#fff;color:#525252;font-size:0.875rem;cursor:pointer;transition:background 0.2s;';
-        const activeStyle = 'width:2.5rem;height:2.5rem;border-radius:9999px;display:inline-flex;align-items:center;justify-content:center;background:#8b5cf6;color:#fff;font-size:0.875rem;font-weight:700;';
-
         let html = '';
         if (currentPage > 1) {
-            html += `<button type="button" class="pg-btn" data-page="${currentPage - 1}" style="${btnStyle}font-size:1rem;">\u2039</button>`;
+            html += `<button type="button" class="pg-btn" data-page="${currentPage - 1}" style="font-size:1rem;">\u2039</button>`;
         }
 
         // Show limited page range for many pages
@@ -71,16 +70,16 @@
 
         for (const p of pages) {
             if (p === '...') {
-                html += `<span style="width:2rem;text-align:center;color:#9ca3af;">\u2026</span>`;
+                html += `<span class="pg-ellipsis">\u2026</span>`;
             } else if (p === currentPage) {
-                html += `<span style="${activeStyle}">${p}</span>`;
+                html += `<span class="pg-active">${p}</span>`;
             } else {
-                html += `<button type="button" class="pg-btn" data-page="${p}" style="${btnStyle}">${p}</button>`;
+                html += `<button type="button" class="pg-btn" data-page="${p}">${p}</button>`;
             }
         }
 
         if (currentPage < totalPages) {
-            html += `<button type="button" class="pg-btn" data-page="${currentPage + 1}" style="${btnStyle}font-size:1rem;">\u203A</button>`;
+            html += `<button type="button" class="pg-btn" data-page="${currentPage + 1}" style="font-size:1rem;">\u203A</button>`;
         }
         nav.innerHTML = html;
 
@@ -378,10 +377,13 @@
             if (data.parents && data.parents.length > 0) {
                 const p = data.parents[0];
                 selectedParent = { id: p.id, name: p.full_name };
+                if (selectedStudent) selectedStudent.noParent = false;
                 document.getElementById('parent_id').value = p.id;
                 if (parentDisplay) parentDisplay.value = p.full_name;
             } else {
+                // Adult students have no parent/guardian — this is valid.
                 selectedParent = null;
+                if (selectedStudent) selectedStudent.noParent = true;
                 document.getElementById('parent_id').value = '';
                 if (parentDisplay) parentDisplay.value = 'Sin padre/tutor (estudiante adulto)';
             }
@@ -429,13 +431,13 @@
     document.addEventListener('click', function(e) {
         if (!studentSearch.contains(e.target) && !studentSuggestions.contains(e.target))
             studentSuggestions.classList.add('hidden');
-        if (!parentSearch.contains(e.target) && !parentSuggestions.contains(e.target))
-            parentSuggestions.classList.add('hidden');
     });
 
     // Form validation
     form.addEventListener('submit', (e) => {
-        if (!selectedStudent || !selectedParent) {
+        // A student is always required; a parent is required EXCEPT for adult
+        // students, who have no parent/guardian (selectedStudent.noParent).
+        if (!selectedStudent || (!selectedParent && !selectedStudent.noParent)) {
             e.preventDefault();
             validationMessage.classList.remove('hidden');
             validationMessage.style.color = '#dc2626';

@@ -110,10 +110,17 @@ class TestStudentCreateViewPost:
 
 
 class TestSearchStudents:
-    def test_returns_students_page(self, authenticated_client, student):
-        response = authenticated_client.get(reverse("search_students"))
+    def test_returns_json_results(self, authenticated_client, student):
+        response = authenticated_client.get(reverse("search_students"), {"q": student.first_name})
         assert response.status_code == 200
-        assert "students" in response.context
+        data = response.json()
+        assert "results" in data
+        assert any(r["id"] == student.id for r in data["results"])
+
+    def test_short_query_returns_empty(self, authenticated_client, student):
+        response = authenticated_client.get(reverse("search_students"), {"q": "a"})
+        assert response.status_code == 200
+        assert response.json()["results"] == []
 
 
 # ============================================================================

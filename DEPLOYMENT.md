@@ -98,11 +98,19 @@ git clone https://github.com/YOUR_ORG/five-a-day.git
 cd five-a-day
 # Create .env.testing and populate it using the template in README.md (section ".env template")
 touch .env.testing
+# Symlink so settings.py's base load_dotenv(.env) finds the same file
+ln -sf .env.testing .env
 docker compose --env-file .env.testing up -d
 ```
 
 Because docker-compose uses `restart: unless-stopped`, all containers come back automatically after a
 VM reboot — no manual intervention needed.
+
+**Teacher seeding (testing/production only)** — `entrypoint.sh` runs `manage.py seed_teachers` on container start when `DJANGO_ENV` is `testing` or `production`. The command reads numbered `TEACHER_SEED_<N>_*` env vars (see [README → .env template](../README.md#env-template)) and idempotently creates Teacher rows + linked `auth.User` accounts so teachers can log in with email + password.
+
+Keep these vars directly in `.env.testing` (alongside the rest of the testing config). There is no overlay file system — `.env.testing` is self-contained and is renamed to `.env` on the VM before bringing the stack up. It's gitignored via `.env*`.
+
+Watch the logs after `docker compose up -d` for `✅ Teacher created/updated: ...` lines confirming the seeds landed. Gmail SMTP (`EMAIL_HOST_USER` + `EMAIL_SECRET`) must work in this environment: any seed block that omits `TEACHER_SEED_<N>_PASSWORD` requires the teacher to activate via the password-reset email.
 
 #### 5. Routine updates
 
@@ -125,6 +133,21 @@ docker compose up -d --build
 ---
 
 ## 3. Production (Cloud Run + Cloud SQL)
+
+> **Database rollout plan (Neon first, then Cloud SQL):** the production database will
+> initially be prototyped on [Neon](https://neon.tech) (serverless PostgreSQL, free tier)
+> instead of Cloud SQL — the app is agnostic, it only sees `DATABASE_URL`. Once the whole
+> production stack is verified working end-to-end, we will migrate to the Cloud SQL
+> instance described below **before introducing any real data**, so the switch is a plain
+> `DATABASE_URL` swap with no data migration. Notes for the Neon phase:
+>
+> - Use Neon's **direct** (non-pooled) connection string — `settings.py` uses
+>   `CONN_MAX_AGE=600`, which doesn't mix with Neon's transaction-mode PgBouncer pooler.
+> - Neon's closest region is AWS Frankfurt (`eu-central-1`); consider deploying Cloud Run
+>   in `europe-west3` during this phase and moving it to `europe-southwest1` alongside
+>   the Cloud SQL migration.
+> - Skip the "Create Cloud SQL instance" step below until the migration; everything else
+>   in this section applies unchanged.
 
 ### Architecture
 
@@ -221,7 +244,15 @@ echo -n "your-gmail@gmail.com"      | gcloud secrets create EMAIL_HOST_USER     
 echo -n "your-gmail-app-password"   | gcloud secrets create EMAIL_SECRET          --data-file=-
 echo -n "your-google-client-id"     | gcloud secrets create GOOGLE_CLIENT_ID      --data-file=-
 echo -n "your-google-client-secret" | gcloud secrets create GOOGLE_CLIENT_SECRET  --data-file=-
-echo -n "your-login-password"       | gcloud secrets create LOGIN_PASSWORD        --data-file=-
+
+# Teacher seeds — one block per teacher who should be able to log in.
+# Anything not matching ^TEACHER_SEED_<N>_(FIRST_NAME|LAST_NAME|EMAIL|PHONE|ADMIN|PASSWORD)$ is ignored.
+# Omit ..._PASSWORD to make the teacher activate via /password-reset/ instead of receiving an initial password.
+echo -n "Joaquin"                   | gcloud secrets create TEACHER_SEED_1_FIRST_NAME --data-file=-
+echo -n "Hernandez"                 | gcloud secrets create TEACHER_SEED_1_LAST_NAME  --data-file=-
+echo -n "owner@example.com"         | gcloud secrets create TEACHER_SEED_1_EMAIL      --data-file=-
+echo -n "True"                      | gcloud secrets create TEACHER_SEED_1_ADMIN      --data-file=-
+echo -n "your-initial-password"     | gcloud secrets create TEACHER_SEED_1_PASSWORD   --data-file=-
 ```
 
 ### Build & Deploy
@@ -251,16 +282,21 @@ gcloud run deploy fiveaday \
   --set-env-vars="DJANGO_DEBUG=False" \
   --set-env-vars="DJANGO_ALLOWED_HOSTS=fiveaday-XXXXX-ew.a.run.app" \
   --set-env-vars="DATABASE_URL=postgres://fiveaday_user:PASSWORD@/fiveaday_db?host=/cloudsql/$PROJECT_ID:$REGION:fiveaday-db" \
-  --set-env-vars="LOGIN_USERNAME=fiveaday" \
   --set-env-vars="CELERY_TASK_ALWAYS_EAGER=True" \
   --set-env-vars="GOOGLE_REDIRECT_URI=https://fiveaday-XXXXX-ew.a.run.app/auth/google/callback/" \
+  --set-env-vars="TEACHER_SEED_1_ADMIN=True" \
   --set-secrets="DJANGO_SECRET_KEY=DJANGO_SECRET_KEY:latest" \
   --set-secrets="EMAIL_HOST_USER=EMAIL_HOST_USER:latest" \
   --set-secrets="EMAIL_SECRET=EMAIL_SECRET:latest" \
   --set-secrets="GOOGLE_CLIENT_ID=GOOGLE_CLIENT_ID:latest" \
   --set-secrets="GOOGLE_CLIENT_SECRET=GOOGLE_CLIENT_SECRET:latest" \
-  --set-secrets="LOGIN_PASSWORD=LOGIN_PASSWORD:latest"
+  --set-secrets="TEACHER_SEED_1_FIRST_NAME=TEACHER_SEED_1_FIRST_NAME:latest" \
+  --set-secrets="TEACHER_SEED_1_LAST_NAME=TEACHER_SEED_1_LAST_NAME:latest" \
+  --set-secrets="TEACHER_SEED_1_EMAIL=TEACHER_SEED_1_EMAIL:latest" \
+  --set-secrets="TEACHER_SEED_1_PASSWORD=TEACHER_SEED_1_PASSWORD:latest"
 ```
+
+> `LOGIN_USERNAME` / `LOGIN_PASSWORD` are dev-only basic-auth credentials. In testing and production, login goes through `auth.User` (Teacher email + hashed password) — set Teachers up via `TEACHER_SEED_*` instead. `SimpleAuthMiddleware` is still in the stack: it enforces session auth in every environment and adds a non-admin Teacher whitelist in testing/production.
 
 After the first deploy, note the Cloud Run URL (e.g., `https://fiveaday-abc123-ew.a.run.app`) and
 update:
@@ -270,7 +306,7 @@ update:
 
 ### Run migrations
 
-Required on first deploy and after any model change:
+Required on first deploy and after any model change. The v1.0.12 release introduced `students.0003_teacher_user` (adds `Teacher.user` OneToOneField, nullable so existing rows survive); subsequent deploys need a migrate run only when new migrations land.
 
 ```bash
 gcloud run jobs create fiveaday-migrate \
@@ -293,7 +329,26 @@ gcloud run jobs execute fiveaday-migrate --region=$REGION --wait
 ### Celery Beat → Cloud Scheduler
 
 Each Celery Beat periodic task becomes a Cloud Scheduler job that triggers a Cloud Run Job running a
-Django management command. This requires no changes to the existing management commands.
+Django management command. Every Beat task has a command wrapper (they run the task synchronously
+via `.apply()` — Cloud Run Jobs need `CELERY_TASK_ALWAYS_EAGER=True` so nested `.delay()` calls also
+run inline):
+
+| Beat task | Management command | Schedule (Europe/Madrid) | Cron |
+|---|---|---|---|
+| `generate_monthly_payments_task` | `generate_payments` | 1st of month, 06:00 | `0 6 1 * *` |
+| `materialize_recurring_expenses_daily_task` | `materialize_recurring_expenses --daily` | daily, 06:15 | `15 6 * * *` |
+| `materialize_recurring_expenses_task` | `materialize_recurring_expenses` | 1st of month, 06:30 | `30 6 1 * *` |
+| `send_birthday_emails_task` | `send_birthday_emails` | daily, 08:00 | `0 8 * * *` |
+| `send_payment_reminders` | `send_payment_reminders` | Mondays, 09:00 | `0 9 * * 1` |
+| `send_due_fun_friday_emails_task` | `send_due_fun_friday_emails` | daily, 14:30 | `30 14 * * *` |
+| `send_monthly_report_task` | `send_monthly_report` | 28th of month, 20:00 | `0 20 28 * *` |
+| `cleanup_done_backlog_tasks` | `cleanup_backlog_tasks` | QA/testing env only — skip in production | — |
+
+> **Fun Friday announcements** are NOT sent with `apply_async(eta=...)` (the ETA is silently
+> ignored in eager mode, which would send immediately). The form persists a
+> `FunFridayScheduledSend` row scheduled for Monday 14:30 of the event week; the
+> `send_due_fun_friday_emails` job drains due rows and marks them sent (idempotent). If the
+> Monday slot already passed when the event is created, the app drains immediately on its own.
 
 #### Step 1 — Create a reusable Cloud Run Job per task
 
@@ -303,21 +358,25 @@ gcloud run jobs create fiveaday-generate-payments \
   --image=$IMAGE \
   --region=$REGION \
   --add-cloudsql-instances=$PROJECT_ID:$REGION:fiveaday-db \
-  --set-env-vars="DATABASE_URL=..." \
+  --set-env-vars="DATABASE_URL=...,DJANGO_ENV=production,DJANGO_DEBUG=False,CELERY_TASK_ALWAYS_EAGER=True" \
   --command="python" \
   --args="project/manage.py,generate_payments"
 
-# Example: send birthday emails
+# Example: send birthday emails (email-sending jobs also need the email secrets)
 gcloud run jobs create fiveaday-birthday-emails \
   --image=$IMAGE \
   --region=$REGION \
   --add-cloudsql-instances=$PROJECT_ID:$REGION:fiveaday-db \
-  --set-env-vars="DATABASE_URL=..." \
+  --set-env-vars="DATABASE_URL=...,DJANGO_ENV=production,DJANGO_DEBUG=False,CELERY_TASK_ALWAYS_EAGER=True" \
+  --set-secrets="EMAIL_HOST_USER=EMAIL_HOST_USER:latest,EMAIL_SECRET=EMAIL_SECRET:latest" \
   --command="python" \
   --args="project/manage.py,send_birthday_emails"
+
+# Commands with flags pass them as extra args, e.g. the daily expense materializer:
+#   --args="project/manage.py,materialize_recurring_expenses,--daily"
 ```
 
-Repeat for each periodic task. Reuse the same `--image` and `--add-cloudsql-instances` flags.
+Repeat for each row of the table. Reuse the same `--image` and `--add-cloudsql-instances` flags.
 
 #### Step 2 — Schedule each job with Cloud Scheduler
 

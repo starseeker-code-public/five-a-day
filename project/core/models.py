@@ -48,6 +48,45 @@ class FunFridayAttendance(models.Model):
         return f"{self.student} - {self.date}"
 
 
+class FunFridayScheduledSend(models.Model):
+    """A Fun Friday announcement persisted until its scheduled send time.
+
+    Replaces the old ``apply_async(eta=...)`` approach, which silently sends
+    immediately under ``CELERY_TASK_ALWAYS_EAGER=True`` (production on Cloud
+    Run has no Celery worker). Rows are drained by
+    ``comms.tasks.send_due_fun_friday_emails_task`` — via Celery Beat in
+    dev/testing and via the ``send_due_fun_friday_emails`` management command
+    (Cloud Scheduler → Cloud Run Job) in production.
+    """
+
+    recipients = models.JSONField(default=list)  # list of email addresses
+    day_name = models.CharField(max_length=20)
+    day_number = models.PositiveSmallIntegerField()
+    month = models.CharField(max_length=20)
+    start_time = models.CharField(max_length=5)
+    end_time = models.CharField(max_length=5)
+    activity_description = models.TextField()
+    minimum_age = models.PositiveSmallIntegerField(null=True, blank=True)
+    maximum_age = models.PositiveSmallIntegerField(null=True, blank=True)
+    meeting_point = models.CharField(max_length=255, null=True, blank=True)
+    scheduled_for = models.DateTimeField(db_index=True)
+    sent_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "fun_friday_scheduled_sends"
+        ordering = ["scheduled_for"]
+
+    def __str__(self):
+        status = "sent" if self.sent_at else "pending"
+        return f"Fun Friday {self.day_name} {self.day_number} {self.month} ({status})"
+
+    @property
+    def is_due(self) -> bool:
+        return self.sent_at is None and self.scheduled_for <= timezone.now()
+
+
 class TodoItem(models.Model):
     text = models.CharField(max_length=500)
     due_date = models.DateField()
@@ -65,6 +104,12 @@ class TodoItem(models.Model):
         return self.due_date < date.today()
 
 
+# v1.10 — the immutable audit trail lives in a sibling module so this file
+# stays focused on the user-visible core models. Re-exported here (and named in
+# `__all__`) so `from core.models import AuditLog` keeps working.
+from core.audit_models import AuditLog  # noqa: E402
+
+
 class HistoryLog(models.Model):
     """Stores up to 1000 history log entries for user actions."""
 
@@ -79,6 +124,12 @@ class HistoryLog(models.Model):
         ("payment_created", "Pago creado"),
         ("email_sent", "Email enviado"),
         ("schedule_updated", "Horario actualizado"),
+        # v1.1 — Waiting list & group capacity
+        ("waiting_list_added", "Añadido a lista de espera"),
+        ("waiting_list_assigned", "Asignado desde lista de espera"),
+        ("waiting_list_spot_open", "Hueco disponible"),
+        # v1.2 — Google Sheets integration
+        ("sheets_exported", "Exportación a Google Sheets"),
     ]
 
     action = models.CharField(max_length=30, choices=ACTION_CHOICES)
@@ -170,3 +221,17 @@ class QAConfiguration(models.Model):
     def get_config(cls):
         config, _ = cls.objects.get_or_create(pk=1)
         return config
+
+
+# Public model surface of this module, including the sibling-module
+# re-export above.
+__all__ = [
+    "AuditLog",
+    "BacklogTask",
+    "FunFridayAttendance",
+    "FunFridayScheduledSend",
+    "HistoryLog",
+    "QAConfiguration",
+    "ScheduleSlot",
+    "TodoItem",
+]

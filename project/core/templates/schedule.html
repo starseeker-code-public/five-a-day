@@ -14,6 +14,35 @@
 </a>
 {% endblock %}
 
+{% block help_content %}
+<p>El <strong>Horario</strong> muestra la parrilla semanal de clases, de lunes a viernes. Sirve para ver qué grupo ocupa cada franja horaria y qué alumnos tiene cada uno.</p>
+
+<h4 style="font-weight:700;margin-top:1rem;">La parrilla</h4>
+<ul style="list-style:disc;margin:0.4rem 0 0 1.25rem;line-height:1.7;">
+    <li>Las columnas son los días (lunes a viernes) y las filas, las franjas horarias.</li>
+    <li>Cada celda ocupada muestra el <strong>grupo</strong> asignado, con el color que lo identifica (el mismo que ves en Estudiantes y Gestión).</li>
+    <li>Los colores se adaptan automáticamente al tema claro u oscuro para que siempre se lean bien.</li>
+</ul>
+
+<h4 style="font-weight:700;margin-top:1rem;">Editar el horario (solo administradores)</h4>
+<ul style="list-style:disc;margin:0.4rem 0 0 1.25rem;line-height:1.7;">
+    <li>El botón del <strong>lápiz</strong> (esquina superior izquierda de la tabla) activa el <strong>modo edición</strong>.</li>
+    <li>En modo edición puedes asignar o cambiar el grupo de cada hueco. Los cambios se guardan al momento.</li>
+    <li>Los profesores sin permisos de administrador ven el horario en <strong>solo lectura</strong>: no aparece el lápiz y no pueden modificar nada.</li>
+</ul>
+
+<h4 style="font-weight:700;margin-top:1rem;">Detalle por día</h4>
+<p>Debajo de la parrilla hay un desplegable por día. Al abrirlo se detalla, grupo por grupo, qué alumnos asisten ese día. Es útil para preparar clases o pasar lista.</p>
+
+<h4 style="font-weight:700;margin-top:1rem;">Fun Friday</h4>
+<p>El botón <strong>Fun Friday</strong> de la cabecera lleva a la vista de asistencia de la actividad del viernes, donde puedes ver y ajustar quién asiste.</p>
+
+<h4 style="font-weight:700;margin-top:1rem;">Consejos</h4>
+<ul style="list-style:disc;margin:0.4rem 0 0 1.25rem;line-height:1.7;">
+    <li>Si un grupo cambia de franja, edita el horario en cuanto lo sepas: la vista es la referencia común de todo el equipo.</li>
+</ul>
+{% endblock %}
+
 {% block content %}
 <div class="mb-8">
     <div class="flex items-center gap-3 mb-2">
@@ -30,11 +59,13 @@
             <thead>
                 <tr id="day-header-row">
                     <th id="edit-header-cell" class="w-14 min-w-[56px] max-w-[56px] bg-neutral-50 border-b border-r border-neutral-200 p-2 sticky left-0 z-10">
+                        {% if is_admin_user %}
                         <button id="edit-toggle-btn" title="Editar horario" onclick="toggleEditMode()"
                             class="flex items-center justify-center w-8 h-8 rounded-md border border-neutral-200 bg-white cursor-pointer transition-colors duration-150"
                             onmouseover="this.style.background='#f3f4f6'" onmouseout="if(!scheduleEditMode)this.style.background='#fff'">
                             <span class="material-symbols-outlined text-base text-neutral-500">edit</span>
                         </button>
+                        {% endif %}
                     </th>
                 </tr>
             </thead>
