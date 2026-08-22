@@ -11,10 +11,13 @@ The `core` app is the "everything else" app — it owns the dashboard, authentic
 | **FunFridayScheduledSend** | `fun_friday_scheduled_sends` | Persisted Fun Friday announcements awaiting their scheduled send time (drained by `comms.tasks.send_due_fun_friday_emails_task`) |
 | **TodoItem** | `todo_items` | Dashboard task list with due dates |
 | **HistoryLog** | `history_logs` | Audit trail of user actions (auto-capped at 1,000 with guarded single-query cleanup) |
+| **BacklogTask** | `backlog_tasks` | QA-only bug/feature reports filed from the `/testing/` dashboard. Marking one done emails the admin teachers; `core.tasks.cleanup_done_backlog_tasks` deletes rows done > 30 days ago |
+| **QAConfiguration** | `qa_configuration` | QA-only singleton holding the error-email toggle |
+| **AuditLog** | `audit_logs` | v1.10 immutable per-model change trail (`audit_models.py`), written by the `post_save`/`post_delete` receivers in `audit_signals.py` with a contextvar-supplied actor |
 
 ## Views (core/views/)
 
-The monolithic `views.py` was split into 14 focused modules:
+The monolithic `views.py` was split into **22** focused modules:
 
 | Module | Views | Description |
 | ------ | ----- | ----------- |
@@ -31,7 +34,23 @@ The monolithic `views.py` was split into 14 focused modules:
 | `app_forms.py` | `fun_friday_form`, `payment_reminder_form`, `newsletter_form`, `receipt_enrollment_form`, etc. | Email app form views (10+ forms, all prefill from `ACADEMY_*` env vars where relevant) |
 | `support.py` | `submit_support_ticket` | Support ticket email API |
 | `errors.py` | `handler400-500`, `health_check` | Error pages + health endpoint |
-| `testing_tools.py` | `testing_tools_view`, `seed_testdata_ajax`, `submit_backlog`, `toggle_error_reporting` | **QA-only** dashboard at `/testing/` — database seeding, backlog reporting, error-reporting toggle. All gated by `qa_access_required` decorator. |
+| `testing_tools.py` | `testing_tools_view`, `api_seed_database`, `api_create_backlog_task`, `api_update_backlog_task`, `api_toggle_error_email` | **QA-only** dashboard at `/testing/` — database seeding, backlog reporting, error-reporting toggle. All gated by `qa_access_required` (admin Teachers only). Backlog screenshots are attached to the notification email and **never stored** on disk or in the DB. |
+| `waiting_list.py` | `waiting_list_view`, `assign_from_waiting_list`, `add_to_waiting_list`, `group_capacity_summary`, `notify_capacity_freed` | v1.1 — waiting list + `Group.max_students` capacity. Assigning a waiting student runs the same enrollment-fee + `schedule_academic_year_payments` work as a normal creation. |
+| `sheets.py` | `export_to_sheets` | v1.2 — pushes student/payment snapshots to Google Sheets; returns 503 when the integration is unconfigured |
+| `expenses.py` | `expenses_list`, `create_expense`, `delete_expense` | v1.5 — expense CRUD with the three recurring cadences (monthly / weekly / yearly) |
+| `reports.py` | `reports_view`, `reports_pdf` | v1.7 — analytics dashboard (financial summary, collection rate, retention, group utilisation) + reportlab PDF export |
+| `parent_portal.py` | `parent_portal_login`, `parent_portal_verify`, `parent_portal_logout`, `parent_portal_dashboard`, `parent_portal_payments`, `parent_portal_receipt`, `parent_portal_tax_certificate` | v1.9 — parent-facing surface with passwordless magic-link auth (`ParentSessionToken`, single-use under `SELECT FOR UPDATE`). Scoped to that parent's own children. Login is rate-limited and never reveals whether an email is registered. |
+| `stripe_views.py` | `create_checkout_link`, `stripe_webhook` | v1.11 — Stripe Checkout for the parent portal. `STRIPE_WEBHOOK_SECRET` is **required in production**: unset, the webhook skips signature verification. |
+| `pwa.py` | `web_manifest`, `service_worker` | v1.12 — installable-app manifest + cache-first service worker for hashed static |
+| `two_factor.py` | `two_factor_setup`, `two_factor_manage`, `two_factor_verify` | v1.13 — TOTP 2FA for admin Teachers (`pyotp` + `qrcode`), backup codes, and the mid-login verification gate |
+
+## Services (core/services/)
+
+| Module | Purpose |
+| ------ | ------- |
+| `analytics_service.py` | v1.7 — financial summary, collection rate, retention snapshot, group utilisation, and the composed dashboard report used by `reports.py` |
+| `google_sheets_service.py` | v1.2 — Sheets export. Configured by either `GOOGLE_SHEETS_SERVICE_ACCOUNT_JSON` (inline, for Secret Manager) or `..._FILE` (path), plus `GOOGLE_SHEETS_SPREADSHEET_ID`. Dormant and harmless when unset. |
+| `two_factor_service.py` | v1.13 — TOTP enrolment/verification, backup-code generation, rotation, and disable |
 
 ## URL Patterns (core/urls.py)
 
@@ -43,7 +62,9 @@ Student, payment, management, and email app routes live in `students/urls.py`, `
 
 - **`SimpleAuthMiddleware`** (`middleware.py`) — two-layer access control. **Layer 1 (authentication)**: all URLs are protected except the public prefixes (`/login/`, `/health/`, `/static/`, `/media/`, `/auth/google/*`, `/password-reset/*`); unauthenticated requests are redirected to login. **Layer 2 (authorization)**: when the session user is a non-admin Teacher (`teacher.admin=False`), requests are restricted to the `NON_ADMIN_ALLOWED_URL_NAMES` whitelist — admin-only routes redirect to the dashboard with a flash message (or return 403 JSON for `/api/*` endpoints). Keep the whitelist in sync with `core/urls.py` and the per-app urls.
 - **`QAErrorEmailMiddleware`** (`middleware.py`) — in the QA environment, catches unhandled exceptions and emails them to `SUPPORT_EMAIL` with the full traceback. Toggleable via the `/testing/` dashboard.
-- **`qa_access_required`** (`decorators.py`) — reusable gate for `/testing/` views and endpoints. Returns 404 (not 403) unless `DJANGO_ENV=testing`, `DEBUG=False`, and the request is made by a logged-in Teacher (admin or not; resolved via `_request_teacher`). `testing_tools` + the QA API endpoints are on the non-admin whitelist so non-admin teachers can reach them too.
+- **`NoHtmlCacheMiddleware`** (`middleware.py`) — sets `Cache-Control: no-cache, no-store, must-revalidate` on every `text/html` response. Content-hashed static assets are served `immutable` for 10 years, so a browser-cached HTML page would pin *old* asset hashes and leave the theme stale after a deploy. Sits right after WhiteNoise in `MIDDLEWARE`.
+- **`AuditActorMiddleware`** (`audit_signals.py`) — stashes the current user in a contextvar so the `AuditLog` signal receivers can attribute a change without threading the request through the ORM.
+- **`qa_access_required`** (`decorators.py`) — reusable gate for `/testing/` views and endpoints. Returns 404 (not 403) unless `IS_TESTING_ENV` **and** the request comes from a logged-in Teacher with `admin=True` (resolved via `_request_teacher`). Non-admin teachers must not reach the dev tools (DB seed/reset, error-email toggle, git internals), so they get a 404 and `show_testing_tools` hides the sidebar icon from them. Because the QA routes are admin-only, they are deliberately **absent** from `NON_ADMIN_ALLOWED_URL_NAMES` — admins bypass that whitelist anyway.
 
 ## Logging Helpers
 
@@ -69,7 +90,7 @@ All templates live in `core/templates/`:
 - `home.html`, `login.html`, `schedule.html`, `fun_friday.html`, etc. (login page renders a "¿Has olvidado tu contraseña?" link when `password_reset_available` is true, i.e. non-dev environments)
 - `payments/` — payment list, create, detail
 - `apps/` — email form views + `_email_preview.html` partial
-- `emails/` — 18 HTML email templates extending `emails/base_email.html` (all named in English: `enrollment_child.html`, `payment_reminder.html`, `password_reset.html`, etc.). All are styled to a common standard (violet headings, rounded info cards, coloured callouts) matching `welcome_student.html`. `base_email.html` carries an inline `@media (prefers-color-scheme: dark)` stylesheet so emails render in a dark violet theme mirroring the webapp; content templates use inline `style=""` and the dark rules override those hex values with attribute selectors (the same technique as `static/css/theme.css`).
+- `emails/` — 18 HTML content email templates extending `emails/base_email.html` (19 files in the directory including the base itself) (all named in English: `enrollment_child.html`, `payment_reminder.html`, `password_reset.html`, etc.). All are styled to a common standard (violet headings, rounded info cards, coloured callouts) matching `welcome_student.html`. `base_email.html` carries an inline `@media (prefers-color-scheme: dark)` stylesheet so emails render in a dark violet theme mirroring the webapp; content templates use inline `style=""` and the dark rules override those hex values with attribute selectors (the same technique as `static/css/theme.css`).
 - `400.html` through `500.html` — error pages
 
 The standalone password-reset flow uses its own template set under `project/templates/registration/` (form, done, confirm, complete, plus `reset_base.html` for shared styling and `password_reset_email.txt` / `password_reset_subject.txt` for the email body fallback). These live outside `core/templates/` because Django's built-in `PasswordResetView` looks them up by the `registration/` prefix.
@@ -94,10 +115,10 @@ The matching CSS (`project/static/css/admin_custom.css`) overrides all Django ad
 - `images/logo_white_bg.png` — 500×500 PNG with white background; used for favicon, apple-touch-icon, Open Graph, and Twitter Card
 - `images/logo.png` — 500×500 PNG original (transparent background)
 - `css/app.css` — sidebar transitions, Material Symbols icon font settings
+- `css/theme.css` — the **entire dark theme**, written as `html.dark .<utility>` overrides (not Tailwind `dark:` variants). Add an override here whenever a template gains a new surface/text utility or a `primary-*` shade.
+- `css/email.css` — shared email styling reference
 - `css/admin_custom.css` — Django admin theme override (CSS variables, login card, welcome banner)
-- `js/base.js` — notification/history dropdowns (loaded on every page)
-- `js/support.js` — support ticket modal
-- `js/home.js`, `js/students.js`, `js/payments.js`, etc. — per-page modules
+- **16 JS modules** in `js/`: `base.js` (notification/history dropdowns, keyboard nav via `data-hotkey`, per-view help modal, `window.CSRF_TOKEN`), `theme.js` (toggles `html.dark`), `support.js`, `home.js`, `students.js`, `student-create.js`, `student-detail.js`, `payments.js`, `schedule.js`, `fun-friday.js`, `expenses.js`, `management.js`, `all-info.js`, `app-forms.js`, `login_effects.js`, `login_seasonal.js`
 
 ## Tests
 

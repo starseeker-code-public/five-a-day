@@ -124,14 +124,23 @@ jobs:
         run: |
           # Tests live in project/tests/unit/ and project/tests/integration/.
           # Pytest auto-discovers both subdirectories when we point it at tests/.
+          #
+          # --cov-config is REQUIRED. This step runs with `working-directory: project`,
+          # but [tool.coverage.run] — including the omit list for migrations,
+          # management commands and admin.py — lives in the repo-root pyproject.toml.
+          # Coverage only looks for config in the CURRENT directory, so without this
+          # flag the omit list is silently ignored: ~993 extra statements get measured
+          # and the reported figure drops from 95.49% to 86.44%, firing the <90%
+          # warning on every run and sending the wrong number to Codecov.
           uv run python -m pytest tests/ -v --tb=short -n auto \
             --cov=core --cov=students --cov=billing --cov=comms \
+            --cov-config=../pyproject.toml \
             --cov-report=xml --cov-report=term-missing
 
       # Coverage thresholds:
       #   < 75% → fail CI (hard floor; same threshold the pre-commit hook enforces)
       #   < 90% → warning annotation (visible in the PR checks UI, does not fail)
-      #   ≥ 90% → silent pass (current coverage is 96%)
+      #   ≥ 90% → silent pass (current coverage is 95.49%)
       - name: Check coverage threshold
         if: always()
         working-directory: project
