@@ -115,6 +115,7 @@ NON_ADMIN_ALLOWED_URL_NAMES = frozenset(
         "search_students",
         # Waiting list (v1.1) — same authority level as regular student management
         "waiting_list",
+        "waiting_list_create",
         "assign_from_waiting_list",
         "add_to_waiting_list",
         # Parents

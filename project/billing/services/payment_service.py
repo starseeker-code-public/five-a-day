@@ -63,10 +63,41 @@ class PaymentService:
 
     @staticmethod
     def calculate_quarterly_amount(enrollment, config, quarter_due_month):
-        """Calculate the quarterly payment amount (3 months * monthly fee - 5%)."""
+        """Calculate a quarterly payment: 3 months, minus every discount the
+        enrollment carries.
+
+        This used to apply ONLY the quarterly percentage, so a quarterly
+        student with a sibling discount or a language cheque was billed the
+        full price — the enrollment record said one number and the generated
+        payments said another. The order of operations mirrors
+        ``EnrollmentService._apply_discounts`` so the two agree:
+
+            (3 x monthly - quarterly%) - sibling% - (language cheque x 3)
+
+        ``quarter_due_month`` is the month the quarter falls due (10 = Q1
+        Oct-Dec, 1 = Q2 Jan-Mar, 4 = Q3 Apr-Jun). Q3 covers June, so it also
+        picks up the June "complete the year" discount that
+        ``calculate_monthly_amount`` applies to month 6.
+        """
         base = PaymentService._get_base_monthly_fee(enrollment, config)
         total = base * 3
         total -= total * (config.quarterly_enrollment_discount / Decimal("100"))
+
+        # Adult groups pay a flat rate — no sibling / cheque / June discounts,
+        # matching calculate_monthly_amount.
+        if enrollment.schedule_type == "adult_group":
+            return max(total, Decimal("0.01"))
+
+        if enrollment.is_sibling_discount:
+            total -= total * (config.sibling_discount / Decimal("100"))
+
+        if enrollment.has_language_cheque:
+            # The cheque is a per-month amount; a quarter covers three.
+            total -= config.language_cheque_discount * 3
+
+        if quarter_due_month == 4:  # Q3 = Apr-Jun, includes the June discount
+            total -= config.june_discount
+
         return max(total, Decimal("0.01"))
 
     @staticmethod

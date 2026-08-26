@@ -60,6 +60,20 @@ ENROLLMENT_TYPE_CHOICES = [
     ("quarterly", "Quarterly"),
 ]
 
+# Spanish labels for EnrollmentType.display_name. The keys above are internal
+# identifiers (English, like every other choice key in the project); this map is
+# what a PARENT sees — it lands in the matriculation and welcome emails via
+# `enrollment.enrollment_type.display_name`. Seeding those rows with the English
+# key meant the Spanish email said "Monthly" / "Quarterly".
+ENROLLMENT_TYPE_DISPLAY_ES = {
+    "adults": "Adultos",
+    "special": "Especial",
+    "languages_ticket": "Cheque idioma",
+    "monthly": "Mensual",
+    "half_month": "Medio mes",
+    "quarterly": "Trimestral",
+}
+
 SCHEDULE_TYPE_CHOICES = [
     ("full_time", "2 días/semana"),
     ("part_time", "1 día/semana"),
@@ -106,6 +120,15 @@ PAYMENT_TYPE_CHOICES = [
     ("quarterly", "Quarterly Fee"),
     ("other", "Other"),
 ]
+
+# Statuses that represent money the academy still expects to collect (or has
+# already collected). Everything else — cancelled, failed, refunded — is money
+# that will never arrive and must NOT inflate "esperado" / expected revenue.
+#
+# Before this existed each view rolled its own filter: the payments list and the
+# dashboard summed EVERY status into "esperado", so cancelling a duplicate
+# payment left it counted as expected and dragged the collection rate down.
+LIVE_PAYMENT_STATUSES = ("pending", "completed")
 
 
 # ============================================================================

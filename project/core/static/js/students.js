@@ -1,75 +1,15 @@
 /**
- * students.js — Student list: modal, search, sort, Fun Friday toggle/filter,
- * student type filter, new-student dropdown, form validation.
+ * students.js — Student list: search, sort, Fun Friday toggle/filter, student
+ * type / GDPR / allergy filters, new-student dropdown.
  * No Django template variables required.
  */
 document.addEventListener('DOMContentLoaded', function () {
-    // Modal functionality
-    const modal = document.getElementById('studentModal');
-    const closeBtn = document.getElementById('closeModal');
-    const cancelBtn = document.getElementById('cancelBtn');
-    const form = document.getElementById('studentForm');
-    const modalTitle = document.getElementById('modalTitle');
-    const submitBtnText = document.getElementById('submitBtnText');
-    const studentIdInput = document.getElementById('studentId');
-
-    // Close modal
-    function closeModal() {
-        modal.classList.add('hidden');
-        resetForm();
-    }
-
-    closeBtn.addEventListener('click', closeModal);
-    cancelBtn.addEventListener('click', closeModal);
-
-    // Close modal when clicking outside
-    modal.addEventListener('click', (e) => {
-        if (e.target === modal) {
-            closeModal();
-        }
-    });
-
-    // Reset form
-    function resetForm() {
-        form.reset();
-        // Reset checkboxes
-        document.querySelectorAll('input[name="parents"]').forEach(cb => cb.checked = false);
-        document.getElementById('active').checked = true;
-    }
-
-    // Edit student function
-    window.editStudent = function editStudent(studentId) {
-        fetch(`/students/${studentId}/`)
-            .then(response => response.json())
-            .then(data => {
-                // Populate form with student data
-                document.getElementById('first_name').value = data.first_name;
-                document.getElementById('last_name').value = data.last_name;
-                document.getElementById('birth_date').value = data.birth_date;
-                document.getElementById('email').value = data.email || '';
-                document.getElementById('school').value = data.school || '';
-                document.getElementById('group').value = data.group;
-                document.getElementById('allergies').value = data.allergies || '';
-                document.getElementById('gdpr_signed').checked = data.gdpr_signed;
-                document.getElementById('active').checked = data.active;
-
-                // Set parent checkboxes
-                document.querySelectorAll('input[name="parents"]').forEach(cb => {
-                    cb.checked = data.parents.includes(parseInt(cb.value));
-                });
-
-                // Update modal
-                modalTitle.textContent = 'Editar Estudiante';
-                submitBtnText.textContent = 'Actualizar Estudiante';
-                studentIdInput.value = studentId;
-                form.action = `/students/${studentId}/update/`;
-                modal.classList.remove('hidden');
-            })
-            .catch(error => {
-                console.error('Error loading student data:', error);
-                alert('Error al cargar los datos del estudiante');
-            });
-    };
+    // NOTE: this page used to carry an "add/edit student" modal. It was dead:
+    // its form had no action (so creating POSTed to /students/, a ListView →
+    // 405), `editStudent()` fetched /students/<id>/ and called .json() on an
+    // HTML response (so editing always errored), and nothing in the template
+    // ever opened it. Creating now goes through the "Nuevo Estudiante"
+    // dropdown and editing through the per-row pencil → student_update.
 
     // ==================== SEARCH & SORT ====================
     const studentSearchBtn = document.getElementById('studentSearchBtn');
@@ -78,11 +18,14 @@ document.addEventListener('DOMContentLoaded', function () {
     const studentSortIcon = document.getElementById('studentSortIcon');
     const studentsTableBody = document.getElementById('studentsTableBody');
 
-    // Each row has three independent visibility flags: searchHidden, ffHidden, typeHidden
-    // A row is shown only if no flag is set.
+    // Each row carries independent visibility flags: search, Fun Friday, type,
+    // GDPR and allergies. A row is shown only if no flag is set.
     function applyVisibility() {
         studentsTableBody.querySelectorAll('tr[data-name]').forEach(row => {
-            row.style.display = (row._searchHidden || row._ffHidden || row._typeHidden) ? 'none' : '';
+            row.style.display = (
+                row._searchHidden || row._ffHidden || row._typeHidden ||
+                row._gdprHidden || row._allergyHidden
+            ) ? 'none' : '';
         });
     }
 
@@ -240,15 +183,72 @@ document.addEventListener('DOMContentLoaded', function () {
         applyTypeFilter();
     });
 
-    // Form validation
-    form.addEventListener('submit', (e) => {
-        const selectedParents = document.querySelectorAll('input[name="parents"]:checked');
-        if (selectedParents.length === 0) {
-            e.preventDefault();
-            alert('Debe seleccionar al menos un padre/tutor para el estudiante.');
-            return;
-        }
-    });
+    // ==================== GDPR FILTER (All / Signed / Not signed) ====================
+    // Used to check whose face may appear in newsletters and photos.
+    const studentGdprFilterBtn = document.getElementById('studentGdprFilterBtn');
+    const studentGdprFilterIcon = document.getElementById('studentGdprFilterIcon');
+    let gdprFilterState = 0;
+
+    const gdprFilterCfg = [
+        { icon: 'policy',       title: 'RGPD: Todos',            bg: '',        color: '' },
+        { icon: 'verified_user', title: 'RGPD firmado',          bg: '#059669', color: '#ffffff' },
+        { icon: 'gpp_maybe',    title: 'RGPD SIN firmar',        bg: '#dc2626', color: '#ffffff' },
+    ];
+
+    function applyGdprFilter() {
+        studentsTableBody.querySelectorAll('tr[data-name]').forEach(row => {
+            const signed = row.dataset.gdpr === '1';
+            if (gdprFilterState === 0) row._gdprHidden = false;
+            else if (gdprFilterState === 1) row._gdprHidden = !signed;
+            else row._gdprHidden = signed;
+        });
+        applyVisibility();
+    }
+
+    if (studentGdprFilterBtn) {
+        studentGdprFilterBtn.addEventListener('click', () => {
+            gdprFilterState = (gdprFilterState + 1) % gdprFilterCfg.length;
+            const cfg = gdprFilterCfg[gdprFilterState];
+            studentGdprFilterIcon.textContent = cfg.icon;
+            studentGdprFilterBtn.title = cfg.title;
+            studentGdprFilterBtn.style.background = cfg.bg;
+            studentGdprFilterBtn.style.color = cfg.color;
+            applyGdprFilter();
+        });
+    }
+
+    // ==================== ALLERGY FILTER (All / With allergies) ====================
+    const studentAllergyFilterBtn = document.getElementById('studentAllergyFilterBtn');
+    const studentAllergyFilterIcon = document.getElementById('studentAllergyFilterIcon');
+    let allergyFilterState = 0;
+
+    const allergyFilterCfg = [
+        { icon: 'allergies',  title: 'Alergias: Todos',      bg: '',        color: '' },
+        { icon: 'warning',    title: 'Solo CON alergias',    bg: '#d97706', color: '#ffffff' },
+        { icon: 'check_circle', title: 'Solo SIN alergias',  bg: '#059669', color: '#ffffff' },
+    ];
+
+    function applyAllergyFilter() {
+        studentsTableBody.querySelectorAll('tr[data-name]').forEach(row => {
+            const hasAllergies = row.dataset.allergies === '1';
+            if (allergyFilterState === 0) row._allergyHidden = false;
+            else if (allergyFilterState === 1) row._allergyHidden = !hasAllergies;
+            else row._allergyHidden = hasAllergies;
+        });
+        applyVisibility();
+    }
+
+    if (studentAllergyFilterBtn) {
+        studentAllergyFilterBtn.addEventListener('click', () => {
+            allergyFilterState = (allergyFilterState + 1) % allergyFilterCfg.length;
+            const cfg = allergyFilterCfg[allergyFilterState];
+            studentAllergyFilterIcon.textContent = cfg.icon;
+            studentAllergyFilterBtn.title = cfg.title;
+            studentAllergyFilterBtn.style.background = cfg.bg;
+            studentAllergyFilterBtn.style.color = cfg.color;
+            applyAllergyFilter();
+        });
+    }
 
     // ==================== NEW STUDENT DROPDOWN ====================
     const newStudentBtn = document.getElementById('newStudentBtn');

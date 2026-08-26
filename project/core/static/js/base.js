@@ -18,8 +18,27 @@
         }
         return null;
     }
-    window.CSRF_TOKEN = getCookie('csrftoken') ||
-        (document.querySelector('[name=csrfmiddlewaretoken]') || {}).value || '';
+    // Input FIRST, cookie only as a fallback: CSRF_COOKIE_HTTPONLY is True
+    // whenever DEBUG=False, so `document.cookie` is empty in testing/production
+    // and a cookie-first reader silently 403s every POST there.
+    window.CSRF_TOKEN =
+        (document.querySelector('[name=csrfmiddlewaretoken]') || {}).value ||
+        getCookie('csrftoken') || '';
+
+    /* ── HTML escaping ────────────────────────────────────────────────────── */
+    // History messages embed user-supplied text (todo titles, student names,
+    // payment concepts). They are rendered with innerHTML below, so they must
+    // be escaped or a todo called `<img src=x onerror=...>` executes in every
+    // admin's browser on every page.
+    function escapeHtml(str) {
+        return String(str == null ? '' : str)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
+    window.escapeHtml = escapeHtml;
 
     /* ── Notifications dropdown toggle ────────────────────────────────────── */
     const notifBtn = document.getElementById('notif-btn');
@@ -81,10 +100,10 @@
                 const div = document.createElement('div');
                 div.className = 'px-4 py-3 border-b border-neutral-50 flex items-start gap-3 hover:bg-neutral-50';
                 div.innerHTML =
-                    '<span class="material-symbols-outlined text-primary-400 shrink-0 text-xl mt-0.5">' + e.icon + '</span>' +
+                    '<span class="material-symbols-outlined text-primary-400 shrink-0 text-xl mt-0.5">' + escapeHtml(e.icon) + '</span>' +
                     '<div class="flex-1 min-w-0">' +
-                    '<p class="text-neutral-700 text-sm leading-snug break-words">' + e.message + '</p>' +
-                    '<p class="text-xs text-neutral-400 mt-0.5">' + formatTimeAgo(e.created_at) + '</p>' +
+                    '<p class="text-neutral-700 text-sm leading-snug break-words">' + escapeHtml(e.message) + '</p>' +
+                    '<p class="text-xs text-neutral-400 mt-0.5">' + escapeHtml(formatTimeAgo(e.created_at)) + '</p>' +
                     '</div>';
                 entriesContainer.appendChild(div);
             });

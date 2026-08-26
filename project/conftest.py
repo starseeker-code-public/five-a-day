@@ -228,6 +228,22 @@ def cancelled_enrollment(db, student, enrollment_type_monthly, site_config):
     )
 
 
+@pytest.fixture(autouse=True)
+def _reset_dashboard_quote_cache():
+    """Isolate the dashboard's module-level quote cache between tests.
+
+    `core.views.dashboard` keeps the quote batch and its failure backoff in
+    module globals (one per Gunicorn worker in production). Without this,
+    whichever test ran first decided whether later ones saw a cache hit, a
+    fetch, or a suppressed fetch during backoff.
+    """
+    from core.views.dashboard import reset_quote_cache
+
+    reset_quote_cache()
+    yield
+    reset_quote_cache()
+
+
 @pytest.fixture
 def authenticated_client(client):
     """A Django test client with session-based auth (matching SimpleAuthMiddleware)."""

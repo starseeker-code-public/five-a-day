@@ -65,7 +65,14 @@
         <h3 class="text-2xl font-semibold text-neutral-700 mb-2">Estudiantes</h3>
         <p class="text-neutral-600">Total: {{ students_total }} estudiantes registrados</p>
       </div>
-      <div class="flex items-center gap-2">
+      <div class="flex items-center gap-2 flex-wrap">
+        <label for="students-group" class="text-sm font-medium text-neutral-600">Grupo:</label>
+        <select id="students-group" class="px-3 py-2 border border-neutral-300 rounded-md text-sm text-neutral-700 bg-white">
+          <option value="">Todos los grupos</option>
+          {% for g in group_choices %}
+          <option value="{{ g.id }}" {% if students_group == g.id %}selected{% endif %}>{{ g.group_name }}</option>
+          {% endfor %}
+        </select>
         <label for="students-sort" class="text-sm font-medium text-neutral-600">Ordenar por:</label>
         <select id="students-sort" class="px-3 py-2 border border-neutral-300 rounded-md text-sm text-neutral-700 bg-white">
           <option value="date_desc" {% if students_sort == 'date_desc' %}selected{% endif %}>Fecha (más reciente)</option>
@@ -184,19 +191,19 @@
     <div style="margin-top:1.5rem;display:flex;justify-content:center;">
         <nav style="display:flex;align-items:center;gap:0.5rem;">
             {% if students.has_previous %}
-                <a href="?students_page={{ students.previous_page_number }}&students_sort={{ students_sort }}&payments_page={{ payments.number }}&payments_sort={{ payments_sort }}#db-students-section" class="pg-btn" style="font-size:1rem;">‹</a>
+                <a href="?students_page={{ students.previous_page_number }}&students_sort={{ students_sort }}&students_group={{ students_group|default_if_none:"" }}&payments_page={{ payments.number }}&payments_sort={{ payments_sort }}#db-students-section" class="pg-btn" style="font-size:1rem;">‹</a>
             {% endif %}
             {% for num in students.paginator.page_range %}
                 {% if students.number == num %}
                     <span class="pg-active">{{ num }}</span>
                 {% elif num > students.number|add:"-3" and num < students.number|add:"3" or num == 1 or num == students.paginator.num_pages %}
-                    <a href="?students_page={{ num }}&students_sort={{ students_sort }}&payments_page={{ payments.number }}&payments_sort={{ payments_sort }}#db-students-section" class="pg-btn">{{ num }}</a>
+                    <a href="?students_page={{ num }}&students_sort={{ students_sort }}&students_group={{ students_group|default_if_none:"" }}&payments_page={{ payments.number }}&payments_sort={{ payments_sort }}#db-students-section" class="pg-btn">{{ num }}</a>
                 {% elif num == students.number|add:"-3" or num == students.number|add:"3" %}
                     <span style="width:2rem;text-align:center;color:#9ca3af;">…</span>
                 {% endif %}
             {% endfor %}
             {% if students.has_next %}
-                <a href="?students_page={{ students.next_page_number }}&students_sort={{ students_sort }}&payments_page={{ payments.number }}&payments_sort={{ payments_sort }}#db-students-section" class="pg-btn" style="font-size:1rem;">›</a>
+                <a href="?students_page={{ students.next_page_number }}&students_sort={{ students_sort }}&students_group={{ students_group|default_if_none:"" }}&payments_page={{ payments.number }}&payments_sort={{ payments_sort }}#db-students-section" class="pg-btn" style="font-size:1rem;">›</a>
             {% endif %}
         </nav>
     </div>
@@ -308,19 +315,19 @@
     <div style="margin-top:1.5rem;display:flex;justify-content:center;">
         <nav style="display:flex;align-items:center;gap:0.5rem;">
             {% if payments.has_previous %}
-                <a href="?payments_page={{ payments.previous_page_number }}&payments_sort={{ payments_sort }}&students_page={{ students.number }}&students_sort={{ students_sort }}#db-payments-section" class="pg-btn" style="font-size:1rem;">‹</a>
+                <a href="?payments_page={{ payments.previous_page_number }}&payments_sort={{ payments_sort }}&students_page={{ students.number }}&students_sort={{ students_sort }}&students_group={{ students_group|default_if_none:"" }}#db-payments-section" class="pg-btn" style="font-size:1rem;">‹</a>
             {% endif %}
             {% for num in payments.paginator.page_range %}
                 {% if payments.number == num %}
                     <span class="pg-active">{{ num }}</span>
                 {% elif num > payments.number|add:"-3" and num < payments.number|add:"3" or num == 1 or num == payments.paginator.num_pages %}
-                    <a href="?payments_page={{ num }}&payments_sort={{ payments_sort }}&students_page={{ students.number }}&students_sort={{ students_sort }}#db-payments-section" class="pg-btn">{{ num }}</a>
+                    <a href="?payments_page={{ num }}&payments_sort={{ payments_sort }}&students_page={{ students.number }}&students_sort={{ students_sort }}&students_group={{ students_group|default_if_none:"" }}#db-payments-section" class="pg-btn">{{ num }}</a>
                 {% elif num == payments.number|add:"-3" or num == payments.number|add:"3" %}
                     <span style="width:2rem;text-align:center;color:#9ca3af;">…</span>
                 {% endif %}
             {% endfor %}
             {% if payments.has_next %}
-                <a href="?payments_page={{ payments.next_page_number }}&payments_sort={{ payments_sort }}&students_page={{ students.number }}&students_sort={{ students_sort }}#db-payments-section" class="pg-btn" style="font-size:1rem;">›</a>
+                <a href="?payments_page={{ payments.next_page_number }}&payments_sort={{ payments_sort }}&students_page={{ students.number }}&students_sort={{ students_sort }}&students_group={{ students_group|default_if_none:"" }}#db-payments-section" class="pg-btn" style="font-size:1rem;">›</a>
             {% endif %}
         </nav>
     </div>

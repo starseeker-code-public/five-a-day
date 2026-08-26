@@ -100,6 +100,16 @@ def parent_portal_verify(request, token: str):
         messages.error(request, "Enlace inválido o caducado.")
         return redirect("parent_portal_login")
 
+    # Start a clean session on the identity change. `flush()` gives a brand-new
+    # session key, which does two things:
+    #   1. Prevents session fixation — this is a login, and a pre-existing
+    #      session id must never survive one (django.contrib.auth.login cycles
+    #      the key for exactly this reason; this custom login has to do it too).
+    #   2. Drops any admin state (`is_authenticated`) that happened to be in the
+    #      same session, so a teacher clicking a parent's magic link doesn't end
+    #      up holding both identities in one cookie — and so `parent_portal_logout`
+    #      is a real logout rather than a partial one.
+    request.session.flush()
     request.session[_PARENT_SESSION_KEY] = session_token.parent_id
     request.session.set_expiry(_PARENT_SESSION_MAX_AGE)
     return redirect("parent_portal_dashboard")
@@ -107,7 +117,9 @@ def parent_portal_verify(request, token: str):
 
 @require_http_methods(["POST", "GET"])
 def parent_portal_logout(request):
-    request.session.pop(_PARENT_SESSION_KEY, None)
+    # Full flush, not just popping parent_id: the session may still hold other
+    # state and "cerrar sesión" should mean the session is gone.
+    request.session.flush()
     return redirect("parent_portal_login")
 
 

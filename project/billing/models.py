@@ -44,11 +44,25 @@ def academic_year_end_date(year):
 # ============================================================================
 
 
+class _SingletonQuerySet(models.QuerySet):
+    """Blocks queryset-level deletes of a singleton row.
+
+    Overriding only `Model.delete()` leaves `Model.objects.all().delete()` wide
+    open — that path never touches the instance method and silently wiped the
+    configuration row (taking every price with it).
+    """
+
+    def delete(self):
+        return (0, {})
+
+
 class SiteConfiguration(models.Model):
     """
     Modelo singleton para almacenar configuración editable del sitio.
     Solo debe existir una instancia de este modelo.
     """
+
+    objects = _SingletonQuerySet.as_manager()
 
     # Matrícula (Enrollment Fees)
     children_enrollment_fee = models.DecimalField(
@@ -182,8 +196,13 @@ class SiteConfiguration(models.Model):
         super().save(*args, **kwargs)
 
     def delete(self, *args, **kwargs):
-        """Prevent deletion of the singleton"""
-        pass
+        """Prevent deletion of the singleton.
+
+        Returns the (count, per-model-counts) tuple Django's delete() contract
+        promises — returning None broke callers that unpack it (the admin's
+        bulk-delete action among them).
+        """
+        return (0, {})
 
     @classmethod
     def get_config(cls):
@@ -230,6 +249,8 @@ class EnrollmentType(models.Model):
 
     class Meta:
         db_table = "enrollment_types"
+        verbose_name = "Tipo de matrícula"
+        verbose_name_plural = "Tipos de matrícula"
 
     def __str__(self):
         return self.display_name
@@ -270,6 +291,8 @@ class Enrollment(models.Model):
 
     class Meta:
         db_table = "enrollments"
+        verbose_name = "Matrícula"
+        verbose_name_plural = "Matrículas"
         indexes = [
             models.Index(fields=["student"]),
             models.Index(fields=["status"]),
@@ -291,18 +314,21 @@ class Enrollment(models.Model):
         """
         Auto-calculate final_amount based on enrollment_type and schedule_type
         """
+        base_amount = None
         if not self.final_amount:
             base_amount = (
                 self.enrollment_type.base_amount_full_time
                 if self.schedule_type == "full_time"
                 else self.enrollment_type.base_amount_part_time
             )
-
             discount_amount = base_amount * (self.discount_percentage / Decimal("100"))
             self.final_amount = base_amount - discount_amount
 
-            if not self.enrollment_amount:
-                self.enrollment_amount = self.final_amount
+        # Deliberately OUTSIDE the block above. It used to be nested inside it,
+        # so passing final_amount but not enrollment_amount skipped the
+        # fallback entirely and the insert died on a NOT NULL violation.
+        if not self.enrollment_amount:
+            self.enrollment_amount = self.final_amount
 
         super().save(*args, **kwargs)
 
@@ -364,6 +390,8 @@ class Payment(models.Model):
 
     class Meta:
         db_table = "payments"
+        verbose_name = "Pago"
+        verbose_name_plural = "Pagos"
         indexes = [
             models.Index(fields=["student"]),
             models.Index(fields=["parent"]),
@@ -477,7 +505,11 @@ class Expense(models.Model):
     recurring_day = models.PositiveSmallIntegerField(
         null=True,
         blank=True,
-        help_text="Day of the month (1–28). Used by monthly + yearly templates.",
+        help_text=(
+            "Day of the month (1–31). Used by monthly + yearly templates. "
+            "Days past the end of a short month fall back to that month's last "
+            "day, so 31 means 'last day of the month'."
+        ),
     )
     recurring_month = models.PositiveSmallIntegerField(
         null=True,
@@ -504,6 +536,8 @@ class Expense(models.Model):
 
     class Meta:
         db_table = "expenses"
+        verbose_name = "Gasto"
+        verbose_name_plural = "Gastos"
         ordering = ["-expense_date", "-created_at"]
         indexes = [
             models.Index(fields=["expense_date"]),
@@ -525,6 +559,8 @@ class Expense(models.Model):
         if not self.is_recurring:
             return ""
         if self.recurring_frequency == "monthly":
+            if self.recurring_day and self.recurring_day >= 29:
+                return "Mensual · último día del mes"
             return f"Mensual · día {self.recurring_day}"
         if self.recurring_frequency == "yearly":
             months = dict(
@@ -556,14 +592,14 @@ class Expense(models.Model):
 
         if self.recurring_frequency == "monthly":
             if not self.recurring_day:
-                raise ValidationError("Monthly recurring expenses must set recurring_day (1–28).")
-            if not (1 <= self.recurring_day <= 28):
-                raise ValidationError("recurring_day must be between 1 and 28.")
+                raise ValidationError("Monthly recurring expenses must set recurring_day (1–31).")
+            if not (1 <= self.recurring_day <= 31):
+                raise ValidationError("recurring_day must be between 1 and 31.")
         elif self.recurring_frequency == "yearly":
             if not self.recurring_day:
-                raise ValidationError("Yearly recurring expenses must set recurring_day (1–28).")
-            if not (1 <= self.recurring_day <= 28):
-                raise ValidationError("recurring_day must be between 1 and 28.")
+                raise ValidationError("Yearly recurring expenses must set recurring_day (1–31).")
+            if not (1 <= self.recurring_day <= 31):
+                raise ValidationError("recurring_day must be between 1 and 31.")
             if not self.recurring_month:
                 raise ValidationError("Yearly recurring expenses must set recurring_month (1–12).")
             if not (1 <= self.recurring_month <= 12):

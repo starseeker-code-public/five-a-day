@@ -1,6 +1,6 @@
 [project]
 name = "five-a-day"
-version = "1.14.8"
+version = "1.15.2"
 description = "Five a Day management software"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -25,7 +25,7 @@ dependencies = [
     "httpx>=0.28.1,<1",
     "python-dotenv>=1.2.1,<2",
     "psycopg2-binary>=2.9.9,<3",
-    "gunicorn>=21.2.0,<24",
+    "gunicorn>=21.2.0,<27",
     "whitenoise>=6.11.0,<7",
     "dj-database-url>=3.0.1,<4",
     "openpyxl>=3.1.5,<4",

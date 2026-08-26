@@ -70,7 +70,7 @@
                         {% elif model.object_name == "TodoItem" %}Tareas pendientes
                         {% elif model.object_name == "ScheduleSlot" %}Horarios
                         {% elif model.object_name == "FunFridayAttendance" %}Fun Friday
-                        {% else %}{{ model.verbose_name_plural|capfirst }}
+                        {% else %}{{ model.name }}
                         {% endif %}
                     </div>
                     <div class="card-desc">
@@ -101,7 +101,7 @@
                         {% elif model.object_name == "FunFridayAttendance" %}
                             Registro de asistencia a las actividades especiales de los viernes.
                         {% else %}
-                            Gestión de {{ model.verbose_name_plural }}.
+                            Gestión de {{ model.name }}.
                         {% endif %}
                     </div>
                     <div class="card-actions">
@@ -193,13 +193,13 @@
                 </span>
                 <div class="card-name">
                     {% if model.object_name == "AccessCredentials" %}Credenciales Google
-                    {% else %}{{ model.verbose_name_plural|capfirst }}{% endif %}
+                    {% else %}{{ model.name }}{% endif %}
                 </div>
                 <div class="card-desc">
                     {% if model.object_name == "AccessCredentials" %}
                         Token de acceso para la integración con Google Sheets.
                     {% else %}
-                        Gestión de {{ model.verbose_name_plural }}.
+                        Gestión de {{ model.name }}.
                     {% endif %}
                 </div>
                 <div class="card-actions">
@@ -238,7 +238,7 @@
                 <div class="card-name">
                     {% if model.object_name == "User" %}Usuarios
                     {% elif model.object_name == "Group" %}Grupos de permisos
-                    {% else %}{{ model.verbose_name_plural|capfirst }}{% endif %}
+                    {% else %}{{ model.name }}{% endif %}
                 </div>
                 <div class="card-desc">
                     {% if model.object_name == "User" %}
@@ -246,7 +246,7 @@
                     {% elif model.object_name == "Group" %}
                         Roles y conjuntos de permisos para los usuarios del panel.
                     {% else %}
-                        Gestión de {{ model.verbose_name_plural }}.
+                        Gestión de {{ model.name }}.
                     {% endif %}
                 </div>
                 <div class="card-actions">
@@ -278,8 +278,8 @@
             {% for model in app.models %}
             <div class="model-card">
                 <span class="card-icon">📦</span>
-                <div class="card-name">{{ model.verbose_name_plural|capfirst }}</div>
-                <div class="card-desc">Gestión de {{ model.verbose_name_plural }}.</div>
+                <div class="card-name">{{ model.name }}</div>
+                <div class="card-desc">Gestión de {{ model.name }}.</div>
                 <div class="card-actions">
                     {% if model.admin_url %}
                     <a href="{{ model.admin_url }}" class="card-btn view-btn">📋 Ver</a>

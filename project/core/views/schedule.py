@@ -7,7 +7,7 @@ from django.shortcuts import get_object_or_404, render
 from django.views.decorators.http import require_http_methods
 
 from core.models import FunFridayAttendance, HistoryLog, ScheduleSlot
-from core.schedule_utils import slot_time_range
+from core.schedule_utils import is_valid_slot, slot_time_range
 from core.views.students import get_last_friday, get_next_friday
 from students.models import Group, Student
 
@@ -41,7 +41,9 @@ def schedule_view(request):
     saved = ScheduleSlot.objects.select_related("group").all()
     slots_data = []
     for s in saved:
-        start, end = slot_time_range(s.row, s.day)
+        if not is_valid_slot(s.row, s.day, s.col):
+            continue  # legacy/out-of-grid row — skip rather than 500 the page
+        start, end = slot_time_range(s.row, s.day, s.col)
         slots_data.append(
             {"row": s.row, "day": s.day, "col": s.col, "group_id": s.group_id, "start": start, "end": end}
         )
@@ -49,13 +51,16 @@ def schedule_view(request):
     all_students_qs = Student.objects.filter(active=True).order_by("first_name", "last_name")
     students_data = [{"first_name": s.first_name, "last_name": s.last_name} for s in all_students_qs]
 
+    # Passed as plain objects (not json.dumps strings) so the template can use
+    # `|json_script`, which escapes `<`, `>` and `&`. Inlining JSON with `|safe`
+    # let a group or student name containing `</script>` break out of the block.
     return render(
         request,
         "schedule.html",
         {
-            "groups_json": json.dumps(groups_data),
-            "slots_json": json.dumps(slots_data),
-            "students_json": json.dumps(students_data),
+            "groups_json": groups_data,
+            "slots_json": slots_data,
+            "students_json": students_data,
         },
     )
 
@@ -69,6 +74,15 @@ def save_schedule_slot(request):
         day = int(data["day"])
         col = int(data["col"])
         group_id = data.get("group_id")
+
+        # Reject anything outside the grid. An unvalidated row used to be
+        # accepted here and then raised IndexError on every render of
+        # /schedule/ — a 500 for every user, with no UI to undo it.
+        if not is_valid_slot(row, day, col):
+            return JsonResponse(
+                {"success": False, "error": "Franja horaria no válida."},
+                status=400,
+            )
 
         if group_id:
             group = get_object_or_404(Group, id=int(group_id))

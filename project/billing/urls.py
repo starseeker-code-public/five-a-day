@@ -25,6 +25,7 @@ from core.views import (
     quick_complete_payment,
     # Search/API
     search_payments,
+    student_payments_pdf,
     # Enrollment API
     update_enrollment_modality,
     update_payment,
@@ -39,6 +40,7 @@ urlpatterns = [
     path("payments/create/", create_payment, name="create_payment"),
     path("payments/<int:payment_id>/", payment_detail_view, name="payment_detail_view"),
     path("payments/<int:payment_id>/receipt.pdf", payment_receipt_pdf, name="payment_receipt_pdf"),
+    path("students/<int:student_id>/payments.pdf", student_payments_pdf, name="student_payments_pdf"),
     path("payments/<int:payment_id>/update/", update_payment, name="update_payment"),
     path("payments/<int:payment_id>/delete/", delete_payment, name="delete_payment"),
     path(

@@ -19,6 +19,7 @@ from core.views import (
     # Fun Friday attendance
     toggle_fun_friday_this_week,
     validate_student_parent,
+    waiting_list_create,
     waiting_list_view,
 )
 
@@ -34,6 +35,7 @@ urlpatterns = [
     path("students/create/", StudentCreateView.as_view(), name="student_create"),
     # Waiting list (v1.1)
     path("students/waiting/", waiting_list_view, name="waiting_list"),
+    path("students/waiting/create/", waiting_list_create, name="waiting_list_create"),
     path(
         "students/<int:student_id>/assign/",
         assign_from_waiting_list,

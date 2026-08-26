@@ -31,9 +31,31 @@ def _client_ip(request) -> str:
     trusted verbatim: that rejects anything containing a separator, a line
     break, or arbitrary text, and normalises the representation so the same
     client can't occupy several rate-limit buckets.
+
+    We read the entry `TRUSTED_PROXY_COUNT` hops from the RIGHT, not the
+    leftmost one. A proxy APPENDS the address it saw, so the rightmost entries
+    are the ones our own infrastructure wrote and the leftmost is whatever the
+    client sent. Taking `split(",")[0]` meant an attacker could prepend a fake
+    `X-Forwarded-For` and land in a brand-new rate-limit bucket on every single
+    request, which made the login throttle a no-op (verified: 12 attempts with
+    rotating values, 0 throttled).
+
+    `TRUSTED_PROXY_COUNT` defaults to 1 (Cloud Run / a single reverse proxy).
+    Set it to 0 when the app is reached directly, so XFF is ignored entirely.
     """
-    fwd = request.META.get("HTTP_X_FORWARDED_FOR")
-    raw = fwd.split(",")[0].strip() if fwd else request.META.get("REMOTE_ADDR", "")
+    trusted = getattr(settings, "TRUSTED_PROXY_COUNT", 1)
+    raw = request.META.get("REMOTE_ADDR", "")
+
+    if trusted > 0:
+        fwd = request.META.get("HTTP_X_FORWARDED_FOR")
+        if fwd:
+            hops = [h.strip() for h in fwd.split(",") if h.strip()]
+            # The client-controlled prefix can be any length; index from the
+            # right so extra spoofed hops shift the window past them, never
+            # into them.
+            if len(hops) >= trusted:
+                raw = hops[-trusted]
+
     try:
         return ipaddress.ip_address(raw).compressed
     except ValueError:

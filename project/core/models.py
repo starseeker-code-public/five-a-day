@@ -123,6 +123,11 @@ class HistoryLog(models.Model):
         ("config_updated", "Configuración actualizada"),
         ("payment_created", "Pago creado"),
         ("email_sent", "Email enviado"),
+        # Used by the Fun Friday form, which queues the announcement rather
+        # than sending it immediately. It was logged without being declared
+        # here, so `get_action_display()` fell through to the raw slug and the
+        # activity feed showed "email_scheduled" instead of Spanish.
+        ("email_scheduled", "Email programado"),
         ("schedule_updated", "Horario actualizado"),
         # v1.1 — Waiting list & group capacity
         ("waiting_list_added", "Añadido a lista de espera"),
@@ -198,8 +203,18 @@ class BacklogTask(models.Model):
         return f"[{self.get_priority_display()}] {self.title}"
 
 
+class _SingletonQuerySet(models.QuerySet):
+    """Blocks queryset-level deletes of a singleton row — see the twin in
+    billing.models. `Model.objects.all().delete()` bypasses `Model.delete()`."""
+
+    def delete(self):
+        return (0, {})
+
+
 class QAConfiguration(models.Model):
     """Singleton storing QA-specific toggles (error email reporting, etc.)."""
+
+    objects = _SingletonQuerySet.as_manager()
 
     error_email_enabled = models.BooleanField(
         default=False,
@@ -209,13 +224,16 @@ class QAConfiguration(models.Model):
 
     class Meta:
         db_table = "qa_configuration"
+        verbose_name = "Configuración QA"
+        verbose_name_plural = "Configuración QA"
 
     def save(self, *args, **kwargs):
         self.pk = 1
         super().save(*args, **kwargs)
 
     def delete(self, *args, **kwargs):
-        pass
+        """Returns Django's (count, per-model-counts) tuple; see SiteConfiguration."""
+        return (0, {})
 
     @classmethod
     def get_config(cls):

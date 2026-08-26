@@ -1,5 +1,6 @@
 import calendar as cal_module
 import logging
+import time
 from datetime import date
 from decimal import Decimal
 
@@ -8,10 +9,11 @@ from django.core.paginator import Paginator
 from django.db.models import Case, DecimalField, Sum, Value, When
 from django.shortcuts import render
 
+from billing.constants import LIVE_PAYMENT_STATUSES
 from billing.models import Payment
 from core.constants import SCHEDULED_APPS
 from core.models import TodoItem
-from students.models import Student
+from students.models import Group, Student
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +33,26 @@ _QUOTE_FALLBACK = "¡Cada día es una nueva oportunidad para inspirar!"
 # Thread safety: safe for sync Gunicorn workers (each process has its own
 # list); not safe for async workers or multithreaded servers.
 _quotes: list[tuple[str, str]] = []
+
+# Monotonic timestamp until which we will NOT retry the quotes API. Without it,
+# an outage meant every single dashboard load paid the full 5s timeout, because
+# the cache stayed empty and the `if not _quotes` guard re-fetched every time.
+_quotes_retry_after: float = 0.0
+_QUOTE_FAILURE_BACKOFF = 10 * 60  # seconds
+
+
+def reset_quote_cache() -> None:
+    """Clear the in-memory quote cache and its failure backoff.
+
+    Both are module-level (per Gunicorn worker), which makes them shared state
+    across tests in the same process. Exposed so the test suite can reset them
+    between cases rather than having one test's backoff silently suppress
+    another's fetch.
+    """
+    global _quotes_retry_after  # noqa: PLW0603
+
+    _quotes.clear()
+    _quotes_retry_after = 0.0
 
 
 def _fetch_quotes() -> list[tuple[str, str]]:
@@ -67,10 +89,14 @@ def _get_quote(request):
 
     Every page load sees a different quote — no day-based logic.
     """
-    global _quotes  # noqa: PLW0603
+    global _quotes_retry_after  # noqa: PLW0603
 
-    if not _quotes:
+    if not _quotes and time.monotonic() >= _quotes_retry_after:
         _quotes[:] = _fetch_quotes()
+        if not _quotes:
+            # Back off before trying again so a dead third-party API costs one
+            # slow request every 10 minutes instead of one on every page load.
+            _quotes_retry_after = time.monotonic() + _QUOTE_FAILURE_BACKOFF
 
     if _quotes:
         quote, author = _quotes.pop()
@@ -172,9 +198,15 @@ def home(request):
 
     _zero = Decimal("0.00")
     revenue_stats = Payment.objects.aggregate(
+        # Excludes cancelled / failed / refunded — see LIVE_PAYMENT_STATUSES.
         expected_revenue=Sum(
             Case(
-                When(due_date__month=current_month, due_date__year=current_year, then="amount"),
+                When(
+                    due_date__month=current_month,
+                    due_date__year=current_year,
+                    payment_status__in=LIVE_PAYMENT_STATUSES,
+                    then="amount",
+                ),
                 default=Value(0),
                 output_field=DecimalField(),
             )
@@ -282,6 +314,18 @@ def all_info(request):
         "date_desc": "-created_at",
     }.get(students_sort, "-created_at")
     students_qs = get_active_students().order_by(students_order)
+
+    # ── Group filter ──
+    students_group = None
+    raw_group = (request.GET.get("students_group") or "").strip()
+    if raw_group:
+        try:
+            students_group = int(raw_group)
+        except ValueError:
+            students_group = None  # hand-edited URL: ignore rather than 500
+        else:
+            students_qs = students_qs.filter(group_id=students_group)
+
     students_paginator = Paginator(students_qs, DB_PAGE_SIZE)
     students_page = students_paginator.get_page(request.GET.get("students_page", 1))
 
@@ -305,6 +349,8 @@ def all_info(request):
             "students": students_page,
             "students_sort": students_sort,
             "students_total": students_paginator.count,
+            "students_group": students_group,
+            "group_choices": Group.objects.filter(active=True).order_by("group_name"),
             "payments": payments_page,
             "payments_sort": payments_sort,
             "payments_total": payments_paginator.count,

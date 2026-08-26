@@ -56,8 +56,7 @@ def web_manifest(request):
 _SW_TEMPLATE = """// Five a Day — service worker (v1.12)
 //
 // Cache strategy — deliberately narrow:
-//   - Cache-first ONLY for /static/ assets and the login page (which is
-//     public and identical for every user).
+//   - Cache-first ONLY for /static/ assets (content-hashed, session-free).
 //   - Network-first with cache fallback for the manifest + logo so an
 //     offline load still renders the shell.
 //   - Everything else (dashboard, students, payments, parent portal,
@@ -90,9 +89,13 @@ function isCacheable(url) {
     const path = url.pathname;
     // Static assets never carry a session — safe to cache.
     if (path.startsWith("/static/") || path.startsWith("/media/")) return true;
-    // Manifest + the login page are public and identical for every user.
+    // Manifest is public and identical for every user.
     if (path === "/manifest.webmanifest") return true;
-    if (path === "/login/") return true;
+    // NOTE: /login/ is deliberately NOT cached. It looks public, but it embeds
+    // a CSRF token, and Django rotates the CSRF secret on login. Serving the
+    // page cache-first handed back a token minted against an old secret, so the
+    // next sign-in failed with a 403. The Cache API ignores Cache-Control, so
+    // the server's `no-store` header could not prevent this on its own.
     return false;
 }
 

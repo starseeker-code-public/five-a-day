@@ -43,6 +43,18 @@ class AcademyInfo:
     website: str = "www.fiveadayenglish.com"
 
 
+def _md(value) -> str:
+    """Escape text for a reportlab `Paragraph`.
+
+    Paragraph parses a mini-HTML dialect, so raw names went in as MARKUP: a
+    student called `O<Brien` raised `ValueError: paraparser: syntax error:
+    parse ended with 1 unclosed tags` and killed PDF generation outright, while
+    `<b>x</b>` silently rendered as bold. Table cells are plain strings and
+    don't need this, but anything reaching a Paragraph does.
+    """
+    return str("" if value is None else value).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
 def _get_academy_info() -> AcademyInfo:
     """Pull business info from SiteConfiguration when populated, fall back
     to hard-coded defaults so a fresh install still produces a valid document."""
@@ -211,7 +223,7 @@ def generate_payment_receipt(payment) -> bytes:
             styles,
             academy,
             f"RECIBO Nº {payment.id}",
-            f"Emitido a nombre de {parent.full_name if parent else student.full_name}",
+            f"Emitido a nombre de {_md(parent.full_name if parent else student.full_name)}",
         ),
         info_table,
         Spacer(1, 8 * mm),
@@ -260,10 +272,101 @@ def generate_quarterly_summary(student, payments, quarter_label: str) -> bytes:
         *_header_flowables(
             styles,
             academy,
-            f"RESUMEN TRIMESTRAL · {quarter_label}",
-            f"Estudiante: {student.full_name}",
+            f"RESUMEN TRIMESTRAL · {_md(quarter_label)}",
+            f"Estudiante: {_md(student.full_name)}",
         ),
         table,
+        *_footer_flowables(styles, academy),
+    ]
+    return _build_pdf(flowables)
+
+
+def generate_student_payment_history(student, payments, *, title_suffix: str = "") -> bytes:
+    """Full payment history for one student — what was paid, when and how.
+
+    `payments` is any iterable of Payment rows (the caller decides the filter).
+    Shows the payment method and both dates so the academy can answer "cuándo
+    lo pagó y cómo lo pagó" from a single sheet, and totals the collected vs
+    outstanding amounts separately so the two are never conflated.
+    """
+    academy = _get_academy_info()
+    styles = _styles()
+
+    rows: list[list[str]] = [["Concepto", "Tipo", "Vencimiento", "Fecha cobro", "Método", "Estado", "Importe (€)"]]
+    total_paid = Decimal("0.00")
+    total_pending = Decimal("0.00")
+
+    payments = list(payments)
+    for p in payments:
+        rows.append(
+            [
+                _md(p.concept or "—"),
+                p.get_payment_type_display(),
+                p.due_date.strftime("%d/%m/%Y") if p.due_date else "—",
+                p.payment_date.strftime("%d/%m/%Y") if p.payment_date else "—",
+                p.get_payment_method_display() if p.payment_status == "completed" else "—",
+                p.get_payment_status_display(),
+                f"{p.amount:.2f}",
+            ]
+        )
+        if p.payment_status == "completed":
+            total_paid += p.amount
+        elif p.payment_status == "pending":
+            total_pending += p.amount
+
+    if not payments:
+        rows.append(["Sin pagos registrados", "—", "—", "—", "—", "—", "0.00"])
+
+    table = Table(rows, colWidths=[52 * mm, 22 * mm, 22 * mm, 22 * mm, 24 * mm, 22 * mm, 22 * mm], repeatRows=1)
+    table.setStyle(
+        TableStyle(
+            [
+                ("BACKGROUND", (0, 0), (-1, 0), _PRIMARY_COLOR),
+                ("TEXTCOLOR", (0, 0), (-1, 0), _HEADER_TEXT_COLOR),
+                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                ("ALIGN", (6, 0), (6, -1), "RIGHT"),
+                ("FONTSIZE", (0, 0), (-1, -1), 8),
+                ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#DDDDDD")),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+                ("TOPPADDING", (0, 0), (-1, -1), 4),
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ]
+        )
+    )
+
+    totals = Table(
+        [
+            ["TOTAL COBRADO", f"{total_paid:.2f} €"],
+            ["PENDIENTE", f"{total_pending:.2f} €"],
+        ],
+        colWidths=[120 * mm, 40 * mm],
+    )
+    totals.setStyle(
+        TableStyle(
+            [
+                ("BACKGROUND", (0, 0), (-1, 0), _PRIMARY_COLOR),
+                ("TEXTCOLOR", (0, 0), (-1, 0), _HEADER_TEXT_COLOR),
+                ("BACKGROUND", (0, 1), (-1, 1), colors.HexColor("#EEEEEE")),
+                ("FONTNAME", (0, 0), (-1, -1), "Helvetica-Bold"),
+                ("FONTSIZE", (0, 0), (-1, -1), 11),
+                ("ALIGN", (1, 0), (1, -1), "RIGHT"),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
+                ("TOPPADDING", (0, 0), (-1, -1), 7),
+            ]
+        )
+    )
+
+    group_name = student.group.group_name if getattr(student, "group_id", None) else "Sin grupo"
+    subtitle = f"Estudiante: {_md(student.full_name)} · Grupo: {_md(group_name)}"
+    heading = "HISTORIAL DE PAGOS"
+    if title_suffix:
+        heading = f"{heading} · {title_suffix}"
+
+    flowables = [
+        *_header_flowables(styles, academy, heading, subtitle),
+        table,
+        Spacer(1, 8 * mm),
+        totals,
         *_footer_flowables(styles, academy),
     ]
     return _build_pdf(flowables)
@@ -300,20 +403,20 @@ def generate_tax_certificate(parent, year: int) -> bytes:
             styles,
             academy,
             f"CERTIFICADO FISCAL · AÑO {year}",
-            f"Titular: {parent.full_name} · DNI: {parent.dni}",
+            f"Titular: {_md(parent.full_name)} · DNI: {_md(parent.dni)}",
         ),
     ]
 
     if not students_data:
         flowables.append(
             Paragraph(
-                f"No consta ningún pago completado a nombre de {parent.full_name} durante {year}.",
+                f"No consta ningún pago completado a nombre de {_md(parent.full_name)} durante {year}.",
                 styles["body"],
             )
         )
     else:
         for student_name, entry in students_data.items():
-            flowables.append(Paragraph(f"<b>Estudiante:</b> {student_name}", styles["h2"]))
+            flowables.append(Paragraph(f"<b>Estudiante:</b> {_md(student_name)}", styles["h2"]))
 
             rows: list[list[str]] = [["Fecha", "Concepto", "Tipo", "Importe (€)"]]
             for p in entry["payments"]:

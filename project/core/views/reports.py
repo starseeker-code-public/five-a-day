@@ -18,6 +18,9 @@ def _parse_month_year(request):
     # Clamp month to 1-12 — anything outside makes queries return empty and
     # renders a confusing dashboard.
     month = max(1, min(month, 12))
+    # Clamp the year too: `?year=-1` raised "year -1 is out of range" and a
+    # huge value raised OverflowError, both 500s from a hand-edited URL.
+    year = max(date.min.year, min(year, date.max.year))
     return month, year
 
 

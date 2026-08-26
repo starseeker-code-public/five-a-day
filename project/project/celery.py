@@ -73,6 +73,13 @@ app.conf.beat_schedule = {
         "schedule": crontab(hour=7, minute=0),
         "options": {"queue": "celery"},
     },
+    # Audit-trail retention — drop rows older than 2 years, weekly Sunday 03:00.
+    # Without this the table only ever grows (see core.tasks.prune_audit_log).
+    "prune-audit-log": {
+        "task": "core.tasks.prune_audit_log",
+        "schedule": crontab(hour=3, minute=0, day_of_week=0),
+        "options": {"queue": "celery"},
+    },
 }
 
 app.conf.timezone = "Europe/Madrid"

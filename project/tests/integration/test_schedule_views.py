@@ -18,14 +18,14 @@ class TestScheduleView:
 
     def test_groups_in_context(self, authenticated_client, group):
         response = authenticated_client.get(reverse("schedule_view"))
-        groups = json.loads(response.context["groups_json"])
+        groups = response.context["groups_json"]
         assert len(groups) == 1
         assert groups[0]["name"] == "Group A"
 
     def test_slots_in_context(self, authenticated_client, group):
         ScheduleSlot.objects.create(row=0, day=0, col=0, group=group)
         response = authenticated_client.get(reverse("schedule_view"))
-        slots = json.loads(response.context["slots_json"])
+        slots = response.context["slots_json"]
         assert len(slots) == 1
         assert slots[0]["group_id"] == group.id
 

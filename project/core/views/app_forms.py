@@ -3,6 +3,7 @@ Email app form views — each view handles GET (show form with email preview)
 and POST (send emails to parents).
 """
 
+import logging
 import os
 from datetime import date, timedelta
 
@@ -25,6 +26,21 @@ from core.constants import DIAS_ES, MESES_ES
 from core.models import HistoryLog
 from students.models import Group, Parent, Student
 
+logger = logging.getLogger(__name__)
+
+
+def _safe_year(raw, default: int) -> int:
+    """Parse a year from form input, falling back to `default`.
+
+    A bare `int(request.POST.get("year"))` here was a 500 on any non-numeric
+    input; the range keeps it inside what a DateField can hold.
+    """
+    try:
+        year = int(raw)
+    except (TypeError, ValueError):
+        return default
+    return year if 1900 <= year <= 2200 else default
+
 
 def apps_view(request):
     """Vista para la página de aplicaciones/herramientas"""
@@ -42,8 +58,6 @@ def fun_friday_form(request):
     GET: Muestra el formulario con valores por defecto
     POST: Valida HTML y envía emails a todos los padres con estudiantes activos
     """
-    import html.parser
-
     today = date.today()
     days_until_friday = (4 - today.weekday()) % 7
     if days_until_friday == 0:
@@ -68,7 +82,7 @@ Esta semana haremos manualidades creativas con materiales reciclados.
         action = request.POST.get("action", "")
         if action in ("preview", "test_send"):
             _event_date_str = request.POST.get("event_date", next_friday.isoformat())
-            _start_time = request.POST.get("start_time", "17:00")
+            _start_time = request.POST.get("start_time", "17:30")
             _end_time = request.POST.get("end_time", "18:30")
             _meeting_point = request.POST.get("meeting_point", "")
             _activity = request.POST.get("activity_description", default_html)
@@ -132,21 +146,6 @@ Esta semana haremos manualidades creativas con materiales reciclados.
             )
 
         try:
-            parser = html.parser.HTMLParser()
-            parser.feed(activity_description)
-        except Exception as e:
-            messages.error(request, f"❌ HTML inválido: {str(e)}")
-            return render(
-                request,
-                "apps/fun_friday_form.html",
-                {
-                    "next_friday": next_friday.isoformat(),
-                    "parent_count": parent_count,
-                    "default_html": activity_description,
-                },
-            )
-
-        try:
             event_date = date.fromisoformat(event_date_str)
         except ValueError:
             messages.error(request, "❌ Fecha inválida")
@@ -164,9 +163,9 @@ Esta semana haremos manualidades creativas con materiales reciclados.
             min_age_int = int(min_age)
             max_age_int = int(max_age)
             if min_age_int > max_age_int:
-                raise ValueError("Edad mínima mayor que máxima")
-        except ValueError as e:
-            messages.error(request, f"❌ Error en rango de edades: {str(e)}")
+                raise ValueError
+        except ValueError:
+            messages.error(request, "❌ Las edades deben ser números y la mínima no puede superar la máxima.")
             return render(
                 request,
                 "apps/fun_friday_form.html",
@@ -241,7 +240,7 @@ Esta semana haremos manualidades creativas con materiales reciclados.
             "day_name": DIAS_ES[next_friday.weekday()],
             "day_number": next_friday.day,
             "month": MESES_ES[next_friday.month - 1],
-            "start_time": "17:00",
+            "start_time": "17:30",
             "end_time": "18:30",
             "activity_description": default_html,
             "meeting_point": "En la puerta principal del centro",
@@ -601,7 +600,7 @@ def tax_certificate_form(request):
     if request.method == "POST":
         action = request.POST.get("action", "")
         if action in ("preview", "test_send"):
-            _year = int(request.POST.get("year", default_year))
+            _year = _safe_year(request.POST.get("year"), default_year)
             _ctx = {"year": _year, "parent_name": "Nombre del padre"}
             if action == "preview":
                 return JsonResponse({"html": render_to_string("emails/tax_certificate.html", _ctx)})
@@ -621,7 +620,7 @@ def tax_certificate_form(request):
                 )
             return JsonResponse({"success": False, "message": "❌ Error al enviar el email de prueba"})
 
-        year = int(request.POST.get("year", default_year))
+        year = _safe_year(request.POST.get("year"), default_year)
         results = send_all_tax_certificates(year)
 
         if results["sent"] > 0:
@@ -672,10 +671,7 @@ def monthly_report_form(request):
         action = request.POST.get("action", "")
         if action in ("preview", "test_send"):
             _month = request.POST.get("month", current_month)
-            try:
-                _year = int(request.POST.get("year", today.year))
-            except (ValueError, TypeError):
-                _year = today.year
+            _year = _safe_year(request.POST.get("year"), today.year)
             _ctx = {
                 "month": _month,
                 "year": _year,
@@ -702,7 +698,7 @@ def monthly_report_form(request):
             return JsonResponse({"success": False, "message": "❌ Error al enviar el email de prueba"})
 
         month = request.POST.get("month", current_month)
-        year = int(request.POST.get("year", today.year))
+        year = _safe_year(request.POST.get("year"), today.year)
 
         parents = Parent.objects.filter(children__active=True).distinct().prefetch_related("children__group")
 
@@ -985,25 +981,27 @@ def receipts_form(request):
                         error_count += 1
         else:
             adult_month = request.POST.get("adult_month", current_month)
-            parents = Parent.objects.filter(children__active=True).distinct()
+            # ADULT students receive their own monthly receipt. This used to
+            # query parents of active children — so the adult receipt went to
+            # every child's parent and never reached a single adult student.
+            adult_students = Student.objects.filter(active=True, is_adult=True).exclude(email="")
 
             success_count = 0
             error_count = 0
-            for parent in parents:
-                if not parent.email:
-                    continue
+            for student in adult_students:
                 try:
                     result = email_service.send_email(
                         template_name="receipt_adult",
-                        recipients=parent.email,
+                        recipients=student.email,
                         subject=f"🧾 Recibo Mensual - {adult_month.title()}",
-                        context={"month": adult_month},
+                        context={"month": adult_month, "student_name": student.full_name},
                     )
                     if result:
                         success_count += 1
                     else:
                         error_count += 1
                 except Exception:
+                    logger.exception("Adult receipt failed for student %d", student.id)
                     error_count += 1
 
         if success_count > 0:
@@ -1083,13 +1081,19 @@ def newsletter_form(request):
             messages.error(request, "❌ Debes seleccionar un grupo")
             return redirect("newsletter_form")
 
-        # Send to parents with students in the selected group
+        # Send to parents with students in the selected group. If the group
+        # can't be found (renamed / deactivated between page load and submit)
+        # this used to silently fall back to EVERY parent while keeping the
+        # group's name in the subject — a mass send nobody asked for.
         group_obj = Group.objects.filter(group_name=group_name, active=True).first()
-        if group_obj:
-            parents = Parent.objects.filter(children__group=group_obj, children__active=True).distinct()
-        else:
-            parents = Parent.objects.filter(children__active=True).distinct()
+        if not group_obj:
+            messages.error(
+                request,
+                f"❌ El grupo «{group_name}» ya no existe o está inactivo. No se ha enviado nada.",
+            )
+            return redirect("newsletter_form")
 
+        parents = Parent.objects.filter(children__group=group_obj, children__active=True).distinct()
         parent_emails = [p.email for p in parents if p.email]
 
         if not parent_emails:

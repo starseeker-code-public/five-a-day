@@ -13,10 +13,15 @@ from django.views.decorators.http import require_http_methods
 
 from billing import constants
 from billing.models import Payment
+from core.constants import MESES_ES
 from core.models import HistoryLog
 from students.models import Parent, Student
 
 logger = logging.getLogger(__name__)
+
+# Max payment rows sent to the browser in one page load. The table paginates
+# client-side, so everything returned is held in the DOM.
+_LIST_CAP = 1000
 
 
 def parse_date_value(date_value):
@@ -37,6 +42,46 @@ def parse_date_value(date_value):
             continue
 
     raise ValidationError(f"Formato de fecha inválido: '{raw_value}'. Usa dd/mm/yyyy.")
+
+
+def _queue_payment_receipt(payment_id: int) -> None:
+    """Fire the payment-receipt email for a payment just marked completed.
+
+    Best-effort: a receipt that fails to send must never fail the request that
+    recorded the money. Imported lazily to avoid a comms->billing import cycle.
+    """
+    try:
+        from comms.tasks import send_payment_receipt_email_task
+
+        send_payment_receipt_email_task.delay(int(payment_id))
+    except Exception:  # noqa: BLE001 — receipt is nice-to-have
+        logger.exception("Failed to enqueue payment receipt for payment %d", int(payment_id))
+
+
+def _validated_choice(value, choices, default):
+    """Return `value` when it is a valid choice key, otherwise `default`.
+
+    `Model.objects.create()` does not enforce `choices`, so raw POST values
+    reached the DB unchecked and `get_..._display()` then echoed them back.
+    """
+    return value if value in {key for key, _ in choices} else default
+
+
+def _safe_int(raw, *, default, low=None, high=None):
+    """Parse a query-string int, clamped to [low, high]. Never raises.
+
+    Query params are hand-editable; a bare `int()` on them is how
+    `?year=-1` and `?month=abc` turned into 500s elsewhere in the app.
+    """
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return default
+    if low is not None and value < low:
+        return default
+    if high is not None and value > high:
+        return default
+    return value
 
 
 def payments_list(request):
@@ -61,46 +106,61 @@ def payments_list(request):
             | Q(reference_number__icontains=search_query)
         )
 
-    # Monthly payment totals — single aggregate query with Case/When
     today = date.today()
-    current_month = today.month
     current_year = today.year
 
+    # Month/year filter (server-side, so it narrows the whole dataset rather
+    # than only the rows already rendered). Empty month = the whole year.
+    selected_month = _safe_int(request.GET.get("month"), default=None, low=1, high=12)
+    selected_year = _safe_int(request.GET.get("year"), default=current_year, low=2000, high=2100)
+    payments_queryset = payments_queryset.filter(due_date__year=selected_year)
+    if selected_month:
+        payments_queryset = payments_queryset.filter(due_date__month=selected_month)
+
+    # Years that actually have payments, so the dropdown never offers an
+    # empty year. Always includes the current one.
+    year_choices = sorted(
+        {current_year} | {y for y in Payment.objects.values_list("due_date__year", flat=True).distinct() if y},
+        reverse=True,
+    )
+
+    # Summary figures describe the SELECTED period, not "today", so the totals
+    # always match the rows on screen. Previously "Esperado"/"Cobrado" were
+    # hard-wired to the current month while "Pendiente"/"Vencido" were all-time
+    # — three different periods in one line, which is a large part of why
+    # "esperado" was reported as unintelligible.
     _zero = Decimal("0.00")
-    stats = Payment.objects.aggregate(
+    period_payments = Payment.objects.filter(due_date__year=selected_year)
+    if selected_month:
+        period_payments = period_payments.filter(due_date__month=selected_month)
+
+    stats = period_payments.aggregate(
+        # Money still expected in this period. Cancelled / failed / refunded are
+        # excluded: cancelling a duplicate used to leave it counted as revenue
+        # you were still waiting for.
         expected_total=Sum(
             Case(
-                When(due_date__month=current_month, due_date__year=current_year, then="amount"),
+                When(payment_status__in=constants.LIVE_PAYMENT_STATUSES, then="amount"),
                 default=Value(0),
                 output_field=DecimalField(),
             )
         ),
         expected_count=Sum(
             Case(
-                When(due_date__month=current_month, due_date__year=current_year, then=Value(1)),
+                When(payment_status__in=constants.LIVE_PAYMENT_STATUSES, then=Value(1)),
                 default=Value(0),
             )
         ),
         completed_total=Sum(
             Case(
-                When(
-                    payment_status="completed",
-                    payment_date__month=current_month,
-                    payment_date__year=current_year,
-                    then="amount",
-                ),
+                When(payment_status="completed", then="amount"),
                 default=Value(0),
                 output_field=DecimalField(),
             )
         ),
         completed_count=Sum(
             Case(
-                When(
-                    payment_status="completed",
-                    payment_date__month=current_month,
-                    payment_date__year=current_year,
-                    then=Value(1),
-                ),
+                When(payment_status="completed", then=Value(1)),
                 default=Value(0),
             )
         ),
@@ -132,11 +192,14 @@ def payments_list(request):
         ),
     )
 
-    all_payments_list = list(payments_queryset[:1000])
+    # Hard cap on rows sent to the browser (the table paginates client-side).
+    # `result_truncated` below surfaces it instead of silently dropping rows.
+    total_count = payments_queryset.count()
+    all_payments_list = list(payments_queryset[:_LIST_CAP])
 
     context = {
         "payments_list": all_payments_list,
-        "total_count": payments_queryset.count(),
+        "total_count": total_count,
         "search_query": search_query,
         "expected_payments_total": stats["expected_total"] or _zero,
         "expected_payments_count": stats["expected_count"] or 0,
@@ -147,6 +210,14 @@ def payments_list(request):
         "overdue_payments_total": stats["overdue_total"] or _zero,
         "overdue_payments_count": stats["overdue_count"] or 0,
         "payment_method_choices": constants.PAYMENT_METHOD_CHOICES,
+        # Month/year filter controls
+        "month_choices": list(enumerate(MESES_ES, start=1)),
+        "selected_month": selected_month,
+        "selected_year": selected_year,
+        "period_label": MESES_ES[selected_month - 1].capitalize() if selected_month else "",
+        "year_choices": year_choices,
+        "result_truncated": total_count > _LIST_CAP,
+        "list_cap": _LIST_CAP,
     }
 
     return render(request, "payments/payments_list.html", context)
@@ -185,35 +256,71 @@ def create_payment(request):
                 )
                 return redirect("payments_list")
 
-            # Get enrollment if exists
-            enrollment = student.enrollments.first()
+            # Prefer the ACTIVE enrollment. `enrollments.first()` has no
+            # ordering and no status filter, so for a returning student it
+            # picked whichever row happened to come first — usually the old
+            # finished one — and attached the payment to it.
+            enrollment = (
+                student.enrollments.filter(status="active").order_by("-enrollment_date", "-id").first()
+                or student.enrollments.order_by("-enrollment_date", "-id").first()
+            )
+
+            # Choice fields are not validated by Model.objects.create(), so a
+            # crafted or stale form could persist e.g. payment_status="wat",
+            # which then renders raw through get_payment_status_display().
+            payment_type = _validated_choice(
+                request.POST.get("payment_type"), constants.PAYMENT_TYPE_CHOICES, "monthly"
+            )
+            payment_method = _validated_choice(
+                request.POST.get("payment_method"), constants.PAYMENT_METHOD_CHOICES, "transfer"
+            )
+            payment_status = _validated_choice(
+                request.POST.get("payment_status"), constants.PAYMENT_STATUS_CHOICES, "pending"
+            )
+
+            concept = (request.POST.get("concept") or "").strip()[:200]
 
             # Create payment
-            payment = Payment.objects.create(
+            payment = Payment(
                 student=student,
                 parent=parent,
                 enrollment=enrollment,
-                payment_type=request.POST.get("payment_type"),
-                payment_method=request.POST.get("payment_method"),
+                payment_type=payment_type,
+                payment_method=payment_method,
                 amount=Decimal(str(request.POST.get("amount", "0"))),
-                currency=request.POST.get("currency", "EUR"),
-                payment_status=request.POST.get("payment_status", "pending"),
-                due_date=request.POST.get("due_date"),
-                payment_date=request.POST.get("payment_date") or None,
-                concept=request.POST.get("concept"),
-                reference_number=request.POST.get("reference_number", ""),
+                currency=request.POST.get("currency", "EUR")[:3],
+                payment_status=payment_status,
+                due_date=parse_date_value(request.POST.get("due_date")),
+                payment_date=parse_date_value(request.POST.get("payment_date")),
+                concept=concept,
+                reference_number=(request.POST.get("reference_number", "") or "")[:50],
                 observations=request.POST.get("observations", ""),
             )
+            payment.full_clean(exclude=["enrollment"])
+            payment.save()
             HistoryLog.log(
                 "payment_created",
                 f"Pago creado: {student.full_name} — €{payment.amount} ({payment.get_payment_type_display()})",
                 icon="add_card",
             )
+            if payment.payment_status == "completed":
+                _queue_payment_receipt(payment.id)
             messages.success(request, f"Pago creado exitosamente para {student.full_name}.")
             return redirect("payments_list")
 
-        except Exception as e:
-            messages.error(request, f"Error al crear el pago: {str(e)}")
+        except ValidationError as e:
+            # ValidationError.messages is Django's written-for-humans text.
+            messages.error(request, " ".join(e.messages))
+            return redirect("payments_list")
+        except InvalidOperation:
+            logger.exception("Invalid amount submitted when creating a payment")
+            messages.error(request, "El importe introducido no es válido.")
+            return redirect("payments_list")
+        except Exception:
+            # Never echo str(e): on an IntegrityError it leaks the table and
+            # column names, on a DataError the column width.
+            logger.exception("Error creating payment")
+            messages.error(request, "Error al crear el pago. Revisa los datos e inténtalo de nuevo.")
             return redirect("payments_list")
 
     return render(request, "payments/payment_create.html", {})
@@ -232,11 +339,16 @@ def payment_detail(request, payment_id):
             "full_name": payment.student.full_name,
             "school": payment.student.school or "",
         },
-        "parent": {
-            "id": payment.parent.id,
-            "full_name": payment.parent.full_name,
-            "email": payment.parent.email,
-        },
+        # Adult students have no parent — Payment.parent is nullable.
+        "parent": (
+            {
+                "id": payment.parent.id,
+                "full_name": payment.parent.full_name,
+                "email": payment.parent.email,
+            }
+            if payment.parent
+            else None
+        ),
         "enrollment": (
             {
                 "id": payment.enrollment.id if payment.enrollment else None,
@@ -287,6 +399,34 @@ def payment_receipt_pdf(request, payment_id):
     return response
 
 
+@require_http_methods(["GET"])
+def student_payments_pdf(request, student_id):
+    """Stream a student's full payment history as a PDF.
+
+    Shows the payment method and both dates per row, so the academy can see at
+    a glance when each fee was paid and how. `?year=` narrows to one academic
+    calendar year; omitted means every payment on record.
+    """
+    from billing.services.pdf_service import generate_student_payment_history
+
+    student = get_object_or_404(Student.objects.select_related("group"), id=student_id)
+
+    payments = Payment.objects.filter(student=student).select_related("enrollment").order_by("due_date", "id")
+
+    year = _safe_int(request.GET.get("year"), default=None, low=2000, high=2100)
+    suffix = ""
+    if year:
+        payments = payments.filter(due_date__year=year)
+        suffix = str(year)
+
+    pdf_bytes = generate_student_payment_history(student, payments, title_suffix=suffix)
+    response = HttpResponse(pdf_bytes, content_type="application/pdf")
+    slug = student.full_name.replace(" ", "-").lower()
+    stem = f"pagos-{slug}" + (f"-{year}" if year else "")
+    response["Content-Disposition"] = f'attachment; filename="{stem}.pdf"'
+    return response
+
+
 @require_http_methods(["POST"])
 def update_payment(request, payment_id):
     """
@@ -294,6 +434,7 @@ def update_payment(request, payment_id):
     """
     try:
         payment = get_object_or_404(Payment, id=payment_id)
+        was_completed = payment.payment_status == "completed"
 
         # Parse data
         if request.content_type == "application/json":
@@ -306,8 +447,16 @@ def update_payment(request, payment_id):
             student = get_object_or_404(Student, id=data["student_id"])
             payment.student = student
         if "parent_id" in data:
-            parent = get_object_or_404(Parent, id=data["parent_id"])
-            payment.parent = parent
+            # An empty parent_id clears the link (valid for adult students),
+            # rather than 404-ing on a lookup for "".
+            if data["parent_id"] in (None, "", 0, "0"):
+                payment.parent = None
+            else:
+                payment.parent = get_object_or_404(Parent, id=data["parent_id"])
+        # Stricter than Payment.clean() on purpose: the model exempts adults
+        # (who normally have no parent at all), but if a parent IS named on the
+        # payment they must actually be linked to the student — otherwise the
+        # receipt would be issued to someone unrelated.
         if (
             payment.student_id
             and payment.parent_id
@@ -335,7 +484,17 @@ def update_payment(request, payment_id):
         if "observations" in data:
             payment.observations = data["observations"]
 
+        # Model.save() does NOT call clean(), so without this the endpoint could
+        # mark a payment "completed" with payment_date=None — and every income
+        # figure filters on payment_date, so the money silently vanished from
+        # all reporting. Payment.clean() backfills the date and rejects choices.
+        payment.full_clean(exclude=["enrollment", "parent", "student"])
         payment.save()
+
+        # Only on the pending -> completed transition, so an edit to an
+        # already-completed payment doesn't re-send the receipt.
+        if payment.payment_status == "completed" and not was_completed:
+            _queue_payment_receipt(payment.id)
 
         if request.content_type != "application/json":
             messages.success(request, "Pago actualizado exitosamente.")
@@ -446,6 +605,18 @@ def quick_complete_payment(request, payment_id):
                 status=400,
             )
 
+        # Idempotent: re-completing an already-completed payment used to rewrite
+        # its historical payment_date to today, silently moving the money into a
+        # different month in every income report (and re-sending the receipt).
+        if payment.payment_status == "completed":
+            return JsonResponse(
+                {
+                    "success": True,
+                    "already_completed": True,
+                    "message": f"El pago de {payment.student.full_name} ya estaba completado.",
+                }
+            )
+
         payment.payment_method = payment_method
         payment.payment_status = "completed"
         payment.payment_date = date.today()
@@ -456,6 +627,11 @@ def quick_complete_payment(request, payment_id):
             f"Pago completado: {payment.student.full_name} — {payment.get_payment_method_display()} (€{payment.amount})",
             icon="paid",
         )
+
+        # Email the payer a receipt. Previously only the Stripe webhook did
+        # this, so a payment taken in cash / by transfer and marked complete
+        # here sent nothing at all.
+        _queue_payment_receipt(payment.id)
 
         return JsonResponse(
             {
@@ -566,7 +742,8 @@ def search_payments(request):
             {
                 "id": payment.id,
                 "student_name": payment.student.full_name,
-                "parent_name": payment.parent.full_name,
+                # Adult students have no parent — Payment.parent is nullable.
+                "parent_name": payment.parent.full_name if payment.parent else "",
                 "amount": str(payment.amount),
                 "currency": payment.currency,
                 "payment_type": payment.get_payment_type_display(),
@@ -611,7 +788,8 @@ def export_payments(request):
             [
                 payment.id,
                 payment.student.full_name,
-                payment.parent.full_name,
+                # Adult students have no parent — Payment.parent is nullable.
+                payment.parent.full_name if payment.parent else "",
                 payment.concept,
                 payment.amount,
                 payment.get_payment_method_display(),

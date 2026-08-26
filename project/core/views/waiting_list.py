@@ -21,6 +21,7 @@ from django.views.decorators.http import require_http_methods
 from billing.models import Payment, SiteConfiguration
 from billing.services.enrollment_service import EnrollmentService
 from core.models import HistoryLog
+from students.forms import WaitingListForm
 from students.models import Group, Student
 
 logger = logging.getLogger(__name__)
@@ -78,6 +79,34 @@ def waiting_list_view(request):
     )
 
 
+@require_http_methods(["GET", "POST"])
+def waiting_list_create(request):
+    """Short form for adding someone to the waiting list.
+
+    Only a name and a phone number are required — these are taken during a
+    phone call. The previous route through `StudentCreateView?mode=waiting`
+    reused the full enrollment form and demanded a group, a school, a birth
+    date and GDPR consent before it would save anything.
+    """
+    if request.method == "POST":
+        form = WaitingListForm(request.POST)
+        if form.is_valid():
+            student = form.save()
+            group_label = student.group.group_name if student.group_id else "sin grupo preferido"
+            HistoryLog.log(
+                "waiting_list_added",
+                f"Nuevo en lista de espera: {student.full_name} — {group_label}",
+                icon="hourglass_top",
+            )
+            messages.success(request, f"✅ {student.full_name} añadido/a a la lista de espera.")
+            return redirect("waiting_list")
+        messages.error(request, "Revisa los campos obligatorios.")
+    else:
+        form = WaitingListForm()
+
+    return render(request, "waiting_list_create.html", {"form": form})
+
+
 @require_http_methods(["POST"])
 def assign_from_waiting_list(request, student_id):
     """
@@ -92,12 +121,12 @@ def assign_from_waiting_list(request, student_id):
         is_waiting=True,
     )
 
-    # Defensive: Student.group is a required FK today, but if that ever
-    # becomes nullable a missing group would produce an AttributeError on
-    # `.is_full` below. Fail loudly with a friendly error instead.
+    # `Student.group` is nullable — a waiting-list entry taken over the phone
+    # may have no preferred group yet. Tell the admin what to do rather than
+    # blowing up on `.is_full` below.
     target_group = student.group
     if target_group is None:
-        error_msg = "El estudiante no tiene grupo preferido asignado."
+        error_msg = "El estudiante no tiene grupo preferido asignado. Edítalo y elige un grupo antes de promoverlo."
         if request.headers.get("X-Requested-With") == "XMLHttpRequest":
             return JsonResponse({"success": False, "error": error_msg}, status=400)
         messages.error(request, f"❌ {error_msg}")
@@ -119,10 +148,15 @@ def assign_from_waiting_list(request, student_id):
     # generated Payment would be orphaned (Payment.parent is nullable but
     # tax certificates and reminders both key off parent).
     if default_parent is None and not student.is_adult:
+        # Expected for entries created from the short waiting-list form, which
+        # only stores a contact name + phone (a Parent needs a unique DNI).
         error_msg = (
-            f"{student.full_name} no tiene padre/madre asociado — no se puede promover "
-            "sin un titular para la matrícula."
+            f"{student.full_name} no tiene padre/tutor (titular) registrado. "
+            "Crea primero su ficha de padre/madre y vincúlala al alumno."
         )
+        contact = " · ".join(p for p in (student.waiting_contact_name, student.waiting_contact_phone) if p)
+        if contact:
+            error_msg += f" Contacto de la lista de espera: {contact}."
         if request.headers.get("X-Requested-With") == "XMLHttpRequest":
             return JsonResponse({"success": False, "error": error_msg}, status=400)
         messages.error(request, f"❌ {error_msg}")
@@ -132,6 +166,12 @@ def assign_from_waiting_list(request, student_id):
         with transaction.atomic():
             student.is_waiting = False
             student.save(update_fields=["is_waiting", "waiting_since", "updated_at"])
+
+            # Rescue students stranded by the older behaviour, where being moved
+            # onto the waiting list left the enrollment active: creating a
+            # second active one violates unique_active_enrollment_per_student
+            # and the promotion died with a 500 every time.
+            student.enrollments.filter(status="active").update(status="cancelled")
 
             enrollment = EnrollmentService.create_enrollment(
                 student,
@@ -215,17 +255,27 @@ def add_to_waiting_list(request, student_id):
         messages.info(request, f"{student.full_name} ya está en la lista de espera.")
         return redirect("waiting_list")
 
-    student.is_waiting = True
-    # save() auto-sets waiting_since
-    student.save(update_fields=["is_waiting", "waiting_since", "updated_at"])
+    with transaction.atomic():
+        student.is_waiting = True
+        # save() auto-sets waiting_since
+        student.save(update_fields=["is_waiting", "waiting_since", "updated_at"])
 
+        # Cancel the active enrollment. Leaving it active was a one-way door:
+        # the student kept generating pending payments while off the roster,
+        # and `assign_from_waiting_list` later hit the
+        # unique_active_enrollment_per_student constraint and 500'd, so they
+        # could never be promoted back.
+        cancelled = student.enrollments.filter(status="active").update(status="cancelled")
+
+    group_name = student.group.group_name if student.group else "sin grupo"
     HistoryLog.log(
         "waiting_list_added",
-        f"Movido a lista de espera: {student.full_name} (grupo preferido {student.group.group_name})",
+        f"Movido a lista de espera: {student.full_name} (grupo preferido {group_name})",
         icon="hourglass_top",
     )
 
-    messages.success(request, f"✅ {student.full_name} añadido/a a la lista de espera.")
+    note = " Su matrícula activa se ha cancelado." if cancelled else ""
+    messages.success(request, f"✅ {student.full_name} añadido/a a la lista de espera.{note}")
     return redirect("waiting_list")
 
 
@@ -306,6 +356,7 @@ def notify_capacity_freed(student):
 
 __all__ = [
     "waiting_list_view",
+    "waiting_list_create",
     "assign_from_waiting_list",
     "add_to_waiting_list",
     "group_capacity_summary",

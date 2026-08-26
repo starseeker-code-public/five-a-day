@@ -15,6 +15,7 @@ from typing import Any
 from django.db.models import Count, DecimalField, Q, Sum, Value
 from django.db.models.functions import Coalesce
 
+from billing.constants import LIVE_PAYMENT_STATUSES
 from billing.models import Expense, Payment
 from students.models import Group, Student
 
@@ -71,9 +72,20 @@ def financial_summary_year(year: int) -> dict[str, Any]:
 
 
 def collection_rate(month: int, year: int) -> dict[str, Any]:
-    """Ratio of collected to expected payments in a month (0.0-1.0)."""
+    """Ratio of collected to expected payments in a month (0.0-1.0).
+
+    "Expected" excludes cancelled / failed / refunded payments: money that will
+    never arrive shouldn't sit in the denominator. Cancelling one duplicate
+    payment used to drag the whole month's collection rate toward 0%.
+    """
     zero = Decimal("0.00")
-    expected = _sum(Payment.objects.filter(due_date__month=month, due_date__year=year))
+    expected = _sum(
+        Payment.objects.filter(
+            due_date__month=month,
+            due_date__year=year,
+            payment_status__in=LIVE_PAYMENT_STATUSES,
+        )
+    )
     collected = _sum(Payment.objects.filter(payment_status="completed", due_date__month=month, due_date__year=year))
     ratio = (collected / expected) if expected else zero
     return {
