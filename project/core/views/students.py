@@ -52,11 +52,13 @@ class StudentCreateView(CreateView):
 
         parent_id = self.request.GET.get("parent_id")
         if parent_id:
+            # ValueError as well as DoesNotExist: `?parent_id=abc` raised
+            # "invalid literal for int()" and 500'd the page.
             try:
-                parent = Parent.objects.get(id=parent_id)
+                parent = Parent.objects.get(id=int(parent_id))
                 context["parent"] = parent
                 context["parent_id"] = parent_id
-            except Parent.DoesNotExist:
+            except (Parent.DoesNotExist, TypeError, ValueError):
                 messages.error(self.request, "El padre especificado no existe")
 
         if mode == "existing_parent":
@@ -130,9 +132,9 @@ class StudentCreateView(CreateView):
                         student.delete()
                         return self.form_invalid(form)
                     try:
-                        parent = Parent.objects.get(id=parent_id)
+                        parent = Parent.objects.get(id=int(parent_id))
                         student.parents.add(parent)
-                    except Parent.DoesNotExist:
+                    except (Parent.DoesNotExist, TypeError, ValueError):
                         messages.error(self.request, "El padre especificado no existe")
                         student.delete()
                         return self.form_invalid(form)
@@ -233,8 +235,14 @@ class StudentCreateView(CreateView):
                     )
                 )
 
-        except Exception as e:
-            messages.error(self.request, f"Error al crear el estudiante: {str(e)}")
+        except Exception:
+            # Never echo str(e): a double submit raises IntegrityError whose
+            # text carries the Postgres constraint, table and column names.
+            logger.exception("Error creating student")
+            messages.error(
+                self.request,
+                "Error al crear el estudiante. Revisa los datos e inténtalo de nuevo.",
+            )
             return self.form_invalid(form)
 
     def form_invalid(self, form):
@@ -338,11 +346,37 @@ class StudentUpdateView(UpdateView):
 
         return context
 
+    @staticmethod
+    def _enrollment_plan_changed(current, enrollment_form) -> bool:
+        """True when the submitted plan differs from the active enrollment.
+
+        Guards against re-issuing an identical enrollment on every save. Maps
+        the form's single `enrollment_plan` choice back onto the two model
+        fields it encodes (payment_modality + schedule_type).
+        """
+        data = enrollment_form.cleaned_data
+        plan = data.get("enrollment_plan") or "monthly_full"
+        if plan == "quarterly":
+            wanted = ("quarterly", "full_time")
+        elif plan == "monthly_part":
+            wanted = ("monthly", "part_time")
+        else:
+            wanted = ("monthly", "full_time")
+
+        # Adult enrollments always resolve to adult_group/monthly regardless of
+        # the plan widget, so compare only the discount flags for them.
+        if current.schedule_type != "adult_group" and (current.payment_modality, current.schedule_type) != wanted:
+            return True
+        return current.has_language_cheque != bool(
+            data.get("has_language_cheque")
+        ) or current.is_sibling_discount != bool(data.get("is_sibling_discount"))
+
     def form_valid(self, form):
         # Waiting-list students don't have an active enrollment, so we skip the
         # enrollment form. Once is_waiting is toggled off, a fresh enrollment is
         # created below.
         is_waiting_now = form.cleaned_data.get("is_waiting", False)
+        student_pk = self.object.pk if self.object else None
 
         enrollment_form = None
         if not is_waiting_now:
@@ -358,17 +392,28 @@ class StudentUpdateView(UpdateView):
                     # Cancel any active enrollment — the student is off the roster.
                     student.enrollments.filter(status="active").update(status="cancelled")
                 else:
-                    # Deactivate old enrollment if exists, then issue the new one.
-                    student.enrollments.filter(status="active").update(status="finished")
-                    enrollment_form.create_enrollment(student, is_adult=student.is_adult)
+                    # Only re-issue the enrollment when the plan actually
+                    # changed. This used to run unconditionally, so saving an
+                    # edit to (say) the school name marked the current
+                    # enrollment "finished" and created a duplicate — students
+                    # accumulated a new enrollment row per edit, and payments
+                    # then attached to whichever one came back first.
+                    current = student.enrollments.filter(status="active").order_by("-enrollment_date", "-id").first()
+                    if current is None or self._enrollment_plan_changed(current, enrollment_form):
+                        student.enrollments.filter(status="active").update(status="finished")
+                        enrollment_form.create_enrollment(student, is_adult=student.is_adult)
 
                 messages.success(
                     self.request,
                     f"Estudiante {student.full_name} actualizado exitosamente",
                 )
 
-        except Exception as e:
-            messages.error(self.request, f"Error al actualizar el estudiante: {str(e)}")
+        except Exception:
+            logger.exception("Error updating student %s", student_pk)
+            messages.error(
+                self.request,
+                "Error al actualizar el estudiante. Revisa los datos e inténtalo de nuevo.",
+            )
             return self.form_invalid(form)
 
         return HttpResponseRedirect(self.get_success_url())
@@ -598,7 +643,7 @@ def student_detail(request, student_id):
             "id": student.id,
             "first_name": student.first_name,
             "last_name": student.last_name,
-            "birth_date": student.birth_date.strftime("%Y-%m-%d"),
+            "birth_date": student.birth_date.strftime("%Y-%m-%d") if student.birth_date else "",
             "email": student.email,
             "school": student.school,
             "group": student.group.id,
@@ -631,7 +676,7 @@ def update_student(request, student_id):
             "id": student.id,
             "first_name": student.first_name,
             "last_name": student.last_name,
-            "birth_date": student.birth_date.strftime("%Y-%m-%d"),
+            "birth_date": student.birth_date.strftime("%Y-%m-%d") if student.birth_date else "",
             "email": student.email,
             "school": student.school,
             "group": student.group.id if student.group else None,

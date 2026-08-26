@@ -13,6 +13,15 @@ if (studentsSort) {
   });
 }
 
+const studentsGroup = document.getElementById('students-group');
+if (studentsGroup) {
+  studentsGroup.addEventListener('change', (e) => {
+    // Reset to page 1: the filtered set is shorter, so the current page number
+    // may no longer exist.
+    window.location.href = buildUrl({ students_group: e.target.value, students_page: 1 }, 'db-students-section');
+  });
+}
+
 // Payments sort change → reload with new sort, reset to page 1
 const paymentsSort = document.getElementById('payments-sort');
 if (paymentsSort) {

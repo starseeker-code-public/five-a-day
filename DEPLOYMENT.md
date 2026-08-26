@@ -327,6 +327,10 @@ harmless when unset. Add them to the same `gcloud run deploy` invocation:
   --set-env-vars="GOOGLE_SHEETS_SPREADSHEET_ID=<doc-id>" \
   # Needed only behind a proxy or a custom domain
   --set-env-vars="CSRF_TRUSTED_ORIGINS=https://fiveaday-332600671945.europe-southwest1.run.app" \
+  # Cloud Run puts exactly one proxy in front of the app. The rate limiter reads the
+  # client IP this many hops from the RIGHT of X-Forwarded-For, because a proxy APPENDS
+  # what it saw — anything further left is client-supplied and therefore spoofable.
+  --set-env-vars="TRUSTED_PROXY_COUNT=1" \
   --set-env-vars="LOG_LEVEL=INFO"
 ```
 
@@ -380,6 +384,7 @@ run inline):
 | `send_due_fun_friday_emails_task` | `send_due_fun_friday_emails` | daily, 14:30 | `30 14 * * *` |
 | `send_monthly_report_task` | `send_monthly_report` | 28th of month, 20:00 | `0 20 28 * *` |
 | `cleanup_done_backlog_tasks` | `cleanup_backlog_tasks` | QA/testing env only — skip in production | — |
+| `prune_audit_log` | `prune_audit_log` | weekly, Sunday 03:00 | `0 3 * * 0` |
 
 > **Fun Friday announcements** are NOT sent with `apply_async(eta=...)` (the ETA is silently
 > ignored in eager mode, which would send immediately). The form persists a

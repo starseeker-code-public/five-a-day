@@ -104,6 +104,7 @@ from core.views.payments import (
     quick_complete_payment,
     search_parents,
     search_payments,
+    student_payments_pdf,
     update_payment,
     validate_student_parent,
 )
@@ -148,6 +149,7 @@ from core.views.testing_tools import (
     api_seed_database,
     api_toggle_error_email,
     api_update_backlog_task,
+    export_backlog_tasks,
     testing_tools_view,
 )
 
@@ -167,5 +169,6 @@ from core.views.waiting_list import (
     assign_from_waiting_list,
     group_capacity_summary,
     notify_capacity_freed,
+    waiting_list_create,
     waiting_list_view,
 )

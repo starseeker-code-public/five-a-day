@@ -1,3 +1,5 @@
+import logging
+
 from django.contrib import messages
 from django.http import HttpResponseRedirect
 from django.urls import reverse_lazy
@@ -5,6 +7,8 @@ from django.views.generic import CreateView
 
 from students.forms import ParentForm
 from students.models import Parent
+
+logger = logging.getLogger(__name__)
 
 
 class ParentCreateView(CreateView):
@@ -35,6 +39,8 @@ class ParentCreateView(CreateView):
             )
             return HttpResponseRedirect(self.get_success_url())
 
-        except Exception as e:
-            messages.error(self.request, f"Error al crear el padre: {str(e)}")
+        except Exception:
+            # Never echo str(e) — an IntegrityError leaks the table and column.
+            logger.exception("Error creating parent")
+            messages.error(self.request, "Error al crear el padre/tutor. Revisa los datos e inténtalo de nuevo.")
             return self.form_invalid(form)

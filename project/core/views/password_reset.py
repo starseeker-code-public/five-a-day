@@ -12,6 +12,8 @@ because a teacher who can't log in still needs to be able to reach them.
 """
 
 from django.conf import settings
+from django.contrib.auth import get_user_model
+from django.contrib.auth.forms import PasswordResetForm
 from django.contrib.auth.tokens import default_token_generator
 from django.contrib.auth.views import (
     PasswordResetCompleteView,
@@ -23,10 +25,34 @@ from django.urls import reverse_lazy
 from django.utils.encoding import force_bytes
 from django.utils.http import urlsafe_base64_encode
 
+UserModel = get_user_model()
+
+
+class ActivationFriendlyPasswordResetForm(PasswordResetForm):
+    """Password-reset form that also serves accounts awaiting activation.
+
+    Django's default `get_users()` skips users whose password is unusable, and
+    its own docstring points at subclassing as the way to change that. That
+    default silently broke the documented onboarding flow here: both
+    `seed_teachers` (when TEACHER_SEED_<N>_PASSWORD is omitted) and the
+    "create teacher" screen provision the account with `set_unusable_password()`
+    and tell the teacher to activate via /password-reset/ — but the reset page
+    reported "check your inbox" while sending nothing at all, leaving the
+    account permanently unreachable.
+
+    Inactive users are still excluded: `is_active=False` is a deliberate
+    lock-out, whereas an unusable password just means "not set yet".
+    """
+
+    def get_users(self, email):
+        email_field_name = UserModel.get_email_field_name()
+        return UserModel._default_manager.filter(**{f"{email_field_name}__iexact": email, "is_active": True})
+
 
 class BrandedPasswordResetView(PasswordResetView):
     """Request-a-reset: user enters their email."""
 
+    form_class = ActivationFriendlyPasswordResetForm
     template_name = "registration/password_reset_form.html"
     # Plain-text body (required by PasswordResetForm.save) — kept minimal because
     # the HTML alternative below is what users actually see in GUI clients.

@@ -67,6 +67,9 @@ def send_welcome_email_task(self, parent_id: int, student_id: int, enrollment_id
             "student_name": student.full_name,
             "group_name": student.group.group_name if student.group else None,
             "enrollment_type": enrollment.enrollment_type.display_name if enrollment.enrollment_type else None,
+            # Spanish "Mensual" / "Trimestral" — parents were shown the English
+            # EnrollmentType label and had no explicit payment frequency.
+            "payment_modality": enrollment.get_payment_modality_display(),
             "schedule_type": enrollment.get_schedule_type_display(),
             "schedule_lines": get_group_schedule_lines(student.group),
             "start_date": enrollment.enrollment_date.strftime("%d/%m/%Y") if enrollment.enrollment_date else None,
@@ -684,11 +687,25 @@ def send_due_fun_friday_emails_task(self):
 
     from core.models import FunFridayScheduledSend
 
-    due = FunFridayScheduledSend.objects.filter(sent_at__isnull=True, scheduled_for__lte=timezone.now())
+    due_ids = list(
+        FunFridayScheduledSend.objects.filter(sent_at__isnull=True, scheduled_for__lte=timezone.now()).values_list(
+            "id", flat=True
+        )
+    )
 
     processed = 0
     sent_total = 0
-    for scheduled in due:
+    for row_id in due_ids:
+        # CLAIM the row before sending, with a conditional UPDATE that only
+        # matches while sent_at IS NULL. Marking it after the send left a
+        # window where two overlapping drains (the immediate .delay() from the
+        # form and the scheduled Beat/Cloud Scheduler run, which both fire at
+        # 14:30) each saw sent_at=None and mailed every parent twice.
+        claimed = FunFridayScheduledSend.objects.filter(id=row_id, sent_at__isnull=True).update(sent_at=timezone.now())
+        if not claimed:
+            continue  # another worker got there first
+        scheduled = FunFridayScheduledSend.objects.get(id=row_id)
+
         result = _send_fun_friday_batch(
             recipients=scheduled.recipients,
             day_name=scheduled.day_name,
@@ -701,8 +718,6 @@ def send_due_fun_friday_emails_task(self):
             maximum_age=scheduled.maximum_age,
             meeting_point=scheduled.meeting_point,
         )
-        scheduled.sent_at = timezone.now()
-        scheduled.save(update_fields=["sent_at", "updated_at"])
         processed += 1
         sent_total += result["sent"]
 

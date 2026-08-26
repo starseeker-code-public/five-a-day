@@ -72,8 +72,43 @@ class TestClientIpValidation:
     def test_uses_remote_addr_when_no_forwarded_header(self):
         assert _client_ip(self._req()) == "9.9.9.9"
 
-    def test_prefers_first_forwarded_entry(self):
-        assert _client_ip(self._req(forwarded="1.2.3.4, 5.6.7.8")) == "1.2.3.4"
+    def test_reads_the_hop_our_proxy_appended_not_the_client_prefix(self):
+        """With one trusted proxy we take the LAST entry, not the first.
+
+        A proxy APPENDS the address it saw, so the rightmost entries are the
+        ones our own infrastructure wrote and everything to the left is
+        client-supplied. Reading `split(",")[0]` let an attacker prepend a
+        value and land in a fresh rate-limit bucket on every request, which
+        made the login throttle a no-op.
+        """
+        assert _client_ip(self._req(forwarded="1.2.3.4, 5.6.7.8")) == "5.6.7.8"
+
+    def test_spoofed_prefix_cannot_rotate_the_bucket(self, settings):
+        settings.TRUSTED_PROXY_COUNT = 1
+        real = "203.0.113.9"
+        seen = {
+            _client_ip(self._req(forwarded=f"{spoof}, {real}"))
+            for spoof in ("10.0.0.1", "10.0.0.2", "10.0.0.3", "198.51.100.7")
+        }
+        assert seen == {real}, "rotating the client-supplied prefix must not change the bucket"
+
+    def test_zero_trusted_proxies_ignores_forwarded_header(self, settings):
+        settings.TRUSTED_PROXY_COUNT = 0
+        req = self._req(forwarded="1.2.3.4")
+        req.META["REMOTE_ADDR"] = "198.51.100.1"
+        assert _client_ip(req) == "198.51.100.1"
+
+    def test_two_trusted_proxies_reads_two_from_the_right(self, settings):
+        settings.TRUSTED_PROXY_COUNT = 2
+        assert _client_ip(self._req(forwarded="1.2.3.4, 203.0.113.5, 10.0.0.1")) == "203.0.113.5"
+
+    def test_short_chain_falls_back_to_remote_addr(self, settings):
+        """Fewer hops than configured means the header didn't come from our
+        proxies — trust REMOTE_ADDR instead of a client-supplied value."""
+        settings.TRUSTED_PROXY_COUNT = 3
+        req = self._req(forwarded="1.2.3.4")
+        req.META["REMOTE_ADDR"] = "198.51.100.1"
+        assert _client_ip(req) == "198.51.100.1"
 
     def test_ipv6_is_normalised(self):
         # Same client must not be able to occupy several buckets by varying the

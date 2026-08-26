@@ -229,7 +229,10 @@ class Parent(models.Model):
 class Student(models.Model):
     last_name = models.CharField(max_length=100)
     first_name = models.CharField(max_length=100)
-    birth_date = models.DateField()
+    # Optional so a waiting-list entry can be taken down from a phone call with
+    # nothing but a name and a number. It is filled in when the student is
+    # actually enrolled.
+    birth_date = models.DateField(null=True, blank=True)
     GENDER_CHOICES = [
         ("m", "Masculino"),
         ("f", "Femenino"),
@@ -241,7 +244,35 @@ class Student(models.Model):
     school = models.CharField(max_length=200, blank=True)
     allergies = models.TextField(blank=True)
     gdpr_signed = models.BooleanField(default=False)
-    group = models.ForeignKey(Group, on_delete=models.PROTECT, related_name="students")
+    # Nullable for the same reason as birth_date: a waiting-list entry may not
+    # have a preferred group yet. `assign_from_waiting_list` already guarded
+    # for this case defensively before the field allowed it.
+    group = models.ForeignKey(Group, on_delete=models.PROTECT, related_name="students", null=True, blank=True)
+    # v1.15 — captured on the short waiting-list form (and useful thereafter).
+    course = models.CharField(
+        max_length=60,
+        blank=True,
+        verbose_name="Curso",
+        help_text="Curso escolar, p. ej. «3º Primaria». Texto libre.",
+    )
+    observations = models.TextField(
+        blank=True,
+        verbose_name="Observaciones",
+        help_text="Notas libres: preferencia de horario, peticiones, etc.",
+    )
+    # Contact for a waiting-list entry. Deliberately NOT a Parent FK: Parent
+    # requires a unique DNI, which is far more than we can ask for over the
+    # phone. A real Parent record is created when the student is enrolled.
+    waiting_contact_name = models.CharField(
+        max_length=200,
+        blank=True,
+        verbose_name="Contacto (padre/madre)",
+    )
+    waiting_contact_phone = models.CharField(
+        max_length=20,
+        blank=True,
+        verbose_name="Móvil de contacto",
+    )
     parents = models.ManyToManyField(Parent, through="StudentParent", related_name="children")
     active = models.BooleanField(default=True)
     is_waiting = models.BooleanField(
@@ -278,8 +309,16 @@ class Student(models.Model):
 
     @property
     def age(self):
+        """Age in years, or None when no birth date is on record.
+
+        `birth_date` is optional (waiting-list entries may only have a name and
+        a phone number), so callers must handle None — templates render it as
+        blank, which is what we want.
+        """
         from datetime import date
 
+        if not self.birth_date:
+            return None
         today = date.today()
         return (
             today.year

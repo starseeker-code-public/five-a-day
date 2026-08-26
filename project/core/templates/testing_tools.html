@@ -335,9 +335,27 @@
             <div class="qa-card-icon bg-amber-100">
                 <span class="material-symbols-outlined text-amber-600">assignment</span>
             </div>
-            <div>
+            <div class="flex-1">
                 <h2 class="text-lg font-bold text-neutral-800">Backlog</h2>
                 <p class="text-xs text-neutral-500">Registra errores, sugerencias o tareas de prueba. Se lo mas detallado posible — cada tarea se envia por email al equipo de desarrollo.</p>
+            </div>
+            {# Download the backlog to hand the whole list to the developer at once. #}
+            <div class="flex items-center gap-2 shrink-0">
+                <a href="{% url 'export_backlog_tasks' %}?format=json&scope=active"
+                   class="inline-flex items-center gap-1 px-3 py-2 text-xs font-semibold rounded-lg border border-neutral-300 text-neutral-600 hover:bg-primary-50 hover:text-primary-700 hover:border-primary-300 transition-colors"
+                   style="text-decoration:none;" title="Descargar tareas pendientes en JSON">
+                    <span class="material-symbols-outlined text-sm">download</span> JSON
+                </a>
+                <a href="{% url 'export_backlog_tasks' %}?format=csv&scope=active"
+                   class="inline-flex items-center gap-1 px-3 py-2 text-xs font-semibold rounded-lg border border-neutral-300 text-neutral-600 hover:bg-primary-50 hover:text-primary-700 hover:border-primary-300 transition-colors"
+                   style="text-decoration:none;" title="Descargar tareas pendientes en CSV (Excel)">
+                    <span class="material-symbols-outlined text-sm">download</span> CSV
+                </a>
+                <a href="{% url 'export_backlog_tasks' %}?format=json&scope=all"
+                   class="inline-flex items-center gap-1 px-3 py-2 text-xs font-semibold rounded-lg border border-neutral-200 text-neutral-500 hover:bg-neutral-100 transition-colors"
+                   style="text-decoration:none;" title="Descargar TODAS las tareas, incluidas las hechas">
+                    <span class="material-symbols-outlined text-sm">inventory_2</span> Todas
+                </a>
             </div>
         </div>
 

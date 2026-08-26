@@ -39,7 +39,7 @@ The `billing` app owns all financial logic: pricing configuration, enrollment pl
 
 - `_get_base_monthly_fee(enrollment, config)` — shared helper that resolves base fee by schedule type (adult_group / full_time / part_time)
 - `calculate_monthly_amount(enrollment, config, month)` — monthly payment with discounts + June bonus (delegates to `_get_base_monthly_fee`)
-- `calculate_quarterly_amount(enrollment, config, quarter_due_month)` — 3 months minus quarterly discount (delegates to `_get_base_monthly_fee`)
+- `calculate_quarterly_amount(enrollment, config, quarter_due_month)` — 3 months minus the quarterly discount, **then** the sibling percentage, the language cheque (x3, one per covered month) and — for Q3, which covers June — the June discount. Mirrors `EnrollmentService._apply_discounts` so the enrollment row and the generated payments agree. Before v1.15 only the quarterly percentage was applied, so a quarterly student with a sibling discount or a cheque was billed full price. Adult groups keep their flat rate.
 - `complete_payment(payment_id)` — marks payment completed with today's date (within `transaction.atomic()`)
 - `schedule_academic_year_payments(enrollment, parent=None)` — on enrollment, creates all pending periodic payments for the academic year: monthly (Sep–Jun) or quarterly (Oct/Jan/Apr), each due at period end, starting at the enrollment month. Idempotent (matches on payment_type + due-date month/year) so the periodic `generate_payments` command never double-creates. Called by `StudentCreateView` and waiting-list assignment. Returns the count created.
 - `should_generate_monthly/quarterly(month)` — academic calendar validation
@@ -64,6 +64,9 @@ The `billing` app owns all financial logic: pricing configuration, enrollment pl
 - `generate_payment_receipt(payment)` — single-payment receipt PDF (v1.3, reportlab)
 - `generate_quarterly_summary(...)` — quarterly statement
 - `generate_tax_certificate(...)` — annual certificate for a parent's tax return
+- `generate_student_payment_history(student, payments, title_suffix="")` (v1.15) — a student's full payment history: concept, type, due date, **payment date**, **method** and status per row, with collected and outstanding totalled separately. Served by `student_payments_pdf`
+
+All text reaching a reportlab `Paragraph` goes through `_md()`. Paragraph parses a mini-HTML dialect, so an unescaped name like `O<Brien` raised `paraparser: syntax error` and killed generation outright.
 - Academy details come from the `ACADEMY_*` env vars, with a fallback when unset
 
 ### StripeService (`billing/services/stripe_service.py`)
@@ -121,7 +124,7 @@ immediately.
 ## URL Patterns (billing/urls.py)
 
 Payment CRUD, enrollment API, management panel, expenses, reports, search/statistics, Stripe
-endpoints, CSV/Excel export. **23 URL patterns** total.
+endpoints, CSV/Excel export, per-student payment-history PDF (v1.15). **24 URL patterns** total.
 
 ## Cross-App Communication
 
