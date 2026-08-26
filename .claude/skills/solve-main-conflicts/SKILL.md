@@ -1,9 +1,9 @@
 ---
-name: fix-release-pr
+name: solve-main-conflicts
 description: Use when the open testing → main release PR has merge conflicts, failing checks, or review/CodeQL comments to address. Diagnoses the conflicts, applies the real fix on development as a new patch version, merges to testing, pushes, and verifies the PR is mergeable — iterating until it is.
 ---
 
-# fix-release-pr
+# solve-main-conflicts
 
 Unblock the open `testing → main` release PR.
 
@@ -237,9 +237,21 @@ Find the candidate by matching subject lines (`git log origin/testing --format='
 `git log origin/main -1 --format='%s'`).
 
 **Only if both checks pass** — identical tree AND already an ancestor of `testing` — record the
-merge without touching files:
+merge without touching files.
+
+**Name this commit with the same `vX.Y.Z — <description>` convention as every other release
+commit**, carrying the version currently on `testing`. It is part of the release, so it must read
+like one in `git log`; a bare descriptive subject like `Record main as merged into testing` breaks
+the scannable version history:
 
 ```bash
+cat > /tmp/m2.txt <<'EOF'
+vX.Y.Z — main merge to solve conflicts
+
+<why main brings no content: identical tree to <sha>, already an ancestor of
+testing, so -s ours records the ancestry without touching the tree>
+EOF
+
 TREE_BEFORE=$(git rev-parse HEAD^{tree})
 git merge -s ours origin/main -F /tmp/m2.txt
 TREE_AFTER=$(git rev-parse HEAD^{tree})
@@ -298,6 +310,9 @@ Report to the user:
 
 - **The fix goes on `development`.** `testing` only ever receives merges. The one exception is
   the `-s ours` ancestry record in Step 6, which changes no files.
+- **Every commit this skill creates is titled `vX.Y.Z — <description>`**, including the merge
+  commits. The version prefix is what makes the release history scannable and is what
+  `auto-merge.yml` keys its gate on. No bare descriptive subjects.
 - **Prove content-neutrality before trusting a mechanical fix** — `--ignore-cr-at-eol` for
   renormalisation, tree-hash comparison for `-s ours`. Both are cheap; both caught real
   ambiguity in v1.15.2.
