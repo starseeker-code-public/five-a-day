@@ -13,6 +13,7 @@ from datetime import date
 from decimal import Decimal
 
 import pytest
+from django.conf import settings
 from django.test import Client
 from django.urls import reverse
 
@@ -60,9 +61,7 @@ class TestHistoryFeedIsNotAnXssSink:
     def test_renderer_escapes_before_inserting(self):
         """base.js must escape it. Guarding the renderer is what actually
         matters — the data feed is not the vulnerability, the innerHTML is."""
-        from pathlib import Path
-
-        source = Path("/app/project/core/static/js/base.js").read_text(encoding="utf-8")
+        source = (settings.BASE_DIR / "core/static/js/base.js").read_text(encoding="utf-8")
         assert "function escapeHtml" in source
         assert "escapeHtml(e.message)" in source, "history messages must be escaped before innerHTML"
 
@@ -87,9 +86,7 @@ class TestStudentSearchIsNotAnXssSink:
     def test_suggestions_are_built_as_dom_nodes(self):
         """No innerHTML, no inline onclick — the values go through textContent
         and the handler is attached with addEventListener."""
-        from pathlib import Path
-
-        source = Path("/app/project/core/static/js/payments.js").read_text(encoding="utf-8")
+        source = (settings.BASE_DIR / "core/static/js/payments.js").read_text(encoding="utf-8")
         block = source.split("function displayStudentSuggestions")[1].split("\n    }")[0]
         # Strip `//` comments so the prose explaining the fix isn't mistaken for
         # the pattern it describes.

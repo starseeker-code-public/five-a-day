@@ -20,7 +20,7 @@ Built to centralize student records, automate billing cycles, and streamline par
 ### Project Status
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v1.15.0-brightgreen?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-v1.15.1-brightgreen?style=flat-square" alt="Version">
   &nbsp;|&nbsp;
   <a href="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml?query=branch%3Amain"><img src="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml/badge.svg?branch=main&style=flat-square" alt="CI main"></a>
   &nbsp;|&nbsp;
@@ -41,9 +41,9 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 | Version | Date | Description |
 |---------|------|-------------|
-| **v1.15.0** | 2026-08-27 | Security + billing audit, 16 backlog items |
+| **v1.15.1** | 2026-08-27 | Portable test paths, gunicorn bound raised to <27 |
+| v1.15.0 | 2026-08-27 | Security + billing audit, 16 backlog items |
 | v1.14.8 | 2026-08-21 | SameSite fix — unbreaks Google OAuth in production |
-| v1.14.7 | 2026-08-21 | Production Gunicorn fix + full documentation sync |
 
 ---
 
@@ -150,8 +150,25 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 ## Version History & Roadmap
 
-<details id="v1150" open>
-<summary><strong>v1.15.0 — Security &amp; billing audit + backlog delivery (current)</strong></summary>
+<details id="v1151" open>
+<summary><strong>v1.15.1 — Portable test paths + dependency bump (current)</strong></summary>
+
+**Testing**
+
+- Two XSS-regression guards in `integration/test_bugfix_security_and_features.py` read their JS
+  source through a hard-coded `/app/project/...` container path, so they failed with
+  `FileNotFoundError` anywhere the repo wasn't mounted at `/app`. Both now resolve the file through
+  `settings.BASE_DIR`, which is correct in Docker, CI and a local checkout alike. The assertions
+  themselves are unchanged — the sinks are still pinned.
+
+**Dependencies**
+
+- `gunicorn` bound raised from `<24` to `<27` (Dependabot #39).
+
+</details>
+
+<details id="v1150">
+<summary><strong>v1.15.0 — Security &amp; billing audit + backlog delivery</strong></summary>
 
 A full-codebase audit followed by a fix pass. The suite was green at 1,061 tests and 95 % coverage
 throughout, and `ruff`, `mypy` and `bandit` all passed — none of the defects below were caught by
