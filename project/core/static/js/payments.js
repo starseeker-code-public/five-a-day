@@ -281,6 +281,46 @@
         });
     });
 
+    // ==================== CANCEL PAYMENT ====================
+    // Soft-delete: sets payment_status='cancelled' so the row stays for the
+    // audit trail but stops counting toward "esperado". Used for duplicates
+    // and for students who drop out before a due date.
+    document.querySelectorAll('.payment-cancel-btn').forEach(btn => {
+        btn.addEventListener('click', function (e) {
+            e.stopPropagation();
+            const paymentId = this.dataset.paymentId;
+            const student = this.dataset.studentName || 'este alumno';
+            const concept = this.dataset.concept ? ` (${this.dataset.concept})` : '';
+            if (!confirm(`¿Cancelar el pago de ${student}${concept}?\n\nDejará de contar como pago esperado. Podrás verlo en el historial marcado como "Cancelado".`)) {
+                return;
+            }
+            fetch(`/payments/${paymentId}/deactivate/`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCsrf() },
+                body: '{}',
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (!data.success) {
+                    alert(data.message || data.error || 'No se pudo cancelar el pago');
+                    return;
+                }
+                const row = document.querySelector(`tr[data-payment-id="${paymentId}"]`);
+                if (row) {
+                    row.dataset.paymentStatus = 'cancelled';
+                    const statusCell = row.querySelectorAll('td')[5];
+                    if (statusCell) {
+                        statusCell.innerHTML = '<span class="status-badge inline-flex items-center px-2 py-1 rounded-full text-xs font-bold bg-neutral-100 text-neutral-800"><span class="material-symbols-outlined text-sm mr-2">block</span>Cancelado</span>';
+                    }
+                    const trigger = row.querySelector('.payment-complete-trigger');
+                    if (trigger) trigger.remove();
+                    this.remove();
+                }
+            })
+            .catch(() => alert('Error de conexión'));
+        });
+    });
+
     // ==================== INIT ====================
     // Initialize filter flags
     allRows.forEach(r => { r._searchHidden = false; r._typeHidden = false; r._statusHidden = false; });
@@ -318,12 +358,11 @@
     document.getElementById('payment_type').addEventListener('change', function() {
         const concept = document.getElementById('concept');
         if (!concept.value || concept.value.startsWith('Pago de') || concept.value === 'Otro pago') {
+            // Keys must match billing.constants.PAYMENT_TYPE_CHOICES.
             const map = {
                 enrollment: 'Pago de matr\u00edcula',
                 monthly: 'Pago mensualidad',
-                materials: 'Pago de materiales',
-                registration: 'Pago de inscripci\u00f3n',
-                exam: 'Pago de examen',
+                quarterly: 'Pago trimestral',
                 other: 'Otro pago',
             };
             concept.value = map[this.value] || '';
@@ -348,13 +387,29 @@
 
     function displayStudentSuggestions(students) {
         if (!students.length) { studentSuggestions.classList.add('hidden'); return; }
-        studentSuggestions.innerHTML = students.map(s => `
-            <div class="p-3 hover:bg-neutral-50 cursor-pointer border-b border-neutral-100"
-                 onclick="window._paymentSelectStudent(${s.id}, '${s.full_name.replace(/'/g, "\\'")}', '${(s.school||'').replace(/'/g, "\\'")}')">
-                <div class="font-medium text-neutral-800">${s.full_name}</div>
-                ${s.school ? `<div class="text-sm text-neutral-500">${s.school}</div>` : ''}
-            </div>
-        `).join('');
+        // Built as DOM nodes with textContent, NOT innerHTML + inline onclick.
+        // Student names are free text; string-interpolating them into an HTML
+        // attribute let a name like `Ana" onmouseover="...` execute script.
+        studentSuggestions.replaceChildren();
+        students.forEach(s => {
+            const row = document.createElement('div');
+            row.className = 'p-3 hover:bg-neutral-50 cursor-pointer border-b border-neutral-100';
+
+            const name = document.createElement('div');
+            name.className = 'font-medium text-neutral-800';
+            name.textContent = s.full_name;
+            row.appendChild(name);
+
+            if (s.school) {
+                const school = document.createElement('div');
+                school.className = 'text-sm text-neutral-500';
+                school.textContent = s.school;
+                row.appendChild(school);
+            }
+
+            row.addEventListener('click', () => selectStudent(s.id, s.full_name, s.school || ''));
+            studentSuggestions.appendChild(row);
+        });
         studentSuggestions.classList.remove('hidden');
     }
 

@@ -32,8 +32,15 @@ class TestParentCreateView:
         parent = Parent.objects.get(dni="11223344X")
         assert f"parent_id={parent.id}" in response.url
 
-    def test_post_existing_dni_shows_form_error(self, authenticated_client, parent):
-        """Duplicate DNI is caught by ModelForm unique validation."""
+    def test_post_existing_dni_reuses_the_existing_parent(self, authenticated_client, parent):
+        """A repeat DNI means "this family is already registered" — typically a
+        second sibling. The view reuses the existing parent and sends the user
+        on to create the child, rather than showing a uniqueness error.
+
+        This path was previously unreachable: `Parent.dni` is unique, so the
+        ModelForm failed validation and `form_valid()` never ran.
+        """
+        before = Parent.objects.count()
         response = authenticated_client.post(
             reverse("parent_create"),
             {
@@ -44,7 +51,24 @@ class TestParentCreateView:
                 "email": "different@test.com",
             },
         )
-        assert response.status_code == 200  # re-renders form with uniqueness error
+        assert response.status_code == 302
+        assert f"parent_id={parent.id}" in response.url
+        assert Parent.objects.count() == before, "must not create a duplicate parent row"
+
+    def test_post_short_dni_still_shows_form_error(self, authenticated_client):
+        """Relaxing the uniqueness check must not relax the format check."""
+        response = authenticated_client.post(
+            reverse("parent_create"),
+            {
+                "first_name": "Too",
+                "last_name": "Short",
+                "dni": "123",
+                "phone": "600999888",
+                "email": "short@test.com",
+            },
+        )
+        assert response.status_code == 200
+        assert not Parent.objects.filter(dni="123").exists()
 
     def test_post_invalid_data_shows_form(self, authenticated_client):
         response = authenticated_client.post(
@@ -78,11 +102,13 @@ class TestParentCreateViewExtra:
         assert response.status_code == 302
 
     def test_post_existing_dni_redirects(self, authenticated_client, parent):
-        """Duplicate DNI is caught at form clean level → form_invalid
-        (template re-render, 200). The redirect-on-existing branch in
-        form_valid only triggers when the DB unique-constraint check sees
-        it as a would-be dupe. The existing test in test_parent_views
-        covers the form error path."""
+        """A duplicate DNI redirects to the student form for the existing parent.
+
+        The old docstring here described the opposite (a 200 re-render) and the
+        assertion accepted either status, so it passed whichever way the view
+        behaved — it could not have caught the bug where the friendly branch was
+        unreachable.
+        """
         response = authenticated_client.post(
             reverse("parent_create"),
             {
@@ -93,8 +119,8 @@ class TestParentCreateViewExtra:
                 "email": "dup@test.com",
             },
         )
-        # Either branch (form-level error 200 or redirect 302) is correct
-        assert response.status_code in (200, 302)
+        assert response.status_code == 302
+        assert f"parent_id={parent.id}" in response.url
 
     def test_post_exception_triggers_form_invalid(self, authenticated_client):
         from students.models import Parent

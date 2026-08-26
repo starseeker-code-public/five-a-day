@@ -53,10 +53,22 @@ Quarters:
 - **Q2**: January–March
 - **Q3**: April–June
 
-Quarterly amount = 3 months × monthly fee × 0.95 (5% discount).
+Quarterly amount = 3 months × monthly fee × 0.95 (5% discount), **then the same discounts a
+monthly student would receive**.
 
-- **No further discounts** for quarterly modality (no sibling, no language cheque).
+- **Sibling discount** applies (percentage, on the discounted quarterly total).
+- **Language cheque** applies **×3** — a quarter covers three months, so it carries three cheques.
+- **June discount** applies to **Q3 only**, since Q3 (due April) covers April–June.
+- **Adult groups** keep the flat rate: quarterly percentage only, no further discounts — matching
+  `calculate_monthly_amount`, which returns the adult base fee untouched.
 - Quarterly students are notified at the **start of each quarter**.
+
+> Changed in **v1.15.0**. Previously only the 5% quarterly discount was applied, so a quarterly
+> student with a sibling discount or a language cheque was billed the full amount — and the
+> `Enrollment` row (which *did* apply them, via `EnrollmentService._apply_discounts`) disagreed with
+> the `Payment` rows generated from it. `PaymentService.calculate_quarterly_amount` now mirrors that
+> method exactly, and its `quarter_due_month` argument — previously unused — is what carries the June
+> discount into Q3.
 - Monthly students are notified **each month**.
 
 ### Special Payments
@@ -114,7 +126,10 @@ base = part_time_monthly_fee (36€)
 **Quarterly (children):**
 ```
 base = 3 × monthly_fee × 0.95
-No further discounts.
+- sibling_discount % if applicable
+- language_cheque_discount × 3 if applicable
+- june_discount if Q3 (due month = April, covers April–June)
+minimum 0.01€
 ```
 
 **Adult monthly:**

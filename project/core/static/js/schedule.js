@@ -45,16 +45,44 @@ document.addEventListener('DOMContentLoaded', function () {
         return `rgb(${Math.round(r*0.55)},${Math.round(g*0.55)},${Math.round(b*0.55)})`;
     }
 
-    function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+    // Escapes quotes too: these values land inside double-quoted style/HTML
+    // attributes, where a bare `"` would close the attribute early.
+    function esc(s) {
+        return String(s)
+            .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+            .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+    }
 
     const DAY_NAMES = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes'];
     const COLS = 2;
     const NUM_ROWS = 3;
+    const FRIDAY = 4;
     const ROW_TIMES = [
         { start: '16:10', end: '17:30' },
         { start: '17:40', end: '19:00' },
         { start: '19:10', end: '20:30' },
     ];
+
+    // Friday runs four overlapping sessions, so each cell carries its own
+    // hours instead of sharing a row band. Mirrors core/schedule_utils.py —
+    // keep the two in sync.
+    //   row 0 · col 0 → infantil     16:30–17:15
+    //   row 0 · col 1 → primaria     16:00–17:25
+    //   row 1 · col 0 → Fun Friday   17:30–18:30  (fixed label, not assignable)
+    //   row 1 · col 1 → adultos      17:30–19:00
+    const FRIDAY_TIMES = {
+        '0-0': { start: '16:30', end: '17:15' },
+        '0-1': { start: '16:00', end: '17:25' },
+        '1-0': { start: '17:30', end: '18:30' },
+        '1-1': { start: '17:30', end: '19:00' },
+    };
+    const FUN_FRIDAY_ROW = 1;
+    const FUN_FRIDAY_COL = 0;
+
+    function cellTimes(row, day, col) {
+        if (day === FRIDAY) return FRIDAY_TIMES[`${row}-${col}`] || null;
+        return ROW_TIMES[row] || null;
+    }
 
     // ── Build schedule grid from server slots ──────────────────
     // All slots start null (empty) — only saved DB slots are populated
@@ -65,26 +93,28 @@ document.addEventListener('DOMContentLoaded', function () {
         schedule[s.row][colPos] = { groupId: s.group_id, start: s.start, end: s.end, row: s.row, day: s.day, col: s.col };
     });
 
-    // Ensure every non-FF slot has an entry so edit mode can show a dropdown
+    // Ensure every real slot has an entry so edit mode can show a dropdown.
+    // Cells with no session (Friday row 2) stay null and render blank.
     for (let row = 0; row < NUM_ROWS; row++) {
         for (let day = 0; day < 5; day++) {
             for (let col = 0; col < COLS; col++) {
-                // Skip Friday rows 1 and 2 (Fun Friday / empty)
-                if (day === 4 && row > 0) continue;
+                const times = cellTimes(row, day, col);
+                if (!times) continue;  // no session in this cell
                 const colPos = day * COLS + col;
                 if (!schedule[row][colPos]) {
-                    const start = day === 4 ? '16:00' : ROW_TIMES[row].start;
-                    const end   = day === 4 ? '17:20' : ROW_TIMES[row].end;
-                    schedule[row][colPos] = { groupId: null, start, end, row, day, col };
+                    schedule[row][colPos] = { groupId: null, start: times.start, end: times.end, row, day, col };
                 }
             }
         }
     }
 
-    // Fun Friday: Friday row 1 spans both cols
-    for (let col = 0; col < COLS; col++) {
-        schedule[1][4 * COLS + col] = { isFunFriday: true };
-    }
+    // Fun Friday occupies ONE Friday cell (17:30–18:30) rather than spanning
+    // the row, so the adjacent cell is free for the 17:30–19:00 adult group.
+    schedule[FUN_FRIDAY_ROW][FRIDAY * COLS + FUN_FRIDAY_COL] = {
+        isFunFriday: true,
+        start: FRIDAY_TIMES[`${FUN_FRIDAY_ROW}-${FUN_FRIDAY_COL}`].start,
+        end: FRIDAY_TIMES[`${FUN_FRIDAY_ROW}-${FUN_FRIDAY_COL}`].end,
+    };
 
     // ── CSRF helper ─────────────────────────────────────────────
     function getCsrf() {
@@ -102,6 +132,14 @@ document.addEventListener('DOMContentLoaded', function () {
         });
     }
 
+    // Friday cells carry their own hours (the row gutter only holds the
+    // Mon–Thu band), so stamp them into the cell itself.
+    function fridayTimeLabel(cell, dayIdx) {
+        if (dayIdx !== FRIDAY || !cell || !cell.start) return '';
+        return '<div style="font-size:10.5px;font-weight:600;color:var(--sched-dim);line-height:1.2;margin-bottom:2px;">'
+            + esc(cell.start) + '–' + esc(cell.end) + '</div>';
+    }
+
     // ── Render a single cell ────────────────────────────────────
     function renderCell(td, cell, row, dayIdx, colIdx) {
         td.innerHTML = '';
@@ -111,7 +149,13 @@ document.addEventListener('DOMContentLoaded', function () {
         if (scheduleEditMode) {
             td.style.background = 'var(--sched-surface)';
             const sel = document.createElement('select');
-            sel.style.cssText = 'width:100%;font-size:0.7rem;padding:4px 2px;border:1px solid var(--sched-border);border-radius:4px;background:#fff;cursor:pointer;';
+            // Theme-aware surface + explicit text colour. `background:#fff` with
+            // no colour was unreadable in dark mode: theme.css rewrites the
+            // white background to a dark surface but the inherited text stayed
+            // dark, so the dropdown rendered dark-on-dark.
+            sel.style.cssText = 'width:100%;font-size:0.7rem;padding:4px 2px;border:1px solid var(--sched-border);'
+                + 'border-radius:4px;background:var(--sched-surface);color:var(--sched-strong);cursor:pointer;';
+            if (dayIdx === FRIDAY) td.insertAdjacentHTML('afterbegin', fridayTimeLabel(cell, dayIdx));
             const blank = document.createElement('option');
             blank.value = '';
             blank.textContent = '— sin grupo —';
@@ -131,14 +175,15 @@ document.addEventListener('DOMContentLoaded', function () {
             });
             td.appendChild(sel);
         } else {
+            const timeLabel = fridayTimeLabel(cell, dayIdx);
             if (cell.groupId && groupById[cell.groupId]) {
                 const g = groupById[cell.groupId];
                 td.style.background = cellBg(g.color);
                 const dot = `<span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:${esc(g.color)};margin-right:3px;vertical-align:middle;flex-shrink:0;"></span>`;
-                td.innerHTML = `<div style="display:flex;align-items:center;justify-content:center;gap:2px;">${dot}<span style="font-size:0.936rem;font-weight:600;color:${esc(cellText(g.color))};">${esc(g.name)}</span></div>`;
+                td.innerHTML = timeLabel + `<div style="display:flex;align-items:center;justify-content:center;gap:2px;">${dot}<span style="font-size:0.936rem;font-weight:600;color:${esc(cellText(g.color))};">${esc(g.name)}</span></div>`;
             } else {
                 // Empty slot — hint to use edit mode
-                td.innerHTML = '<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;opacity:0.35;"><span style="font-size:11.7px;font-weight:600;color:var(--sched-ink);line-height:1.2;">SIN GRUPO</span><span style="font-size:11.7px;color:var(--sched-dim);line-height:1.2;">editar ✏</span></div>';
+                td.innerHTML = timeLabel + '<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;opacity:0.35;"><span style="font-size:11.7px;font-weight:600;color:var(--sched-ink);line-height:1.2;">SIN GRUPO</span><span style="font-size:11.7px;color:var(--sched-dim);line-height:1.2;">editar ✏</span></div>';
             }
         }
     }
@@ -191,16 +236,14 @@ document.addEventListener('DOMContentLoaded', function () {
                 const cell = schedule[row][c];
 
                 if (cell && cell.isFunFriday) {
-                    if (colIdx === 0) {
-                        td.colSpan = COLS;
-                        td.style.background = FF_CLR.bg;
-                        td.style.padding = '8px 4px 4px 4px';
-                        td.innerHTML = '<span style="font-size:0.975rem;font-weight:600;color:' + FF_CLR.text + ';">Fun Friday</span>';
-                        tr.appendChild(td);
-                        c += COLS;
-                    } else {
-                        c++;
-                    }
+                    // Occupies a single cell now, leaving the neighbouring
+                    // Friday cell free for the 17:30–19:00 adult group.
+                    td.style.background = FF_CLR.bg;
+                    td.style.padding = '8px 4px 4px 4px';
+                    td.innerHTML = fridayTimeLabel(cell, dayIdx)
+                        + '<span style="font-size:0.975rem;font-weight:600;color:' + FF_CLR.text + ';">Fun Friday</span>';
+                    tr.appendChild(td);
+                    c++;
                     continue;
                 }
 

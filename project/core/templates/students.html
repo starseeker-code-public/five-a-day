@@ -112,6 +112,12 @@
             <button id="studentTypeFilterBtn" class="px-4 py-2 bg-primary-500 text-white rounded-md hover:bg-primary-600 transition-colors duration-200 flex items-center gap-2" title="Todos los estudiantes">
                 <span class="material-symbols-outlined text-sm" id="studentTypeFilterIcon">groups</span>
             </button>
+<button id="studentGdprFilterBtn" class="px-4 py-2 bg-primary-500 text-white rounded-md hover:bg-primary-600 transition-colors duration-200 flex items-center gap-2" title="RGPD: Todos">
+                <span class="material-symbols-outlined text-sm" id="studentGdprFilterIcon">policy</span>
+            </button>
+            <button id="studentAllergyFilterBtn" class="px-4 py-2 bg-primary-500 text-white rounded-md hover:bg-primary-600 transition-colors duration-200 flex items-center gap-2" title="Alergias: Todos">
+                <span class="material-symbols-outlined text-sm" id="studentAllergyFilterIcon">allergies</span>
+            </button>
 <button id="studentFFFilterBtn" class="px-4 py-2 bg-primary-500 text-white rounded-md hover:bg-primary-600 transition-colors duration-200 flex items-center gap-2" title="Filtrar por Fun Friday">
                 <span class="material-symbols-outlined text-sm" id="studentFFFilterIcon">celebration</span>
             </button>
@@ -143,7 +149,7 @@
             </thead>
             <tbody id="studentsTableBody" class="divide-y divide-neutral-100">
                 {% for student in students %}
-                <tr class="hover:bg-neutral-50 transition-all duration-200" data-name="{{ student.full_name }}" data-date="{{ student.id }}" data-is-adult="{% if student.is_adult %}1{% else %}0{% endif %}" data-has-lc="{% if student.id in language_cheque_ids %}1{% else %}0{% endif %}" data-ff-this="{% if student.id in this_week_ids %}1{% else %}0{% endif %}" data-ff-last="{% if student.id in last_week_ids %}1{% else %}0{% endif %}">
+                <tr class="hover:bg-neutral-50 transition-all duration-200" data-name="{{ student.full_name }}" data-date="{{ student.id }}" data-is-adult="{% if student.is_adult %}1{% else %}0{% endif %}" data-has-lc="{% if student.id in language_cheque_ids %}1{% else %}0{% endif %}" data-ff-this="{% if student.id in this_week_ids %}1{% else %}0{% endif %}" data-ff-last="{% if student.id in last_week_ids %}1{% else %}0{% endif %}" data-gdpr="{% if student.gdpr_signed %}1{% else %}0{% endif %}" data-allergies="{% if student.allergies|striptags|slice:':1' %}1{% else %}0{% endif %}">
                     <td class="px-6 py-4">
                         <div class="flex items-center gap-3">
                             <div class="w-12 h-12 rounded-full flex items-center justify-center" style="background-color:#ede9fe;">
@@ -223,9 +229,14 @@
                         {% endif %}
                     </td>
                     <td class="px-3 py-4 border-l border-neutral-200 bg-neutral-50 text-center">
-                        <a href="{% url 'student_detail' student.id %}" class="inline-flex p-2 text-primary-600 hover:bg-primary-100 rounded-full transition-all duration-200" style="text-decoration:none;" title="Ver estudiante">
-                            <span class="material-symbols-outlined text-base">visibility</span>
-                        </a>
+                        <div style="display:flex;align-items:center;justify-content:center;gap:0.25rem;">
+                            <a href="{% url 'student_detail' student.id %}" class="inline-flex p-2 text-primary-600 hover:bg-primary-100 rounded-full transition-all duration-200" style="text-decoration:none;" title="Ver estudiante">
+                                <span class="material-symbols-outlined text-base">visibility</span>
+                            </a>
+                            <a href="{% url 'student_update' student.id %}" class="inline-flex p-2 text-neutral-500 hover:bg-primary-100 hover:text-primary-600 rounded-full transition-all duration-200" style="text-decoration:none;" title="Editar estudiante">
+                                <span class="material-symbols-outlined text-base">edit</span>
+                            </a>
+                        </div>
                     </td>
                 </tr>
                 {% empty %}
@@ -244,384 +255,9 @@
     </div>
 </div>
 
-<!-- Student Form Modal -->
-<div id="studentModal" class="hidden fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
-    <div class="bg-white rounded-lg max-w-4xl w-full max-h-[90vh] overflow-y-auto">
-        <div class="p-6 border-b border-neutral-200">
-            <div class="flex justify-between items-center">
-                <h3 id="modalTitle" class="text-xl font-semibold text-neutral-800">Nuevo Estudiante</h3>
-                <button id="closeModal" class="p-2 hover:bg-neutral-100 rounded-md transition-all duration-200">
-                    <span class="material-symbols-outlined">close</span>
-                </button>
-            </div>
-        </div>
-        
-        <form id="studentForm" method="post" class="p-6">
-            {% csrf_token %}
-            <input type="hidden" id="studentId" name="student_id" value="">
-            
-            <!-- Personal Information -->
-            <div class="mb-6">
-                <h4 class="text-lg font-medium text-neutral-700 mb-4">Información del Estudiante</h4>
-                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div>
-                        <label for="first_name" class="block text-sm font-medium text-neutral-700 mb-2">Nombre *</label>
-                        <input type="text" id="first_name" name="first_name" required 
-                               class="w-full px-3 py-2 border border-neutral-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500">
-                    </div>
-                    <div>
-                        <label for="last_name" class="block text-sm font-medium text-neutral-700 mb-2">Apellidos *</label>
-                        <input type="text" id="last_name" name="last_name" required 
-                               class="w-full px-3 py-2 border border-neutral-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500">
-                    </div>
-                    <div>
-                        <label for="birth_date" class="block text-sm font-medium text-neutral-700 mb-2">Fecha de Nacimiento *</label>
-                        <input type="date" id="birth_date" name="birth_date" required 
-                               class="w-full px-3 py-2 border border-neutral-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500">
-                    </div>
-                    <div>
-                        <label for="email" class="block text-sm font-medium text-neutral-700 mb-2">Email</label>
-                        <input type="email" id="email" name="email" 
-                               class="w-full px-3 py-2 border border-neutral-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500">
-                    </div>
-                </div>
-            </div>
-
-            <!-- Academic Information -->
-            <div class="mb-6">
-                <h4 class="text-lg font-medium text-neutral-700 mb-4">Información Académica</h4>
-                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div>
-                        <label for="group" class="block text-sm font-medium text-neutral-700 mb-2">Grupo *</label>
-                        <select id="group" name="group" required 
-                                class="w-full px-3 py-2 border border-neutral-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500">
-                            <option value="">Seleccionar grupo...</option>
-                            {% for group in groups %}
-                                <option value="{{ group.id }}">{{ group.group_name }} - {{ group.teacher }}</option>
-                            {% endfor %}
-                        </select>
-                    </div>
-                    <div>
-                        <label for="school" class="block text-sm font-medium text-neutral-700 mb-2">Colegio</label>
-                        <input type="text" id="school" name="school" 
-                               class="w-full px-3 py-2 border border-neutral-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500">
-                    </div>
-                </div>
-            </div>
-
-            <!-- Parents Information -->
-            <div class="mb-6">
-                <h4 class="text-lg font-medium text-neutral-700 mb-4">Padres/Tutores *</h4>
-                <div class="space-y-4">
-                    {% for parent in parents %}
-                    <label class="flex items-center space-x-3 p-3 border border-neutral-200 rounded-md hover:bg-neutral-50 cursor-pointer">
-                        <input type="checkbox" name="parents" value="{{ parent.id }}" class="form-checkbox h-5 w-5 text-primary-600">
-                        <div class="flex-1">
-                            <div class="font-medium text-neutral-800">{{ parent.full_name }}</div>
-                            <div class="text-sm text-neutral-600">{{ parent.email }} • {{ parent.phone }}</div>
-                        </div>
-                    </label>
-                    {% endfor %}
-                </div>
-            </div>
-
-            <!-- Additional Information -->
-            <div class="mb-6">
-                <h4 class="text-lg font-medium text-neutral-700 mb-4">Información Adicional</h4>
-                <div class="space-y-4">
-                    <div>
-                        <label for="allergies" class="block text-sm font-medium text-neutral-700 mb-2">Alergias</label>
-                        <textarea id="allergies" name="allergies" rows="3" 
-                                  class="w-full px-3 py-2 border border-neutral-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500"></textarea>
-                    </div>
-                    <div class="flex items-center space-x-3">
-                        <input type="checkbox" id="gdpr_signed" name="gdpr_signed" class="form-checkbox h-5 w-5 text-primary-600">
-                        <label for="gdpr_signed" class="text-sm font-medium text-neutral-700">GDPR Firmado</label>
-                    </div>
-                    <div class="flex items-center space-x-3">
-                        <input type="checkbox" id="active" name="active" checked class="form-checkbox h-5 w-5 text-primary-600">
-                        <label for="active" class="text-sm font-medium text-neutral-700">Estudiante Activo</label>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Form Actions -->
-            <div class="flex justify-end gap-3 pt-4 border-t border-neutral-200">
-                <button type="button" id="cancelBtn" class="px-6 py-2 text-neutral-600 bg-neutral-100 rounded-md hover:bg-neutral-200 transition-all duration-200">
-                    Cancelar
-                </button>
-                <button type="submit" class="px-6 py-2 bg-primary-500 text-white rounded-md hover:bg-primary-600 transition-all duration-200">
-                    <span id="submitBtnText">Crear Estudiante</span>
-                </button>
-            </div>
-        </form>
-    </div>
-</div>
-
 {% endblock %}
 
 {% block extra_js %}
 {% load static %}
 <script src="{% static 'js/students.js' %}"></script>
 {% endblock %}
-{% comment %}
-    const closeBtn = document.getElementById('closeModal');
-    const cancelBtn = document.getElementById('cancelBtn');
-    const form = document.getElementById('studentForm');
-    const modalTitle = document.getElementById('modalTitle');
-    const submitBtnText = document.getElementById('submitBtnText');
-    const studentIdInput = document.getElementById('studentId');
-
-    // Close modal
-    function closeModal() {
-        modal.classList.add('hidden');
-        resetForm();
-    }
-
-    closeBtn.addEventListener('click', closeModal);
-    cancelBtn.addEventListener('click', closeModal);
-
-    // Close modal when clicking outside
-    modal.addEventListener('click', (e) => {
-        if (e.target === modal) {
-            closeModal();
-        }
-    });
-
-    // Reset form
-    function resetForm() {
-        form.reset();
-        // Reset checkboxes
-        document.querySelectorAll('input[name="parents"]').forEach(cb => cb.checked = false);
-        document.getElementById('active').checked = true;
-    }
-
-    // Edit student function
-    function editStudent(studentId) {
-        fetch(`/students/${studentId}/`)
-            .then(response => response.json())
-            .then(data => {
-                // Populate form with student data
-                document.getElementById('first_name').value = data.first_name;
-                document.getElementById('last_name').value = data.last_name;
-                document.getElementById('birth_date').value = data.birth_date;
-                document.getElementById('email').value = data.email || '';
-                document.getElementById('school').value = data.school || '';
-                document.getElementById('group').value = data.group;
-                document.getElementById('allergies').value = data.allergies || '';
-                document.getElementById('gdpr_signed').checked = data.gdpr_signed;
-                document.getElementById('active').checked = data.active;
-                
-                // Set parent checkboxes
-                document.querySelectorAll('input[name="parents"]').forEach(cb => {
-                    cb.checked = data.parents.includes(parseInt(cb.value));
-                });
-
-                // Update modal
-                modalTitle.textContent = 'Editar Estudiante';
-                submitBtnText.textContent = 'Actualizar Estudiante';
-                studentIdInput.value = studentId;
-                form.action = `/students/${studentId}/update/`;
-                modal.classList.remove('hidden');
-            })
-            .catch(error => {
-                console.error('Error loading student data:', error);
-                alert('Error al cargar los datos del estudiante');
-            });
-    }
-
-    // ==================== SEARCH & SORT ====================
-    const studentSearchBtn = document.getElementById('studentSearchBtn');
-    const studentSearchInput = document.getElementById('studentSearchInput');
-    const studentSortBtn = document.getElementById('studentSortBtn');
-    const studentSortIcon = document.getElementById('studentSortIcon');
-    const studentsTableBody = document.getElementById('studentsTableBody');
-
-    // Each row has three independent visibility flags: searchHidden, ffHidden, typeHidden
-    // A row is shown only if no flag is set.
-    function applyVisibility() {
-        studentsTableBody.querySelectorAll('tr[data-name]').forEach(row => {
-            row.style.display = (row._searchHidden || row._ffHidden || row._typeHidden) ? 'none' : '';
-        });
-    }
-
-    // Search toggle
-    studentSearchBtn.addEventListener('click', () => {
-        const visible = studentSearchInput.style.display !== 'none';
-        if (visible) {
-            studentSearchInput.style.display = 'none';
-            studentSearchInput.value = '';
-            studentsTableBody.querySelectorAll('tr[data-name]').forEach(r => { r._searchHidden = false; });
-            applyVisibility();
-        } else {
-            studentSearchInput.style.display = 'block';
-            studentSearchInput.focus();
-        }
-    });
-
-    studentSearchInput.addEventListener('input', function() {
-        const q = this.value.toLowerCase().trim();
-        studentsTableBody.querySelectorAll('tr[data-name]').forEach(row => {
-            row._searchHidden = q !== '' && !row.dataset.name.toLowerCase().includes(q);
-        });
-        applyVisibility();
-    });
-
-    // Sort — cycles: date ↑ → date ↓ → name A→Z → name Z→A → repeat
-    let studentSortState = 0;
-    const studentSortCfg = [
-        { field: 'date', dir: 'asc',  icon: 'calendar_month', title: 'Fecha ↑' },
-        { field: 'date', dir: 'desc', icon: 'calendar_month', title: 'Fecha ↓' },
-        { field: 'name', dir: 'asc',  icon: 'sort_by_alpha',  title: 'Nombre A→Z' },
-        { field: 'name', dir: 'desc', icon: 'sort_by_alpha',  title: 'Nombre Z→A' },
-    ];
-
-    studentSortBtn.addEventListener('click', () => {
-        studentSortState = (studentSortState + 1) % 4;
-        const cfg = studentSortCfg[studentSortState];
-        studentSortIcon.textContent = cfg.icon;
-        studentSortBtn.title = cfg.title;
-        const rows = Array.from(studentsTableBody.querySelectorAll('tr[data-name]'));
-        rows.sort((a, b) => {
-            if (cfg.field === 'name') {
-                const na = a.dataset.name.toLowerCase(), nb = b.dataset.name.toLowerCase();
-                return cfg.dir === 'asc' ? na.localeCompare(nb) : nb.localeCompare(na);
-            } else {
-                const da = parseInt(a.dataset.date), db = parseInt(b.dataset.date);
-                return cfg.dir === 'asc' ? da - db : db - da;
-            }
-        });
-        rows.forEach(row => studentsTableBody.appendChild(row));
-    });
-
-    // ==================== FUN FRIDAY ====================
-    function getCsrf() {
-        return document.cookie.split(';').map(c=>c.trim()).find(c=>c.startsWith('csrftoken='))?.split('=')[1]||'';
-    }
-
-    // Returns sort priority 1(green)→2(yellow✓)→3(yellow✗)→4(grey)
-    function getFFCategory(row) {
-        const t = row.dataset.ffThis === '1', l = row.dataset.ffLast === '1';
-        if (t && !l) return 1;
-        if (t && l)  return 2;
-        if (!t && l) return 3;
-        return 4;
-    }
-
-    function updateFFIcon(btn, isThis, isLast) {
-        const span = btn.querySelector('.ff-icon');
-        const row = btn.closest('tr');
-        row.dataset.ffThis = isThis ? '1' : '0';
-        if (isThis && !isLast)       { span.textContent = 'check_circle'; span.style.color = '#22c55e'; }
-        else if (isThis && isLast)   { span.textContent = 'check_circle'; span.style.color = '#f59e0b'; }
-        else if (!isThis && isLast)  { span.textContent = 'cancel';       span.style.color = '#f59e0b'; }
-        else                         { span.textContent = 'cancel';       span.style.color = '#d1d5db'; }
-    }
-
-    document.querySelectorAll('.ff-toggle-btn').forEach(btn => {
-        btn.addEventListener('click', function() {
-            const studentId = this.dataset.studentId;
-            fetch(`/api/students/${studentId}/fun-friday/toggle/`, {
-                method: 'POST',
-                headers: {'Content-Type':'application/json','X-CSRFToken':getCsrf()},
-                body: '{}',
-            }).then(r=>r.json()).then(data => {
-                if (data.success) {
-                    updateFFIcon(this, data.is_this_week, data.was_last_week);
-                    applyFFFilter();
-                }
-            });
-        });
-    });
-
-    // FF Filter: 0=all → 1=not-in-this-week → 2=in-this-week → 0
-    const studentFFFilterBtn = document.getElementById('studentFFFilterBtn');
-    const studentFFFilterIcon = document.getElementById('studentFFFilterIcon');
-    let ffFilterState = 0;
-
-    function applyFFFilter() {
-        studentsTableBody.querySelectorAll('tr[data-name]').forEach(row => {
-            const isThis = row.dataset.ffThis === '1';
-            row._ffHidden = (ffFilterState === 1 && isThis) || (ffFilterState === 2 && !isThis);
-        });
-        applyVisibility();
-    }
-
-    const ffFilterCfg = [
-        { icon: 'celebration',   title: 'Filtrar por Fun Friday',          bg: '',        color: '' },
-        { icon: 'cancel',        title: 'Mostrando: Sin FF esta semana',   bg: '#6b7280', color: '#ffffff' },
-        { icon: 'check_circle',  title: 'Mostrando: Con FF esta semana',   bg: '#22c55e', color: '#ffffff' },
-    ];
-
-    studentFFFilterBtn.addEventListener('click', () => {
-        ffFilterState = (ffFilterState + 1) % 3;
-        const cfg = ffFilterCfg[ffFilterState];
-        studentFFFilterIcon.textContent = cfg.icon;
-        studentFFFilterBtn.title = cfg.title;
-        studentFFFilterBtn.style.background = cfg.bg;
-        studentFFFilterBtn.style.color = cfg.color;
-        applyFFFilter();
-    });
-
-    // ==================== STUDENT TYPE FILTER (All / Children / Adults) ====================
-    const studentTypeFilterBtn = document.getElementById('studentTypeFilterBtn');
-    const studentTypeFilterIcon = document.getElementById('studentTypeFilterIcon');
-    let typeFilterState = 0; // 0=all, 1=children, 2=adults
-
-    const typeFilterCfg = [
-        { icon: 'groups',       title: 'Todos los estudiantes',   bg: '', color: '' },
-        { icon: 'child_care',   title: 'Solo niños',              bg: '#3b82f6', color: '#ffffff' },
-        { icon: 'person',       title: 'Solo adultos',            bg: '#f59e0b', color: '#ffffff' },
-        { icon: 'translate',    title: 'Cheque idioma',            bg: '#059669', color: '#ffffff' },
-    ];
-
-    function applyTypeFilter() {
-        studentsTableBody.querySelectorAll('tr[data-name]').forEach(row => {
-            const isAdult = row.dataset.isAdult === '1';
-            const hasLC = row.dataset.hasLc === '1';
-            if (typeFilterState === 0) row._typeHidden = false;
-            else if (typeFilterState === 1) row._typeHidden = isAdult;
-            else if (typeFilterState === 2) row._typeHidden = !isAdult;
-            else if (typeFilterState === 3) row._typeHidden = !hasLC;
-        });
-        applyVisibility();
-    }
-
-    studentTypeFilterBtn.addEventListener('click', () => {
-        typeFilterState = (typeFilterState + 1) % 4;
-        const cfg = typeFilterCfg[typeFilterState];
-        studentTypeFilterIcon.textContent = cfg.icon;
-        studentTypeFilterBtn.title = cfg.title;
-        studentTypeFilterBtn.style.background = cfg.bg;
-        studentTypeFilterBtn.style.color = cfg.color;
-        applyTypeFilter();
-    });
-
-    // Form validation
-    form.addEventListener('submit', (e) => {
-        const selectedParents = document.querySelectorAll('input[name="parents"]:checked');
-        if (selectedParents.length === 0) {
-            e.preventDefault();
-            alert('Debe seleccionar al menos un padre/tutor para el estudiante.');
-            return;
-        }
-    });
-
-    // ==================== NEW STUDENT DROPDOWN ====================
-    const newStudentBtn = document.getElementById('newStudentBtn');
-    const newStudentMenu = document.getElementById('newStudentMenu');
-    const newStudentArrow = document.getElementById('newStudentArrow');
-
-    newStudentBtn.addEventListener('click', () => {
-        const open = !newStudentMenu.classList.contains('hidden');
-        newStudentMenu.classList.toggle('hidden');
-        newStudentArrow.textContent = open ? 'expand_more' : 'expand_less';
-    });
-
-    document.addEventListener('click', (e) => {
-        if (!document.getElementById('newStudentDropdown').contains(e.target)) {
-            newStudentMenu.classList.add('hidden');
-            newStudentArrow.textContent = 'expand_more';
-        }
-    });
-{% endcomment %}

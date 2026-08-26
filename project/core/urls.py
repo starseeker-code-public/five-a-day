@@ -16,6 +16,7 @@ from core.views import (
     create_checkout_link,
     # Todos
     create_todo,
+    export_backlog_tasks,
     # Google Sheets export (v1.2)
     export_to_sheets,
     fun_friday_view,
@@ -128,6 +129,7 @@ urlpatterns = [
     path("api/testing/seed/", api_seed_database, name="api_seed_database"),
     path("api/testing/backlog/create/", api_create_backlog_task, name="api_create_backlog_task"),
     path("api/testing/backlog/<int:task_id>/update/", api_update_backlog_task, name="api_update_backlog_task"),
+    path("api/testing/backlog/export/", export_backlog_tasks, name="export_backlog_tasks"),
     path("api/testing/error-email/toggle/", api_toggle_error_email, name="api_toggle_error_email"),
     path("api/testing/ready/", api_mark_ready, name="api_mark_ready"),
     # Error test pages

@@ -9,14 +9,14 @@ The `students` app owns all people-related models: students, parents, teachers, 
 | **Teacher** | `teachers` | first_name, last_name, email (unique), phone, active, admin, user (OneToOne → `auth.User`), two_factor_secret / _enabled / _backup_codes (v1.13) | Has many Groups; linked to a Django auth user for login |
 | **Group** | `groups` | group_name (unique), color (hex), max_students (v1.1 capacity), active | FK to Teacher; has many Students |
 | **Parent** | `parents` | first_name, last_name, dni (unique), phone, email, iban, sms_opt_in (v1.8) | M2M to Students via StudentParent |
-| **Student** | `students` | first_name, last_name, birth_date, gender (m/f), is_adult, school, allergies, gdpr_signed, active, is_waiting / waiting_since (v1.1), withdrawal_date / withdrawal_reason | FK to Group; M2M to Parents |
+| **Student** | `students` | first_name, last_name, birth_date (nullable, v1.15), gender (m/f), is_adult, school, allergies, gdpr_signed, active, is_waiting / waiting_since (v1.1), withdrawal_date / withdrawal_reason, course / observations / waiting_contact_name / waiting_contact_phone (v1.15) | FK to Group (nullable, v1.15); M2M to Parents |
 | **StudentParent** | `student_parents` | student, parent | Through table for Student-Parent M2M |
 | **ParentSessionToken** | `parent_session_tokens` | parent, token (hashed), expires_at, used_at — in `parent_portal_models.py` (v1.9) | FK to Parent; single-use magic-link token for the parent portal |
 
 ### Key Properties
 
 - `Student.full_name` — "{first_name} {last_name}"
-- `Student.age` — calculated from birth_date
+- `Student.age` — calculated from birth_date; returns `None` when no birth date is on record (waiting-list entries may only have a name and a phone number)
 - `Student.gender` — 'm' or 'f' (used in enrollment confirmation emails)
 - `Parent.full_name` — "{first_name} {last_name}"
 - `Teacher.full_name` — "{first_name} {last_name}"
@@ -37,7 +37,8 @@ Dev environment (`DJANGO_ENV=development`) keeps using the legacy env-var basic-
 ## Forms
 
 - **StudentForm** — ModelForm for Student (first_name, last_name, birth_date, school, allergies, gdpr_signed, group). Validates birth_date is not in the future.
-- **ParentForm** — ModelForm for Parent (first_name, last_name, dni, phone, email, iban). Validates DNI minimum 8 characters.
+- **WaitingListForm** (v1.15) — deliberately minimal form for taking a waiting-list entry over the phone. Only the student's name and a contact phone are required; parent name, `course`, `age` and `observations` are optional, and the preferred group may be left blank. The contact is stored on the Student (`waiting_contact_*`) rather than as a `Parent`, because `Parent` requires a unique DNI that nobody has to hand during a call. An `age` is converted to an approximate `birth_date` so the age column has something to show.
+- **ParentForm** — (v1.15: DNI uniqueness is deliberately NOT enforced at form level, so `ParentCreateView` can reuse an existing parent when a second sibling is enrolled instead of showing a raw uniqueness error)  ModelForm for Parent (first_name, last_name, dni, phone, email, iban). Validates DNI minimum 8 characters.
 - **ParentFormSet** — Inline formset for StudentParent through model.
 
 ## Admin

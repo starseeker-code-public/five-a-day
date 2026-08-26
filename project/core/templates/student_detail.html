@@ -223,9 +223,17 @@
     </div>
 
     <div class="bg-white rounded-lg shadow-lg p-6">
-        <h3 class="text-lg font-semibold text-neutral-800 mb-4 flex items-center gap-2">
-            <span class="material-symbols-outlined">payments</span>Pagos del Estudiante
-        </h3>
+        <div class="flex items-center justify-between flex-wrap gap-3 mb-4">
+            <h3 class="text-lg font-semibold text-neutral-800 flex items-center gap-2">
+                <span class="material-symbols-outlined">payments</span>Pagos del Estudiante
+            </h3>
+            <a href="{% url 'student_payments_pdf' student.id %}"
+               class="inline-flex items-center gap-2 px-4 py-2 bg-primary-500 text-white rounded-md hover:bg-primary-600 transition-colors duration-200 text-sm font-semibold"
+               style="text-decoration:none;"
+               title="Descargar el historial de pagos en PDF (cuándo y cómo se pagó)">
+                <span class="material-symbols-outlined text-[18px]">picture_as_pdf</span> Historial en PDF
+            </a>
+        </div>
         <div class="overflow-x-auto">
             <table class="w-full text-sm">
                 <thead class="bg-primary-50">

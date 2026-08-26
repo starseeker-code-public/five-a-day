@@ -2,6 +2,7 @@ import json
 import logging
 from decimal import Decimal
 
+from django.core.exceptions import ValidationError
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404, render
 from django.views.decorators.http import require_http_methods
@@ -65,11 +66,20 @@ def update_site_config(request):
             if field in data:
                 setattr(config, field, Decimal(str(data[field])))
 
+        # Model.save() skips validators, so a negative fee (or a percentage over
+        # 100) used to persist straight through and quietly break every price.
+        config.full_clean()
         config.save()
 
         HistoryLog.log("config_updated", "Precios o descuentos actualizados", icon="tune")
 
         return JsonResponse({"success": True, "message": "Configuración actualizada correctamente"})
+    except ValidationError as e:
+        # Django's own field messages — written to be shown to a user.
+        return JsonResponse(
+            {"success": False, "message": " ".join(m for msgs in e.message_dict.values() for m in msgs)},
+            status=400,
+        )
     except Exception:
         logger.exception("Error updating site configuration")
         return JsonResponse(
@@ -110,12 +120,19 @@ def create_teacher(request):
             admin=False,
         )
 
+        # Create the linked auth.User with an unusable password. Without this a
+        # teacher created here had no login identity at all: they could not sign
+        # in AND `/password-reset/` silently sent nothing (no User matched the
+        # address), so the account was unreachable. They now activate the same
+        # way seeded teachers do — via the password-reset flow.
+        teacher.ensure_user()
+
         HistoryLog.log("teacher_created", f"Profesor creado: {teacher.full_name}", icon="person_add")
 
         return JsonResponse(
             {
                 "success": True,
-                "message": "Profesor creado correctamente",
+                "message": "Profesor creado. Debe activar su cuenta desde “¿Olvidaste tu contraseña?”.",
                 "teacher": {
                     "id": teacher.id,
                     "full_name": teacher.full_name,
@@ -265,7 +282,8 @@ def language_cheque_students(request):
             {
                 "id": s.id,
                 "full_name": s.full_name,
-                "birth_date": s.birth_date.strftime("%Y-%m-%d"),
+                # birth_date is optional (waiting-list entries may not have one).
+                "birth_date": s.birth_date.strftime("%Y-%m-%d") if s.birth_date else "",
                 "group": s.group.group_name if s.group else "",
                 "parent_name": parent.full_name if parent else "",
                 "parent_dni": parent.dni if parent else "",

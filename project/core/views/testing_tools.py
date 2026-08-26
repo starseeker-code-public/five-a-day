@@ -12,7 +12,7 @@ from datetime import datetime
 import django
 from django.conf import settings
 from django.core.mail import send_mail
-from django.http import JsonResponse
+from django.http import HttpResponse, JsonResponse
 from django.shortcuts import render
 from django.views.decorators.http import require_http_methods
 
@@ -200,6 +200,77 @@ def api_create_backlog_task(request):
         )
     except json.JSONDecodeError:
         return JsonResponse({"success": False, "message": "JSON invalido."}, status=400)
+    except Exception:
+        logger.exception("Error creating backlog task")
+        return JsonResponse(
+            {"success": False, "message": "No se pudo crear la tarea. Revisa los datos."},
+            status=500,
+        )
+
+
+@qa_access_required
+@require_http_methods(["GET"])
+def export_backlog_tasks(request):
+    """Download the backlog as JSON or CSV.
+
+    `?format=csv` (default `json`) and `?scope=active|all` (default `active`,
+    meaning everything not yet done) so the export matches what the dashboard
+    is showing. Every field on the task is included.
+    """
+    export_format = (request.GET.get("format") or "json").lower()
+    scope = (request.GET.get("scope") or "active").lower()
+
+    tasks = BacklogTask.objects.all().order_by("-created_at")
+    if scope != "all":
+        tasks = tasks.exclude(status="done")
+
+    rows = [
+        {
+            "id": t.id,
+            "title": t.title,
+            "description": t.description,
+            "priority": t.priority,
+            "priority_display": t.get_priority_display(),
+            "status": t.status,
+            "status_display": t.get_status_display(),
+            "created_by": t.created_by,
+            "created_at": t.created_at.isoformat(),
+            "updated_at": t.updated_at.isoformat(),
+        }
+        for t in tasks
+    ]
+
+    stamp = datetime.now().strftime("%Y%m%d-%H%M")
+    filename = f"backlog-{scope}-{stamp}"
+
+    if export_format == "csv":
+        import csv
+        import io
+
+        buffer = io.StringIO()
+        fieldnames = list(rows[0].keys()) if rows else ["id", "title", "description", "priority", "status"]
+        writer = csv.DictWriter(buffer, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+        # BOM so Excel opens the accented Spanish text correctly.
+        response = HttpResponse("﻿" + buffer.getvalue(), content_type="text/csv; charset=utf-8")
+        response["Content-Disposition"] = f'attachment; filename="{filename}.csv"'
+        return response
+
+    payload = {
+        "exported_at": datetime.now().isoformat(),
+        "app_version": settings.APP_VERSION,
+        "environment": settings.ENVIRONMENT,
+        "scope": scope,
+        "count": len(rows),
+        "tasks": rows,
+    }
+    response = HttpResponse(
+        json.dumps(payload, indent=2, ensure_ascii=False),
+        content_type="application/json; charset=utf-8",
+    )
+    response["Content-Disposition"] = f'attachment; filename="{filename}.json"'
+    return response
 
 
 @qa_access_required
@@ -224,6 +295,14 @@ def api_update_backlog_task(request, task_id):
         return JsonResponse({"success": True})
     except BacklogTask.DoesNotExist:
         return JsonResponse({"success": False, "message": "Tarea no encontrada."}, status=404)
+    except json.JSONDecodeError:
+        return JsonResponse({"success": False, "message": "JSON invalido."}, status=400)
+    except Exception:
+        logger.exception("Error updating backlog task %d", int(task_id))
+        return JsonResponse(
+            {"success": False, "message": "No se pudo actualizar la tarea."},
+            status=500,
+        )
 
 
 def _email_task_done(task):

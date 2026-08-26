@@ -87,11 +87,16 @@
 
 {% block extra_js %}
 {% load static %}
+{# `json_script` escapes <, >, & so a group or student name containing      #}
+{# `</script>` cannot break out of the block. Never inline JSON with |safe. #}
+{{ groups_json|json_script:"schedule-groups" }}
+{{ students_json|json_script:"schedule-students" }}
+{{ slots_json|json_script:"schedule-slots" }}
 <script>
 window.SCHEDULE_CONFIG = {
-    groups: {{ groups_json|safe }},
-    students: {{ students_json|safe }},
-    slots: {{ slots_json|safe }}
+    groups: JSON.parse(document.getElementById('schedule-groups').textContent),
+    students: JSON.parse(document.getElementById('schedule-students').textContent),
+    slots: JSON.parse(document.getElementById('schedule-slots').textContent)
 };
 </script>
 <script src="{% static 'js/schedule.js' %}"></script>

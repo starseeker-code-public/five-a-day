@@ -20,7 +20,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # NOTA: Usa `make version x.y.z` para actualizar ambos sitios a la vez:
 #   - pyproject.toml (campo version)
 #   - README.md (badge y tabla de versiones — gestionado por la skill update-readme)
-APP_VERSION = os.getenv("APP_VERSION", "1.14.8")
+APP_VERSION = os.getenv("APP_VERSION", "1.15.0")
 
 # ============================================================================
 # SECURITY SETTINGS
@@ -97,6 +97,23 @@ SESSION_COOKIE_SAMESITE = os.getenv("SESSION_COOKIE_SAMESITE", "Lax")
 SUPPORT_EMAIL = os.getenv("SUPPORT_EMAIL", None)
 
 # ============================================================================
+# RATE LIMITING
+# ============================================================================
+# How many reverse proxies sit in front of the app. `core.rate_limit` reads the
+# client IP this many hops from the RIGHT of X-Forwarded-For, because a proxy
+# APPENDS what it saw — everything to the left of our own hops is attacker
+# controlled. Cloud Run and a single nginx are both 1. Use 0 when the app is
+# reached directly, so X-Forwarded-For is ignored entirely.
+TRUSTED_PROXY_COUNT = int(os.getenv("TRUSTED_PROXY_COUNT", "1"))
+
+# The rate limiter is backed by the cache. LocMemCache (the default) is
+# PER-PROCESS, so with Gunicorn's 4 workers the effective limit is 4x what is
+# configured, and on Cloud Run it multiplies again per instance. Point
+# CACHE_URL at the Redis that Celery already uses to make the limit real.
+if cache_url := os.getenv("CACHE_URL", "").strip():
+    CACHES = {"default": {"BACKEND": "django.core.cache.backends.redis.RedisCache", "LOCATION": cache_url}}
+
+# ============================================================================
 # CSRF CONFIGURATION
 # ============================================================================
 CSRF_COOKIE_HTTPONLY = os.getenv("CSRF_COOKIE_HTTPONLY", "True" if not DEBUG else "False").lower() == "true"
@@ -117,7 +134,19 @@ INSTALLED_APPS = [  # https://www.djangoproject.com/
     # https://django-storages.readthedocs.io/en/latest/
     # https://github.com/jazzband/django-redis
     # https://django-environ.readthedocs.io/en/latest/
-    "gsheets",  # https://pypi.org/project/django-gsheets/
+    #
+    # `gsheets` (django-gsheets) is deliberately NOT enabled. Nothing imports it
+    # today — the Sheets export uses `gspread` directly via
+    # core.services.google_sheets_service — and having it in INSTALLED_APPS made
+    # `makemigrations --check` fail: DEFAULT_AUTO_FIELD=BigAutoField wants an
+    # AlterField migration written into the package's own site-packages
+    # directory, which is not a file we can commit.
+    #
+    # The dependency stays in pyproject.toml on purpose (planned future use).
+    # To turn it back on: add "gsheets" below AND give it an AppConfig with
+    # `default_auto_field = "django.db.models.AutoField"` so the drift doesn't
+    # return. Its existing migrations are already applied, so the table is
+    # still there and re-enabling needs no data work.
     "core",
     "students",
     "billing",

@@ -132,14 +132,16 @@ class TestRateLimitEdgeCases:
         req.META["REMOTE_ADDR"] = "3.3.3.3"
         assert _client_ip(req) == "3.3.3.3"
 
-    def test_client_ip_extracts_first_forwarded(self):
+    def test_client_ip_extracts_the_proxy_appended_hop(self):
+        """Rightmost hop with one trusted proxy — see test_rate_limit.py for why
+        the leftmost entry is not trustworthy."""
         from django.http import HttpRequest
 
         from core.rate_limit import _client_ip
 
         req = HttpRequest()
         req.META["HTTP_X_FORWARDED_FOR"] = "1.1.1.1, 2.2.2.2"
-        assert _client_ip(req) == "1.1.1.1"
+        assert _client_ip(req) == "2.2.2.2"
 
     def test_client_ip_unknown_when_nothing_set(self):
         from django.http import HttpRequest

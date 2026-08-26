@@ -38,17 +38,32 @@ class TestExpenseModel:
         with pytest.raises(ValidationError):
             e.full_clean()
 
-    def test_recurring_day_out_of_range(self):
+    @pytest.mark.parametrize("day", [0, 32, 99])
+    def test_recurring_day_out_of_range(self, day):
         e = Expense(
             description="X",
             category="other",
             amount=Decimal("1.00"),
             expense_date=date(2026, 3, 1),
             is_recurring=True,
-            recurring_day=30,
+            recurring_day=day,
         )
         with pytest.raises(ValidationError):
             e.full_clean()
+
+    @pytest.mark.parametrize("day", [1, 15, 28, 29, 30, 31])
+    def test_recurring_day_accepts_the_whole_month(self, day):
+        """Days 29-31 are allowed: materialisation clamps them to the month's
+        last day, so 31 reads as "el último día de cada mes"."""
+        e = Expense(
+            description="X",
+            category="other",
+            amount=Decimal("1.00"),
+            expense_date=date(2026, 3, 1),
+            is_recurring=True,
+            recurring_day=day,
+        )
+        e.full_clean()  # must not raise
 
     def test_default_frequency_is_monthly(self):
         e = Expense.objects.create(

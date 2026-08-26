@@ -446,8 +446,21 @@ class TestPwaCacheExclusions:
         response = client.get(reverse("service_worker"))
         body = response.content.decode()
         assert "function isCacheable" in body
-        # login is safe to cache (public); dashboard is not.
-        assert '"/login/"' in body
+        # Only session-free paths are cacheable.
+        assert '"/static/"' in body
+        assert '"/manifest.webmanifest"' in body
+
+    def test_login_page_is_not_cached(self, client):
+        """/login/ must NOT be cache-first.
+
+        It looks public, but it carries a CSRF token and Django rotates the CSRF
+        secret on login — a cached copy hands back a token minted against the
+        old secret and the next sign-in 403s. The Cache API ignores
+        Cache-Control, so the server's `no-store` cannot prevent it.
+        """
+        body = client.get(reverse("service_worker")).content.decode()
+        cacheable = body.split("function isCacheable")[1].split("}")[0]
+        assert 'path === "/login/"' not in cacheable
 
 
 # ── Report PDF service extraction ───────────────────────────────────────────

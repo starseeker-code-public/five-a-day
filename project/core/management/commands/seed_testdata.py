@@ -23,6 +23,7 @@ from decimal import Decimal
 from django.core.management.base import BaseCommand
 from django.db import transaction
 
+from billing.constants import ENROLLMENT_TYPE_DISPLAY_ES
 from billing.models import (
     Enrollment,
     EnrollmentType,
@@ -340,26 +341,26 @@ class Command(BaseCommand):
     # ------------------------------------------------------------------
 
     def _seed_enrollment_types(self):
-        specs = {
+        # display_name is parent-facing (it appears in the matriculation and
+        # welcome emails), so it must be Spanish — see ENROLLMENT_TYPE_DISPLAY_ES.
+        amounts = {
             "monthly": (
-                "Monthly",
                 self.config.full_time_monthly_fee,
                 self.config.part_time_monthly_fee,
             ),
             "quarterly": (
-                "Quarterly",
                 self.config.full_time_monthly_fee * 3,
                 self.config.part_time_monthly_fee * 3,
             ),
             "adults": (
-                "Adults",
                 self.config.adult_group_monthly_fee,
                 self.config.adult_group_monthly_fee,
             ),
         }
         for name in ENROLLMENT_TYPE_NAMES:
-            display, ft, pt = specs[name]
-            EnrollmentType.objects.get_or_create(
+            ft, pt = amounts[name]
+            display = ENROLLMENT_TYPE_DISPLAY_ES.get(name, name)
+            et, created = EnrollmentType.objects.get_or_create(
                 name=name,
                 defaults={
                     "display_name": display,
@@ -367,6 +368,10 @@ class Command(BaseCommand):
                     "base_amount_part_time": pt,
                 },
             )
+            # Repair rows seeded before the labels were translated.
+            if not created and et.display_name != display:
+                et.display_name = display
+                et.save(update_fields=["display_name", "updated_at"])
         self.stdout.write(f"  {len(ENROLLMENT_TYPE_NAMES)} enrollment types.")
 
     def _seed_teachers(self):

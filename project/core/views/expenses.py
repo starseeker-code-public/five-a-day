@@ -95,7 +95,10 @@ def create_expense(request):
                 recurring_day = int(recurring_day_raw)
             except ValueError:
                 recurring_day = 1
-            recurring_day = max(1, min(recurring_day, 28))
+            # 1-31. Days past the end of a short month are clamped to that
+            # month's last day at materialisation time, so 31 behaves as
+            # "last day of the month" (this used to be silently capped at 28).
+            recurring_day = max(1, min(recurring_day, 31))
             if recurring_frequency == "yearly":
                 try:
                     recurring_month = int(request.POST.get("recurring_month") or 1)
