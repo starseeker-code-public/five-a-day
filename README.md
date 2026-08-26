@@ -20,7 +20,7 @@ Built to centralize student records, automate billing cycles, and streamline par
 ### Project Status
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v1.15.1-brightgreen?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-v1.15.2-brightgreen?style=flat-square" alt="Version">
   &nbsp;|&nbsp;
   <a href="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml?query=branch%3Amain"><img src="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml/badge.svg?branch=main&style=flat-square" alt="CI main"></a>
   &nbsp;|&nbsp;
@@ -41,9 +41,9 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 | Version | Date | Description |
 |---------|------|-------------|
-| **v1.15.1** | 2026-08-27 | Portable test paths, gunicorn bound raised to <27 |
+| **v1.15.2** | 2026-08-27 | LF line-ending normalisation, unblocks the release PR |
+| v1.15.1 | 2026-08-27 | Portable test paths, gunicorn bound raised to <27 |
 | v1.15.0 | 2026-08-27 | Security + billing audit, 16 backlog items |
-| v1.14.8 | 2026-08-21 | SameSite fix — unbreaks Google OAuth in production |
 
 ---
 
@@ -150,8 +150,35 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 ## Version History & Roadmap
 
-<details id="v1151" open>
-<summary><strong>v1.15.1 — Portable test paths + dependency bump (current)</strong></summary>
+<details id="v1152" open>
+<summary><strong>v1.15.2 — LF line-ending normalisation (current)</strong></summary>
+
+**Repository hygiene**
+
+- `.gitattributes` only ever managed `*.sh`, so every other text file took whatever
+  line ending the committing checkout happened to use. v1.15.0 was authored on Windows
+  and committed **CRLF** into `DEPLOYMENT.md`, the four app READMEs, `settings.py` and
+  ~25 other files that `main` still held as **LF**. Git compares line by line, so every
+  line of those files read as modified on both sides at once — which is why the
+  `testing → main` release PR (#40) conflicted across whole files rather than at the
+  handful of lines that actually changed.
+- `.gitattributes` now sets `* text=auto eol=lf`, with images and other binaries pinned
+  `binary` so auto-detection can never rewrite them. The tree was renormalised with
+  `git add --renormalize .`; the only files still holding `0x0D` bytes are the PNG/ICO
+  assets, where those bytes are image data. Working-tree endings on Windows are
+  unaffected for editing.
+
+**Testing**
+
+- `TestSingletonsResistDeletion.test_instance_delete_returns_djangos_tuple` called
+  `site_config.delete()` *inside* its `assert`. Under `python -O` assertions are stripped
+  and the deletion the test exists to exercise would vanish with them; the call now
+  happens on its own line. Flagged by CodeQL on PR #40.
+
+</details>
+
+<details id="v1151">
+<summary><strong>v1.15.1 — Portable test paths + dependency bump</strong></summary>
 
 **Testing**
 

@@ -1,2 +1,25 @@
-# Force LF line endings for shell scripts (prevents CRLF issues in Docker containers)
+# Normalise every text file to LF *in the repository*.
+#
+# Without this only *.sh was managed, so a Windows checkout was free to commit
+# CRLF. v1.15.0 did exactly that: DEPLOYMENT.md, the four READMEs, settings.py
+# and ~25 other files landed on `development` with CRLF while `main` still held
+# the LF originals. Git then sees every single line as modified, which is what
+# made the testing -> main PR (#40) conflict across whole files at once.
+#
+# `text=auto` lets Git detect text vs binary (binaries contain NUL bytes and are
+# left untouched); `eol=lf` pins the in-repo form. Working-tree endings on
+# Windows are unaffected for editing purposes.
+* text=auto eol=lf
+
+# Shell scripts must stay LF or they break inside the Docker containers.
 *.sh text eol=lf
+
+# Explicitly binary — never touch these, regardless of what auto-detection thinks.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.woff binary
+*.woff2 binary
