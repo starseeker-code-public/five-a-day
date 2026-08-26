@@ -1,6 +1,6 @@
 # comms — Communications
 
-The `comms` app owns all email sending logic: the EmailService class, 12+ convenience email functions, Celery async tasks, and management commands for sending emails.
+The `comms` app owns all outbound communication: the EmailService class, the Twilio SmsService, 12 convenience email functions, 12 Celery async tasks, and management commands for sending emails and for wrapping the Beat tasks.
 
 **No database models** — all state lives in the other apps. Comms is purely a service layer for communications.
 
@@ -14,7 +14,16 @@ Generic email sending service with HTML template rendering and inline images.
 - `send_bulk_emails(template_name, emails_data, ...)` — sends multiple emails with the same template
 - `email_service` — singleton instance used throughout the project
 
-Templates live in `core/templates/emails/` and extend `emails/base_email.html`. There are currently **14 email templates**: `happy_birthday`, `welcome_student`, `enrollment_child`, `enrollment_adult`, `fun_friday`, `payment_reminder`, `receipt_quarterly_child`, `receipt_adult`, `receipt_enrollment`, `vacation_closure`, `tax_certificate`, `monthly_report`, `newsletter`, plus the shared `base_email`.
+Templates live in `core/templates/emails/` and extend `emails/base_email.html`. There are currently **18 content templates** (19 files including the shared base): `happy_birthday`, `welcome_student`, `enrollment_child`, `enrollment_adult`, `fun_friday`, `payment_reminder`, `payment_reminder_simple`, `payment_receipt`, `receipt_quarterly_child`, `receipt_adult`, `receipt_enrollment`, `vacation_closure`, `tax_certificate`, `monthly_report`, `admin_monthly_report`, `newsletter`, `parent_magic_link`, `password_reset`, plus the shared `base_email`.
+
+### SmsService (`comms/services/sms_service.py`)
+
+Twilio SMS sender (v1.8). The `twilio` client is imported lazily so the app runs fine without it.
+
+- `is_configured()` — true only when all three of `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM_NUMBER` are set
+- `send(to, body)` — returns an `SmsResult`; the destination number and any Twilio error are passed through `safe_log()` in the log record *and* in `SmsResult.error`, because callers surface that text in responses
+- `send_to_parent(parent, body)` — **strictly opt-in**: only parents with `sms_opt_in=True` receive anything
+- `get_sms_service()` — singleton accessor
 
 ### Email Functions (`comms/services/email_functions.py`)
 
@@ -58,10 +67,14 @@ All tasks have retry logic (3 retries, exponential backoff):
 
 | Task | Purpose | Trigger |
 | ---- | ------- | ------- |
-| `send_welcome_email_task` | Async welcome email | On student creation |
+| `send_welcome_email_task` | Async welcome email (includes the group's timetable) | On student creation, fired `on_commit` |
 | `send_birthday_email_task` | Individual birthday email | Called by batch task |
-| `send_birthday_emails_task` | Daily birthday batch | Celery Beat (8:00 AM) |
-| `send_payment_reminders` | Weekly payment reminder batch | Celery Beat |
+| `send_birthday_emails_task` | Daily birthday batch — goes to **all** of a student's parents, dated with `localdate()` | Celery Beat (daily 08:00) / `send_birthday_emails` command |
+| `send_payment_reminders` | Weekly payment reminder batch, deduped against the SMS channel | Celery Beat (Mondays 09:00) / `send_payment_reminders` command |
+| `send_payment_reminder_sms_task` | Twilio SMS reminder for one payment — opt-in parents only (v1.8) | Called from the reminder batch |
+| `send_monthly_report_task` | Admin monthly report (`--recipient` overrides `SUPPORT_EMAIL`) | Celery Beat (28th, 20:00) / `send_monthly_report` command |
+| `send_parent_magic_link_task` | Emails the parent-portal magic link (v1.9) | Parent-portal login |
+| `send_payment_receipt_email_task` | Emails a receipt PDF for a completed payment (v1.11) | Payment completion / Stripe webhook |
 | `send_generic_email_task` | Generic email dispatcher | Manual |
 | `send_enrollment_confirmation_task` | Enrollment confirmation with attachments (uses `student.gender` field) | On enrollment |
 | `send_fun_friday_emails_task` | Fun Friday announcement to all parents (immediate) | Direct/manual sends |
@@ -108,7 +121,7 @@ python manage.py send_due_fun_friday_emails      # daily 14:30 — drains due Fu
 
 ## URL Patterns (comms/urls.py)
 
-10 URL patterns for the email app form views (`apps/`, `apps/fun-friday/`, `apps/payment-reminder/`, etc.). Views are imported from `core.views.app_forms`.
+11 URL patterns for the email app form views (`apps/`, `apps/fun-friday/`, `apps/payment-reminder/`, etc.). Views are imported from `core.views.app_forms`.
 
 ## Tests
 
@@ -118,6 +131,13 @@ Tests for comms services live in `project/tests/`:
 | ---- | ------------- |
 | `test_email_service.py` | `EmailService` — basic send, multiple recipients, CC/BCC, attachments, fail_silently, bulk sends, bad template handling. Uses `django.core.mail.outbox` (locmem backend). |
 | `test_email_functions.py` | All convenience functions in `email_functions.py` — correct template, subject, context, and fail_silently for each function |
+| `test_email_service_year.py` | Regression: the `year` context value used to be hard-coded to 2025 |
+| `test_tasks.py` | The core email tasks called synchronously with `email_service` mocked |
+| `test_new_email_tasks.py` | `send_parent_magic_link_task` (v1.9) + `send_payment_receipt_email_task` (v1.11) |
+| `test_sms_service.py` / `test_sms_tasks.py` | `SmsService` configuration/send/opt-in gate, and the SMS reminder task |
+| `test_email_bug_hunt_fixes.py` | Round-2 email regressions — templates, image guard, `on_commit`, all-parents birthday, timezone |
+| `test_fun_friday_scheduling.py` | `FunFridayScheduledSend.is_due` + the idempotent drain task |
+| `test_beat_commands.py` | The Beat-task management-command wrappers |
 
 Run with `make test` (requires Docker + PostgreSQL running).
 
@@ -126,3 +146,17 @@ Run with `make test` (requires Docker + PostgreSQL running).
 - **Depends on**: students (Student, Parent for recipient resolution), billing (Payment for tax certificates)
 - **Depended on by**: core views (student creation triggers welcome email task, app form views send emails)
 - **Imported by**: `core/views/students.py` imports `comms.tasks.send_welcome_email_task`; `core/views/app_forms.py` imports email functions and email_service
+
+### Known debt — `comms` reaches up into `core`
+
+Two lazy, function-body imports in `comms/tasks.py` reverse the documented dependency flow:
+
+- `core.schedule_utils.get_group_schedule_lines` — the welcome email prints the group's timetable, and `ScheduleSlot` is a `core` model
+- `core.models.FunFridayScheduledSend` — the drain task consumes a `core` model
+
+Because both are inside function bodies there is no import cycle today; the cost is coupling.
+The fix for the first is to compute `schedule_lines` in the `core` request path and pass them
+into `send_welcome_email_task`; the second probably wants the model moved to a neutral layer.
+Deferred deliberately in v1.14.6 — fixing only one would leave the codebase inconsistent with
+itself. (`comms/urls.py` importing `core.views` is a separate, deliberate choice and not part
+of this.) See [CLAUDE.md](../../CLAUDE.md).

@@ -8,10 +8,10 @@ Five a Day eVolution is a Django student management system for a small English a
 
 ### 4 Django apps
 
-- **students** — People models (Student, Parent, Teacher, Group, StudentParent). No views of its own — views live in `core/views/`.
-- **billing** — Financial models (SiteConfiguration, EnrollmentType, Enrollment, Payment). Contains the service layer (EnrollmentService, PaymentService, PricingService) where business logic lives.
-- **comms** — No models. Email service (EmailService), email convenience functions, Celery tasks, management commands for sending emails.
-- **core** — Cross-cutting models (TodoItem, HistoryLog, FunFridayAttendance, FunFridayScheduledSend, ScheduleSlot). Owns ALL views (split into 12 modules in `core/views/`), ALL templates, middleware, and URL routing for dashboard/auth/schedule.
+- **students** — People models (Student, Parent, Teacher, Group, StudentParent, plus ParentSessionToken in `parent_portal_models.py`). No views of its own — views live in `core/views/`.
+- **billing** — Financial models (SiteConfiguration, EnrollmentType, Enrollment, Payment, Expense). Contains the 6-module service layer (EnrollmentService, PaymentService, PricingService, ExpenseService, PdfService, StripeService) where business logic lives.
+- **comms** — No models. Email service (EmailService), SMS service (SmsService, Twilio), 12 email convenience functions, 12 Celery tasks, management commands for sending emails and for wrapping the Beat tasks.
+- **core** — Cross-cutting models (TodoItem, HistoryLog, FunFridayAttendance, FunFridayScheduledSend, ScheduleSlot, BacklogTask, QAConfiguration, plus AuditLog in `audit_models.py`). Owns ALL views (split into **22 modules** in `core/views/`), ALL templates, middleware, and URL routing for dashboard/auth/schedule.
 
 ### Key design decisions
 
@@ -20,7 +20,7 @@ Five a Day eVolution is a Django student management system for a small English a
 - **SiteConfiguration is the single source of truth for pricing** — `billing/constants.py` has seed values only used when creating the initial config row.
 - **Two-mode auth** — in **development** the login view compares against `LOGIN_USERNAME`/`LOGIN_PASSWORD` env vars (and get-or-creates a matching Django superuser so `/admin/` keeps working). In **testing/production** the same view authenticates against `auth.User` via `django.contrib.auth.authenticate` — Teachers log in with their email + hashed password through the `Teacher.user` OneToOneField. Google OAuth always backs into the same Django `ModelBackend` (get-or-creates a superuser + links to a Teacher by email). `SimpleAuthMiddleware` adds a second authorization layer: when the session belongs to a non-admin Teacher, only URLs in `NON_ADMIN_ALLOWED_URL_NAMES` are reachable.
 - **Tailwind CSS via CDN** — no build tools. Custom violet palette defined in `base.html`'s Tailwind config block.
-- **All JS extracted to static files** — 13 modules in `core/static/js/`. Django template variables passed via `data-*` attributes or small inline config scripts.
+- **All JS extracted to static files** — 16 modules in `core/static/js/`. Django template variables passed via `data-*` attributes or small inline config scripts.
 - **PostgreSQL everywhere** — same database engine in development, testing, and production. Never use SQLite for anything other than quick local fallback (`TEST_DB_ENGINE=sqlite`).
 
 ### Dependency flow
@@ -55,12 +55,18 @@ make lint              # Ruff linter
 make format            # Ruff formatter
 make pc-run            # Run all pre-commit hooks (dry run + auto version bump)
 make test              # Run the full suite (PostgreSQL via Docker, parallel, with coverage)
+make test unit         # Suite selector is POSITIONAL (unit | integration | coverage)
+make test K=payment    # Filter by keyword;  make test ARGS='-x --lf'  passes raw pytest flags
+make test-cov-gate     # Full suite + hard fail under 75% coverage (used by pre-commit)
 ```
+
+`make test` and `make test-cov-gate` are the **only** two test targets. There is no
+`make test-unit` / `test-integration` / `test-coverage` / `test-sqlite` / `test-fast` / `test-k`.
 
 - **UV** for dependency management (see [docs/UV.md](docs/UV.md))
 - **Ruff** for linting and formatting (`pyproject.toml [tool.ruff]`)
 - **pre-commit** hooks run Ruff on every commit (`.pre-commit-config.yaml`)
-- **pytest-cov** for coverage reports (`make test-coverage`)
+- **pytest-cov** for coverage reports (`make test coverage` — positional, not a `test-coverage` target)
 
 ## Important files
 
@@ -127,6 +133,8 @@ All pricing flows through `billing/services/`. The single source of truth is `Si
 - **Theme default is TIME-BASED and session-scoped** — when the user hasn't explicitly toggled, the pre-paint inline script in `base.html`'s `<head>` picks **light 10:00–16:59, dark otherwise**. An explicit choice persists in `localStorage` (`theme` key) ONLY during the session: the login page (`login.html`) clears `localStorage.theme` on load (reaching `/login/` means the session ended) and re-applies the time-based default. Sessions expire after **6h of inactivity** (`SESSION_COOKIE_AGE=21600` + `SESSION_SAVE_EVERY_REQUEST=True`). `login.html` is standalone (its own `<style>`) and carries its own dark rules + toggle. A few spots hard-code the violet hex (`home.html` gradient, `403/405.html`).
 - **Email templates have their own dark mode in `base_email.html`** — all 18 templates under `core/templates/emails/` extend `base_email.html` and share a common violet style matching `welcome_student.html` (violet headings `#6d28d9`, rounded info cards, coloured callouts, `#ddd6fe` table dividers). Email clients strip `<link>` stylesheets and don't support classes reliably, so content templates use **inline `style=""`** and dark mode lives as an inline `@media (prefers-color-scheme: dark)` `<style>` block in `base_email.html`'s `<head>` that overrides those exact inline hex values with **attribute selectors** (`[style*="#6d28d9"] { color: … !important }`) — the same technique `theme.css` uses for the webapp. When you add a new email template, reuse the shared palette hexes so the existing dark overrides catch it; if you introduce a new colour, add its dark override to the `base_email.html` `<style>` block. The signature/legal footer content in `base_email.html` must NOT change — only its dark rendering is themed.
 - **`NoHtmlCacheMiddleware` marks dynamic HTML `no-cache`** — content-hashed static assets are served `immutable` (10y), so if a dynamic HTML page is browser-cached it pins OLD asset hashes and the theme goes stale after a deploy. `core.middleware.NoHtmlCacheMiddleware` (in `MIDDLEWARE`, right after WhiteNoise) sets `Cache-Control: no-cache, no-store, must-revalidate` on every `text/html` response so navigation always revalidates and loads current hashes. The PWA service worker is **cache-first** for hashed static (optimal); don't switch it to network-first.
+- **`SESSION_COOKIE_SAMESITE` must stay `Lax` — do NOT "harden" it to `Strict`** — the Google OAuth callback is a **cross-site top-level navigation** (`accounts.google.com` → our domain). Under `Strict` the browser withholds the session cookie on exactly that hop, so Django builds a fresh empty session, `google_oauth_state` is missing when `google_oauth_callback` compares it, and every OAuth login fails with "Estado OAuth inválido". Email + password login is unaffected (it never leaves the site), which is why this survived to production and became the first real bug found there (v1.14.8). `Lax` is Django's own default and still withholds the cookie on cross-site POSTs and subresource requests — where the CSRF risk actually lives. `CSRF_COOKIE_SAMESITE` **does** stay `Strict` (not needed on the callback GET; every form POST is same-site). Same reason a teacher arriving from an external link (payment-reminder email, CI deploy notification) used to render as logged out. This pair looks like an inconsistency to a security-hardening pass — it isn't.
+- **Gunicorn needs `--chdir project` in the Dockerfile `CMD`** — `manage.py` lives at `/app/project/manage.py` and the Django settings package at `/app/project/project/`, so `project.wsgi` only resolves with `/app/project` as the working directory. Without `--chdir project` the container starts and dies with `ModuleNotFoundError: No module named 'project.wsgi'`. This is invisible in development (which uses `runserver`) and on the testing VM (`docker-compose.testing.yml` overrides the command), so **production is the only environment that runs the image's own `CMD`** — it cost a broken deploy in v1.14.7. The `CMD` also passes `--access-logfile -` / `--error-logfile -` so Gunicorn logs reach Cloud Logging via stdout/stderr. If you change the `CMD`, add an entrypoint, or move `manage.py`, re-check this.
 - **`git` is required in the Docker image** — the QA testing dashboard's "last commit" card runs `git log` (`_git_info` in `core/views/testing_tools.py`, with `-c safe.directory=*`). `git` is installed in the `Dockerfile` runtime stage; without it the card is empty.
 - **Payments allow no parent for adult students** — adults have no parent/guardian, which is valid. `create_payment` (`core/views/payments.py`) requires a parent only for non-adult students; for `student.is_adult` the payment is created with `parent=None`. The create-payment JS mirrors this (`selectedStudent.noParent` skips the parent requirement in the submit guard). `Payment.parent` is nullable.
 - **No `active` field on Payment** — soft-delete was planned but never implemented. Don't filter by `active=True` on Payment.
@@ -171,6 +179,7 @@ The `README.md` must stay in sync with the code. At the end of any non-trivial c
 3. **Recent Versions table** — keep only the **last 3** versions. Entries must include: version, date (YYYY-MM-DD), and an **extremely brief** description — one short phrase, ≤10 words, naming only the headline change. The long-form writeup (every user-visible change, subsection headings, bullets) lives in the Version History `<details>` block below, not in this table. When a new patch ships, drop the oldest row.
 4. **Version History `<details>` blocks** — add a new `<details id="vXYZ" open>` block for the new version; remove the `open` attribute from the previous one. Structure: `**Subsection**` headings + bullet lists. Pull subjects from `git log` for the commits in that version.
 5. **Directory Layout** — if directories, tool counts, test counts, or Make command counts changed, update them here. `tests/` line must show current test count and coverage percentage.
+   - The **App: core / students / billing / comms** summary tables sit right below the Directory Layout and drift independently of it. Whenever you touch the tree, re-check those four tables against it — in v1.14.7 they disagreed with the tree directly above them on view-module, model, service, task and URL counts.
 6. **Make Commands table** — every renamed or new `make` target must appear or be updated.
 7. **Contributing → Development Workflow** — if the developer flow changed (new pre-commit behavior, new commands), update the numbered list.
 8. **Table of Contents** — every new section or renamed heading must have a matching ToC entry with a valid anchor (GitHub generates anchors by lowercasing, replacing spaces with `-`, dropping non-alphanumerics except `-`).
@@ -214,7 +223,7 @@ The `README.md` must stay in sync with the code. At the end of any non-trivial c
 
 ### Testing
 
-- **Test against PostgreSQL** — SQLite has different behavior for constraints, transactions, and date handling. Always test against the same database you deploy to. Use `make test-sqlite` only for quick iteration.
+- **Test against PostgreSQL** — SQLite has different behavior for constraints, transactions, and date handling. Always test against the same database you deploy to. There is no `make test-sqlite` target; the only SQLite escape hatch is `TEST_DB_ENGINE=sqlite`, and it is not for normal use.
 - **Use fixtures in conftest.py** — shared fixtures (`student`, `parent`, `group`, `teacher`, `active_enrollment`, `pending_payment`, `authenticated_client`) avoid repetition.
 - **Test at three levels** — model tests (data logic), service tests (business logic), view tests (HTTP behavior). Don't test Django internals.
 - **Use `pytest.mark.django_db`** — either per-test or as `pytestmark` at module level. Without it, tests can't access the database.

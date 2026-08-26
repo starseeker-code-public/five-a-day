@@ -20,7 +20,7 @@ Built to centralize student records, automate billing cycles, and streamline par
 ### Project Status
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v1.14.6-brightgreen?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-v1.14.8-brightgreen?style=flat-square" alt="Version">
   &nbsp;|&nbsp;
   <a href="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml?query=branch%3Amain"><img src="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml/badge.svg?branch=main&style=flat-square" alt="CI main"></a>
   &nbsp;|&nbsp;
@@ -34,16 +34,16 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 | Environment | Branch | Hosting | CI Status |
 |-------------|--------|---------|-----------|
-| **Production** | `main` | Pending — GCP Cloud Run + Cloud SQL (`europe-southwest1`) | [![Production CI](https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml?query=branch%3Amain) |
+| **Production** | `main` | [https://fiveaday-332600671945.europe-southwest1.run.app/login/](https://fiveaday-332600671945.europe-southwest1.run.app/login/) — GCP Cloud Run + Cloud SQL (PostgreSQL 16, `europe-southwest1`) | [![Production CI](https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml?query=branch%3Amain) |
 | **Testing (QA)** | `testing` | [http://34.26.130.187:8000/](http://34.26.130.187:8000/) — GCP Compute Engine `e2-micro` (always-free tier, Docker Compose) | [![Testing CI](https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml/badge.svg?branch=testing)](https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml?query=branch%3Atesting) |
 | **Development** | `development` | [Local Docker](http://localhost:8000/) via `make up` | [![Development CI](https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml/badge.svg?branch=development)](https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml?query=branch%3Adevelopment) |
 
 
 | Version | Date | Description |
 |---------|------|-------------|
-| **v1.14.6** | 2026-08-21 | SMS log-injection fix + shared comms log helper |
-| v1.14.5 | 2026-08-21 | Log-injection remediation + CodeQL scoping |
-| v1.14.4 | 2026-08-21 | Code-scanning cleanup + CVE dependency bumps |
+| **v1.14.8** | 2026-08-21 | SameSite fix — unbreaks Google OAuth in production |
+| v1.14.7 | 2026-08-21 | Production Gunicorn fix + full documentation sync |
+| v1.14.6 | 2026-08-21 | SMS log-injection fix + shared comms log helper |
 
 ---
 
@@ -85,13 +85,19 @@ Built to centralize student records, automate billing cycles, and streamline par
     - [Student Create](#student-create)
     - [Student Detail \& Update](#student-detail--update)
     - [Payments](#payments)
+    - [Expenses](#expenses)
+    - [Reports](#reports)
     - [Schedule](#schedule)
     - [Fun Friday](#fun-friday)
+    - [Waiting List](#waiting-list)
     - [Apps (Email Tools)](#apps-email-tools)
     - [Management](#management)
     - [Database (All Info)](#database-all-info)
     - [Login](#login)
     - [Password Reset](#password-reset)
+    - [Two-Factor Authentication](#two-factor-authentication)
+    - [Parent Portal](#parent-portal)
+    - [PWA (Installable App)](#pwa-installable-app)
   - [Testing](#testing)
     - [Testing Overview](#testing-overview)
     - [Unit Tests](#unit-tests)
@@ -144,8 +150,66 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 ## Version History & Roadmap
 
-<details id="v1146" open>
-<summary><strong>v1.14.6 — SMS log-injection fix + shared comms log helper (current)</strong></summary>
+<details id="v1148" open>
+<summary><strong>v1.14.8 — SameSite fix: Google OAuth login on Cloud Run (current)</strong></summary>
+
+The first real bug found by using production. Teacher email + password login worked, but every
+Google OAuth attempt bounced straight back to `/login/` with **"Estado OAuth inválido"**.
+
+**Root cause (`project/project/settings.py`)**
+
+- `SESSION_COOKIE_SAMESITE` defaulted to `Strict` whenever `DEBUG=False`.
+- The OAuth round trip ends with Google issuing a redirect to `/auth/google/callback/`. That return is a **cross-site top-level navigation** — the initiator is `accounts.google.com`, the destination is our domain — and `SameSite=Strict` instructs the browser to withhold the cookie on exactly that kind of request.
+- Django therefore received no session cookie, built a fresh empty session, and found no `google_oauth_state` to compare against the `state` query parameter. The CSRF guard in `google_oauth_callback` (`core/views/auth.py`) did its job and rejected the callback.
+- Email + password login was unaffected because it never leaves the site, so the cookie is never asked to survive a cross-site hop.
+
+**Fix**
+
+- `SESSION_COOKIE_SAMESITE` now defaults to `Lax` in every environment. `Lax` permits the cookie on top-level cross-site **GET** navigations — precisely the OAuth callback — while still withholding it on cross-site POSTs and subresource requests, which is where the CSRF risk actually lives. It is also Django's own default.
+- `CSRF_COOKIE_SAMESITE` is deliberately left at `Strict`: the CSRF cookie is not needed on the callback GET, and every form POST is same-site.
+- Side benefit: under `Strict`, arriving from any external link — a payment-reminder email, the CI deploy notification — rendered the teacher as logged out until they clicked something internal. That no longer happens.
+
+**Docs**
+
+- README's three SameSite tables said `Strict` in production; all now say `Lax` for the session cookie and carry the reason inline, so nobody "hardens" it back and silently breaks OAuth.
+- The environment-variable reference splits `SESSION_COOKIE_SAMESITE` and `CSRF_COOKIE_SAMESITE` into separate rows — they no longer share a value.
+
+</details>
+<details id="v1147">
+<summary><strong>v1.14.7 — Production Gunicorn fix + full documentation sync</strong></summary>
+
+Production is **live** on Cloud Run as of this release:
+[https://fiveaday-332600671945.europe-southwest1.run.app/login/](https://fiveaday-332600671945.europe-southwest1.run.app/login/).
+Getting there needed a one-line container fix, and auditing the docs afterwards turned up a
+large amount of drift that had accumulated across the v1.1-v1.14 feature work.
+
+**Production boot fix (`Dockerfile`)**
+
+- The image's default `CMD` ran `gunicorn project.wsgi:application` from `/app`, but `manage.py` lives at `/app/project/manage.py` and the Django settings package at `/app/project/project/` — so `project.wsgi` only resolves with `/app/project` as the working directory. On Cloud Run the container died at startup with `ModuleNotFoundError: No module named 'project.wsgi'`.
+- Fixed by adding `--chdir project` to the `CMD`. This never reproduced locally: development uses `runserver`, and `docker-compose.testing.yml` overrides the command outright — so the only environment that ran the image's own `CMD` was production.
+- Also added `--access-logfile -` and `--error-logfile -` so Gunicorn's request and error logs reach Cloud Logging via stdout/stderr instead of being swallowed.
+
+**Documentation sync — the drift, itemised**
+
+The README claimed counts and commands that stopped being true several releases ago:
+
+- **Testing section** documented eight `make` targets that do not exist (`make test-unit`, `test-integration`, `test-local`, `test-sqlite`, `test-coverage`, `test-fast`, `test-k`). The Makefile has exactly two test targets: `make test` (with positional suite selector, `K=`, and `ARGS=`) and `make test-cov-gate`. `CLAUDE.md` carried the same three stale references.
+- **Test tables** listed 22 of 46 unit files and 17 of 26 integration files — 33 test files were entirely undocumented, including every file for the waiting list, expenses, reports, parent portal, Stripe, PWA, 2FA, SMS, audit log, rate limiter and Google Sheets work. Both tables are now complete and their per-file counts sum to exactly the 1,061 tests pytest collects.
+- **Per-app summary tables** contradicted the Directory Layout directly above them: `core` claimed 14 view modules (22), 13 JS modules (16) and 5 models (8, counting `AuditLog`); `billing` claimed 3 services (6), 4 models (5, missing `Expense`) and 20 URLs (23); `comms` claimed 6 Celery tasks (12) and omitted `SmsService`; `students` claimed 12 URLs (14) and omitted `ParentSessionToken`.
+- **Counts corrected**: 1,008 -> 1,061 tests; 70 -> 72 test files; 15 -> 18 conftest fixtures; 4 -> 8 Celery Beat schedule entries; `~50` -> 12 email convenience functions; coverage table refreshed from a live run (28 files below 100%, 57 at 100%, 4,772 statements, 95.49%).
+- **`core/schedule_utils.py` reached 100%** coverage in v1.14.5 and has been removed from the below-100% table, where it was still listed at 62%.
+- **Project Status** showed production as "Pending" and the QA row's web address as "(will be provided once deployed on GCP)". Both now carry their real URLs.
+
+**Docs**
+
+- **CI was under-reporting coverage as 86.44%.** The test step runs with `working-directory: project`, but `[tool.coverage.run]` and its `omit` list live in the repo-root `pyproject.toml`, and coverage only reads config from the *current* directory. The omit list was silently ignored, so 42 files meant to be excluded — 22 migrations, 16 management commands, 4 `admin.py` — were counted: ~993 extra statements. `ci.yml` now passes `--cov-config=../pyproject.toml`, so CI, `make test` and `make test-cov-gate` all agree on 95.49%. This also stops the spurious `< 90%` warning that fired on every run and corrects the figure sent to Codecov.
+- New `CLAUDE.md` gotcha recording the `--chdir project` requirement, so the next person to touch the `CMD` or add a container entrypoint does not reintroduce it.
+- `CLAUDE.md`'s "12 view modules" and stale `make test-*` references corrected; per-app READMEs re-synced against their source.
+
+</details>
+
+<details id="v1146">
+<summary><strong>v1.14.6 — SMS log-injection fix + shared comms log helper</strong></summary>
 
 Closes the two Copilot review threads that were blocking the v1.14.5 release PR
 (`main-protection` requires review-thread resolution).
@@ -1195,9 +1259,14 @@ All tools configured in `pyproject.toml` — single source of truth.
 <details id="roadmap">
 <summary><strong>Click to expand roadmap (all shipped)</strong></summary>
 
-All v1.1 – v1.12 milestones are shipped. Post-v1.12 evolution now happens in
-directly-scoped work rather than the numbered roadmap; add new items here
-when they're planned and dated.
+All v1.1 – v1.14 milestones are shipped, and production went live on Cloud Run
+in v1.14.7. Post-v1.12 evolution happens in directly-scoped work rather than the
+numbered roadmap; add new items here when they're planned and dated.
+
+Two pieces of work are tracked but deliberately deferred (see [CLAUDE.md](CLAUDE.md)):
+
+- **`comms` reaches up into `core` twice** — `comms/tasks.py` lazily imports `core.schedule_utils` and `core.models.FunFridayScheduledSend`, which reverses the documented dependency flow. Both imports are function-body, so there is no cycle today; the cost is coupling.
+- **Django 6.1 email deprecations** — the whole `EMAIL_*` settings family is superseded by `MAILERS`, and `EmailMessage.send(fail_silently=...)` is deprecated (56 `RemovedInDjango70Warning`s in the suite). Nothing breaks before Django 7.0, but this must land before the `<7` bound is lifted.
 
 </details>
 
@@ -1210,13 +1279,13 @@ when they're planned and dated.
 | Technology | Version | Purpose |
 |-----------|---------|---------|
 | [![Python](https://img.shields.io/badge/Python-3.12+-3776ab?style=flat-square&logo=python&logoColor=white)](https://python.org) | 3.12+ | Runtime |
-| [![Django](https://img.shields.io/badge/Django-5.2-092e20?style=flat-square&logo=django&logoColor=white)](https://djangoproject.com) | 5.2.5 | Web framework |
+| [![Django](https://img.shields.io/badge/Django-6.1-092e20?style=flat-square&logo=django&logoColor=white)](https://djangoproject.com) | 6.1 | Web framework — pinned `>=6.0.8,<7` so a major can't land unreviewed |
 | [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-336791?style=flat-square&logo=postgresql&logoColor=white)](https://postgresql.org) | 16 (Alpine) | Database (production, development, and testing) |
-| Celery | 5.5.3 | Async task queue (eager mode without Redis, full async with Redis in v1.4) |
-| Celery Beat | (bundled with Celery) | Scheduled task execution (birthday emails, payment generation — v1.4) |
-| Redis | 7 (Alpine) | Message broker for Celery (planned, v1.4) |
+| Celery | 5.6.3 | Async task queue (eager mode without Redis, full async with Redis) |
+| Celery Beat | (bundled with Celery) | Scheduled task execution — 8 periodic tasks (birthday emails, payment generation, recurring expenses, monthly report, Fun Friday drain, backlog cleanup). Production has no Beat process: Cloud Scheduler runs the equivalent management commands as Cloud Run Jobs |
+| Redis | 7 (Alpine) | Message broker + result backend for Celery, and the Django cache backend (rate limiter) |
 | Gunicorn | 23.0.0 | Production WSGI server |
-| WhiteNoise | 6.11.0 | Static file serving in production |
+| WhiteNoise | 6.12.0 | Static file serving in production (hashed + compressed manifest storage) |
 
 ### Frontend
 
@@ -1224,18 +1293,18 @@ when they're planned and dated.
 |-----------|---------|
 | [Tailwind CSS](https://tailwindcss.com/) (CDN) | Utility-first CSS with custom violet primary palette |
 | [Google Fonts](https://fonts.google.com/) | Material Symbols Outlined (icons), Montserrat Alternates (login), Parisienne (login accent) |
-| Vanilla JavaScript | 13 static modules — zero build tools, no framework |
+| Vanilla JavaScript | 16 static modules — zero build tools, no framework |
 
 ### Infrastructure & Deployment
 
 | Technology | Purpose |
 |-----------|---------|
 | Docker | Multi-stage build, non-root `django` user |
-| Docker Compose | Service orchestration (PostgreSQL + Django) |
-| Google Cloud Platform | Production hosting: Cloud Run + Cloud SQL |
+| Docker Compose | Service orchestration (PostgreSQL + Redis + Django + Celery worker + Beat) |
+| Google Cloud Platform | Production: Cloud Run + Cloud SQL (`europe-southwest1`) + Cloud Scheduler + Secret Manager. Testing: Compute Engine `e2-micro` (always-free tier) |
 | Gmail SMTP | Email sending (app password authentication) |
 | Google OAuth 2.0 | Optional admin authentication |
-| Make | 45+ development commands |
+| Make | 48 development commands (`make help`) |
 
 ### Python Dependencies
 
@@ -1258,6 +1327,14 @@ when they're planned and dated.
 | `pytest-xdist` | Parallel test execution (`-n auto`) |
 | `pytest-randomly` | Randomized test ordering (catches order-dependent bugs) |
 | `pytest-cov` + `coverage-badge` | Coverage reporting + SVG badge generation |
+| `reportlab` | PDF generation — receipts, quarterly summaries, tax certificates (v1.3) |
+| `pyotp` + `qrcode` | TOTP two-factor authentication + enrolment QR codes (v1.13) |
+| `djangorestframework` | Serializer/API primitives |
+| `django-environ` | Typed environment parsing |
+| `django-debug-toolbar` | SQL/query inspection in development |
+| `gunicorn` | Production WSGI server (`--chdir project`, see the Dockerfile `CMD`) |
+| `whitenoise` | Hashed + compressed static serving |
+| `cryptography` / `sqlparse` / `idna` / `urllib3` / `pip` | Transitive dependencies pinned to patched ranges to clear `pip-audit` CVEs — see the comments in `pyproject.toml` |
 
 ### Developer Tooling
 
@@ -1286,6 +1363,10 @@ erDiagram
         string phone
         bool active
         bool admin
+        int user_id FK
+        string two_factor_secret
+        bool two_factor_enabled
+        json two_factor_backup_codes
     }
 
     Group {
@@ -1293,6 +1374,7 @@ erDiagram
         string group_name UK
         string color
         int teacher_id FK
+        int max_students
         bool active
     }
 
@@ -1304,6 +1386,7 @@ erDiagram
         string phone
         string email
         string iban
+        bool sms_opt_in
     }
 
     Student {
@@ -1311,6 +1394,7 @@ erDiagram
         string first_name
         string last_name
         date birth_date
+        string gender
         bool is_adult
         string email
         string phone
@@ -1319,6 +1403,8 @@ erDiagram
         bool gdpr_signed
         int group_id FK
         bool active
+        bool is_waiting
+        datetime waiting_since
         date withdrawal_date
         text withdrawal_reason
     }
@@ -1338,9 +1424,14 @@ erDiagram
         decimal adult_group_monthly_fee
         decimal language_cheque_discount
         decimal quarterly_enrollment_discount
+        decimal old_student_discount
+        decimal returning_student_enrollment_discount
         decimal sibling_discount
         decimal june_discount
         decimal full_year_bonus
+        decimal half_month_discount
+        decimal one_week_discount
+        decimal three_week_discount
     }
 
     EnrollmentType {
@@ -1383,6 +1474,8 @@ erDiagram
         date payment_date
         string concept
         string reference_number
+        string stripe_session_id
+        string stripe_payment_intent
     }
 
     TodoItem {
@@ -1421,6 +1514,55 @@ erDiagram
         datetime sent_at
     }
 
+    Expense {
+        int id PK
+        string description
+        string category
+        decimal amount
+        date expense_date
+        bool is_recurring
+        string recurring_frequency
+        int recurring_day
+        int recurring_month
+        string recurring_weekdays
+        int generated_from_id FK
+    }
+
+    ParentSessionToken {
+        int id PK
+        int parent_id FK
+        string token
+        datetime expires_at
+        datetime used_at
+    }
+
+    AuditLog {
+        int id PK
+        int actor_id FK
+        string actor_label
+        string action
+        string model
+        string object_id
+        string object_label
+        json changes
+        datetime created_at
+    }
+
+    BacklogTask {
+        int id PK
+        string title
+        text description
+        string priority
+        string status
+        string created_by
+        datetime updated_at
+    }
+
+    QAConfiguration {
+        int id PK
+        bool error_email_enabled
+    }
+
     Teacher ||--o{ Group : "teaches"
     Group ||--o{ Student : "contains"
     Student }o--o{ Parent : "has parents"
@@ -1433,7 +1575,13 @@ erDiagram
     Enrollment ||--o{ Payment : "covers"
     Group ||--o{ ScheduleSlot : "assigned to"
     Student ||--o{ FunFridayAttendance : "attends"
+    Parent ||--o{ ParentSessionToken : "portal magic link"
+    Expense ||--o{ Expense : "generated from recurring"
 ```
+
+**Not shown:** `Teacher.user_id` points at Django's built-in `auth.User`, and
+`AuditLog.actor_id` at the same table — both are outside this diagram.
+`BacklogTask` and `QAConfiguration` are QA-only and stand alone with no foreign keys.
 
 ### Key Constraints
 
@@ -1503,12 +1651,20 @@ DJANGO_SECRET_KEY=
 DJANGO_ALLOWED_HOSTS=localhost,127.0.0.1
 
 # ============================================================================
+# LOGGING  (all environments — optional)
+# ============================================================================
+# LOG_LEVEL sets the app logger; DJANGO_LOG_LEVEL overrides just the framework
+# logger and inherits LOG_LEVEL when unset.
+# LOG_LEVEL=INFO                  # DEBUG in dev, INFO elsewhere
+# DJANGO_LOG_LEVEL=INFO
+
+# ============================================================================
 # HTTPS & SECURITY  (testing + production only — defaults are correct in dev)
 # ============================================================================
 SECURE_SSL_REDIRECT=False         # True in production (Cloud Run terminates TLS)
 SESSION_COOKIE_SECURE=False       # True in production
 CSRF_COOKIE_SECURE=False          # True in production
-SESSION_COOKIE_SAMESITE=Lax       # Strict in production
+SESSION_COOKIE_SAMESITE=Lax       # Lax everywhere — Strict breaks Google OAuth
 CSRF_COOKIE_HTTPONLY=True
 CSRF_COOKIE_SAMESITE=Lax          # Strict in production
 CSRF_TRUSTED_ORIGINS=             # Comma-separated http(s):// origins for non-localhost hosts
@@ -1519,7 +1675,6 @@ CSRF_TRUSTED_ORIGINS=             # Comma-separated http(s):// origins for non-l
 # POSTGRES_HOST + POSTGRES_PORT are injected by docker-compose.yml (POSTGRES_HOST=db).
 # On Cloud Run, use DATABASE_URL with the Unix-socket query instead:
 #   postgres://user:pass@/dbname?host=/cloudsql/PROJECT:REGION:INSTANCE
-DATABASE=postgres
 POSTGRES_DB=fiveaday_db
 POSTGRES_USER=fiveaday_user
 POSTGRES_PASSWORD=                # openssl rand -base64 32
@@ -1618,6 +1773,9 @@ Run `make` or `make help` for the full list. Key commands:
 
 | Command | Description |
 |---------|-------------|
+| **Setup & Build** | |
+| `make setup` | Create `.env` (copies `.env.development` if present, else an empty file) |
+| `make build` | Build the Docker images |
 | **Lifecycle** | |
 | `make up` | Start all services (detached) |
 | `make down` | Stop and remove containers |
@@ -1655,12 +1813,23 @@ Run `make` or `make help` for the full list. Key commands:
 | `make celery-status` / `make celery-test-task` | Inspect active tasks / queue a debug task |
 | **Versioning** | |
 | `make version` | Show current pyproject + README badge values, warn on drift |
-| `make version 1.13.0` | Update `pyproject.toml`, `settings.py`, README badge, regenerate `uv.lock` (with y/N confirmation) |
+| `make version 1.15.0` | Update `pyproject.toml`, `settings.py`, README badge, regenerate `uv.lock` (with y/N confirmation) |
 | **Admin ops** | |
 | `manage.py reset_two_factor <email>` | Wipe 2FA secret + backup codes for a locked-out admin (v1.13) |
 | `manage.py export_to_sheets [--students] [--payments]` | Push snapshots to Google Sheets (v1.2) |
 | `manage.py generate_payments [--month M --year Y]` | Create monthly / quarterly payment rows for active enrollments |
 | `manage.py seed_teachers` | Idempotently seed Teacher rows from `TEACHER_SEED_<N>_*` env vars |
+| `manage.py seed_testdata [--reset]` | Populate the QA stack with fake students, parents and payments |
+| `manage.py send_email --template X [--test]` | Send one email template |
+| `manage.py test_all_emails [--only X,Y]` | Render/send every email template for review |
+| **Beat-task wrappers** (production has no Beat process — Cloud Scheduler runs these as Cloud Run Jobs) | |
+| `manage.py generate_payments` | Monthly/quarterly payment rows (Beat: 1st, 06:00) |
+| `manage.py materialize_recurring_expenses [--daily]` | Recurring expenses — monthly pass, or `--daily` for the weekly/yearly pass (Beat: 1st 06:30 / daily 06:15) |
+| `manage.py send_birthday_emails` | Birthday emails (Beat: daily 08:00) |
+| `manage.py send_payment_reminders` | Overdue-payment reminders (Beat: Mondays 09:00) |
+| `manage.py send_monthly_report` | Admin monthly report (Beat: 28th, 20:00) |
+| `manage.py send_due_fun_friday_emails` | Drain due `FunFridayScheduledSend` rows (Beat: daily 14:30) |
+| `manage.py cleanup_backlog_tasks` | Delete QA backlog tasks done > 30 days ago (Beat: daily 07:00) |
 | **Developer Tooling** | |
 | `make sync` | Install all deps (including dev) via uv |
 | `make lint` / `make lint FIX=1` | Run Ruff linter (optionally auto-fix) |
@@ -1670,6 +1839,8 @@ Run `make` or `make help` for the full list. Key commands:
 | `make coverage-badge` | Regenerate `coverage.svg` from the latest test run |
 | `make pre-commit-install` | Install the git pre-commit hook |
 | `make pc-run` | Run pre-commit on all files; on clean pass, offer to auto-bump patch version; auto-stages regenerated `uv.lock` |
+| **Remote** | |
+| `make connect-testing` | SSH into the GCP testing VM (auto-login if needed) |
 | **Cleanup** | |
 | `make clean` | Remove stopped containers + system prune |
 | `make clean-all` | Remove everything including volumes (y/N prompt) |
@@ -1702,12 +1873,11 @@ The table below describes every variable in the [.env template](#env-template) a
 | `DJANGO_ALLOWED_HOSTS` | Comma-separated hosts | No | `localhost,127.0.0.1` |
 | `SECURE_SSL_REDIRECT` | Force HTTPS redirects | No | `True` when `DEBUG=False` |
 | **Database** | | | |
-| `DATABASE` | Set to `postgres` for PostgreSQL | No | `postgres` |
 | `DATABASE_URL` | Full URL (Cloud deployments) | No | — |
 | `POSTGRES_DB` | Database name | No | `fiveaday_db` |
 | `POSTGRES_USER` | Database user | No | `fiveaday_user` |
 | `POSTGRES_PASSWORD` | Database password | **Yes** | — |
-| `POSTGRES_HOST` | Database host | No | `db` (Docker) |
+| `POSTGRES_HOST` | Database host | No | `localhost` (compose injects `db`) |
 | `POSTGRES_PORT` | Database port | No | `5432` |
 | **Email** | | | |
 | `EMAIL_HOST_USER` | Gmail address | For email features | — |
@@ -1753,7 +1923,25 @@ The table below describes every variable in the [.env template](#env-template) a
 | `LOG_LEVEL` | App log level | No | `DEBUG` in dev, `INFO` in prod |
 | `DJANGO_LOG_LEVEL` | Django framework log level | No | inherits `LOG_LEVEL` |
 | `APP_VERSION` | Version string override | No | from `settings.py` default |
-| `SESSION_COOKIE_AGE` | Session duration (seconds) | No | `86400` (24 h) |
+| `DJANGO_SUPERUSER_EMAIL` | Email given to the auto-created dev superuser, and last fallback for the Google-login allow-list | No | `<LOGIN_USERNAME>@local.dev` |
+| **Security headers & cookies** (advanced overrides — all applied only when `DEBUG=False`) | | | |
+| `SESSION_COOKIE_SECURE` | HTTPS-only session cookie | No | `True` |
+| `CSRF_COOKIE_SECURE` | HTTPS-only CSRF cookie | No | `True` |
+| `SESSION_COOKIE_HTTPONLY` | Block JS access to the session cookie | No | `True` |
+| `CSRF_COOKIE_HTTPONLY` | Block JS access to the CSRF cookie — **why AJAX must read the token from the hidden input, not the cookie** | No | `True` when `DEBUG=False` |
+| `SESSION_COOKIE_SAMESITE` | Session-cookie SameSite policy. Must stay `Lax` — see below | No | `Lax` |
+| `CSRF_COOKIE_SAMESITE` | CSRF-cookie SameSite policy | No | `Strict` (`Lax` in dev) |
+| `SESSION_SAVE_EVERY_REQUEST` | Refresh the session on every request, making `SESSION_COOKIE_AGE` an inactivity timeout | No | `True` |
+| `CSRF_TRUSTED_ORIGINS` | Comma-separated origins allowed to POST (needed behind a proxy or a custom domain) | No | — |
+| `SECURE_HSTS_SECONDS` | HSTS max-age | No | `31536000` (1 y) |
+| `SECURE_HSTS_INCLUDE_SUBDOMAINS` / `SECURE_HSTS_PRELOAD` | HSTS scope | No | `True` |
+| `SECURE_CONTENT_TYPE_NOSNIFF` | `X-Content-Type-Options: nosniff` | No | `True` |
+| `SECURE_BROWSER_XSS_FILTER` | Legacy XSS filter header | No | `True` |
+| `X_FRAME_OPTIONS` | Clickjacking protection | No | `DENY` |
+| **Test suite only** (read by `project/settings_test.py`) | | | |
+| `TEST_DB_HOST` | Postgres host for the test database — `make test` sets `db` inside Docker | No | `localhost` |
+| `TEST_DB_ENGINE` | Set to `sqlite` for a Docker-free local fallback. Not for CI or normal use — always prefer `make test` against Postgres | No | postgres |
+| `SESSION_COOKIE_AGE` | Session duration (seconds) — sessions expire after this much inactivity, since `SESSION_SAVE_EVERY_REQUEST` is on | No | `21600` (6 h) |
 
 ### App Versioning
 
@@ -1785,10 +1973,10 @@ graph TB
     Django --> OAuth[Google OAuth]
 
     subgraph "Django Apps"
-        Core["<b>core</b><br/>Dashboard, Auth<br/>Schedule, Utilities<br/><i>4 models</i>"]
-        Students["<b>students</b><br/>Student, Parent<br/>Teacher, Group<br/><i>5 models</i>"]
-        Billing["<b>billing</b><br/>Payment, Enrollment<br/>Pricing, Exports<br/><i>4 models, 3 services</i>"]
-        Comms["<b>comms</b><br/>Email Service<br/>Tasks, Commands<br/><i>0 models</i>"]
+        Core["<b>core</b><br/>Dashboard, Auth<br/>Schedule, Utilities<br/><i>8 models, 3 services</i>"]
+        Students["<b>students</b><br/>Student, Parent<br/>Teacher, Group<br/><i>6 models</i>"]
+        Billing["<b>billing</b><br/>Payment, Enrollment<br/>Pricing, Exports<br/><i>5 models, 6 services</i>"]
+        Comms["<b>comms</b><br/>Email Service<br/>Tasks, Commands<br/><i>0 models, 3 services</i>"]
     end
 
     Core --> Students
@@ -1818,12 +2006,12 @@ five-a-day/
 │   │   ├── settings.py           Main settings (env-driven)
 │   │   ├── settings_test.py      Test overrides (PostgreSQL default, SQLite fallback)
 │   │   ├── urls.py               Root URL conf → includes 4 app URL files
-│   │   ├── celery.py             Celery app + Beat schedule (4 periodic tasks)
+│   │   ├── celery.py             Celery app + Beat schedule (8 periodic tasks)
 │   │   └── wsgi.py / asgi.py
 │   │
 │   ├── core/                     Dashboard, Auth, Schedule, Utilities, Cross-cutting
 │   │   ├── models.py             TodoItem, HistoryLog, FunFridayAttendance, ScheduleSlot,
-│   │   │                         QAConfiguration, FunFridayScheduledSend (v1.14.2)
+│   │   │                         BacklogTask, QAConfiguration, FunFridayScheduledSend (v1.14.2)
 │   │   ├── audit_models.py       AuditLog (v1.10 — immutable per-model change trail)
 │   │   ├── audit_signals.py      Signal receivers + AuditActorMiddleware (contextvar-based actor)
 │   │   ├── rate_limit.py         Cache-backed IP rate limiter (v1.10)
@@ -1838,12 +2026,14 @@ five-a-day/
 │   │   │                         google_sheets_service (v1.2), two_factor_service (v1.13)
 │   │   ├── constants.py          DIAS_ES, MESES_ES, SCHEDULED_APPS
 │   │   ├── middleware.py         SimpleAuthMiddleware + QAErrorEmailMiddleware
+│   │   │                         + NoHtmlCacheMiddleware
 │   │   ├── decorators.py         qa_access_required (testing env gate)
 │   │   ├── context_processors.py Notifications + is_admin_user / is_non_admin_teacher flags
 │   │   ├── transactions.py       Optimised queryset builders with stable ordering
 │   │   ├── templates/            All HTML templates — base, pages, emails/, parent_portal/,
 │   │   │                         two_factor/ (v1.13), plus expenses/reports/waiting_list
-│   │   ├── static/               CSS (app.css) + JS (14 modules) + images
+│   │   ├── static/               CSS (app.css, theme.css, email.css, admin_custom.css)
+│   │   │                         + JS (16 modules) + images
 │   │   └── management/commands/  seed_teachers, seed_testdata, export_to_sheets (v1.2),
 │   │                             reset_two_factor (v1.13), cleanup_backlog_tasks (v1.14.2)
 │   │
@@ -1875,7 +2065,7 @@ five-a-day/
 │   │
 │   ├── comms/                    Communications
 │   │   ├── services/             email_service (EmailService singleton),
-│   │   │                         email_functions (~50 convenience helpers),
+│   │   │                         email_functions (12 convenience helpers),
 │   │   │                         sms_service (v1.8 — Twilio, lazy import)
 │   │   ├── tasks.py              12 Celery tasks — welcome, birthday (all parents, v1.13
 │   │   │                         localdate), payment reminders (email + SMS dedup),
@@ -1885,7 +2075,7 @@ five-a-day/
 │   │   └── management/commands/  send_email, test_all_emails, plus 4 Beat-task wrappers
 │   │                             (v1.14.2 — birthday, reminders, report, Fun Friday drain)
 │   │
-│   ├── tests/                    pytest suite (1,058 tests, 95 % coverage) — unit/ + integration/
+│   ├── tests/                    pytest suite (1,061 tests, 95 % coverage) — unit/ + integration/
 │   ├── templates/registration/   Password-reset templates (form, done, confirm, complete + email body)
 │   ├── templates/admin/          Django admin overrides (branded theme)
 │   └── conftest.py               Shared fixtures (models + authenticated_client)
@@ -1933,12 +2123,14 @@ Dashboard, authentication, scheduling, and shared utilities. Owns all views and 
 
 | Component | Details |
 |-----------|---------|
-| **Models** | TodoItem, HistoryLog (1000-entry cap), FunFridayAttendance, FunFridayScheduledSend, ScheduleSlot |
-| **Views** | 14 modules: auth, password_reset, dashboard, students, parents, payments, management, app_forms, schedule, fun_friday_attendance, todos, support, errors, testing_tools |
-| **Middleware** | SimpleAuthMiddleware — two layers: session auth (public allow-list incl. `/password-reset/`) + non-admin teacher URL-name whitelist |
-| **Templates** | base.html (layout), 15+ page templates, 18 email templates (common violet style + dark-mode support), error pages, plus `templates/registration/` for the password-reset flow |
-| **Static** | app.css (sidebar/icons), 13 JS modules, logo |
-| **Commands** | seed_teachers (Teacher + auth.User from env vars), seed_testdata (in billing) |
+| **Models** | 8 — TodoItem, HistoryLog (1000-entry cap), FunFridayAttendance, FunFridayScheduledSend, ScheduleSlot, BacklogTask (QA), QAConfiguration (QA), plus AuditLog in `audit_models.py` |
+| **Views** | 22 modules: auth, password_reset, dashboard, students, parents, payments, management, app_forms, schedule, fun_friday_attendance, todos, support, errors, testing_tools, waiting_list, sheets, expenses, reports, parent_portal, stripe_views, pwa, two_factor |
+| **Services** | 3 — analytics_service, google_sheets_service, two_factor_service |
+| **Middleware** | 4 — NoHtmlCacheMiddleware (no-cache on dynamic HTML), QAErrorEmailMiddleware, SimpleAuthMiddleware (session auth public allow-list incl. `/password-reset/` + non-admin teacher URL-name whitelist), AuditActorMiddleware |
+| **Templates** | base.html (layout), 22 page templates, 18 email templates + `base_email.html` (common violet style + dark-mode support), error pages, plus `templates/registration/` for the password-reset flow |
+| **Static** | 4 CSS files (app.css, theme.css, email.css, admin_custom.css), 16 JS modules, images |
+| **Commands** | seed_teachers (Teacher + auth.User from env vars), seed_testdata, export_to_sheets, reset_two_factor, cleanup_backlog_tasks |
+| **URLs** | 45 patterns: dashboard, auth, password reset, schedule, todos, support, QA, PWA, 2FA, parent portal |
 
 See [core/README.md](project/core/README.md) for details.
 
@@ -1948,10 +2140,10 @@ People management — the foundation app with no external dependencies.
 
 | Component | Details |
 |-----------|---------|
-| **Models** | Student (with age calc, withdrawal tracking), Parent (DNI unique), Teacher (with optional `auth.User` link for login), Group, StudentParent (M2M through) |
+| **Models** | 6 — Student (age calc, withdrawal + waiting-list tracking), Parent (DNI unique, `sms_opt_in`), Teacher (optional `auth.User` link for login, `two_factor_*`), Group (`max_students` capacity), StudentParent (M2M through), plus ParentSessionToken in `parent_portal_models.py` |
 | **Forms** | StudentForm (birth_date validation), ParentForm (DNI validation), ParentFormSet |
-| **Admin** | StudentAdmin with StudentParentInline, ParentAdmin with ParentStudentInline |
-| **URLs** | 12 patterns: CRUD + search + fun friday attendance |
+| **Admin** | StudentAdmin with StudentParentInline, ParentAdmin with ParentStudentInline, group capacity columns |
+| **URLs** | 14 patterns: CRUD + search + fun friday attendance + waiting list |
 | **Auth integration** | `Teacher.ensure_user(password=...)` get-or-creates the linked Django user; `post_save` signal mirrors admin / email / name onto `auth.User` |
 
 See [students/README.md](project/students/README.md) for details.
@@ -1962,26 +2154,28 @@ Financial management with a dedicated service layer.
 
 | Component | Details |
 |-----------|---------|
-| **Models** | SiteConfiguration (singleton pricing), EnrollmentType (plan types), Enrollment (with discount flags), Payment (with overdue detection) |
-| **Services** | EnrollmentService (creation + discounts), PaymentService (generation + calculations), PricingService (centralized config access) |
+| **Models** | 5 — SiteConfiguration (singleton pricing), EnrollmentType (plan types), Enrollment (discount flags), Payment (overdue detection, Stripe ids), Expense (three recurring cadences) |
+| **Services** | 6 — EnrollmentService (creation + discounts + returning-student detection), PaymentService (generation + calculations), PricingService (centralized config access), ExpenseService, PdfService (reportlab), StripeService (httpx, no SDK dependency) |
 | **Constants** | Pricing seeds, ENROLLMENT_TYPE_CHOICES, SCHEDULE_TYPE_CHOICES, PAYMENT_METHOD_CHOICES, etc. |
 | **Exports** | build_database_workbook() → multi-sheet .xlsx |
-| **Commands** | `generate_payments --month X --year Y [--dry-run]` |
-| **URLs** | 20 patterns: payment CRUD, enrollment API, management, exports |
+| **Celery tasks** | 3 — generate_monthly_payments_task, materialize_recurring_expenses_task, materialize_recurring_expenses_daily_task |
+| **Commands** | `generate_payments --month X --year Y [--dry-run]`, `materialize_recurring_expenses [--daily]` |
+| **URLs** | 23 patterns: payment CRUD, enrollment API, expenses, reports, exports, Stripe |
 
 See [billing/README.md](project/billing/README.md) for details.
 
 ### App: comms
 
-Email communications — no database models, pure service layer.
+Email and SMS communications — no database models, pure service layer.
 
 | Component | Details |
 |-----------|---------|
 | **EmailService** | Generic HTML email sender with inline images and attachments |
-| **Email functions** | 12 convenience functions (birthday, welcome, enrollment, payment reminder, receipts, tax cert, etc.) |
-| **Celery tasks** | 6 tasks with retry logic: welcome, birthday (single + batch), payment reminders, generic, enrollment confirmation |
-| **Commands** | `send_email --template X [--test]`, `test_all_emails [--only X,Y]` |
-| **URLs** | 10 patterns: all email app form views |
+| **SmsService** | Twilio SMS sender (lazy import, opt-in only — `Parent.sms_opt_in`) |
+| **Email functions** | 12 convenience functions (birthday, welcome, enrollment, payment reminder, receipts, tax cert, fun friday, vacation closure, monthly report) |
+| **Celery tasks** | 12 tasks with retry logic: welcome, birthday (single + batch), payment reminders (email + SMS dedup), monthly report, generic, enrollment confirmation, parent magic link, payment receipt, Fun Friday (batch + due-drain) |
+| **Commands** | `send_email --template X [--test]`, `test_all_emails [--only X,Y]`, plus 4 Beat-task wrappers (send_birthday_emails, send_payment_reminders, send_monthly_report, send_due_fun_friday_emails) |
+| **URLs** | 11 patterns: all email app form views |
 
 See [comms/README.md](project/comms/README.md) for details.
 
@@ -2056,6 +2250,25 @@ Payment management with search, filtering, pagination, and quick-complete.
 - **Detail view** — read-only display of all payment fields.
 - **Export** — CSV download (all payments) and Excel download (full database: students + enrollments + payments as multi-sheet .xlsx).
 
+### Expenses
+
+`/gastos/` (v1.5) — admin only.
+
+- **Expense list** — description, category, amount, date, with monthly totals per category.
+- **Create expense** — one-off, or recurring with one of three cadences: **monthly** (`recurring_day` 1-28), **weekly** (`recurring_weekdays`, a CSV of ints 0-6 with Monday=0), or **yearly** (`recurring_day` + `recurring_month`). `Expense.clean()` validates the right fields per cadence.
+- **Auto-materialisation** — recurring rows spawn real expense rows: monthly on the 1st (`materialize_recurring`), weekly and yearly daily at 06:15 (`materialize_recurring_for_date`). Both are idempotent, matching on `generated_from` + the exact `expense_date`, so a re-run never double-creates.
+- **Delete** — removes the row; generated children keep their `generated_from` link.
+
+### Reports
+
+`/informes/` (v1.7) — admin only.
+
+- **Financial summary** — expected vs collected vs outstanding for the selected month/year.
+- **Collection rate** — paid/total ratio over the period.
+- **Retention snapshot** — active, withdrawn, and waiting counts.
+- **Group utilisation** — per-group occupancy against `Group.max_students`.
+- **PDF export** — `reports_pdf` renders the same dashboard as a reportlab document.
+
 ### Schedule
 
 Weekly class timetable with drag-and-drop group assignment.
@@ -2072,6 +2285,16 @@ Dedicated attendance management for the weekly Fun Friday event.
 - **Toggle buttons** — same icon system as student list. AJAX toggles.
 - **This week / Last week panels** — lists of registered students for each Friday.
 - **Search, sort, filter** — same tools as student list.
+
+### Waiting List
+
+`/lista-espera/` (v1.1) — admin only.
+
+- **Group capacity** — every `Group` has `max_students`; `group_capacity_summary` reports occupancy and free seats.
+- **Waiting students** — `Student.is_waiting` + `waiting_since`. Waiting students are excluded from the main student list and shown here in arrival order.
+- **Add to waiting list** — from the student-creation flow when the chosen group is full.
+- **Assign from waiting list** — moves a waiting student into a group once a seat frees up. This runs the *same* post-enrollment work as a normal creation: the enrollment-fee payment plus `PaymentService.schedule_academic_year_payments`, so the whole academic year is scheduled exactly once.
+- **Capacity-freed notification** — `notify_capacity_freed` flags a group that dropped below capacity.
 
 ### Apps (Email Tools)
 
@@ -2100,7 +2323,7 @@ Hub page listing all 10 email communication tools. Each follows a consistent pat
 Admin configuration panel with live editing.
 
 - **Pricing config** — all fees and discounts from SiteConfiguration. Toggle edit mode → modify values → save via AJAX. Fields: children/adult enrollment fees, full-time/part-time/adult monthly fees, 8 discount types.
-- **Teachers** — create via modal (name, email, phone, admin flag). Validates unique email. Lists active teachers.
+- **Teachers** — create via modal (name, email, phone). Validates unique email. Lists active teachers. Teachers created here are **always non-admin** (`create_teacher` hard-codes `admin=False`) — only seeded teachers (`TEACHER_SEED_<N>_ADMIN=True`) and the superuser are admins, and an existing admin promotes others via `/admin/`.
 - **Groups** — create via modal (name, color picker, teacher dropdown). Teacher list populated via AJAX from `/api/teachers/`. Validates unique name.
 - **Language cheque API** — `GET /api/students/language-cheque/` returns all students with active language cheque for government reporting.
 
@@ -2120,7 +2343,7 @@ Standalone page with custom styling (does not extend base.html). The login view 
 - **Testing / production** — credentials checked against `auth.User` via `ModelBackend`. Teachers log in with their email + hashed password (seeded by `manage.py seed_teachers` from `TEACHER_SEED_*` env vars). Non-admin Teachers reach a slimmed-down dashboard with the SimpleAuthMiddleware whitelist enforcing URL-level gating.
 - **Google OAuth** — optional. Button shown if `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` are configured. Validates email matches `GOOGLE_ALLOWED_EMAIL`, get-or-creates a Django superuser, links it to an existing Teacher by email if one exists, and stores Google credentials in session for Gmail/Sheets API access. The same login also grants `/admin/`.
 - **"¿Has olvidado tu contraseña?"** — shown in non-dev environments, links into the password-reset flow below.
-- **Session** — every successful login goes through `django.contrib.auth.login(...)` (sets `_auth_user_id`) *and* the legacy `session["is_authenticated"]` flag for the middleware. 24-hour expiry.
+- **Session** — every successful login goes through `django.contrib.auth.login(...)` (sets `_auth_user_id`) *and* the legacy `session["is_authenticated"]` flag for the middleware. Expires after **6 h of inactivity** (`SESSION_COOKIE_AGE=21600` + `SESSION_SAVE_EVERY_REQUEST=True`).
 
 ### Password Reset
 
@@ -2132,6 +2355,32 @@ Public flow at `/password-reset/...` that lets a teacher recover access without 
 - **Complete page** (`/password-reset/complete/`) — confirms the change and links back to login.
 - All four URLs are listed in `SimpleAuthMiddleware.PUBLIC_PREFIXES` so a locked-out teacher can reach them. Branded templates live under `project/templates/registration/`.
 
+### Two-Factor Authentication
+
+`/2fa/setup/`, `/2fa/manage/`, `/2fa/verify/` (v1.13) — **admin teachers only**.
+
+- **Enrolment** — `two_factor_setup` generates a TOTP secret (`pyotp`) and renders it as a `qrcode` for any authenticator app, plus a set of one-time backup codes.
+- **Login gate** — once `Teacher.two_factor_enabled` is set, `two_factor_verify` sits between password authentication and a usable session. Accepts a TOTP code or a backup code (which is consumed on use).
+- **Manage** — disable 2FA, or rotate the backup codes.
+- **Lockout recovery** — `manage.py reset_two_factor <email>` clears the secret and backup codes for an admin who lost their device.
+
+### Parent Portal
+
+`/portal/` (v1.9) — a separate, parent-facing surface with its own passwordless auth.
+
+- **Magic-link login** — a parent enters their email; if it matches a `Parent`, `send_parent_magic_link_task` emails a signed link. The response is identical either way, so the endpoint never reveals whether an email is registered.
+- **Token** — `ParentSessionToken` is single-use and time-limited; `consume` runs under `SELECT FOR UPDATE` so a link can't be redeemed twice concurrently.
+- **Dashboard + payments** — the parent sees only their own children's payments. Receipts and the annual tax certificate download as PDFs.
+- **Pay online (v1.11)** — when `STRIPE_SECRET_KEY` is set, a "Pagar online" button creates a Stripe Checkout session. The webhook (`stripe_webhook`) marks the payment completed. `STRIPE_WEBHOOK_SECRET` is **required in production** — with it unset the webhook skips signature verification, so any HTTP client could mark payments as paid.
+- **Rate limited** — the login endpoint is behind the v1.10 IP rate limiter.
+
+### PWA (Installable App)
+
+(v1.12) — the app installs to a phone or desktop home screen.
+
+- **`/manifest.webmanifest`** — name, theme colour (violet `#8b5cf6`), and icon set.
+- **`/service-worker.js`** — **cache-first** for content-hashed static assets (they're immutable, so this is optimal) and network for everything else. `NoHtmlCacheMiddleware` marks dynamic HTML `no-cache` so navigation always revalidates and never pins stale asset hashes after a deploy.
+
 ---
 
 ## Testing
@@ -2140,11 +2389,11 @@ Public flow at `/password-reset/...` that lets a teacher recover access without 
 
 | Metric | Value |
 |--------|-------|
-| **Total tests** | 1,008 |
-| **Test files** | 70 (44 unit + 26 integration) |
-| **Coverage** | 95% |
+| **Total tests** | 1,061 |
+| **Test files** | 72 (46 unit + 26 integration) |
+| **Coverage** | 95% (95.49% — 4,772 statements, 215 uncovered) |
 | **Coverage thresholds** | **≥ 90%** (target, no warning) / **75-89%** (CI warning, pre-commit still blocks below 75) / **< 75%** (CI fails, pre-commit rejects the commit) |
-| **Runtime** | ~19 seconds (8 parallel workers via pytest-xdist) |
+| **Runtime** | ~50 seconds (parallel workers via `pytest-xdist -n auto`) |
 | **Database** | PostgreSQL (same as production) — **always use `make test`** |
 | **Framework** | pytest 9 + pytest-django + pytest-cov + pytest-xdist + pytest-randomly |
 | **Type checking** | mypy + django-stubs (pre-commit hook) |
@@ -2152,20 +2401,22 @@ Public flow at `/password-reset/...` that lets a teacher recover access without 
 | **Dependency audit** | pip-audit for CVE scanning |
 | **Linting** | Ruff (check + format) via pre-commit hooks |
 | **Settings** | `project/settings_test.py` |
-| **Fixtures** | `conftest.py` — 15 shared fixtures |
+| **Fixtures** | `conftest.py` — 18 shared fixtures |
 
 ```bash
-make test              # Inside Docker (PostgreSQL, parallel, with coverage)
-make test-unit         # Only unit tests (tests/unit/)
-make test-integration  # Only integration tests (tests/integration/)
-make test-cov-gate     # Same as make test + fails if coverage < 75%
-                       # (invoked by the pytest-coverage pre-commit hook)
-make test-local        # Local against Docker PostgreSQL
-make test-sqlite       # Local with SQLite (no Docker)
-make test-coverage     # Generate HTML coverage report
-make test-fast         # Stop on first failure
-make test-k K=payment  # Run tests matching keyword
+make test                   # Inside Docker (PostgreSQL, parallel, with coverage)
+make test unit              # Only unit tests (tests/unit/)
+make test integration       # Only integration tests (tests/integration/)
+make test coverage          # All tests + HTML coverage report
+make test K=payment         # Filter by keyword
+make test ARGS='-x --lf'    # Pass raw pytest flags through
+make test-cov-gate          # Same as make test + fails if coverage < 75%
+                            # (invoked by the pytest-coverage pre-commit hook)
 ```
+
+> `make test` takes the suite selector as a **positional argument** (`make test unit`), not as a
+> separate target. There are no `make test-unit` / `test-sqlite` / `test-coverage` / `test-fast`
+> targets — `make test` and `make test-cov-gate` are the only two test targets in the Makefile.
 
 **Coverage gates at every stage of the pipeline:**
 
@@ -2186,56 +2437,93 @@ Within each file, related tests are grouped into classes. Where a large file abs
 
 ### Unit Tests
 
+**46 files, 594 tests.** Direct-call tests — no HTTP stack, no URL resolver, no template rendering.
+
 | File | Count | Coverage |
 | --- | --- | --- |
 | [`unit/test_models.py`](project/tests/unit/test_models.py) | 48 | Every model across `students`, `billing`, `core` — properties (`full_name`, `age`, `is_overdue`, `remaining_amount`, `is_paid`), `__str__`, unique constraints, FK behavior, academic-year helpers (`current_academic_year`, `academic_year_start_date`, `academic_year_end_date`), SiteConfiguration singleton, HistoryLog cap + debounce |
 | [`unit/test_services.py`](project/tests/unit/test_services.py) | 27 | `PricingService` (all fee + discount combos), `EnrollmentService` (all plans, language cheque, sibling, both, minimum-amount floor, adult enrollment, edge cases), `PaymentService` (monthly + quarterly amounts, June bonus, academic month/quarter validation, payment completion), service error paths |
+| [`unit/test_schedule_utils.py`](project/tests/unit/test_schedule_utils.py) | 27 | `core.schedule_utils` — the single source of truth for how a group's timetable is rendered into the welcome email: `slot_time_range` formatting and `get_group_schedule_lines` (ordering, day grouping, empty group, contiguous-slot merging) |
 | [`unit/test_student_view_internals.py`](project/tests/unit/test_student_view_internals.py) | 25 | `StudentUpdateView` view-object method branches (quarterly, part-time, no enrollment, exception-handling) via `RequestFactory` to sidestep missing template, plus unreferenced helper functions `handle_student_form`, `student_detail`, `update_student` called directly |
+| [`unit/test_expenses.py`](project/tests/unit/test_expenses.py) | 25 | `Expense` model + `ExpenseService` (v1.5): per-frequency `clean()` validation, monthly totals aggregation, `materialize_recurring` (monthly, 1st-of-month) and `materialize_recurring_for_date` (weekly `recurring_weekdays` CSV + yearly), idempotency on `generated_from` + exact `expense_date` |
+| [`unit/test_coverage_boost.py`](project/tests/unit/test_coverage_boost.py) | 25 | Targeted branch fill-in across the fix set: recurring-expense task, Google Sheets service internals, `SmsService._get_client`, rate-limit edge cases, Stripe view edge cases, expense-form bad input, waiting-list branches, parent-portal edge branches |
 | [`unit/test_tasks.py`](project/tests/unit/test_tasks.py) | 24 | Celery tasks called synchronously with `email_service` mocked: `send_welcome_email_task` (parent + adult-student + missing + failure paths), `send_birthday_email_task`, `send_birthday_emails_task`, `send_payment_reminders`, `send_generic_email_task`, `send_enrollment_confirmation_task` (success + missing + attachments + failure) |
-| [`unit/test_email_service.py`](project/tests/unit/test_email_service.py) | 18 | `EmailService.send_email`: string + list recipients, CC/BCC, attachments, inline images (existing + missing path), `fail_silently` on and off, exception-raises-when-not-silent, `send_bulk_emails` mixed success/failure, `get_email_config` |
+| [`unit/test_review_fixes.py`](project/tests/unit/test_review_fixes.py) | 23 | Regression locks for the review-loop fixes, one class per bug so a revert fails loudly: Stripe replay safety + checkout URLs, async magic link, `ParentSessionToken` atomicity (`SELECT FOR UPDATE`), rate-limit count methods, waiting-list assign guards, payment-reminder dedup, audit-log PII scrubbing |
+| [`unit/test_email_service.py`](project/tests/unit/test_email_service.py) | 19 | `EmailService.send_email`: string + list recipients, CC/BCC, attachments, inline images (existing + missing path), `fail_silently` on and off, exception-raises-when-not-silent, `send_bulk_emails` mixed success/failure, `get_email_config`, Django 6 inline-image API |
+| [`unit/test_two_factor_service.py`](project/tests/unit/test_two_factor_service.py) | 17 | TOTP two-factor service (v1.13): `begin_enrolment`, `confirm_enrolment`, `verify_totp`, `verify_backup_code`, `verify_code`, `disable`, `rotate_backup_codes`, issuer-name derivation |
 | [`unit/test_email_functions.py`](project/tests/unit/test_email_functions.py) | 17 | All convenience wrappers (`send_birthday_email`, `send_welcome_email`, `send_payment_reminder`, `send_monthly_report`, `send_enrollment_confirmation_email`, `send_quarterly_receipt_email`, `send_fun_friday_email`, `send_vacation_closure_email`, `send_tax_certificate_email`, `send_all_tax_certificates`) plus tax-certificate PDF generation branches |
+| [`unit/test_stripe_service.py`](project/tests/unit/test_stripe_service.py) | 16 | Stripe service (v1.11, `httpx` — no SDK dependency): `is_configured`, `create_checkout_session`, `verify_webhook_signature`, `apply_webhook_event`, singleton accessor |
+| [`unit/test_email_bug_hunt_fixes.py`](project/tests/unit/test_email_bug_hunt_fixes.py) | 16 | Round-2 email regression suite: `payment_reminder_simple` + birthday templates, Fun Friday image guard, welcome email fired `on_commit`, CLI batch per-recipient loop, birthday to all parents, birthday-task timezone (`localdate`), monthly-report template defaults |
+| [`unit/test_rate_limit.py`](project/tests/unit/test_rate_limit.py) | 15 | Cache-backed IP rate limiter (v1.10): window counting, limit enforcement, per-key isolation, disabled path, and `_client_ip` validation through `ipaddress` (spoofed `X-Forwarded-For`, malformed values) |
+| [`unit/test_waiting_list.py`](project/tests/unit/test_waiting_list.py) | 14 | Waiting List & Group Capacity (v1.1) models + helpers: `Group.max_students` capacity properties, `Student.is_waiting`/`waiting_since`, group-capacity summary, capacity-freed notification |
+| [`unit/test_google_sheets_service.py`](project/tests/unit/test_google_sheets_service.py) | 14 | Google Sheets export service (v1.2): configuration detection (inline creds vs file path), student + payment export shaping, result object, lazy `_get_service` construction |
+| [`unit/test_coverage_boost_2.py`](project/tests/unit/test_coverage_boost_2.py) | 13 | Second branch-fill pass: waiting-list exception branches, student-create waiting mode, context-processor exception branches, audit-signal branches, PDF-service academy-info fallback, expense validation, Stripe cross-parent guard, rate-limit disabled path |
 | [`unit/test_context_processors.py`](project/tests/unit/test_context_processors.py) | 13 | `today_notifications`: expected keys, todos due today vs other day, scheduled apps on Friday vs Monday, monthly apps excluded on day 15, history count, unauthenticated early-return |
 | [`unit/test_constants.py`](project/tests/unit/test_constants.py) | 13 | Pure functions: `calculate_discount` (flat/percentage/invalid/edge), `get_monthly_fee_by_schedule`, `get_enrollment_fee` |
+| [`unit/test_sms_service.py`](project/tests/unit/test_sms_service.py) | 12 | Twilio SMS service (v1.8): `is_configured` (all three env vars), `send`, `send_to_parent` (opt-in gate via `Parent.sms_opt_in`), singleton accessor |
 | [`unit/test_beat_commands.py`](project/tests/unit/test_beat_commands.py) | 12 | The Beat-task management-command wrappers (v1.14.2): each command runs its task synchronously via `.apply()`, `--recipient`/`--month`/`--year`/`--date`/`--days` forwarding, `materialize_recurring_expenses` flag validation (`--daily` vs monthly), real backlog-cleanup run (old done task deleted, fresh survives) |
+| [`unit/test_returning_student_discount.py`](project/tests/unit/test_returning_student_discount.py) | 11 | Returning-student enrollment discount (v1.13): `is_returning_student` detection, `compute_enrollment_fee` with the discount applied, `SiteConfiguration` default, and the `update_site_config` API accepting the new field |
+| [`unit/test_log_safe.py`](project/tests/unit/test_log_safe.py) | 11 | `core.log_safe.safe_log` — the log-injection sanitizer (v1.14.4): CR/LF stripping, control characters, non-string coercion, length clamping |
+| [`unit/test_analytics_service.py`](project/tests/unit/test_analytics_service.py) | 11 | Reports analytics service (v1.7): financial summary, collection rate, retention snapshot, group utilisation, and the composed dashboard report |
 | [`unit/test_transactions.py`](project/tests/unit/test_transactions.py) | 10 | Query helpers: `get_active_students`, `get_payments_for_last_two_school_years`, `get_all_payments_unrestricted` — ordering, select_related, school-year filtering |
-| [`unit/test_teacher_user_sync.py`](project/tests/unit/test_teacher_user_sync.py) | 10 | `Teacher.ensure_user()` (create + link + sync + password) and the `post_save` mirror signal (`admin` → `is_staff`/`is_superuser`, email/name/username sync) |
+| [`unit/test_teacher_user_sync.py`](project/tests/unit/test_teacher_user_sync.py) | 10 | `Teacher.ensure_user()` (create + link + sync + password) and the `post_save` mirror signal (`admin` -> `is_staff`/`is_superuser`, email/name/username sync) |
+| [`unit/test_celery_config.py`](project/tests/unit/test_celery_config.py) | 10 | Beat-schedule sanity checks (v1.4): every entry in `app.conf.beat_schedule` names a task that actually exists, queue routing is set, and task autodiscovery finds all four apps |
 | [`unit/test_forms.py`](project/tests/unit/test_forms.py) | 9 | `EnrollmentForm` validation + `create_enrollment()` delegation to `EnrollmentService` (quarterly, monthly full/part, manual amount, sibling checkbox, adult, below-minimum rejection) |
 | [`unit/test_seed_teachers_command.py`](project/tests/unit/test_seed_teachers_command.py) | 8 | `manage.py seed_teachers`: creation, idempotent update, password-persistence rule (no overwrite once a teacher has a usable password), gap-stop iteration, missing-field skip |
+| [`unit/test_parent_session_token.py`](project/tests/unit/test_parent_session_token.py) | 8 | Parent-portal session token (v1.9): `issue` (hashing + expiry), validity window, and single-use `consume` under concurrent access |
+| [`unit/test_new_email_tasks.py`](project/tests/unit/test_new_email_tasks.py) | 8 | The two review-pass email tasks: `send_parent_magic_link_task` (v1.9) and `send_payment_receipt_email_task` (v1.11) — success, missing-record, and send-failure paths |
 | [`unit/test_fun_friday_scheduling.py`](project/tests/unit/test_fun_friday_scheduling.py) | 8 | `FunFridayScheduledSend.is_due` semantics + `send_due_fun_friday_emails_task` drain: due rows sent + marked `sent_at`, future rows skipped, idempotent re-run never re-sends, end-to-end send through the real email backend |
+| [`unit/test_beat_tasks.py`](project/tests/unit/test_beat_tasks.py) | 8 | The v1.4 Beat tasks themselves: `generate_monthly_payments_task` (creates the month's pending fees, idempotent) and `send_monthly_report_task` (default + explicit recipient) |
 | [`unit/test_student_forms.py`](project/tests/unit/test_student_forms.py) | 7 | `StudentForm` + `ParentForm` validation: future birth date rejected, DNI minimum length, required fields, both date formats |
-| [`unit/test_exports.py`](project/tests/unit/test_exports.py) | 7 | Excel workbook generation via `openpyxl`: Students, Enrollments, Payments sheets + combined workbook; empty-database edge case |
+| [`unit/test_pdf_service.py`](project/tests/unit/test_pdf_service.py) | 7 | reportlab PDF service (v1.3): payment receipt, quarterly summary, and tax certificate generation — byte output, academy-info population |
 | [`unit/test_payment_helpers.py`](project/tests/unit/test_payment_helpers.py) | 7 | `parse_date_value` (6 formats including invalid) + `payment_detail` AJAX helper called directly via `RequestFactory` |
-| [`unit/test_decorators.py`](project/tests/unit/test_decorators.py) | 4 | `@qa_access_required`: allow when `IS_TESTING_ENV` + the request is a logged-in Teacher, 404 when not testing env / authenticated non-teacher / anonymous |
-| [`unit/test_payment_scheduling.py`](project/tests/unit/test_payment_scheduling.py) | 4 | `PaymentService.schedule_academic_year_payments`: monthly enrollment → 10 pending payments (Sep–Jun) due at month end, quarterly → 3 (Oct/Jan/Apr), idempotent on re-run, inactive student skipped |
-| [`unit/test_error_handlers.py`](project/tests/unit/test_error_handlers.py) | 5 | `handler400`/`handler403`/`handler404`/`handler405`/`handler500` render with correct status codes |
+| [`unit/test_exports.py`](project/tests/unit/test_exports.py) | 7 | Excel workbook generation via `openpyxl`: Students, Enrollments, Payments sheets + combined workbook; empty-database edge case |
+| [`unit/test_audit_log.py`](project/tests/unit/test_audit_log.py) | 6 | Immutable audit trail (v1.10): the `post_save`/`post_delete` signal receivers write an `AuditLog` row with the contextvar actor, and the model rejects mutation after creation |
 | [`unit/test_qa_error_middleware.py`](project/tests/unit/test_qa_error_middleware.py) | 5 | `QAErrorEmailMiddleware.process_exception` via `RequestFactory`: pass-through, disabled config, no support email, send success, send failure swallowed |
+| [`unit/test_final_coverage.py`](project/tests/unit/test_final_coverage.py) | 5 | The last uncovered branches: waiting-list assign with a null group in JSON, welcome-email `on_commit` happy path, Stripe checkout `httpx` error, receipt-email PDF-generation error |
+| [`unit/test_error_handlers.py`](project/tests/unit/test_error_handlers.py) | 5 | `handler400`/`handler403`/`handler404`/`handler405`/`handler500` render with correct status codes |
+| [`unit/test_decorators.py`](project/tests/unit/test_decorators.py) | 5 | `@qa_access_required`: allow when `IS_TESTING_ENV` + the request is a logged-in admin Teacher, 404 when not testing env / authenticated non-teacher / anonymous |
+| [`unit/test_sms_tasks.py`](project/tests/unit/test_sms_tasks.py) | 4 | `send_payment_reminder_sms_task` (v1.8): opt-in parent gets the SMS, opted-out is skipped, missing payment and send failure handled |
+| [`unit/test_payment_scheduling.py`](project/tests/unit/test_payment_scheduling.py) | 4 | `PaymentService.schedule_academic_year_payments`: monthly enrollment -> 10 pending payments (Sep-Jun) due at month end, quarterly -> 3 (Oct/Jan/Apr), idempotent on re-run, inactive student skipped |
+| [`unit/test_email_service_year.py`](project/tests/unit/test_email_service_year.py) | 3 | Regression: the `year` context value used to be hard-coded to 2025 — it now tracks the current year in every rendered email |
 | [`unit/test_testing_tools_helpers.py`](project/tests/unit/test_testing_tools_helpers.py) | 2 | `_git_info` helper: success path + non-zero returncode branch with `subprocess.run` mocked |
 
 ### Integration Tests
 
+**26 files, 467 tests.** Full HTTP stack through Django's test client.
+
 | File | Count | Coverage |
 | --- | --- | --- |
-| [`integration/test_app_form_views.py`](project/tests/integration/test_app_form_views.py) | 98 | Every email form GET page, POST `action=preview` (JSON HTML), `test_send` with/without EMAIL_TEST_* env vars, main send-to-parents for every form (fun_friday, payment_reminder, vacation_closure, tax_certificate, monthly_report, birthday, receipts × 3, newsletter, enrollment/welcome), Fun Friday persist-for-Monday-14:30 + immediate drain when the slot passed (v1.14.2), invalid-date fallbacks, missing-field errors, no-parents-with-email edge cases, per-recipient exception swallowing, welcome_form redirect |
-| [`integration/test_views.py`](project/tests/integration/test_views.py) | 54 | Cross-cutting top-level HTTP coverage: auth flow, dashboard, `all_info`, student/parent list + detail + create + search, payment list + create + detail + CRUD + stats + CSV + validation, todos + history API, management admin, email form pages (parametrized), enrollment API, error pages (parametrized), schedule, Fun Friday, support |
-| [`integration/test_payment_views.py`](project/tests/integration/test_payment_views.py) | 37 | All HTTP payment endpoints: list (search, stats), create (+ invalid parent + unexpected exception), detail-view (+ 404), update (JSON + FormData + all error branches), delete (success + exception 500), deactivate (success + exception 400), quick-complete (success + invalid method + broken JSON), get-details (success + exception), search payments/parents (short query + hits), validate student-parent (all branches), export DB to Excel |
+| [`integration/test_app_form_views.py`](project/tests/integration/test_app_form_views.py) | 99 | Every email form GET page, POST `action=preview` (JSON HTML), `test_send` with/without EMAIL_TEST_* env vars, main send-to-parents for every form (fun_friday, payment_reminder, vacation_closure, tax_certificate, monthly_report, birthday, receipts x 3, newsletter, enrollment/welcome), Fun Friday persist-for-Monday-14:30 + immediate drain when the slot passed (v1.14.2), invalid-date fallbacks, missing-field errors, no-parents-with-email edge cases, per-recipient exception swallowing, welcome_form redirect |
+| [`integration/test_views.py`](project/tests/integration/test_views.py) | 65 | Cross-cutting top-level HTTP coverage: auth flow, dashboard, `all_info`, student/parent list + detail + create + search, payment list + create + detail + CRUD + stats + CSV + validation, todos + history API, management admin, email form pages (parametrized), enrollment API, error pages (parametrized), schedule, Fun Friday, support |
+| [`integration/test_payment_views.py`](project/tests/integration/test_payment_views.py) | 38 | All HTTP payment endpoints: list (search, stats), create (+ invalid parent + unexpected exception), detail-view (+ 404), update (JSON + FormData + all error branches), delete (success + exception 500), deactivate (success + exception 400), quick-complete (success + invalid method + broken JSON), get-details (success + exception), search payments/parents (short query + hits), validate student-parent (all branches), export DB to Excel |
 | [`integration/test_student_views.py`](project/tests/integration/test_student_views.py) | 23 | `StudentListView` (search, exclude inactive, context), `StudentDetailView` (parents visible, 404), `StudentCreateView` (form + adult mode + success + full POST + error paths including invalid parent, existing-parent mode, create_sibling flag, email-task swallow), `search_students` JSON endpoint (results + short-query empty) |
+| [`integration/test_testing_tools.py`](project/tests/integration/test_testing_tools.py) | 21 | QA dashboard `/testing/` gated by `@qa_access_required` (via `override_settings`): dashboard renders + git failure handled, `api_seed_database` (success + reset + command error 500 + non-QA 404), `api_create_backlog_task` (all branches + screenshot attached to the email but never stored + send/swallow), `api_update_backlog_task` (success + invalid status + 404), `api_toggle_error_email` (on + off + bad JSON) |
 | [`integration/test_teacher_auth_flow.py`](project/tests/integration/test_teacher_auth_flow.py) | 21 | Login dispatcher branches (dev env-var vs `auth.User`-backed Teacher login), OAuth user creation/Teacher-linking, `_finalize_session_login` setting both `_auth_user_id` and `is_authenticated`, `SimpleAuthMiddleware` whitelist behaviour for non-admin Teachers (allowed routes, 403 JSON for `/api/*`, dashboard redirect with flash for HTML), template gating (sidebar swap, read-only management) |
-| [`integration/test_testing_tools.py`](project/tests/integration/test_testing_tools.py) | 20 | QA dashboard `/testing/` gated by `@qa_access_required` (via `override_settings`): dashboard renders + git failure handled, `api_seed_database` (success + reset + command error 500 + non-QA 404), `api_create_backlog_task` (all branches + email send/swallow), `api_update_backlog_task` (success + invalid status + 404), `api_toggle_error_email` (on + off + bad JSON) |
 | [`integration/test_management_views.py`](project/tests/integration/test_management_views.py) | 19 | `gestion_view` + `update_site_config` (all fields + bad JSON), `create_teacher` (success + duplicate + missing field + bad JSON), `create_group` (success + missing fields + duplicate + nonexistent teacher + bad JSON), `api_get_teachers`, `update_enrollment_modality` (success + invalid + no enrollment + student not found), `language_cheque_students` |
+| [`integration/test_two_factor_views.py`](project/tests/integration/test_two_factor_views.py) | 17 | 2FA views and the login gate (v1.13): setup page (QR + secret), manage page (disable, rotate backup codes), the login gate flow (TOTP accepted, backup code accepted, wrong code rejected), and the `reset_two_factor` management command |
+| [`integration/test_waiting_list_views.py`](project/tests/integration/test_waiting_list_views.py) | 16 | Waiting List & Group Capacity views (v1.1): waiting-list page, `assign_from_waiting_list` (capacity checks + payment scheduling), `add_to_waiting_list`, student list excludes waiting students, dashboard waiting widget |
+| [`integration/test_dashboard_views.py`](project/tests/integration/test_dashboard_views.py) | 15 | `home` view quote-cookie branches (valid cookie, corrupt cookie -> API, API failure, API empty, `[AUTH]` placeholder filtered, with pending payments), `all_info` sort variants (default, first_name, last_name, id_asc, payments_sort=student_asc) |
+| [`integration/test_parent_portal.py`](project/tests/integration/test_parent_portal.py) | 14 | Parent portal (v1.9): magic-link request + token issue, link consumption establishing a scoped session, and the portal pages (payment list, receipt download) restricted to that parent's own children |
 | [`integration/test_schedule_views.py`](project/tests/integration/test_schedule_views.py) | 13 | Schedule page (groups + slots in context), `save_schedule_slot` (assign + clear + reject GET + invalid JSON), Fun Friday page (loads, excludes adults, with attendance) |
 | [`integration/test_auth_oauth.py`](project/tests/integration/test_auth_oauth.py) | 13 | OAuth callback flow with `google_auth_oauthlib.flow.Flow` mocked: state missing, state mismatch, `fetch_token` failure, id-token verification failure, email whitelist mismatch, successful session establishment; login view extras (already-auth redirect, missing env, OAuth-available flag); logout clears session |
-| [`integration/test_dashboard_views.py`](project/tests/integration/test_dashboard_views.py) | 11 | `home` view quote-cookie branches (valid cookie, corrupt cookie → API, API failure, API empty, `[AUTH]` placeholder filtered, with pending payments), `all_info` sort variants (default, first_name, last_name, id_asc, payments_sort=student_asc) |
+| [`integration/test_expense_views.py`](project/tests/integration/test_expense_views.py) | 11 | Expense CRUD endpoints (v1.5): list page with monthly totals, create (valid + per-frequency validation errors), delete |
 | [`integration/test_password_reset.py`](project/tests/integration/test_password_reset.py) | 10 | Full password-reset round-trip: request form renders, valid email triggers branded HTML email send, confirm page accepts new password with valid uidb64+token, complete page renders, all four URLs reachable while unauthenticated (`SimpleAuthMiddleware.PUBLIC_PREFIXES` exemption) |
-| [`integration/test_parent_views.py`](project/tests/integration/test_parent_views.py) | 8 | `ParentCreateView`: GET renders, POST new + existing DNI + invalid + exception-triggers-form-invalid |
+| [`integration/test_middleware.py`](project/tests/integration/test_middleware.py) | 10 | `SimpleAuthMiddleware`: public paths (login, health, static, media, OAuth prefix), protected paths redirect to login, authenticated requests pass; `NoHtmlCacheMiddleware` marks dynamic HTML `no-cache` while leaving hashed static assets immutable |
 | [`integration/test_todo_views.py`](project/tests/integration/test_todo_views.py) | 8 | `create_todo` (missing text + missing date + invalid date + success), `complete_todo`, `history_list` (default + offset + invalid offset) |
-| [`integration/test_middleware.py`](project/tests/integration/test_middleware.py) | 8 | `SimpleAuthMiddleware`: public paths (login, health, static, media, OAuth prefix), protected paths redirect to login, authenticated requests pass |
-| [`integration/test_auth_views.py`](project/tests/integration/test_auth_views.py) | 7 | Login view: render for unauth'd, redirect for authenticated, valid + invalid credentials, logout, OAuth redirect (no creds → login) |
+| [`integration/test_stripe_views.py`](project/tests/integration/test_stripe_views.py) | 8 | Stripe endpoints (v1.11): `create_checkout_link` (configured + not configured + cross-parent guard) and the webhook (valid signature applies the payment, bad signature rejected, unknown event ignored) |
+| [`integration/test_pwa_views.py`](project/tests/integration/test_pwa_views.py) | 8 | PWA endpoints (v1.12): `web_manifest` (JSON shape, icons) and `service_worker` (correct content type, cache-first strategy for hashed static) |
+| [`integration/test_parent_views.py`](project/tests/integration/test_parent_views.py) | 8 | `ParentCreateView`: GET renders, POST new + existing DNI + invalid + exception-triggers-form-invalid |
+| [`integration/test_auth_views.py`](project/tests/integration/test_auth_views.py) | 7 | Login view: render for unauth'd, redirect for authenticated, valid + invalid credentials, logout, OAuth redirect (no creds -> login) |
+| [`integration/test_sheets_views.py`](project/tests/integration/test_sheets_views.py) | 6 | Google Sheets export view (v1.2): `/api/sheets/export/` success, 503 when unconfigured, and error propagation |
 | [`integration/test_fun_friday_attendance_views.py`](project/tests/integration/test_fun_friday_attendance_views.py) | 6 | `toggle_fun_friday_this_week` (adult rejected + toggle on/off), `add_fun_friday_attendance` (success + invalid), `remove_fun_friday_attendance` (success + invalid) |
-| [`integration/test_support_views.py`](project/tests/integration/test_support_views.py) | 5 | `submit_support_ticket`: success (send_mail called), short message rejected, no support email configured → 500, bad JSON, unexpected exception |
+| [`integration/test_support_views.py`](project/tests/integration/test_support_views.py) | 5 | `submit_support_ticket`: success (send_mail called), short message rejected, no support email configured -> 500, bad JSON, unexpected exception |
+| [`integration/test_reports_view.py`](project/tests/integration/test_reports_view.py) | 4 | Reports dashboard (v1.7): the HTML page renders every analytics block, and the PDF export returns a reportlab document |
+| [`integration/test_receipt_view.py`](project/tests/integration/test_receipt_view.py) | 2 | Payment-receipt PDF endpoint (v1.3): authorised download returns a PDF, unauthorised is rejected |
 
 ### Coverage Report
 
-Live snapshot from the last full run (`make test`) — files below 100% coverage:
+Live snapshot from the last full run (`make test`) — the 28 source files below 100% coverage:
 
 | File | Stmts | Miss | Cover | Missing lines |
 | --- | --- | --- | --- | --- |
@@ -2244,32 +2532,40 @@ Live snapshot from the last full run (`make test`) — files below 100% coverage
 | `billing/services/payment_service.py` | 90 | 3 | 97% | 39, 42, 49 |
 | `billing/services/stripe_service.py` | 102 | 3 | 97% | 139-140, 168 |
 | `billing/tasks.py` | 33 | 5 | 85% | 40-45 |
-| `comms/services/email_service.py` | 62 | 1 | 98% | 57 |
-| `comms/services/sms_service.py` | 49 | 3 | 94% | 56, 61-62 |
-| `comms/tasks.py` | 237 | 3 | 99% | 383, 474, 623 |
+| `comms/services/email_service.py` | 63 | 1 | 98% | 59 |
+| `comms/services/sms_service.py` | 50 | 3 | 94% | 58, 63-64 |
+| `comms/tasks.py` | 237 | 5 | 98% | 383, 474, 623, 668-669 |
 | `core/audit_models.py` | 25 | 1 | 96% | 66 |
-| `core/audit_signals.py` | 94 | 6 | 94% | 112, 118, 134, 145-146, 151 |
+| `core/audit_signals.py` | 92 | 6 | 93% | 109, 115, 131, 142-143, 148 |
 | `core/context_processors.py` | 31 | 1 | 97% | 22 |
-| `core/middleware.py` | 81 | 5 | 94% | 52-53, 167, 212-213 |
-| `core/models.py` | 116 | 4 | 97% | 48, 100, 197, 217 |
-| `core/schedule_utils.py` | 24 | 9 | 62% | 23, 35, 40-46 |
+| `core/middleware.py` | 81 | 5 | 94% | 52-57, 171, 216-217 |
+| `core/models.py` | 117 | 4 | 97% | 48, 100, 198, 218 |
 | `core/services/google_sheets_service.py` | 99 | 9 | 91% | 74-76, 112-118 |
 | `core/transactions.py` | 19 | 1 | 95% | 28 |
-| `core/views/app_forms.py` | 613 | 45 | 93% | 50, 137-139, 151-153, 167-170, … |
-| `core/views/auth.py` | 166 | 18 | 89% | 44-47, 178, 182-198, 249, 284, 336-345 |
+| `core/views/app_forms.py` | 613 | 44 | 93% | 137-139, 151-153, 167-170, 187-188, 281-282, 305-306, 356-358, 389, 544-546, 552, 691, 713, 732, 806, 810, 832, 843, 919, 945, 958, 971, 983, 994, 1005, 1116, 1162, 1190-1194, 1222-1225 |
+| `core/views/auth.py` | 167 | 18 | 89% | 45-48, 179, 183-199, 250, 285, 346-355 |
 | `core/views/dashboard.py` | 114 | 6 | 95% | 103-110, 151, 167 |
 | `core/views/expenses.py` | 83 | 6 | 93% | 52, 55-56, 84, 102-103 |
-| `core/views/parent_portal.py` | 100 | 3 | 97% | 142, 169, 189 |
+| `core/views/parent_portal.py` | 100 | 3 | 97% | 145, 172, 192 |
 | `core/views/parents.py` | 26 | 3 | 88% | 24-29 |
-| `core/views/payments.py` | 239 | 7 | 97% | 181-186, 341-342, 370-371 |
-| `core/views/students.py` | 325 | 12 | 96% | 54-55, 104, 168, 214-215, 348, 356, 572, 575-577 |
-| `core/views/testing_tools.py` | 145 | 19 | 87% | 138, 140, 229, 247-248, 271-315 |
+| `core/views/payments.py` | 253 | 9 | 96% | 181-186, 341-342, 364-365, 379-380 |
+| `core/views/students.py` | 328 | 12 | 96% | 57-58, 107, 171, 217-218, 351, 359, 575, 578-580 |
+| `core/views/testing_tools.py` | 150 | 20 | 87% | 145, 147, 236, 254-255, 282-330 |
 | `core/views/two_factor.py` | 90 | 9 | 90% | 38, 49-50, 170-172, 177-178, 193 |
-| `core/views/waiting_list.py` | 108 | 7 | 94% | 95-99, 153, 283 |
-| `students/models.py` | 206 | 3 | 99% | 311, 327-328 |
+| `core/views/waiting_list.py` | 111 | 7 | 94% | 100-104, 158, 289 |
+| `students/models.py` | 207 | 3 | 99% | 311, 328-329 |
 | `students/parent_portal_models.py` | 41 | 1 | 98% | 44 |
 
-**54 files** have 100% coverage (skipped above). Total coverage: **95%** across 4,702 statements. Coverage is **very good**. Coverage is enforced at three levels: pre-commit hook (≥ 75%), CI hard floor (≥ 75%), and CI warning (< 90%).
+**57 files** have 100% coverage (skipped above). Total coverage: **95%** (95.49%) across 4,772 statements, 215 uncovered. Coverage is **very good**. Coverage is enforced at three levels: pre-commit hook (>= 75%), CI hard floor (>= 75%), and CI warning (< 90%).
+
+> **Reading the number consistently (fixed in v1.14.7).** The CI test step runs with
+> `working-directory: project`, but `[tool.coverage.run]` — including the `omit` list for
+> migrations, management commands and `admin.py` — lives in the repo-root `pyproject.toml`.
+> Coverage only looks for config in the *current* directory, so CI was silently ignoring the
+> omit list: 42 extra files, ~993 extra statements, and a reported **86.44%** instead of
+> **95.49%**. That fired the `< 90%` warning on every run and sent the wrong figure to Codecov.
+> `ci.yml` now passes `--cov-config=../pyproject.toml`, so CI, `make test` and
+> `make test-cov-gate` all report the same number.
 
 ---
 
@@ -2284,13 +2580,14 @@ All migrations were regenerated from scratch during the v1.0.0 multi-app split.
 | `students` | `0003_teacher_user` | Adds `Teacher.user` OneToOneField → `auth.User` (nullable, `on_delete=SET_NULL`) | `students.0002`, `auth` |
 | `students` | `0004_waiting_list_and_group_capacity` | `Student.is_waiting`, `waiting_since`, `Group.max_students` (v1.1) | `students.0003` |
 | `students` | `0005_add_parent_sms_opt_in` | `Parent.sms_opt_in` (v1.8) | `students.0004` |
-| `students` | `0006_add_parent_session_token` | `ParentSessionToken` — magic-link magic-link auth (v1.9) | `students.0005` |
+| `students` | `0006_add_parent_session_token` | `ParentSessionToken` — parent-portal magic-link auth (v1.9) | `students.0005` |
 | `students` | `0007_add_teacher_two_factor` | `Teacher.two_factor_secret / _enabled / _backup_codes` (v1.13) | `students.0006` |
 | `billing` | `0001_initial` | SiteConfiguration, EnrollmentType, Enrollment, Payment | `students.0001` |
 | `billing` | `0002` | Enrollment academic_year index | `billing.0001`, `students.0002` |
 | `billing` | `0003_add_expense_model` | `Expense` — recurring templates + auto-materialised rows (v1.5) | `billing.0002` |
 | `billing` | `0004_add_payment_stripe_fields` | `Payment.stripe_session_id`, `stripe_payment_intent` (v1.11) | `billing.0003` |
 | `billing` | `0005_add_returning_student_discount` | `SiteConfiguration.returning_student_enrollment_discount` (v1.13) | `billing.0004` |
+| `billing` | `0006_expense_recurring_frequency_and_more` | `Expense.recurring_frequency` / `recurring_month` / `recurring_weekdays`, `recurring_day` widened — the three recurring cadences (monthly / weekly / yearly) | `billing.0005` |
 | `core` | `0001_initial` | TodoItem, HistoryLog, FunFridayAttendance, ScheduleSlot | `students.0001` |
 | `core` | `0002` | UniqueConstraint for FunFridayAttendance and ScheduleSlot | `core.0001`, `students.0002` |
 | `core` | `0003_qa_backlog_and_config` | QA backlog model and config fields | `core.0002` |
@@ -2343,9 +2640,9 @@ All cookie flags are enforced via `settings.py` with environment-aware defaults:
 
 | Setting | Development | Production | Purpose |
 |---------|------------|------------|---------|
-| `SESSION_COOKIE_AGE` | 86400 (24h) | 86400 (24h) | Session lifetime |
+| `SESSION_COOKIE_AGE` | 21600 (6h) | 21600 (6h) | Session lifetime. `SESSION_SAVE_EVERY_REQUEST=True` refreshes it on every request, making this an **inactivity** timeout |
 | `SESSION_COOKIE_HTTPONLY` | `True` | `True` | Prevents JavaScript access to session cookie |
-| `SESSION_COOKIE_SAMESITE` | `Lax` | `Strict` | Prevents cross-site request forgery via session cookies |
+| `SESSION_COOKIE_SAMESITE` | `Lax` | `Lax` | **Not `Strict`.** The Google OAuth callback is a cross-site top-level navigation, and `Strict` withholds the session cookie on that hop — `google_oauth_state` goes missing and every OAuth login fails with "Estado OAuth inválido". `Lax` still blocks cross-site POSTs and subresource requests |
 | `SESSION_COOKIE_SECURE` | `False` | `True` | Requires HTTPS for cookie transmission |
 | `CSRF_COOKIE_HTTPONLY` | `False` | `True` | Prevents JavaScript access to CSRF cookie in production |
 | `CSRF_COOKIE_SAMESITE` | `Lax` | `Strict` | Prevents cross-site CSRF cookie leakage |
@@ -2406,7 +2703,7 @@ Full deployment walkthrough in [DEPLOYMENT.md](DEPLOYMENT.md). Security-relevant
 | Probes | Startup probe + liveness probe on `/health/` |
 | TLS | Managed automatically by Cloud Run (custom domain + Google-managed certificate) |
 | SSL enforced | `SECURE_SSL_REDIRECT=True`, all cookie secure flags enabled when `DEBUG=False` |
-| Strict cookies | `SESSION_COOKIE_SAMESITE=Strict`, `CSRF_COOKIE_SAMESITE=Strict`, `CSRF_COOKIE_HTTPONLY=True` |
+| SameSite cookies | `SESSION_COOKIE_SAMESITE=Lax` (required for the OAuth callback), `CSRF_COOKIE_SAMESITE=Strict`, `CSRF_COOKIE_HTTPONLY=True` |
 
 #### Cold-start behaviour on Cloud Run
 
@@ -2525,7 +2822,7 @@ Think of it as a **rehearsal stage**: you can click anything, try any feature, a
 
 | | |
 |---|---|
-| **Web address** | *(will be provided once deployed on GCP)* |
+| **Web address** | [http://34.26.130.187:8000/](http://34.26.130.187:8000/) — the `testing` branch, auto-deployed to the GCP `e2-micro` VM |
 | **Username** | Your Teacher email — seeded into the system via `TEACHER_SEED_<N>_EMAIL` |
 | **Password** | The initial password set by the development team (or set yours via the "¿Has olvidado tu contraseña?" link if you weren't given one) |
 
@@ -2583,7 +2880,7 @@ The testing environment mirrors production:
 | `DEBUG` | `False` | Hides technical details from error pages, same as production |
 | `DJANGO_ENV` | `testing` | Like production (collectstatic, Gunicorn, secure cookies) but enables the `/testing/` dashboard |
 | Server | Gunicorn (2 workers) | Same as production (not Django's development server) |
-| HTTPS cookies | `Secure=True`, `SameSite=Strict` | Same cookie policy as production |
+| HTTPS cookies | `Secure=True`, session `SameSite=Lax`, CSRF `SameSite=Strict` | Same cookie policy as production |
 | HTTPS | Via Nginx reverse proxy (local) or Cloud Run (GCP) | See [HTTPS.md](docs/HTTPS.md) for full setup guide |
 | `SECURE_PROXY_SSL_HEADER` | Trusts `X-Forwarded-Proto` from reverse proxy | Enables Django to detect HTTPS behind Nginx/Cloud Run |
 | Database | PostgreSQL 16 (separate volume) | Isolated from the development database |
@@ -2741,7 +3038,7 @@ Concurrent CI runs on the same branch cancel each other automatically — new pu
 - Pushes to `testing` (which triggers CI on `testing`)
 - **Creates and pushes an annotated staging tag `testing-vX.Y.Z`** on the new testing merge commit
 - Opens PR `testing → main` if one is not already open (title matches the merge commit)
-- Sends an HTML email to `OWNER_EMAILS` with version bump, staging tag, and a "Review PR" button
+- Sends an HTML email to `TESTING_NOTIFY_EMAILS` (falling back to `OWNER_EMAILS`) with version bump, staging tag, and a "Review PR" button
 
 **2b. You merge the PR → release tag on main**
 
@@ -2759,7 +3056,7 @@ The two tag namespaces (`testing-vX.Y.Z` and `vX.Y.Z`) are fully independent —
 
 **4. Production notification fires**
 
-- `notify-production.yml` sends an email to `hellofiveaday@gmail.com`
+- `notify-production.yml` sends an email to `hellofiveaday@gmail.com` (plus `SUPPORT_EMAIL` when set)
 - Email contains commit info, file-change summary, and the exact `gcloud` commands to deploy to Cloud Run
 
 ### Branch Protection — `main`
@@ -2839,7 +3136,7 @@ Configure at **Settings → Secrets and variables → Actions**:
 | `TESTING_NOTIFY_EMAILS` | auto-merge.yml | Comma-separated recipients for the `development → testing` deploy email — support + the two admin teachers. Preferred over `OWNER_EMAILS` |
 | `TESTING_URL` | auto-merge.yml | Base URL of the testing environment, used for the "Open testing environment" button (falls back to the testing VM IP) |
 | `SUPPORT_EMAIL` | notify-production.yml | Support address added (alongside `hellofiveaday@gmail.com`) to the production deploy email |
-| `PRODUCTION_URL` | notify-production.yml | Optional — base URL of production; if set, adds an "Open production" button to the production email |
+| `PRODUCTION_URL` | notify-production.yml | Base URL of production — adds the "Abrir producción" button to the production email. **Set** (v1.14.7) to `https://fiveaday-332600671945.europe-southwest1.run.app` |
 | `CODECOV_TOKEN` | ci.yml | Optional — only needed for private repos. Public repos push coverage anonymously |
 
 **Rotate `GH_PAT` annually.** Without it, the auto-merge falls back to the default `GITHUB_TOKEN`, which cannot trigger CI on PRs it creates — breaking the pipeline silently.
@@ -2848,8 +3145,8 @@ Configure at **Settings → Secrets and variables → Actions**:
 
 | Event | Recipient | Sent by |
 |-------|-----------|---------|
-| `development → testing` merged + PR opened to `main` | `OWNER_EMAILS` (secret) | auto-merge.yml |
-| New commit on `main` (production ready to deploy) | `hellofiveaday@gmail.com` (hardcoded) | notify-production.yml |
+| `development → testing` merged + PR opened to `main` | `TESTING_NOTIFY_EMAILS`, falling back to `OWNER_EMAILS` | auto-merge.yml |
+| New commit on `main` (production ready to deploy) | `hellofiveaday@gmail.com` (hardcoded) + `SUPPORT_EMAIL` when set | notify-production.yml |
 
 Both use Gmail SMTP via the `dawidd6/action-send-mail@v18` action. Emails include HTML formatting, links to the commit/PR, and actionable next steps.
 
@@ -2884,8 +3181,8 @@ make up                        # Start Docker (PostgreSQL + Redis + Django + Cel
 1. Work on `development` (or a short-lived branch off `development`)
 2. Make changes following the conventions below
 3. Run `make pc-run` — Ruff + mypy + bandit all pass, offers to auto-bump the patch version on success, and auto-stages `uv.lock` if regenerated
-4. Run `make test` — all 1,008 tests must pass (PostgreSQL via Docker, parallel, with coverage)
-5. `git commit` with a message like `v1.0.6 - Short description` (version comes first — conventions match every other commit in the project)
+4. Run `make test` — all 1,061 tests must pass (PostgreSQL via Docker, parallel, with coverage)
+5. `git commit` with a message like `v1.14.7 — Short description` (version first, em dash — matches every other release commit in the project)
 6. `git push origin development`
 7. CI runs automatically on your push (see [CI/CD](#cicd--github-actions))
 8. ~24 h later, the auto-merge pipeline promotes your commit to `testing` and opens a PR to `main` for your review
@@ -2905,7 +3202,7 @@ Pre-commit hooks run **Ruff** (lint + format), **mypy** (type checking), and **b
 | **pytest-randomly** | Randomized test ordering | Built into `make test` (seed printed) |
 | **pytest-cov** | Coverage reporting + badge | `make test`, `make coverage-badge` |
 | **pre-commit** | Git hooks: ruff, ruff-format, mypy, bandit | `make pre-commit-install` (first-time), `make pc-run` (dry-run all hooks + auto bump) |
-| **make version** | Bump version in both `pyproject.toml` and `settings.py` | `make version x.y.z` (positional, with `y/N` confirmation) |
+| **make version** | Bump the version in all four places — `pyproject.toml`, `settings.py` (`APP_VERSION`), the README badge URL, and `uv.lock` | `make version x.y.z` (positional, with `y/N` confirmation); bare `make version` prints the current values and warns on drift |
 
 All tools are configured in `pyproject.toml` and installed as dev dependencies via `uv sync`.
 
