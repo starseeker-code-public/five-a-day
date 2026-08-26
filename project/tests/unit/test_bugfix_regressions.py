@@ -474,7 +474,11 @@ class TestSingletonsResistDeletion:
     def test_instance_delete_returns_djangos_tuple(self, site_config):
         from billing.models import SiteConfiguration
 
-        assert site_config.delete() == (0, {})
+        # Call outside the assert: under `python -O` asserts are stripped, and
+        # with them the delete() that this test exists to exercise.
+        result = site_config.delete()
+
+        assert result == (0, {})
         assert SiteConfiguration.objects.count() == 1
 
     def test_queryset_delete_is_blocked(self, site_config):
