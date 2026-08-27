@@ -77,6 +77,30 @@ class TestAuthMiddleware:
         assert response.status_code == 200
         assert "counts" not in response.json()["database"]
 
+    def test_health_deep_returns_503_when_database_unreachable(self, client):
+        """A dead database must surface as degraded, not as a healthy 200."""
+        from unittest.mock import patch
+
+        with patch("django.db.connection.cursor", side_effect=Exception("boom")):
+            response = client.get("/health/?deep=1")
+
+        assert response.status_code == 503
+        data = response.json()
+        assert data["status"] == "degraded"
+        assert data["database"]["connected"] is False
+        # Exception text must never reach the client.
+        assert "boom" not in response.content.decode()
+
+    def test_health_shallow_still_200_when_database_unreachable(self, client):
+        """Liveness must not depend on the database."""
+        from unittest.mock import patch
+
+        with patch("django.db.connection.cursor", side_effect=Exception("boom")):
+            response = client.get("/health/")
+
+        assert response.status_code == 200
+        assert response.json()["status"] == "healthy"
+
     def test_login_with_valid_credentials(self, client, settings):
         import os
 
