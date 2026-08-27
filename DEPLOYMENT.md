@@ -69,7 +69,7 @@ the same `docker-compose.yml` as development — no cloud-native services needed
 
 ```bash
 gcloud compute instances create fiveaday-testing \
-  --zone=us-east1-b \
+  --zone=us-east1-c \
   --machine-type=e2-micro \
   --image-family=debian-12 \
   --image-project=debian-cloud \
@@ -81,7 +81,7 @@ gcloud compute instances create fiveaday-testing \
 #### 2. SSH in and install Docker
 
 ```bash
-gcloud compute ssh fiveaday-testing --zone=us-east1-b
+gcloud compute ssh fiveaday-testing --zone=us-east1-c
 ```
 
 ```bash
@@ -129,11 +129,41 @@ Watch the logs after `docker compose up -d` for `✅ Teacher created/updated: ..
 
 #### 5. Routine updates
 
+Use the `/deploy testing` skill, which does all of this plus the post-deploy version check.
+By hand, from your workstation:
+
 ```bash
-git pull
-docker compose down
-docker compose up -d --build
+gcloud compute ssh fiveaday-testing --zone=us-east1-c --project=five-a-day-evolution
 ```
+
+The deployed checkout lives at **`/home/Proye/five-a-day`** and is owned by the user `Proye`, which
+is *not* the user `gcloud compute ssh` logs you in as. So every git call needs
+`-c safe.directory=*` under `sudo`, or it fails with `detected dubious ownership`:
+
+```bash
+D=/home/Proye/five-a-day
+sudo git -c safe.directory=* -C $D pull --ff-only origin testing
+sudo docker system prune -f          # required — see below
+sudo docker compose -f $D/docker-compose.yml up -d --build
+```
+
+> **The prune is not optional.** The e2-micro has ~969 MB RAM (~380 MB free with the stack up) plus
+> 2 GB swap, and the boot disk runs around 58% of 30 GB. A `--build` here can be OOM-killed. If it
+> is, retry once after `sudo docker builder prune -af`.
+
+There is no `docker compose down` step — `up -d --build` recreates changed containers in place, and
+skipping the down avoids a window where the stack is fully offline on a slow VM.
+
+Verify the deploy landed by comparing `/health/` against `pyproject.toml` on `origin/testing`:
+
+```bash
+curl -s http://34.26.130.187:8000/health/
+# {"status": "healthy", "service": "fiveaday", "version": "...", "environment": "testing"}
+```
+
+`version` must equal the `version` in `pyproject.toml` on `origin/testing`. If it does not, the
+build did not actually replace the running container. Note that an `APP_VERSION` env var overrides
+the baked-in value and would make this check lie — neither environment sets one today.
 
 ### Free tier limits (permanent, never expire)
 
@@ -263,7 +293,8 @@ echo -n "your-initial-password"     | gcloud secrets create TEACHER_SEED_1_PASSW
 ### Build & Deploy
 
 ```bash
-PROJECT_ID=$(gcloud config get-value project)
+PROJECT_ID=five-a-day-evolution   # no default project is set in gcloud config — do not derive it
+export CLOUDSDK_CORE_PROJECT=$PROJECT_ID   # makes every gcloud command below target it
 REGION=europe-southwest1
 IMAGE=$REGION-docker.pkg.dev/$PROJECT_ID/fiveaday/web
 
@@ -361,11 +392,18 @@ gcloud run jobs create fiveaday-migrate \
 gcloud run jobs execute fiveaday-migrate --region=$REGION --wait
 ```
 
-On subsequent deploys with model changes, just run the job again:
+On subsequent deploys with model changes, **update the job's image first, then run it**:
 
 ```bash
+gcloud run jobs update fiveaday-migrate --image=$IMAGE --region=$REGION
 gcloud run jobs execute fiveaday-migrate --region=$REGION --wait
 ```
+
+> **Cloud Run Jobs pin their own image — this is the easiest way to break a deploy.** Every job
+> stores the image tag it was created or last updated with; deploying a new image to the *service*
+> does not touch them. Executing `fiveaday-migrate` without the `update` above runs the **previous
+> release's** migration set against production, and leaves all seven scheduled jobs executing old
+> code indefinitely. See [Routine deploys](#routine-deploys) for the full loop over all 8 jobs.
 
 ### Celery Beat → Cloud Scheduler
 
@@ -478,15 +516,56 @@ the custom domain and redeploy.
 
 ### Routine deploys
 
+The `/deploy` skill (`.claude/skills/deploy/SKILL.md`) automates everything below, including the
+branch guard, the Cloud SQL backup and the post-deploy version check. Prefer it over running these
+by hand.
+
+Order matters: **migrate before the service rolls**, not after. Rolling the service first puts new
+code in front of an old schema for the length of the rollout.
+
 ```bash
-# Build new image
+# Image tags are the git short SHA of the deployed commit
+IMAGE=$REGION-docker.pkg.dev/$PROJECT_ID/fiveaday/web:$(git rev-parse --short origin/main)
+
+# 1. Back up before touching production data
+gcloud sql backups create --instance=fiveaday-db
+
+# 2. Build new image
 gcloud builds submit --tag $IMAGE .
 
-# Deploy (Cloud Run performs a rolling update with zero downtime)
+# 3. Repoint ALL 8 jobs at the new image — they each pin their own tag
+for JOB in fiveaday-migrate fiveaday-birthday-emails fiveaday-generate-payments \
+           fiveaday-expenses-daily fiveaday-expenses-monthly fiveaday-funfriday-emails \
+           fiveaday-monthly-report fiveaday-payment-reminders; do
+  gcloud run jobs update $JOB --image=$IMAGE --region=$REGION
+done
+
+# 4. Run migrations if any models changed (skip when there are none)
+gcloud run jobs execute fiveaday-migrate --region=$REGION --wait
+
+# 5. Deploy (Cloud Run performs a rolling update with zero downtime).
+#    Pass --image ONLY: re-specifying --set-env-vars replaces the whole set and silently
+#    drops the ~30 env vars and 6 Secret Manager refs not repeated on the command line.
 gcloud run deploy fiveaday --image=$IMAGE --region=$REGION
 
-# Run migrations if any models changed
-gcloud run jobs execute fiveaday-migrate --region=$REGION --wait
+# 6. Confirm the deploy actually landed — compare against pyproject.toml on origin/main
+curl -s https://fiveaday-332600671945.europe-southwest1.run.app/health/
+```
+
+Because image tags are git SHAs, you can check whether a deploy has pending migrations without
+running anything:
+
+```bash
+OLD_SHA=$(gcloud run services describe fiveaday --region=$REGION \
+  --format='value(spec.template.spec.containers[0].image)' | sed 's/.*://')
+git diff --name-only $OLD_SHA..$(git rev-parse --short origin/main) -- '*/migrations/*.py'
+```
+
+Rollback is a traffic shift, no rebuild needed:
+
+```bash
+gcloud run revisions list --service=fiveaday --region=$REGION
+gcloud run services update-traffic fiveaday --region=$REGION --to-revisions=<PREVIOUS>=100
 ```
 
 ### Monitoring & maintenance
