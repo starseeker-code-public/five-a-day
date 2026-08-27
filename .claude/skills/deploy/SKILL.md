@@ -73,6 +73,32 @@ gcloud auth list --filter=status:ACTIVE --format='value(account)'
 Must be `hellofiveaday@gmail.com`. If nothing is active, tell the user to run
 `gcloud auth login` — do not attempt the OAuth flow yourself.
 
+### Backup health — check this first, before anything else
+
+Every other safety net in this document assumes a restore is possible. Confirm
+that **before** you touch anything: deploying on top of a broken backup chain is the
+one situation with no way back.
+
+```bash
+gcloud sql instances describe $SQL_INSTANCE --project=$PROJECT \
+  --format='yaml(settings.backupConfiguration, settings.deletionProtectionEnabled)'
+
+gcloud sql backups list --instance=$SQL_INSTANCE --project=$PROJECT --limit=1 \
+  --format='value(id,status,type,windowStartTime)'
+```
+
+All four must hold — stop and report if any does not:
+
+| Must be true | Why |
+|---|---|
+| `enabled: true` | no automated backups means no nightly recovery point |
+| `pointInTimeRecoveryEnabled: true` | PITR is what gives sub-day granularity |
+| `deletionProtectionEnabled: true` | **deleting the instance deletes every backup with it** |
+| newest backup `SUCCESSFUL` and < 48h old | a silently failing backup job looks identical to a working one |
+
+This check is read-only and takes seconds. Run it even for a deploy you are sure
+about — its value is precisely on the day something has quietly broken.
+
 ```bash
 git fetch origin --quiet
 ```
@@ -253,6 +279,10 @@ echo "backup $BACKUP_ID -> $BACKUP_STATUS"
 backup fails, stop and report it. Do not proceed "just this once" because the change looks
 small — a failed migration with no backup is the one unrecoverable state in this whole
 procedure. Carry `$BACKUP_ID` through to the Step 4 report.
+
+This deploy backup is an **on-demand** backup, which Cloud SQL exempts from the automated
+retention count — it will not age out on its own. `scripts/backup_retention.sh` caps these at
+the 3 most recent so they do not pile up, so do not hand-delete them here.
 
 ### Capture the pre-deploy fingerprint
 
@@ -557,6 +587,76 @@ gcloud compute ssh $VM_NAME --zone=$VM_ZONE --project=$PROJECT --quiet --command
   sudo docker compose -f $D/docker-compose.yml -f $D/docker-compose.testing.yml up -d --build
 '
 ```
+
+---
+
+## Production backups — what exists, and the export script
+
+Know this before you rely on any of it.
+
+| | |
+|---|---|
+| Automated | nightly **23:00 UTC**, kept **7** (a flat count, not an age) |
+| Tier: biweekly | 1 on-demand tagged `tier:biweekly`, created on the 1st and 16th |
+| Tier: monthly | 1 on-demand tagged `tier:monthly`, created on the last day of the month |
+| Manual / deploy | on-demand, **3 most recent kept** |
+| PITR | enabled, **7 days** of transaction logs |
+| Stored in | `eu` **multi-region**, outside the instance's zone (`europe-southwest1-b`) |
+| Instance | **ZONAL** — no HA replica, no automatic failover |
+| Deletion protection | enabled |
+
+Cloud SQL has no grandfather-father-son retention, so only the daily tier is native. The
+biweekly and monthly tiers are on-demand backups created and pruned by
+`scripts/backup_retention.sh` (tracked in the repo, safe to read, `--dry-run` supported).
+Tiers cannot be created retroactively: a point only exists if the script ran that day.
+
+**Two restore paths, and they are not the same:**
+
+- `gcloud sql backups restore <ID> --restore-instance=$SQL_INSTANCE` **overwrites the
+  instance in place** and discards everything written since that backup.
+- PITR restores by **cloning to a NEW instance**
+  (`gcloud sql instances clone ... --point-in-time`), leaving production untouched. Prefer
+  this when you need to *inspect* rather than *replace*.
+
+### `scripts/export_prod_db.sh` — may not be present
+
+A full logical export (`.sql.gz`) of production to a local directory. It is **deliberately
+gitignored and never pushed**, because the dump contains the personal data of real students
+including minors. Access to it is a per-person decision by the maintainer.
+
+**Check for it rather than assuming either way** — most of the time it will be there.
+Being untracked means it travels with the machine instead of the repo, so on the maintainer's
+machine, and on any machine they have granted it to, it is normally present and you should
+treat it as a tool you have.
+
+```bash
+[ -x scripts/export_prod_db.sh ] && echo present || echo absent
+```
+
+It is missing only on a fresh clone, in CI, or for someone who was not given it. That is not a
+broken checkout: do not recreate it and do not reconstruct it from this description — holding
+it is a granted decision, and silently regenerating it would hand out production data access
+that nobody approved. Report that it is missing and ask the maintainer.
+
+When it *is* present, the destination is a **required argument with no default**, so a dump
+can never land somewhere nobody chose:
+
+```bash
+./scripts/export_prod_db.sh --dest "<directory you choose>"
+./scripts/export_prod_db.sh --dest "<dir>" --dry-run
+```
+
+It stages through a private GCS bucket, downloads, verifies the archive (valid gzip, core
+tables actually present), then deletes the cloud copy so the only remaining copy is local. A
+per-database export excludes cluster-wide roles, so restoring into a fresh instance means
+recreating `fiveaday_user` first.
+
+This export is **not** part of a normal deploy. Take one before genuinely irreversible work —
+a destructive migration, a data backfill, an instance change — where the in-place Cloud SQL
+restore path is itself at risk.
+
+> `make backup` is **not** this. That target dumps the **local dev** database from the
+> `db` container into `backups/`. It never touches production.
 
 ---
 

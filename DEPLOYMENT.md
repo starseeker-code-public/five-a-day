@@ -290,6 +290,19 @@ echo -n "True"                      | gcloud secrets create TEACHER_SEED_1_ADMIN
 echo -n "your-initial-password"     | gcloud secrets create TEACHER_SEED_1_PASSWORD   --data-file=-
 ```
 
+**Optional — `HEALTH_PROBE_TOKEN` (v1.16).** Not currently configured. It unlocks the
+row-count fingerprint on `/health/?deep=1`, which is what lets a deploy prove the release did
+not land on the wrong database. Without it the deep probe still reports connectivity and
+migration state, just not the counts:
+
+```bash
+openssl rand -hex 32 | gcloud secrets create HEALTH_PROBE_TOKEN --data-file=-
+
+# --update-secrets is ADDITIVE, unlike --set-env-vars, so it will not drop the
+# existing env set. Verify the variable count before and after regardless.
+gcloud run services update fiveaday --region=$REGION   --update-secrets=HEALTH_PROBE_TOKEN=HEALTH_PROBE_TOKEN:latest
+```
+
 ### Build & Deploy
 
 ```bash
@@ -599,6 +612,115 @@ gcloud run jobs create fiveaday-cmd \
 
 gcloud run jobs execute fiveaday-cmd --region=$REGION --wait
 ```
+
+---
+
+## Backups and Recovery
+
+### What protects production
+
+| | |
+|---|---|
+| Automated backups | nightly **23:00 UTC**, retention **7** (a flat count, not an age) |
+| Tier: biweekly | 1 on-demand tagged `tier:biweekly`, created on the 1st and the 16th |
+| Tier: monthly | 1 on-demand tagged `tier:monthly`, created on the last day of the month |
+| Manual / deploy | on-demand, the **3 most recent** are kept |
+| Point-in-time recovery | enabled, **7 days** of transaction logs in Cloud Storage |
+| Stored in | `eu` **multi-region** — outside the instance's zone |
+| Instance | `europe-southwest1-b`, **ZONAL** (no HA replica, no automatic failover) |
+| Deletion protection | **enabled** |
+
+Backups live in Google-managed storage in the `eu` multi-region, not in a bucket you own —
+the project has no GCS buckets, and they are only reachable through the
+`gcloud sql backups` API. Because that location is multi-region, a failure of the instance's
+zone takes production offline but does **not** lose the backups.
+
+Deletion protection matters more than it looks: **deleting a Cloud SQL instance deletes every
+backup it owns**. That is the single fastest route to total data loss, and it is blocked.
+
+### Why retention needs a script
+
+Cloud SQL's retention is a flat count of **automated** backups — there is no
+grandfather-father-son option — so on its own the recovery horizon is one week. **On-demand**
+backups are exempt from that count and persist until explicitly deleted, so the longer tiers
+are built from on-demand backups tagged through `--description` and pruned by
+`scripts/backup_retention.sh`.
+
+```bash
+./scripts/backup_retention.sh --dry-run     # show the plan, change nothing
+./scripts/backup_retention.sh               # apply, with a confirmation prompt
+./scripts/backup_retention.sh --bootstrap   # seed both tiers today (first run)
+```
+
+Run daily for the calendar rules to fire. Two honest limitations:
+
+- Tiers **cannot be created retroactively** — an automated backup cannot be promoted to
+  on-demand, so a monthly point only exists if the script ran on that day.
+- With `KEEP_BIWEEKLY=1` the biweekly point ages 0→15 days and then resets, so just after the
+  1st there is briefly no ~2-week-old copy. `KEEP_BIWEEKLY=2` gives continuous cover for one
+  extra backup.
+
+### Restoring — two different paths
+
+```bash
+gcloud sql backups list --instance=fiveaday-db --project=five-a-day-evolution
+
+# (a) In place — OVERWRITES the instance, discards everything written since.
+gcloud sql backups restore BACKUP_ID --restore-instance=fiveaday-db
+
+# (b) Point in time — clones to a NEW instance, production untouched.
+gcloud sql instances clone fiveaday-db fiveaday-db-recovery \
+  --point-in-time '2026-08-27T09:00:00Z'
+```
+
+Prefer (b) when you need to *inspect* or recover a few rows; (a) is for a genuine
+roll-the-whole-database-back. (a) is not reversible.
+
+### `scripts/export_prod_db.sh` — full logical export
+
+A complete `.sql.gz` dump of production, downloaded to a local directory.
+
+**This script is gitignored and never pushed.** The dump contains personal data for real
+students including minors — names, DNIs, phone numbers, addresses, allergies, payment
+records and password hashes. Who holds the script is a deliberate per-person decision by the
+maintainer.
+
+Because it is untracked it travels with the machine rather than the repo, so it is normally
+present wherever it has been granted — and absent on a fresh clone, in CI, or for anyone who
+was not given it. Absence is expected in those cases and is not a broken checkout; ask the
+maintainer for a copy rather than reconstructing it.
+
+The destination is a **required argument with no default**, so a dump can never land
+somewhere nobody chose:
+
+```bash
+./scripts/export_prod_db.sh --dest "<directory you choose>"
+./scripts/export_prod_db.sh --dest "<dir>" --dry-run
+```
+
+It stages through a private, public-access-prevented GCS bucket, downloads, verifies the
+archive (non-empty, valid gzip, core tables actually present), then **deletes the cloud
+copy** so the only remaining copy is the local one. Run it outside class hours: the export
+takes a serializable snapshot and briefly competes with live traffic on an `f1-micro`.
+
+A per-database export does **not** include cluster-wide roles or passwords (Cloud SQL exposes
+no `pg_dumpall --globals-only`), so restoring into a fresh instance means recreating the
+`fiveaday_user` role first.
+
+### `make backup` is not a production backup
+
+`make backup` dumps the **local development** database out of the `db` container into
+`backups/`. It never contacts Cloud SQL. The name is short for convenience; production
+backups are the Cloud SQL ones above, and a portable production dump is
+`scripts/export_prod_db.sh`.
+
+### Known gaps
+
+- **No copy outside Cloud SQL, and none outside this GCP project.** There is no scheduled
+  logical export; everything depends on one managed system in one project. The manual export
+  script is the only portable copy, and only when someone runs it.
+- **Zonal instance.** A zone outage means downtime until Google recovers it. Data survives —
+  backups are multi-region — but there is no automatic failover.
 
 ---
 
