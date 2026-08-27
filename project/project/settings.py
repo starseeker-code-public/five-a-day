@@ -74,6 +74,13 @@ ENVIRONMENT = os.getenv("DJANGO_ENV", "development")
 # dashboard is then visible to logged-in ADMIN Teachers (see core.decorators).
 IS_TESTING_ENV = ENVIRONMENT == "testing" and not DEBUG
 
+# Shared secret for the /health/?deep=1 data fingerprint. /health/ is public, so
+# row counts are only returned when the caller presents this token in the
+# X-Probe-Token header. Unset (the default) means the deep probe still reports
+# connectivity and migration state, just not the counts. Deploy tooling uses the
+# counts to prove a release did not land on the wrong database.
+HEALTH_PROBE_TOKEN = os.getenv("HEALTH_PROBE_TOKEN", "")
+
 # ============================================================================
 # SESSION CONFIGURATION
 # ============================================================================

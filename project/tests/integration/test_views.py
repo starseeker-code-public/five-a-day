@@ -34,6 +34,49 @@ class TestAuthMiddleware:
         data = response.json()
         assert data["status"] == "healthy"
 
+    def test_health_shallow_does_not_touch_database(self, client):
+        """The default probe must stay database-free so liveness never flaps."""
+        response = client.get("/health/")
+        assert response.status_code == 200
+        assert "database" not in response.json()
+
+    def test_health_deep_reports_database_state(self, client):
+        response = client.get("/health/?deep=1")
+        assert response.status_code == 200
+        db = response.json()["database"]
+        assert db["connected"] is True
+        assert db["unapplied_migrations"] == 0
+        assert db["applied_migrations"] > 0
+
+    def test_health_deep_hides_counts_without_token(self, client, settings):
+        settings.HEALTH_PROBE_TOKEN = "s3cret"
+        response = client.get("/health/?deep=1")
+        assert response.status_code == 200
+        db = response.json()["database"]
+        assert "counts" not in db
+        assert "name" not in db
+
+    def test_health_deep_hides_counts_with_wrong_token(self, client, settings):
+        settings.HEALTH_PROBE_TOKEN = "s3cret"
+        response = client.get("/health/?deep=1", headers={"X-Probe-Token": "nope"})
+        assert response.status_code == 200
+        assert "counts" not in response.json()["database"]
+
+    def test_health_deep_returns_counts_with_token(self, client, settings, student):
+        settings.HEALTH_PROBE_TOKEN = "s3cret"
+        response = client.get("/health/?deep=1", headers={"X-Probe-Token": "s3cret"})
+        assert response.status_code == 200
+        counts = response.json()["database"]["counts"]
+        assert counts["students"] >= 1
+        assert set(counts) == {"students", "parents", "enrollments", "payments"}
+
+    def test_health_deep_counts_disabled_when_token_unset(self, client, settings):
+        """An empty token must never be treated as a match."""
+        settings.HEALTH_PROBE_TOKEN = ""
+        response = client.get("/health/?deep=1", headers={"X-Probe-Token": ""})
+        assert response.status_code == 200
+        assert "counts" not in response.json()["database"]
+
     def test_login_with_valid_credentials(self, client, settings):
         import os
 
