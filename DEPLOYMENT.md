@@ -69,7 +69,7 @@ the same `docker-compose.yml` as development — no cloud-native services needed
 
 ```bash
 gcloud compute instances create fiveaday-testing \
-  --zone=us-east1-b \
+  --zone=us-east1-c \
   --machine-type=e2-micro \
   --image-family=debian-12 \
   --image-project=debian-cloud \
@@ -81,7 +81,7 @@ gcloud compute instances create fiveaday-testing \
 #### 2. SSH in and install Docker
 
 ```bash
-gcloud compute ssh fiveaday-testing --zone=us-east1-b
+gcloud compute ssh fiveaday-testing --zone=us-east1-c
 ```
 
 ```bash
@@ -129,11 +129,41 @@ Watch the logs after `docker compose up -d` for `✅ Teacher created/updated: ..
 
 #### 5. Routine updates
 
+Use the `/deploy testing` skill, which does all of this plus the post-deploy version check.
+By hand, from your workstation:
+
 ```bash
-git pull
-docker compose down
-docker compose up -d --build
+gcloud compute ssh fiveaday-testing --zone=us-east1-c --project=five-a-day-evolution
 ```
+
+The deployed checkout lives at **`/home/Proye/five-a-day`** and is owned by the user `Proye`, which
+is *not* the user `gcloud compute ssh` logs you in as. So every git call needs
+`-c safe.directory=*` under `sudo`, or it fails with `detected dubious ownership`:
+
+```bash
+D=/home/Proye/five-a-day
+sudo git -c safe.directory=* -C $D pull --ff-only origin testing
+sudo docker system prune -f          # required — see below
+sudo docker compose -f $D/docker-compose.yml up -d --build
+```
+
+> **The prune is not optional.** The e2-micro has ~969 MB RAM (~380 MB free with the stack up) plus
+> 2 GB swap, and the boot disk runs around 58% of 30 GB. A `--build` here can be OOM-killed. If it
+> is, retry once after `sudo docker builder prune -af`.
+
+There is no `docker compose down` step — `up -d --build` recreates changed containers in place, and
+skipping the down avoids a window where the stack is fully offline on a slow VM.
+
+Verify the deploy landed by comparing `/health/` against `pyproject.toml` on `origin/testing`:
+
+```bash
+curl -s http://34.26.130.187:8000/health/
+# {"status": "healthy", "service": "fiveaday", "version": "...", "environment": "testing"}
+```
+
+`version` must equal the `version` in `pyproject.toml` on `origin/testing`. If it does not, the
+build did not actually replace the running container. Note that an `APP_VERSION` env var overrides
+the baked-in value and would make this check lie — neither environment sets one today.
 
 ### Free tier limits (permanent, never expire)
 
@@ -260,10 +290,24 @@ echo -n "True"                      | gcloud secrets create TEACHER_SEED_1_ADMIN
 echo -n "your-initial-password"     | gcloud secrets create TEACHER_SEED_1_PASSWORD   --data-file=-
 ```
 
+**Optional — `HEALTH_PROBE_TOKEN` (v1.16).** Not currently configured. It unlocks the
+row-count fingerprint on `/health/?deep=1`, which is what lets a deploy prove the release did
+not land on the wrong database. Without it the deep probe still reports connectivity and
+migration state, just not the counts:
+
+```bash
+openssl rand -hex 32 | gcloud secrets create HEALTH_PROBE_TOKEN --data-file=-
+
+# --update-secrets is ADDITIVE, unlike --set-env-vars, so it will not drop the
+# existing env set. Verify the variable count before and after regardless.
+gcloud run services update fiveaday --region=$REGION   --update-secrets=HEALTH_PROBE_TOKEN=HEALTH_PROBE_TOKEN:latest
+```
+
 ### Build & Deploy
 
 ```bash
-PROJECT_ID=$(gcloud config get-value project)
+PROJECT_ID=five-a-day-evolution   # no default project is set in gcloud config — do not derive it
+export CLOUDSDK_CORE_PROJECT=$PROJECT_ID   # makes every gcloud command below target it
 REGION=europe-southwest1
 IMAGE=$REGION-docker.pkg.dev/$PROJECT_ID/fiveaday/web
 
@@ -361,11 +405,18 @@ gcloud run jobs create fiveaday-migrate \
 gcloud run jobs execute fiveaday-migrate --region=$REGION --wait
 ```
 
-On subsequent deploys with model changes, just run the job again:
+On subsequent deploys with model changes, **update the job's image first, then run it**:
 
 ```bash
+gcloud run jobs update fiveaday-migrate --image=$IMAGE --region=$REGION
 gcloud run jobs execute fiveaday-migrate --region=$REGION --wait
 ```
+
+> **Cloud Run Jobs pin their own image — this is the easiest way to break a deploy.** Every job
+> stores the image tag it was created or last updated with; deploying a new image to the *service*
+> does not touch them. Executing `fiveaday-migrate` without the `update` above runs the **previous
+> release's** migration set against production, and leaves all seven scheduled jobs executing old
+> code indefinitely. See [Routine deploys](#routine-deploys) for the full loop over all 8 jobs.
 
 ### Celery Beat → Cloud Scheduler
 
@@ -478,15 +529,56 @@ the custom domain and redeploy.
 
 ### Routine deploys
 
+The `/deploy` skill (`.claude/skills/deploy/SKILL.md`) automates everything below, including the
+branch guard, the Cloud SQL backup and the post-deploy version check. Prefer it over running these
+by hand.
+
+Order matters: **migrate before the service rolls**, not after. Rolling the service first puts new
+code in front of an old schema for the length of the rollout.
+
 ```bash
-# Build new image
+# Image tags are the git short SHA of the deployed commit
+IMAGE=$REGION-docker.pkg.dev/$PROJECT_ID/fiveaday/web:$(git rev-parse --short origin/main)
+
+# 1. Back up before touching production data
+gcloud sql backups create --instance=fiveaday-db
+
+# 2. Build new image
 gcloud builds submit --tag $IMAGE .
 
-# Deploy (Cloud Run performs a rolling update with zero downtime)
+# 3. Repoint ALL 8 jobs at the new image — they each pin their own tag
+for JOB in fiveaday-migrate fiveaday-birthday-emails fiveaday-generate-payments \
+           fiveaday-expenses-daily fiveaday-expenses-monthly fiveaday-funfriday-emails \
+           fiveaday-monthly-report fiveaday-payment-reminders; do
+  gcloud run jobs update $JOB --image=$IMAGE --region=$REGION
+done
+
+# 4. Run migrations if any models changed (skip when there are none)
+gcloud run jobs execute fiveaday-migrate --region=$REGION --wait
+
+# 5. Deploy (Cloud Run performs a rolling update with zero downtime).
+#    Pass --image ONLY: re-specifying --set-env-vars replaces the whole set and silently
+#    drops the ~30 env vars and 6 Secret Manager refs not repeated on the command line.
 gcloud run deploy fiveaday --image=$IMAGE --region=$REGION
 
-# Run migrations if any models changed
-gcloud run jobs execute fiveaday-migrate --region=$REGION --wait
+# 6. Confirm the deploy actually landed — compare against pyproject.toml on origin/main
+curl -s https://fiveaday-332600671945.europe-southwest1.run.app/health/
+```
+
+Because image tags are git SHAs, you can check whether a deploy has pending migrations without
+running anything:
+
+```bash
+OLD_SHA=$(gcloud run services describe fiveaday --region=$REGION \
+  --format='value(spec.template.spec.containers[0].image)' | sed 's/.*://')
+git diff --name-only $OLD_SHA..$(git rev-parse --short origin/main) -- '*/migrations/*.py'
+```
+
+Rollback is a traffic shift, no rebuild needed:
+
+```bash
+gcloud run revisions list --service=fiveaday --region=$REGION
+gcloud run services update-traffic fiveaday --region=$REGION --to-revisions=<PREVIOUS>=100
 ```
 
 ### Monitoring & maintenance
@@ -520,6 +612,115 @@ gcloud run jobs create fiveaday-cmd \
 
 gcloud run jobs execute fiveaday-cmd --region=$REGION --wait
 ```
+
+---
+
+## Backups and Recovery
+
+### What protects production
+
+| | |
+|---|---|
+| Automated backups | nightly **23:00 UTC**, retention **7** (a flat count, not an age) |
+| Tier: biweekly | 1 on-demand tagged `tier:biweekly`, created on the 1st and the 16th |
+| Tier: monthly | 1 on-demand tagged `tier:monthly`, created on the last day of the month |
+| Manual / deploy | on-demand, the **3 most recent** are kept |
+| Point-in-time recovery | enabled, **7 days** of transaction logs in Cloud Storage |
+| Stored in | `eu` **multi-region** — outside the instance's zone |
+| Instance | `europe-southwest1-b`, **ZONAL** (no HA replica, no automatic failover) |
+| Deletion protection | **enabled** |
+
+Backups live in Google-managed storage in the `eu` multi-region, not in a bucket you own —
+the project has no GCS buckets, and they are only reachable through the
+`gcloud sql backups` API. Because that location is multi-region, a failure of the instance's
+zone takes production offline but does **not** lose the backups.
+
+Deletion protection matters more than it looks: **deleting a Cloud SQL instance deletes every
+backup it owns**. That is the single fastest route to total data loss, and it is blocked.
+
+### Why retention needs a script
+
+Cloud SQL's retention is a flat count of **automated** backups — there is no
+grandfather-father-son option — so on its own the recovery horizon is one week. **On-demand**
+backups are exempt from that count and persist until explicitly deleted, so the longer tiers
+are built from on-demand backups tagged through `--description` and pruned by
+`scripts/backup_retention.sh`.
+
+```bash
+./scripts/backup_retention.sh --dry-run     # show the plan, change nothing
+./scripts/backup_retention.sh               # apply, with a confirmation prompt
+./scripts/backup_retention.sh --bootstrap   # seed both tiers today (first run)
+```
+
+Run daily for the calendar rules to fire. Two honest limitations:
+
+- Tiers **cannot be created retroactively** — an automated backup cannot be promoted to
+  on-demand, so a monthly point only exists if the script ran on that day.
+- With `KEEP_BIWEEKLY=1` the biweekly point ages 0→15 days and then resets, so just after the
+  1st there is briefly no ~2-week-old copy. `KEEP_BIWEEKLY=2` gives continuous cover for one
+  extra backup.
+
+### Restoring — two different paths
+
+```bash
+gcloud sql backups list --instance=fiveaday-db --project=five-a-day-evolution
+
+# (a) In place — OVERWRITES the instance, discards everything written since.
+gcloud sql backups restore BACKUP_ID --restore-instance=fiveaday-db
+
+# (b) Point in time — clones to a NEW instance, production untouched.
+gcloud sql instances clone fiveaday-db fiveaday-db-recovery \
+  --point-in-time '2026-08-27T09:00:00Z'
+```
+
+Prefer (b) when you need to *inspect* or recover a few rows; (a) is for a genuine
+roll-the-whole-database-back. (a) is not reversible.
+
+### `scripts/export_prod_db.sh` — full logical export
+
+A complete `.sql.gz` dump of production, downloaded to a local directory.
+
+**This script is gitignored and never pushed.** The dump contains personal data for real
+students including minors — names, DNIs, phone numbers, addresses, allergies, payment
+records and password hashes. Who holds the script is a deliberate per-person decision by the
+maintainer.
+
+Because it is untracked it travels with the machine rather than the repo, so it is normally
+present wherever it has been granted — and absent on a fresh clone, in CI, or for anyone who
+was not given it. Absence is expected in those cases and is not a broken checkout; ask the
+maintainer for a copy rather than reconstructing it.
+
+The destination is a **required argument with no default**, so a dump can never land
+somewhere nobody chose:
+
+```bash
+./scripts/export_prod_db.sh --dest "<directory you choose>"
+./scripts/export_prod_db.sh --dest "<dir>" --dry-run
+```
+
+It stages through a private, public-access-prevented GCS bucket, downloads, verifies the
+archive (non-empty, valid gzip, core tables actually present), then **deletes the cloud
+copy** so the only remaining copy is the local one. Run it outside class hours: the export
+takes a serializable snapshot and briefly competes with live traffic on an `f1-micro`.
+
+A per-database export does **not** include cluster-wide roles or passwords (Cloud SQL exposes
+no `pg_dumpall --globals-only`), so restoring into a fresh instance means recreating the
+`fiveaday_user` role first.
+
+### `make backup` is not a production backup
+
+`make backup` dumps the **local development** database out of the `db` container into
+`backups/`. It never contacts Cloud SQL. The name is short for convenience; production
+backups are the Cloud SQL ones above, and a portable production dump is
+`scripts/export_prod_db.sh`.
+
+### Known gaps
+
+- **No copy outside Cloud SQL, and none outside this GCP project.** There is no scheduled
+  logical export; everything depends on one managed system in one project. The manual export
+  script is the only portable copy, and only when someone runs it.
+- **Zonal instance.** A zone outage means downtime until Google recovers it. Data survives —
+  backups are multi-region — but there is no automatic failover.
 
 ---
 

@@ -58,7 +58,7 @@ help:
 	@echo ""
 	@echo "  Database:"
 	@echo "    make dbshell            PostgreSQL interactive shell"
-	@echo "    make backup             Dump DB to backups/"
+	@echo "    make backup             Dump LOCAL dev DB to backups/ (NOT production)"
 	@echo "    make restore FILE=x     Restore from SQL file"
 	@echo "    make reset-db           Drop and recreate DB (destructive!)"
 	@echo ""
@@ -215,10 +215,13 @@ check:
 dbshell:
 	docker compose exec db psql -U fiveaday_user -d fiveaday_db
 
+# LOCAL DEVELOPMENT ONLY. Dumps the `db` container on this machine, never
+# production. Production backups are managed Cloud SQL backups; see the
+# "Backups and Recovery" section of DEPLOYMENT.md.
 backup:
 	@mkdir -p backups
 	docker compose exec db pg_dump -U fiveaday_user fiveaday_db > backups/backup_$$(date +%Y%m%d_%H%M%S).sql
-	@echo "Backup saved to backups/"
+	@echo "Local dev DB dumped to backups/ (this is NOT a production backup)"
 
 restore:
 	@if [ -z "$(FILE)" ]; then \

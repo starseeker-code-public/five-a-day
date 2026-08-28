@@ -20,7 +20,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # NOTA: Usa `make version x.y.z` para actualizar ambos sitios a la vez:
 #   - pyproject.toml (campo version)
 #   - README.md (badge y tabla de versiones — gestionado por la skill update-readme)
-APP_VERSION = os.getenv("APP_VERSION", "1.15.2")
+APP_VERSION = os.getenv("APP_VERSION", "1.16.0")
 
 # ============================================================================
 # SECURITY SETTINGS
@@ -73,6 +73,13 @@ ENVIRONMENT = os.getenv("DJANGO_ENV", "development")
 # QA testing tools — only enabled when DJANGO_ENV=testing (DEBUG off). The
 # dashboard is then visible to logged-in ADMIN Teachers (see core.decorators).
 IS_TESTING_ENV = ENVIRONMENT == "testing" and not DEBUG
+
+# Shared secret for the /health/?deep=1 data fingerprint. /health/ is public, so
+# row counts are only returned when the caller presents this token in the
+# X-Probe-Token header. Unset (the default) means the deep probe still reports
+# connectivity and migration state, just not the counts. Deploy tooling uses the
+# counts to prove a release did not land on the wrong database.
+HEALTH_PROBE_TOKEN = os.getenv("HEALTH_PROBE_TOKEN", "")
 
 # ============================================================================
 # SESSION CONFIGURATION

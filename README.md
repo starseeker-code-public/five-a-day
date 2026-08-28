@@ -20,7 +20,7 @@ Built to centralize student records, automate billing cycles, and streamline par
 ### Project Status
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v1.15.2-brightgreen?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-v1.16.0-brightgreen?style=flat-square" alt="Version">
   &nbsp;|&nbsp;
   <a href="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml?query=branch%3Amain"><img src="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml/badge.svg?branch=main&style=flat-square" alt="CI main"></a>
   &nbsp;|&nbsp;
@@ -41,9 +41,9 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 | Version | Date | Description |
 |---------|------|-------------|
-| **v1.15.2** | 2026-08-27 | LF line-ending normalisation, unblocks the release PR |
+| **v1.16.0** | 2026-08-27 | Deep health probe, verified backups, tiered retention |
+| v1.15.2 | 2026-08-27 | LF line-ending normalisation, unblocks the release PR |
 | v1.15.1 | 2026-08-27 | Portable test paths, gunicorn bound raised to <27 |
-| v1.15.0 | 2026-08-27 | Security + billing audit, 16 backlog items |
 
 ---
 
@@ -150,7 +150,61 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 ## Version History & Roadmap
 
-<details id="v1152" open>
+<details id="v1160" open>
+<summary><strong>v1.16.0 — Deep health probe, verified backups, tiered retention (current)</strong></summary>
+
+**What prompted it**
+
+- A testing deploy reported the correct version while serving a **months-old database**. The
+  code deployed fine; only the DB volume was wrong, and nothing in the pipeline could see it.
+  Root cause: the VM stack was brought up with only `docker-compose.yml`, but
+  `docker-compose.testing.yml` overrides the `db` service to mount `testing_postgres_data`
+  instead of the base `postgres_data`. A one-file bring-up starts a valid stack on the dev
+  volume and exits 0. The real data was orphaned, not deleted, and was recovered intact.
+
+**Health endpoint**
+
+- `/health/` gains an opt-in deep probe at **`/health/?deep=1`** reporting database
+  connectivity plus applied and unapplied migration counts, and returning **503** when the
+  database is unreachable. The default response stays shallow and never touches the database,
+  so liveness checks cannot flap on a transient blip.
+- Row counts identify *which* database is in use, so they are returned only to a caller
+  presenting `X-Probe-Token` matching the new `HEALTH_PROBE_TOKEN`, compared with
+  `constant_time_compare`. `/health/` is public; an unset token disables counts entirely.
+- Exceptions are logged, never echoed to the client.
+
+**Production backups**
+
+- Retention is now tiered: 7 nightly automated backups (native), plus one `tier:biweekly` and
+  one `tier:monthly` on-demand backup, with manual/deploy backups capped at the 3 most recent.
+  Cloud SQL has no grandfather-father-son option, so `scripts/backup_retention.sh` builds the
+  longer tiers from on-demand backups, which are exempt from the automated retention count.
+- `scripts/export_prod_db.sh` produces a full logical `.sql.gz` export to a directory the
+  operator names — **required argument, no default**. It stages through a private bucket,
+  verifies the archive, then deletes the cloud copy. The script is **gitignored and never
+  pushed**, because the dump contains personal data for real students including minors.
+- `make backup` is documented as **local dev only**; it never contacts Cloud SQL.
+
+**Deploy skill**
+
+- Both compose files are now mandatory for the testing VM, enforced by a hard gate that
+  inspects the mounted volume and aborts on anything but `*testing_postgres_data`.
+- A backup health check runs **before anything else**, and the production backup must be
+  verified `SUCCESSFUL` before any migration or rollout.
+- New reconciliation step compares a pre/post deep-probe fingerprint; any drop in a row count
+  stops the deploy and asks whether to roll back the revision or restore the backup.
+- The production build now asserts `HEAD == origin/main` before `gcloud builds submit`, which
+  uploads the working tree rather than the branch.
+
+**Testing**
+
+- 8 new tests covering the shallow/deep split, token gating (absent, wrong, empty, valid), the
+  503 degraded path, and the guarantee that exception text never reaches the client. Suite at
+  **1,213 tests, 95.30% coverage**.
+
+</details>
+
+<details id="v1152">
 <summary><strong>v1.15.2 — LF line-ending normalisation (current)</strong></summary>
 
 **Repository hygiene**
@@ -1891,6 +1945,16 @@ TWILIO_FROM_NUMBER=                 # E.164 format, e.g. +34600111222
 STRIPE_SECRET_KEY=
 STRIPE_PUBLISHABLE_KEY=
 STRIPE_WEBHOOK_SECRET=
+
+# ============================================================================
+# MONITORING  (v1.16 — optional, production mainly)
+# ============================================================================
+# Shared secret for the /health/?deep=1 row-count fingerprint. /health/ is
+# public, so counts are only returned to a caller sending a matching
+# X-Probe-Token header. Leave unset and the deep probe still reports database
+# connectivity and migration state — just not the counts. Deploy tooling uses
+# the counts to prove a release did not land on the wrong database.
+HEALTH_PROBE_TOKEN=
 ```
 
 A few keys are intentionally absent from the template:
@@ -2051,6 +2115,8 @@ The table below describes every variable in the [.env template](#env-template) a
 | `STRIPE_WEBHOOK_SECRET` | Webhook signing secret (`whsec_…`) — **REQUIRED in prod**; when unset the webhook view rejects all events | For prod Stripe | — |
 | **Rate limiting (v1.10)** | | | |
 | `RATELIMIT_ENABLE` | Set to `False` to bypass the login/portal rate limiter (used in tests; leave unset in real envs) | No | `True` |
+| **Monitoring (v1.16)** | | | |
+| `HEALTH_PROBE_TOKEN` | Shared secret for the `/health/?deep=1` row-count fingerprint, sent as `X-Probe-Token`. Unset means the deep probe still reports DB connectivity and migration state, but no counts | No | — (counts disabled) |
 | **Logging / misc** | | | |
 | `LOG_LEVEL` | App log level | No | `DEBUG` in dev, `INFO` in prod |
 | `DJANGO_LOG_LEVEL` | Django framework log level | No | inherits `LOG_LEVEL` |
@@ -2213,7 +2279,7 @@ five-a-day/
 │   │   └── management/commands/  send_email, test_all_emails, plus 4 Beat-task wrappers
 │   │                             (v1.14.2 — birthday, reminders, report, Fun Friday drain)
 │   │
-│   ├── tests/                    pytest suite (1,205 tests, 95 % coverage) — unit/ + integration/
+│   ├── tests/                    pytest suite (1,213 tests, 95.30 % coverage) — unit/ + integration/
 │   ├── templates/registration/   Password-reset templates (form, done, confirm, complete + email body)
 │   ├── templates/admin/          Django admin overrides (branded theme)
 │   └── conftest.py               Shared fixtures (models + authenticated_client)
@@ -2237,7 +2303,7 @@ five-a-day/
 │   ├── CELERY.md                 Celery worker/beat reference
 │   └── TODO.md                   Open tasks
 │
-├── scripts/                      Dev helpers (docker_smoke_test, etc.)
+├── scripts/                      Dev helpers + backup_retention.sh (Cloud SQL tiers)
 ├── backups/                      DB dumps from `make backup` (gitignored)
 │
 ├── Dockerfile                    Multi-stage build (builder + runtime)
@@ -2527,9 +2593,9 @@ Public flow at `/password-reset/...` that lets a teacher recover access without 
 
 | Metric | Value |
 |--------|-------|
-| **Total tests** | 1,205 |
+| **Total tests** | 1,213 |
 | **Test files** | 72 (46 unit + 26 integration) |
-| **Coverage** | 95% (95.26% — 5,088 statements, 241 uncovered) |
+| **Coverage** | 95% (95.30% — 5,123 statements, 241 uncovered) |
 | **Coverage thresholds** | **≥ 90%** (target, no warning) / **75-89%** (CI warning, pre-commit still blocks below 75) / **< 75%** (CI fails, pre-commit rejects the commit) |
 | **Runtime** | ~50 seconds (parallel workers via `pytest-xdist -n auto`) |
 | **Database** | PostgreSQL (same as production) — **always use `make test`** |
@@ -2634,7 +2700,7 @@ Within each file, related tests are grouped into classes. Where a large file abs
 | File | Count | Coverage |
 | --- | --- | --- |
 | [`integration/test_app_form_views.py`](project/tests/integration/test_app_form_views.py) | 99 | Every email form GET page, POST `action=preview` (JSON HTML), `test_send` with/without EMAIL_TEST_* env vars, main send-to-parents for every form (fun_friday, payment_reminder, vacation_closure, tax_certificate, monthly_report, birthday, receipts x 3, newsletter, enrollment/welcome), Fun Friday persist-for-Monday-14:30 + immediate drain when the slot passed (v1.14.2), invalid-date fallbacks, missing-field errors, no-parents-with-email edge cases, per-recipient exception swallowing, welcome_form redirect |
-| [`integration/test_views.py`](project/tests/integration/test_views.py) | 65 | Cross-cutting top-level HTTP coverage: auth flow, dashboard, `all_info`, student/parent list + detail + create + search, payment list + create + detail + CRUD + stats + CSV + validation, todos + history API, management admin, email form pages (parametrized), enrollment API, error pages (parametrized), schedule, Fun Friday, support |
+| [`integration/test_views.py`](project/tests/integration/test_views.py) | 73 | Cross-cutting top-level HTTP coverage: auth flow, dashboard, `all_info`, student/parent list + detail + create + search, payment list + create + detail + CRUD + stats + CSV + validation, todos + history API, management admin, email form pages (parametrized), enrollment API, error pages (parametrized), schedule, Fun Friday, support, and the `/health/` probe (shallow stays DB-free, deep reports connectivity + migrations, token gating for row counts, 503 on an unreachable DB, exception text never reaching the client) |
 | [`integration/test_payment_views.py`](project/tests/integration/test_payment_views.py) | 38 | All HTTP payment endpoints: list (search, stats), create (+ invalid parent + unexpected exception), detail-view (+ 404), update (JSON + FormData + all error branches), delete (success + exception 500), deactivate (success + exception 400), quick-complete (success + invalid method + broken JSON), get-details (success + exception), search payments/parents (short query + hits), validate student-parent (all branches), export DB to Excel |
 | [`integration/test_student_views.py`](project/tests/integration/test_student_views.py) | 23 | `StudentListView` (search, exclude inactive, context), `StudentDetailView` (parents visible, 404), `StudentCreateView` (form + adult mode + success + full POST + error paths including invalid parent, existing-parent mode, create_sibling flag, email-task swallow), `search_students` JSON endpoint (results + short-query empty) |
 | [`integration/test_testing_tools.py`](project/tests/integration/test_testing_tools.py) | 21 | QA dashboard `/testing/` gated by `@qa_access_required` (via `override_settings`): dashboard renders + git failure handled, `api_seed_database` (success + reset + command error 500 + non-QA 404), `api_create_backlog_task` (all branches + screenshot attached to the email but never stored + send/swallow), `api_update_backlog_task` (success + invalid status + 404), `api_toggle_error_email` (on + off + bad JSON) |
@@ -2697,7 +2763,7 @@ Live snapshot from the last full run (`make test`) — the 29 source files below
 | `students/models.py` | 213 | 3 | 99% | 350, 367-368 |
 | `students/parent_portal_models.py` | 41 | 1 | 98% | 44 |
 
-**56 files** have 100% coverage (skipped above). Total coverage: **95%** (95.26%) across 5,088 statements, 241 uncovered. Coverage is **very good**. Coverage is enforced at three levels: pre-commit hook (>= 75%), CI hard floor (>= 75%), and CI warning (< 90%).
+**56 files** have 100% coverage (skipped above). Total coverage: **95%** (95.30%) across 5,123 statements, 241 uncovered. Coverage is **very good**. Coverage is enforced at three levels: pre-commit hook (>= 75%), CI hard floor (>= 75%), and CI warning (< 90%).
 
 > **Reading the number consistently (fixed in v1.14.7).** The CI test step runs with
 > `working-directory: project`, but `[tool.coverage.run]` — including the `omit` list for
@@ -3322,7 +3388,7 @@ make up                        # Start Docker (PostgreSQL + Redis + Django + Cel
 1. Work on `development` (or a short-lived branch off `development`)
 2. Make changes following the conventions below
 3. Run `make pc-run` — Ruff + mypy + bandit all pass, offers to auto-bump the patch version on success, and auto-stages `uv.lock` if regenerated
-4. Run `make test` — all 1,205 tests must pass (PostgreSQL via Docker, parallel, with coverage)
+4. Run `make test` — all 1,213 tests must pass (PostgreSQL via Docker, parallel, with coverage)
 5. `git commit` with a message like `v1.14.7 — Short description` (version first, em dash — matches every other release commit in the project)
 6. `git push origin development`
 7. CI runs automatically on your push (see [CI/CD](#cicd--github-actions))
