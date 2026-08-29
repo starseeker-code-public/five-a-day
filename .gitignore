@@ -237,3 +237,9 @@ logs/
 # Docs with secrets
 /docs
 .claude/settings.local.json
+
+# Production DB export tooling — NOT tracked on purpose.
+# Produces a plain-SQL dump of all production data (students incl. minors,
+# parents, DNIs, payment records, password hashes). Access to this script is a
+# deliberate decision, not a repo default. See DEPLOYMENT.md for what it does.
+scripts/export_prod_db.sh
