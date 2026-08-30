@@ -12,6 +12,7 @@ from datetime import datetime
 import django
 from django.conf import settings
 from django.core.mail import send_mail
+from django.db.models import Q
 from django.http import HttpResponse, JsonResponse
 from django.shortcuts import render
 from django.views.decorators.http import require_http_methods
@@ -22,6 +23,17 @@ from core.models import BacklogTask, QAConfiguration
 logger = logging.getLogger(__name__)
 
 VALID_PRIORITIES = {"low", "medium", "high"}
+
+
+def _backlog_tasks_qs():
+    """Backlog ordered with the OPEN work first, newest first within each half.
+
+    The model's Meta ordering is `-created_at` alone, so a task marked done stayed
+    wherever its creation date put it and pushed live tickets down the list — and,
+    with the dashboard capped at 50, off the page entirely. `Q()` annotates a
+    boolean, and False sorts before True, so done tasks fall to the bottom.
+    """
+    return BacklogTask.objects.annotate(is_done=Q(status="done")).order_by("is_done", "-created_at")
 
 
 def _git_info():
@@ -65,7 +77,7 @@ def testing_tools_view(request):
     """Render the QA testing tools page."""
     git = _git_info()
     qa_config = QAConfiguration.get_config()
-    tasks = BacklogTask.objects.all()[:50]
+    tasks = _backlog_tasks_qs()[:50]
 
     context = {
         "git": git,
@@ -220,7 +232,7 @@ def export_backlog_tasks(request):
     export_format = (request.GET.get("format") or "json").lower()
     scope = (request.GET.get("scope") or "active").lower()
 
-    tasks = BacklogTask.objects.all().order_by("-created_at")
+    tasks = _backlog_tasks_qs()
     if scope != "all":
         tasks = tasks.exclude(status="done")
 
@@ -279,6 +291,16 @@ def api_update_backlog_task(request, task_id):
     """Update a backlog task status."""
     try:
         data = json.loads(request.body)
+
+        # A payload carrying only `verified` toggles the QA tick and nothing else.
+        # It is the tester's own mark ("I checked this and it is correct") and must
+        # not touch `status` or send the developer notification that `done` does.
+        if "status" not in data and "verified" in data:
+            task = BacklogTask.objects.get(pk=task_id)
+            task.verified = bool(data.get("verified"))
+            task.save(update_fields=["verified", "updated_at"])
+            return JsonResponse({"success": True, "verified": task.verified})
+
         new_status = data.get("status")
         if new_status not in ("open", "in_progress", "done"):
             return JsonResponse({"success": False, "message": "Estado no valido."}, status=400)

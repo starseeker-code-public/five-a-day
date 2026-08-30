@@ -4,12 +4,28 @@ from datetime import date
 from decimal import Decimal, InvalidOperation
 
 from django.contrib import messages
+from django.core.exceptions import ValidationError
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_http_methods
 
 from billing.models import Expense
 from billing.services.expense_service import monthly_totals
+
+
+def _default_expense_date(month: int, year: int, today: date) -> date:
+    """Date to prefill the "Nuevo gasto" form with.
+
+    Today when the filter is on the current month, otherwise the 1st of the
+    period being looked at — adding a gasto while browsing March should not
+    silently date it today and drop it out of the list you are staring at.
+    """
+    if (month, year) == (today.month, today.year):
+        return today
+    try:
+        return date(year, month, 1)
+    except ValueError:
+        return today
 
 
 def expenses_list(request):
@@ -39,6 +55,10 @@ def expenses_list(request):
             "month": month,
             "year": year,
             "category": category,
+            # The "Nueva fecha" input is <input type="date">, which only accepts
+            # YYYY-MM-DD. It used to be given "{{ month }}-{{ year }}" ("8-2026"),
+            # which every browser rejects, so the field always rendered blank.
+            "default_expense_date": _default_expense_date(month, year, today),
             "categories": Expense.EXPENSE_CATEGORY_CHOICES,
             "frequencies": Expense.RECURRING_FREQUENCY_CHOICES,
             "weekday_choices": Expense.WEEKDAY_CHOICES,
@@ -56,8 +76,20 @@ def _parse_amount(raw: str) -> Decimal | None:
         return None
 
 
-@require_http_methods(["POST"])
-def create_expense(request):
+_VALID_CATEGORIES = {value for value, _ in Expense.EXPENSE_CATEGORY_CHOICES}
+_VALID_FREQUENCIES = {value for value, _ in Expense.RECURRING_FREQUENCY_CHOICES}
+
+
+def _expense_fields_from(request):
+    """Parse an expense create/update POST.
+
+    Returns `(fields, error)`. `error` is a Spanish message ready for
+    `messages.error`; when it is set, `fields` is None.
+
+    Shared by `create_expense` and `update_expense` so the two can never drift —
+    an edit that parsed its recurrence differently from the create would quietly
+    change a template's cadence.
+    """
     description = (request.POST.get("description") or "").strip()
     category = (request.POST.get("category") or "other").strip()
     amount = _parse_amount(request.POST.get("amount") or "")
@@ -68,8 +100,13 @@ def create_expense(request):
     recurring_day_raw = request.POST.get("recurring_day") or ""
 
     if not description or amount is None or amount <= 0:
-        messages.error(request, "Debes indicar una descripción y un importe válido.")
-        return redirect("expenses_list")
+        return None, "Debes indicar una descripción y un importe válido."
+
+    # `category` is a free-form POST value and `Model.save()` does not enforce
+    # `choices`, so an unknown slug used to persist and then render as a blank
+    # category in the list and the totals breakdown.
+    if category not in _VALID_CATEGORIES:
+        category = "other"
 
     try:
         parsed_date = date.fromisoformat(expense_date_str)
@@ -80,15 +117,14 @@ def create_expense(request):
     recurring_month = None
     recurring_weekdays = ""
     if is_recurring:
-        if recurring_frequency not in ("monthly", "yearly", "weekly"):
+        if recurring_frequency not in _VALID_FREQUENCIES:
             recurring_frequency = "monthly"
 
         if recurring_frequency == "weekly":
             selected = request.POST.getlist("recurring_weekdays")
             valid = sorted({int(d) for d in selected if d.isdigit() and 0 <= int(d) <= 6})
             if not valid:
-                messages.error(request, "Un gasto semanal debe tener al menos un día de la semana.")
-                return redirect("expenses_list")
+                return None, "Un gasto semanal debe tener al menos un día de la semana."
             recurring_weekdays = ",".join(str(d) for d in valid)
         else:
             try:
@@ -108,19 +144,74 @@ def create_expense(request):
     else:
         recurring_frequency = "monthly"
 
-    Expense.objects.create(
-        description=description,
-        category=category,
-        amount=amount,
-        expense_date=parsed_date,
-        notes=notes,
-        is_recurring=is_recurring,
-        recurring_frequency=recurring_frequency,
-        recurring_day=recurring_day,
-        recurring_month=recurring_month,
-        recurring_weekdays=recurring_weekdays,
-    )
-    messages.success(request, f"✅ Gasto '{description}' guardado.")
+    return {
+        "description": description,
+        "category": category,
+        "amount": amount,
+        "expense_date": parsed_date,
+        "notes": notes,
+        "is_recurring": is_recurring,
+        "recurring_frequency": recurring_frequency,
+        "recurring_day": recurring_day,
+        "recurring_month": recurring_month,
+        "recurring_weekdays": recurring_weekdays,
+    }, None
+
+
+@require_http_methods(["POST"])
+def create_expense(request):
+    fields, error = _expense_fields_from(request)
+    if error:
+        messages.error(request, error)
+        return redirect("expenses_list")
+
+    expense = Expense(**fields)
+    try:
+        # `Expense.clean()` carries the real per-frequency rules and neither
+        # `create()` nor `save()` runs it, so an invalid recurrence used to reach
+        # the database and simply never materialise.
+        expense.full_clean()
+    except ValidationError as exc:
+        messages.error(request, " ".join(exc.messages))
+        return redirect("expenses_list")
+
+    expense.save()
+    messages.success(request, f"✅ Gasto '{expense.description}' guardado.")
+    return redirect("expenses_list")
+
+
+@require_http_methods(["POST"])
+def update_expense(request, expense_id):
+    """Edit an existing expense or recurring template.
+
+    There was no update path at all: the only way to change the rent after a
+    rise was to delete the template and build a new one, which orphaned every
+    row already generated from it (`generated_from` is SET_NULL) and lost the
+    cadence. Editing the template in place keeps that history attached.
+
+    Rows already materialised for past months are deliberately NOT rewritten —
+    they are what the academy actually paid, and back-dating them would corrupt
+    the monthly totals. A new amount applies from the next materialisation.
+    """
+    expense = get_object_or_404(Expense, id=expense_id)
+
+    fields, error = _expense_fields_from(request)
+    if error:
+        messages.error(request, error)
+        return redirect("expenses_list")
+
+    for field, value in fields.items():
+        setattr(expense, field, value)
+
+    try:
+        expense.full_clean()
+    except ValidationError as exc:
+        messages.error(request, " ".join(exc.messages))
+        return redirect("expenses_list")
+
+    expense.save()
+    label = "Plantilla" if expense.is_recurring else "Gasto"
+    messages.success(request, f"✅ {label} '{expense.description}' actualizado.")
     return redirect("expenses_list")
 
 
@@ -134,4 +225,4 @@ def delete_expense(request, expense_id):
     return redirect("expenses_list")
 
 
-__all__ = ["expenses_list", "create_expense", "delete_expense"]
+__all__ = ["expenses_list", "create_expense", "update_expense", "delete_expense"]

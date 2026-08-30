@@ -19,6 +19,11 @@ An enrollment represents a student being "inside the system" for an academic yea
 | New child          | 40€   | Default enrollment fee                           |
 | Returning child    | 20€   | Old student discount: -20€ (already had an enrollment) |
 | Adult (18+)        | 20€   | Fixed, no discounts                              |
+| Special            | manual | **Matrícula especial (€)** on the enrollment form, charged verbatim (v1.17.5) |
+
+The four rows above are exactly the four `EnrollmentType` categories — `new_student`, `returning_student`, `adults`, `special`. An `EnrollmentType` is a **matrícula category, not a payment cadence**; the cadence lives on `Enrollment.payment_modality`.
+
+A special *matrícula* is independent of a special *cuota*: **Precio manual (€)** prices the recurring fee, **Matrícula especial (€)** prices the one-time enrollment. Setting the first does not imply the second — left blank, the standard matrícula applies (returning-student discount included). A hand-set matrícula is a negotiated figure, so no discount is taken off it, and it is not stored on `Enrollment` — the `payment_type="enrollment"` Payment row is the record.
 
 ### June Discount
 
@@ -49,7 +54,10 @@ Monthly payments are due every month from **September** to **June**.
 ### Quarterly Payments
 
 Quarters:
-- **Q1**: October–December (includes September payment)
+- **Q1**: October–December — billed as **three** months, due 1 October. The Spanish label is
+  "1er Trimestre (Oct-Dic)" (corrected in v1.17.5; it read "Sep-Dic" while charging three months).
+  `QUARTERS[0]["includes_sept"]` is `True` but is read by nothing — see the note under
+  *Automatic Payment Generation*.
 - **Q2**: January–March
 - **Q3**: April–June
 
@@ -73,8 +81,10 @@ monthly student would receive**.
 
 ### Special Payments
 
-- Always treated as **monthly, 2 days/week**.
-- Have their own custom logic and price (set manually).
+- The admin types the price by hand. It is stored on the enrollment (`enrollment_amount` / `final_amount`) and is the **per-period** figure: per month, or per quarter for a quarterly special.
+- `schedule_type` is only the timetable the student actually attends — it is **not** a price band. A special enrollment can be monthly or quarterly, 1 day or 2 days a week.
+- Every payment of the year is billed at that amount via `PaymentService.hand_priced_amount()`. Sibling / language-cheque / June discounts are **not** layered on top: `EnrollmentService._apply_discounts` already folded whatever was ticked into the stored figure at creation.
+- Before v1.17.5 both generators re-derived the fee from `SiteConfiguration`, so the ficha showed the custom price while every payment charged the standard 1-day / 2-day rate.
 
 ---
 
@@ -99,11 +109,13 @@ Pending (due, not paid) periodic payments are created two ways, and the two are 
 
 - **Monthly students**: A payment is created at the start of each month (September through June).
 - **Quarterly students**: A payment is created at the start of each quarter:
-  - October 1 (Q1, covers September–December)
+  - October 1 (Q1, covers October–December)
   - January 1 (Q2, covers January–March)
   - April 1 (Q3, covers April–June)
 
 Because both paths match on `(student, payment_type, due-date month/year)` before creating, a student enrolled after the up-front scheduling already ran is never charged twice.
+
+> **Known gap.** A quarterly student's September is not billed by either path: monthly students are billed Sep–Jun, but Q1 is due 1 October and covers three months (Oct–Dec). `QUARTERS[0]` still carries an `includes_sept: True` flag, but nothing reads it and `calculate_quarterly_amount` charges `base × 3`. Decide whether September belongs in Q1 before relying on this document for a reconciliation.
 
 ### Payment Amount Calculation
 
@@ -137,6 +149,14 @@ minimum 0.01€
 base = adult_group_monthly_fee (60€)
 No discounts.
 ```
+
+**Special (monthly or quarterly):**
+```
+amount = enrollment.final_amount   (the admin's hand-set per-period price)
+No further discounts — they were already applied when the enrollment was created.
+minimum 0.01€
+```
+Both generators short-circuit here, so any queryset feeding them needs `select_related("enrollment_type")`.
 
 ---
 

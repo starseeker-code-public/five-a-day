@@ -169,6 +169,14 @@
                     <div id="manual-amount-container" class="hidden">
                         <label for="id_manual_amount" class="block text-sm font-medium text-neutral-700 mb-2">Precio manual (€) <span style="color:#dc2626;">*</span></label>
                         {{ enrollment_form.manual_amount }}
+                        <p class="text-xs text-neutral-500 mt-1">Cuota periódica (por mes, o por trimestre en plan trimestral).</p>
+                    </div>
+
+                    <!-- Hand-set matrícula: optional, independent of the recurring price -->
+                    <div id="special-enrollment-fee-container" class="hidden">
+                        <label for="id_special_enrollment_fee" class="block text-sm font-medium text-neutral-700 mb-2">Matrícula especial (€)</label>
+                        {{ enrollment_form.special_enrollment_fee }}
+                        <p class="text-xs text-neutral-500 mt-1">Pago único de matrícula. Vacío = matrícula estándar.</p>
                     </div>
                 </div>
 
@@ -280,6 +288,7 @@ window.STUDENT_CREATE_CONFIG = {
         monthly_full: {{ price_config.monthly_full }},
         monthly_part: {{ price_config.monthly_part }},
         quarterly: {{ price_config.quarterly }},
+        quarterly_gross: {{ price_config.quarterly_gross }},
         adult_group: {{ price_config.adult_group }}
     },
     languageChequeDiscount: {{ language_cheque_discount }},

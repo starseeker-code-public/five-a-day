@@ -192,6 +192,15 @@ class BacklogTask(models.Model):
     priority = models.CharField(max_length=10, choices=PRIORITY_CHOICES, default="medium")
     status = models.CharField(max_length=15, choices=STATUS_CHOICES, default="open")
     created_by = models.CharField(max_length=100, default="anonymous")
+    # Set by the TESTER, not by a developer: a tick they turn green once they
+    # have checked the fix on the testing environment. Deliberately separate
+    # from `status="done"` — that is the developer saying "shipped" (and it
+    # emails the admin teachers); this is QA saying "verified correct".
+    verified = models.BooleanField(
+        default=False,
+        verbose_name="Verificado por QA",
+        help_text="El tester ha comprobado que el ticket está correcto.",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

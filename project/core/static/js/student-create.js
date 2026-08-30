@@ -53,6 +53,9 @@ document.addEventListener('DOMContentLoaded', function () {
     const specialCheckbox = document.getElementById('id_is_special');
     const manualAmountContainer = document.getElementById('manual-amount-container');
     const manualAmountInput = document.getElementById('id_manual_amount');
+    // Optional hand-set matrícula. Shown with the manual price, but independent of
+    // it: the recurring cuota and the one-time matrícula are two different prices.
+    const specialFeeContainer = document.getElementById('special-enrollment-fee-container');
     const calculatedPrice = document.getElementById('calculated-price');
     const priceBreakdown = document.getElementById('price-breakdown');
     const lcCheckbox = document.getElementById('id_has_language_cheque');
@@ -67,9 +70,20 @@ document.addEventListener('DOMContentLoaded', function () {
         return priceConfig[planSelect.value] || 0;
     }
 
+    // What the strike-through shows: the price BEFORE any discount. The quarterly
+    // entry in priceConfig is already net of the -5%, so using it here struck through
+    // the discounted total and printed the same figure twice.
+    function getGrossPrice() {
+        if (!isAdultMode && planSelect && planSelect.value === 'quarterly') {
+            return priceConfig.quarterly_gross || getBasePrice();
+        }
+        return getBasePrice();
+    }
+
     function updateCalculatedPrice() {
         if (specialCheckbox && specialCheckbox.checked) {
             manualAmountContainer.classList.remove('hidden');
+            if (specialFeeContainer) specialFeeContainer.classList.remove('hidden');
             if (manualAmountInput && manualAmountInput.value) {
                 calculatedPrice.textContent = parseFloat(manualAmountInput.value).toFixed(2);
             } else {
@@ -79,8 +93,10 @@ document.addEventListener('DOMContentLoaded', function () {
             return;
         }
         manualAmountContainer.classList.add('hidden');
+        if (specialFeeContainer) specialFeeContainer.classList.add('hidden');
 
         let base = getBasePrice();
+        const gross = getGrossPrice();
         let breakdownParts = [];
         let final = base;
 
@@ -106,11 +122,11 @@ document.addEventListener('DOMContentLoaded', function () {
 
         if (final < 0.01) final = 0.01;
 
-        if (breakdownParts.length > 0 || final !== base) {
-            calculatedPrice.innerHTML = `<span class="line-through text-neutral-400">${base.toFixed(2)}</span> <span class="text-green-600 font-medium">${final.toFixed(2)}</span>`;
+        if (breakdownParts.length > 0 || final !== gross) {
+            calculatedPrice.innerHTML = `<span class="line-through text-neutral-400">${gross.toFixed(2)}</span> <span class="text-green-600 font-medium">${final.toFixed(2)}</span>`;
             priceBreakdown.textContent = breakdownParts.join(', ');
         } else {
-            calculatedPrice.textContent = base.toFixed(2);
+            calculatedPrice.textContent = gross.toFixed(2);
             priceBreakdown.textContent = '';
         }
     }

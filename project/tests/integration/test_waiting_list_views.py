@@ -1,6 +1,6 @@
 """Integration tests for v1.1 — Waiting List & Group Capacity views."""
 
-from datetime import date
+from datetime import date, timedelta
 
 import pytest
 from django.urls import reverse
@@ -222,3 +222,92 @@ class TestDashboardWaitingWidget:
         response = authenticated_client.get(reverse("home"))
         assert response.status_code == 200
         assert response.context["waiting_count"] >= 1
+
+
+class TestWaitingListCreateForm:
+    """v1.17.4 — the phone form drops the surname and gains a priority flag."""
+
+    URL_NAME = "waiting_list_create"
+
+    def _post(self, client, **overrides):
+        data = {"first_name": "Lucia", "waiting_contact_phone": "600111222"}
+        data.update(overrides)
+        return client.post(reverse(self.URL_NAME), data)
+
+    def test_form_page_loads(self, authenticated_client):
+        response = authenticated_client.get(reverse(self.URL_NAME))
+        assert response.status_code == 200
+
+    def test_surname_is_not_asked_for(self, authenticated_client):
+        response = authenticated_client.get(reverse(self.URL_NAME))
+        assert "last_name" not in response.context["form"].fields
+
+    def test_creates_an_entry_without_a_surname(self, authenticated_client):
+        response = self._post(authenticated_client)
+
+        assert response.status_code == 302
+        entry = Student.objects.get(first_name="Lucia")
+        assert entry.is_waiting is True
+        assert entry.last_name == ""
+        # No trailing space from the empty surname — this string is the link text
+        # in the list and the subject of the history entry.
+        assert entry.full_name == "Lucia"
+
+    def test_priority_defaults_to_off(self, authenticated_client):
+        self._post(authenticated_client)
+        assert Student.objects.get(first_name="Lucia").waiting_priority is False
+
+    def test_priority_checkbox_is_saved(self, authenticated_client):
+        self._post(authenticated_client, waiting_priority="on")
+        assert Student.objects.get(first_name="Lucia").waiting_priority is True
+
+    def test_history_entry_marks_a_priority_signup(self, authenticated_client):
+        from core.models import HistoryLog
+
+        self._post(authenticated_client, waiting_priority="on")
+
+        assert HistoryLog.objects.filter(action="waiting_list_added", message__contains="(prioritario)").exists()
+
+
+class TestWaitingListPriorityOrdering:
+    def test_priority_entries_come_first(self, authenticated_client, group):
+        from django.utils import timezone
+
+        older = Student.objects.create(first_name="Primero", group=group, active=True, is_waiting=True)
+        priority = Student.objects.create(
+            first_name="Urgente", group=group, active=True, is_waiting=True, waiting_priority=True
+        )
+        # `waiting_since` is auto-set on save, so pin it: the priority entry has to
+        # win despite having waited strictly less than the other.
+        Student.objects.filter(pk=older.pk).update(waiting_since=timezone.now() - timedelta(days=30))
+
+        response = authenticated_client.get(reverse("waiting_list"))
+        order = [s.id for s in response.context["waiting_students"]]
+
+        assert order.index(priority.id) < order.index(older.id)
+
+    def test_fifo_is_kept_within_each_band(self, authenticated_client, group):
+        from django.utils import timezone
+
+        first = Student.objects.create(
+            first_name="Prio1", group=group, active=True, is_waiting=True, waiting_priority=True
+        )
+        second = Student.objects.create(
+            first_name="Prio2", group=group, active=True, is_waiting=True, waiting_priority=True
+        )
+        Student.objects.filter(pk=first.pk).update(waiting_since=timezone.now() - timedelta(days=10))
+
+        response = authenticated_client.get(reverse("waiting_list"))
+        order = [s.id for s in response.context["waiting_students"]]
+
+        assert order.index(first.id) < order.index(second.id)
+
+
+class TestFullStudentFormStillNeedsASurname:
+    """`Student.last_name` became blank=True for the phone form; the real ficha
+    must not inherit that."""
+
+    def test_last_name_is_required(self):
+        from students.forms import StudentForm
+
+        assert StudentForm().fields["last_name"].required is True

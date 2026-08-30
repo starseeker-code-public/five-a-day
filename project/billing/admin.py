@@ -283,8 +283,12 @@ class EnrollmentAdmin(admin.ModelAdmin):
     )
 
     def is_paid_display(self, obj):
+        # Both branches MUST pass at least one argument: on Django 6.0+ a
+        # format_html() call with only a format string raises TypeError (it was
+        # a RemovedInDjango60Warning before). The paid branch had none, so the
+        # enrollment changelist 500'd as soon as one enrollment was fully paid.
         if obj.is_paid:
-            return format_html('<span style="color: green;">&#10003; Paid</span>')
+            return format_html('<span style="color: green;">&#10003; {}</span>', "Paid")
         remaining = obj.remaining_amount
         return format_html('<span style="color: red;">&#10007; Pending (&euro;{})</span>', remaining)
 

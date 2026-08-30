@@ -61,6 +61,49 @@ class TestSendWelcomeEmailTask:
         assert result["status"] == "success"
         assert result["recipient"] == adult_student.email
 
+    def test_special_enrollment_reports_special_payment_modality(
+        self, student_with_parent, parent, enrollment_type_special, site_config
+    ):
+        """A hand-priced matrícula has no standard cadence to announce."""
+        from billing.models import Enrollment
+        from comms.tasks import send_welcome_email_task
+
+        enr = Enrollment.objects.create(
+            student=student_with_parent,
+            enrollment_type=enrollment_type_special,
+            enrollment_period_start=date(2025, 9, 15),
+            enrollment_period_end=date(2026, 6, 27),
+            academic_year="2025-2026",
+            schedule_type="full_time",
+            payment_modality="monthly",
+            enrollment_amount=Decimal("55.00"),
+            final_amount=Decimal("55.00"),
+            status="active",
+            enrollment_date=date(2025, 9, 1),
+        )
+        with patch("comms.services.email_service.email_service.send_email") as mock_send:
+            mock_send.return_value = True
+            send_welcome_email_task(
+                parent_id=parent.id,
+                student_id=student_with_parent.id,
+                enrollment_id=enr.id,
+            )
+        context = mock_send.call_args.kwargs["context"]
+        assert context["enrollment_type"] == "Especial"
+        assert context["payment_modality"] == "Especial"
+
+    def test_standard_enrollment_keeps_its_cadence(self, student_with_parent, parent, active_enrollment):
+        from comms.tasks import send_welcome_email_task
+
+        with patch("comms.services.email_service.email_service.send_email") as mock_send:
+            mock_send.return_value = True
+            send_welcome_email_task(
+                parent_id=parent.id,
+                student_id=student_with_parent.id,
+                enrollment_id=active_enrollment.id,
+            )
+        assert mock_send.call_args.kwargs["context"]["payment_modality"] == "Mensual"
+
     def test_no_email_address_returns_skipped(self, student, active_enrollment):
         from comms.tasks import send_welcome_email_task
 

@@ -263,6 +263,14 @@ DATE_FORMAT = "d/m/Y"
 SHORT_DATE_FORMAT = "d/m/Y"
 DATE_INPUT_FORMATS = ["%d/%m/%Y", "%Y-%m-%d"]
 
+# The three settings above are IGNORED on their own: localization always takes
+# precedence, so `LANGUAGE_CODE = "es-es"` made Django read
+# django.conf.locale.es.formats and render every unfiltered date as
+# "31 de agosto de 2026". FORMAT_MODULE_PATH is the only supported override
+# since USE_L10N was removed in Django 5 — project/formats/es/formats.py
+# restores dd/mm/yyyy across templates, emails and the admin.
+FORMAT_MODULE_PATH = "project.formats"
+
 USE_TZ = True
 
 # ============================================================================

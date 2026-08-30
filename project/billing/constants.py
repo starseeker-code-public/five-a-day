@@ -93,12 +93,16 @@ QUARTERS = [
     {"name": "Q3", "months": [4, 5, 6], "includes_sept": False, "due_month": 4},  # Apr-Jun
 ]
 
+# Every label below is rendered directly to the user through
+# `get_<field>_display()` — the payment detail page, the payments list, the
+# student detail page and the admin all read them. They must be Spanish: an
+# English "Monthly Fee" in the middle of a Spanish page is what prompted this.
 ENROLLMENT_STATUS_CHOICES = [
-    ("pending", "Pending"),
-    ("active", "Active"),
-    ("finished", "Finished"),
-    ("cancelled", "Cancelled"),
-    ("suspended", "Suspended"),
+    ("pending", "Pendiente"),
+    ("active", "Activa"),
+    ("finished", "Finalizada"),
+    ("cancelled", "Cancelada"),
+    ("suspended", "Suspendida"),
 ]
 
 PAYMENT_METHOD_CHOICES = [
@@ -108,18 +112,18 @@ PAYMENT_METHOD_CHOICES = [
 ]
 
 PAYMENT_STATUS_CHOICES = [
-    ("pending", "Pending"),
-    ("completed", "Completed"),
-    ("failed", "Failed"),
-    ("cancelled", "Cancelled"),
-    ("refunded", "Refunded"),
+    ("pending", "Pendiente"),
+    ("completed", "Completado"),
+    ("failed", "Fallido"),
+    ("cancelled", "Cancelado"),
+    ("refunded", "Reembolsado"),
 ]
 
 PAYMENT_TYPE_CHOICES = [
-    ("enrollment", "Enrollment Fee"),
-    ("monthly", "Monthly Fee"),
-    ("quarterly", "Quarterly Fee"),
-    ("other", "Other"),
+    ("enrollment", "Matrícula"),
+    ("monthly", "Mensualidad"),
+    ("quarterly", "Trimestre"),
+    ("other", "Otro"),
 ]
 
 # Statuses that represent money the academy still expects to collect (or has

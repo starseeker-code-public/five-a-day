@@ -298,3 +298,127 @@ class TestApiToggleErrorEmail:
             content_type="application/json",
         )
         assert response.status_code == 500
+
+
+# ============================================================================
+# api_update_backlog_task — QA verification tick (v1.17.5)
+# ============================================================================
+
+
+class TestBacklogQaVerificationTick:
+    """The shaded tick beside the priority badge, which the tester turns green.
+
+    Deliberately separate from `status="done"`: that is the developer saying
+    "shipped" and it emails the admin teachers. This is QA saying "verified".
+    """
+
+    def _task(self):
+        from core.models import BacklogTask
+
+        return BacklogTask.objects.create(title="Revisar el alta", priority="high", created_by="qa")
+
+    def test_defaults_to_unverified(self):
+        assert self._task().verified is False
+
+    @QA_SETTINGS
+    def test_toggle_on(self, qa_client):
+        task = self._task()
+
+        response = qa_client.post(
+            reverse("api_update_backlog_task", kwargs={"task_id": task.id}),
+            data=json.dumps({"verified": True}),
+            content_type="application/json",
+        )
+
+        assert response.json() == {"success": True, "verified": True}
+        task.refresh_from_db()
+        assert task.verified is True
+
+    @QA_SETTINGS
+    def test_toggle_off(self, qa_client):
+        task = self._task()
+        task.verified = True
+        task.save()
+
+        qa_client.post(
+            reverse("api_update_backlog_task", kwargs={"task_id": task.id}),
+            data=json.dumps({"verified": False}),
+            content_type="application/json",
+        )
+
+        task.refresh_from_db()
+        assert task.verified is False
+
+    @QA_SETTINGS
+    def test_verifying_does_not_touch_status_or_send_the_done_email(self, qa_client, mailoutbox):
+        task = self._task()
+
+        qa_client.post(
+            reverse("api_update_backlog_task", kwargs={"task_id": task.id}),
+            data=json.dumps({"verified": True}),
+            content_type="application/json",
+        )
+
+        task.refresh_from_db()
+        assert task.status == "open"
+        assert mailoutbox == []
+
+    @QA_SETTINGS
+    def test_marking_done_still_works_alongside_it(self, qa_client):
+        task = self._task()
+
+        qa_client.post(
+            reverse("api_update_backlog_task", kwargs={"task_id": task.id}),
+            data=json.dumps({"status": "done"}),
+            content_type="application/json",
+        )
+
+        task.refresh_from_db()
+        assert task.status == "done"
+        # Verification is the tester's own flag and is untouched by a status change.
+        assert task.verified is False
+
+
+class TestBacklogOrdering:
+    """Open work first, done at the bottom.
+
+    The model orders by `-created_at` alone, so a task marked done kept its slot
+    among the live tickets — and with the dashboard capped at 50 it pushed real
+    work off the page.
+    """
+
+    @staticmethod
+    def _make(title, status, days_old):
+        from datetime import timedelta
+
+        from django.utils import timezone
+
+        from core.models import BacklogTask
+
+        task = BacklogTask.objects.create(title=title, status=status)
+        # created_at is auto_now_add, so it has to be rewritten after the insert.
+        BacklogTask.objects.filter(pk=task.pk).update(created_at=timezone.now() - timedelta(days=days_old))
+        return task
+
+    @QA_SETTINGS
+    def test_dashboard_lists_unfinished_tasks_first(self, qa_client):
+        recent_done = self._make("Hecha ayer", "done", 1)
+        old_open = self._make("Abierta hace un mes", "open", 30)
+        old_in_progress = self._make("En curso hace un mes", "in_progress", 29)
+
+        response = qa_client.get(reverse("testing_tools"))
+        ordered = [t.id for t in response.context["tasks"]]
+
+        assert ordered.index(old_in_progress.id) < ordered.index(recent_done.id)
+        assert ordered.index(old_open.id) < ordered.index(recent_done.id)
+        # Newest first still holds within the unfinished half.
+        assert ordered.index(old_in_progress.id) < ordered.index(old_open.id)
+
+    @QA_SETTINGS
+    def test_full_export_uses_the_same_order(self, qa_client):
+        done = self._make("Hecha ayer", "done", 1)
+        still_open = self._make("Abierta hace un mes", "open", 30)
+
+        response = qa_client.get(reverse("export_backlog_tasks"), {"format": "json", "scope": "all"})
+        ids = [row["id"] for row in json.loads(response.content)["tasks"]]
+        assert ids.index(still_open.id) < ids.index(done.id)

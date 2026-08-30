@@ -36,6 +36,8 @@ next_friday = today + timedelta(days=(4 - today.weekday()) % 7 or 7)
 
 def get_email_apps():
     """Retorna la lista de apps de email con sus datos de prueba."""
+    from billing.services.pricing_service import PricingService
+
     return [
         {
             "key": "fun_friday",
@@ -71,6 +73,7 @@ def get_email_apps():
                 "iban_number": "ES00 0000 0000 0000 0000 0000",
                 "reduced_price_cheque_idioma": "34",
                 "telephone_number_bizum": "613 481 141",
+                **PricingService.payment_reminder_fees(),
             },
             "description": "Recordatorio de pago (día 1 de cada mes)",
         },

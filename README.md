@@ -20,7 +20,7 @@ Built to centralize student records, automate billing cycles, and streamline par
 ### Project Status
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v1.17.4-brightgreen?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-v1.17.5-brightgreen?style=flat-square" alt="Version">
   &nbsp;|&nbsp;
   <a href="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml?query=branch%3Amain"><img src="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml/badge.svg?branch=main&style=flat-square" alt="CI main"></a>
   &nbsp;|&nbsp;
@@ -41,9 +41,9 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 | Version | Date | Description |
 |---------|------|-------------|
-| **v1.17.3** | 2026-08-30 | Enrollment types are matrícula categories, not cadences |
-| v1.17.2 | 2026-08-30 | Group quota at creation; waiting list enrolls properly |
-| v1.17.1 | 2026-08-30 | Provision enrollment types; production could not enroll |
+| **v1.17.5** | 2026-08-30 | Spanish dates and labels, editable expenses, special matrícula |
+| v1.17.4 | 2026-08-30 | Password eye drawn as inline SVG, not a webfont glyph |
+| v1.17.3 | 2026-08-30 | Enrollment types are matrícula categories, not cadences |
 
 ---
 
@@ -150,8 +150,146 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 ## Version History & Roadmap
 
-<details id="v1173" open>
-<summary><strong>v1.17.3 — Enrollment types are matrícula categories (current)</strong></summary>
+<details id="v1175" open>
+<summary><strong>v1.17.5 — Spanish dates and labels, editable expenses, a special matrícula (current)</strong></summary>
+
+**Dates were rendered two different ways on the same page**
+
+- `DATE_FORMAT` / `SHORT_DATE_FORMAT` / `DATETIME_FORMAT` in `settings.py` are **inert on their
+  own**: localization always wins, so with `LANGUAGE_CODE = "es-es"` Django read
+  `django.conf.locale.es.formats` and printed every *unfiltered* date as
+  "31 de agosto de 2026". Templates that wrote `|date:"d/m/Y"` looked right; everything else
+  did not — the same page showing a date two ways, and three settings that appeared correct
+  while doing nothing.
+- `FORMAT_MODULE_PATH = "project.formats"` is the only supported override since `USE_L10N` was
+  removed in Django 5. New `project/formats/es/formats.py` (duplicated as `es_ES/`) restores
+  `dd/mm/yyyy` across templates, emails and `/admin/` at once.
+
+**Choice labels are user-facing — they are now Spanish**
+
+- `PAYMENT_TYPE_CHOICES`, `PAYMENT_STATUS_CHOICES` and `ENROLLMENT_STATUS_CHOICES` shipped
+  English labels ("Monthly Fee", "Pending", "Active") that `get_<field>_display()` printed
+  straight onto the payment detail page, the payments list, the student ficha and the admin.
+- The keys stay English like every other choice key; only the labels changed, so there is no
+  data migration — but Django still emits an `AlterField` for the new choices
+  (`billing/migrations/0009`).
+
+**A `special` matrícula is finally billed at its hand-set price**
+
+- Both payment generators (`schedule_academic_year_payments` and the `generate_payments` cron)
+  re-derived the fee from `SiteConfiguration`, so a hand-priced student showed the custom price
+  on the ficha while **every payment of the year charged the standard 1-day / 2-day rate**.
+- New `PaymentService.hand_priced_amount()` short-circuits `calculate_monthly_amount` /
+  `calculate_quarterly_amount` on `enrollment_type.name == "special"` and returns
+  `final_amount` as-is. Sibling / cheque / June discounts are **not** layered on top —
+  `EnrollmentService._apply_discounts` already folded them in at creation.
+- The **matrícula** is a second, independent price: the enrollment form's optional
+  **Matrícula especial (€)** (`special_enrollment_fee`), charged verbatim through
+  `EnrollmentService.compute_enrollment_fee(..., special_fee=...)` with no returning-student
+  discount taken off a negotiated figure. Left blank, the standard matrícula applies — a
+  special cuota does not imply a special matrícula. The form rejects it without
+  "Precio especial" ticked.
+- The welcome email reports "Especial" as the payment modality for these enrollments rather
+  than a standard cadence the family never agreed to.
+
+**Expenses are editable**
+
+- The app could only create and delete an expense, so a rent rise meant deleting the recurring
+  template and rebuilding it — which orphaned every row already generated from it
+  (`generated_from` is `SET_NULL`). New `update_expense` view + edit modal on `/expenses/`,
+  reachable by non-admin teachers like create and delete already were.
+- `create_expense` and `update_expense` share `_expense_fields_from()`, so an edit can never
+  parse a recurrence differently from a create, and **both now call `full_clean()`** — nothing
+  else runs `Expense.clean()`'s per-frequency rules, so an invalid recurrence used to persist
+  and then simply never materialise. An unknown `category` slug falls back to `other` instead
+  of reaching the database.
+- Rows already materialised are deliberately **not** rewritten: they are what the academy
+  actually paid. A new amount applies from the next materialisation.
+- The "Nuevo gasto" date input was fed `"{{ month }}-{{ year }}"` ("8-2026"), which
+  `<input type="date">` rejects, so it always rendered blank. It now prefills today, or the 1st
+  of the month being browsed.
+
+**Waiting list — no surname asked for, and a priority flag that means something**
+
+- `Student.last_name` is `blank=True`: an entry is taken over the phone with a first name and a
+  number, and the surname is collected when the family is offered a place. `full_name` is
+  `.strip()`ed so a missing surname leaves no trailing space, and `StudentForm` re-asserts
+  `last_name.required = True` so the full ficha still demands it.
+- New `Student.waiting_priority` — and it sits in `_waiting_students_qs()`'s `ORDER BY`
+  (`-waiting_priority, waiting_since, created_at`), not just in a badge, so a flagged family
+  jumps the FIFO queue and the admin can work straight down the page when a spot frees up. Set
+  on the create form, edited afterwards from `/admin/`, the same creation-only pattern as
+  `Group.max_students`.
+
+**QA verification tick on the backlog**
+
+- `BacklogTask.verified` is the **tester's** mark ("I checked this and it is correct"), kept
+  separate from `status="done"`, which is the developer's and emails the admin teachers. A
+  payload carrying only `verified` toggles the tick and returns early.
+- The dashboard and the export now share `_backlog_tasks_qs()`, which orders unfinished work
+  first — a done ticket used to hold its slot among live ones and, with the list capped at 50,
+  push real work off the page.
+
+**Payment-reminder email is complete, and the create-payment form has one fewer failure mode**
+
+- The "Cuota trimestral" and "Cuota 2 sesiones descuento hermano" rows read *"consultar en la
+  academia"*. Both are plain derivations of `SiteConfiguration`, so
+  `PricingService.payment_reminder_fees()` computes all five figures from one source and every
+  caller shares it.
+- `search_students` now returns the student's parent in the same response. The form used to
+  POST to `validate_student_parent` with `parent_id: 0` — a lookup dressed up as a validation —
+  behind a bare `.catch(() => {})`, so any hiccup left "Padre/Tutor" silently blank with nothing
+  on screen to explain it. The dead `selectParent()` / `validateRelation()` pair went with it.
+- 11 of the 18 email templates had no `{% block title %}` and silently took the generic
+  fallback; all 18 now carry a title matching their subject line. The birthday email gained its
+  illustration and Fun Friday mentions WhatsApp signup.
+
+**Bug fixes**
+
+- `EnrollmentAdmin.is_paid_display` called `format_html()` with **no** interpolation arguments
+  on the paid branch, which raises `TypeError` on Django 6.0+ (it was a
+  `RemovedInDjango60Warning` before). `/admin/billing/enrollment/` went down entirely as soon as
+  one enrollment was fully paid — invisible locally because `*/admin.py` is excluded from
+  coverage, and only reachable on the testing VM where real payments exist.
+- The student-create price widget struck through the **discounted** quarterly total and printed
+  the same figure twice; `price_config` now also exposes `quarterly_gross`.
+- `QUARTER_NAMES_ES[10]` said "1er Trimestre (Sep-Dic)" for a quarter that runs Oct–Dec.
+- `generate_payments` joins `enrollment_type` rather than paying a query per student.
+
+**Tests**
+
+- **1,375 passing at 95.36 % coverage.** New `integration/test_v1175_fixes.py` (32) pins one
+  class per reported problem, and new `integration/test_admin_views.py` (62) smoke-tests every
+  registered admin view — precisely the gap that let the `format_html` crash ship.
+
+</details>
+
+<details id="v1174">
+<summary><strong>v1.17.4 — The password eye is drawn as inline SVG</strong></summary>
+
+**The hold-to-reveal button was invisible on the testing VM only**
+
+- It rendered fine on production and development. The served HTML, the CSS, the JS asset and the
+  cache headers are byte-identical across all three, and the service worker deliberately
+  bypasses `/login/` — nothing server-side explained it.
+- The one dependency that can fail per-environment is the **Material Symbols webfont**. The icon
+  was a glyph, so the button drew nothing at all whenever the Google Fonts stylesheet was blocked
+  or slow. Testing is plain HTTP on a bare IP, where that third-party request is far likelier to
+  be dropped than on production's HTTPS domain.
+
+**The fix**
+
+- Two inline SVGs toggled via the `hidden` attribute. No external round-trip, renders offline,
+  identical everywhere.
+- `.pw-toggle svg[hidden]` gets an explicit `display: none`, otherwise the `display: block`
+  needed for sizing stacks both icons.
+- `setIcon()` falls back to the old glyph swap when the SVGs are absent, so a browser holding a
+  cached copy of the pre-SVG template gets a working button rather than a dead one.
+
+</details>
+
+<details id="v1173">
+<summary><strong>v1.17.3 — Enrollment types are matrícula categories</strong></summary>
 
 **What prompted it**
 
@@ -1783,6 +1921,7 @@ erDiagram
         bool active
         bool is_waiting
         datetime waiting_since
+        bool waiting_priority
         date withdrawal_date
         text withdrawal_reason
     }
@@ -1932,6 +2071,7 @@ erDiagram
         text description
         string priority
         string status
+        bool verified
         string created_by
         datetime updated_at
     }
@@ -2408,11 +2548,14 @@ five-a-day/
 │   │   ├── settings_test.py      Test overrides (PostgreSQL default, SQLite fallback)
 │   │   ├── urls.py               Root URL conf → includes 4 app URL files
 │   │   ├── celery.py             Celery app + Beat schedule (8 periodic tasks)
+│   │   ├── formats/              FORMAT_MODULE_PATH overrides (v1.17.5) — es/ + es_ES/
+│   │   │                         restore dd/mm/yyyy; the DATE_FORMAT settings are inert alone
 │   │   └── wsgi.py / asgi.py
 │   │
 │   ├── core/                     Dashboard, Auth, Schedule, Utilities, Cross-cutting
 │   │   ├── models.py             TodoItem, HistoryLog, FunFridayAttendance, ScheduleSlot,
-│   │   │                         BacklogTask, QAConfiguration, FunFridayScheduledSend (v1.14.2)
+│   │   │                         BacklogTask (+ `verified` QA tick, v1.17.5), QAConfiguration,
+│   │   │                         FunFridayScheduledSend (v1.14.2)
 │   │   ├── audit_models.py       AuditLog (v1.10 — immutable per-model change trail)
 │   │   ├── audit_signals.py      Signal receivers + AuditActorMiddleware (contextvar-based actor)
 │   │   ├── rate_limit.py         Cache-backed IP rate limiter (v1.10)
@@ -2480,7 +2623,7 @@ five-a-day/
 │   │   └── management/commands/  send_email, test_all_emails, plus 4 Beat-task wrappers
 │   │                             (v1.14.2 — birthday, reminders, report, Fun Friday drain)
 │   │
-│   ├── tests/                    pytest suite (1,248 tests, 95.35 % coverage) — unit/ + integration/
+│   ├── tests/                    pytest suite (1,375 tests, 95.36 % coverage) — unit/ + integration/
 │   ├── templates/registration/   Password-reset templates (form, done, confirm, complete + email body)
 │   ├── templates/admin/          Django admin overrides (branded theme)
 │   └── conftest.py               Shared fixtures (models + authenticated_client)
@@ -2528,7 +2671,7 @@ Dashboard, authentication, scheduling, and shared utilities. Owns all views and 
 
 | Component | Details |
 |-----------|---------|
-| **Models** | 8 — TodoItem, HistoryLog (1000-entry cap), FunFridayAttendance, FunFridayScheduledSend, ScheduleSlot, BacklogTask (QA), QAConfiguration (QA), plus AuditLog in `audit_models.py` |
+| **Models** | 8 — TodoItem, HistoryLog (1000-entry cap), FunFridayAttendance, FunFridayScheduledSend, ScheduleSlot, BacklogTask (QA; `verified` is the tester's tick, separate from `status="done"`, v1.17.5), QAConfiguration (QA), plus AuditLog in `audit_models.py` |
 | **Views** | 22 modules: auth, password_reset, dashboard, students, parents, payments, management, app_forms, schedule, fun_friday_attendance, todos, support, errors, testing_tools, waiting_list, sheets, expenses, reports, parent_portal, stripe_views, pwa, two_factor |
 | **Services** | 3 — analytics_service, google_sheets_service, two_factor_service |
 | **Middleware** | 4 — NoHtmlCacheMiddleware (no-cache on dynamic HTML), QAErrorEmailMiddleware, SimpleAuthMiddleware (session auth public allow-list incl. `/password-reset/` + non-admin teacher URL-name whitelist), AuditActorMiddleware |
@@ -2545,8 +2688,8 @@ People management — the foundation app with no external dependencies.
 
 | Component | Details |
 |-----------|---------|
-| **Models** | 6 — Student (age calc, withdrawal + waiting-list tracking; v1.15 nullable `birth_date`/`group` plus `course`, `observations`, `waiting_contact_name`, `waiting_contact_phone`), Parent (DNI unique, `sms_opt_in`), Teacher (optional `auth.User` link for login, `two_factor_*`), Group (`max_students` capacity), StudentParent (M2M through), plus ParentSessionToken in `parent_portal_models.py` |
-| **Forms** | StudentForm (birth_date validation), WaitingListForm (v1.15 — name + phone only), ParentForm (DNI validation; uniqueness deferred to the view so a repeat DNI reuses the existing parent), ParentFormSet |
+| **Models** | 6 — Student (age calc, withdrawal + waiting-list tracking; v1.15 nullable `birth_date`/`group` plus `course`, `observations`, `waiting_contact_name`, `waiting_contact_phone`; v1.17.5 blank `last_name` and `waiting_priority`), Parent (DNI unique, `sms_opt_in`), Teacher (optional `auth.User` link for login, `two_factor_*`), Group (`max_students` capacity), StudentParent (M2M through), plus ParentSessionToken in `parent_portal_models.py` |
+| **Forms** | StudentForm (birth_date validation; re-asserts `last_name.required`), WaitingListForm (v1.15 — first name + phone only, no surname asked for, optional `waiting_priority`), ParentForm (DNI validation; uniqueness deferred to the view so a repeat DNI reuses the existing parent), ParentFormSet |
 | **Admin** | StudentAdmin with StudentParentInline, ParentAdmin with ParentStudentInline, group capacity columns |
 | **URLs** | 15 patterns: CRUD + search + fun friday attendance + waiting list (incl. the v1.15 short create form) |
 | **Auth integration** | `Teacher.ensure_user(password=...)` get-or-creates the linked Django user; `post_save` signal mirrors admin / email / name onto `auth.User` |
@@ -2560,12 +2703,12 @@ Financial management with a dedicated service layer.
 | Component | Details |
 |-----------|---------|
 | **Models** | 5 — SiteConfiguration (singleton pricing), EnrollmentType (plan types), Enrollment (discount flags), Payment (overdue detection, Stripe ids), Expense (three recurring cadences) |
-| **Services** | 6 — EnrollmentService (creation + discounts + returning-student detection), PaymentService (generation + calculations; v1.15 quarterly amounts now carry sibling / language-cheque / June discounts), PricingService (centralized config access), ExpenseService, PdfService (reportlab; v1.15 per-student payment history), StripeService (httpx, no SDK dependency) |
-| **Constants** | Pricing seeds, ENROLLMENT_TYPE_CHOICES, SCHEDULE_TYPE_CHOICES, PAYMENT_METHOD_CHOICES, etc. |
+| **Services** | 6 — EnrollmentService (creation + discounts + returning-student detection), PaymentService (generation + calculations; v1.15 quarterly amounts now carry sibling / language-cheque / June discounts; v1.17.5 `hand_priced_amount()` bills a `special` matrícula at its agreed price instead of re-deriving it from config), PricingService (centralized config access; v1.17.5 `payment_reminder_fees()` computes the five figures the reminder email prints), ExpenseService, PdfService (reportlab; v1.15 per-student payment history), StripeService (httpx, no SDK dependency) |
+| **Constants** | Pricing seeds, ENROLLMENT_TYPE_CHOICES, SCHEDULE_TYPE_CHOICES, PAYMENT_METHOD_CHOICES, etc. Every choice **label** is Spanish (v1.17.5) — `get_<field>_display()` output is user-facing; the keys stay English |
 | **Exports** | build_database_workbook() → multi-sheet .xlsx |
 | **Celery tasks** | 3 — generate_monthly_payments_task, materialize_recurring_expenses_task, materialize_recurring_expenses_daily_task |
 | **Commands** | `generate_payments --month X --year Y [--dry-run]`, `materialize_recurring_expenses [--daily]` |
-| **URLs** | 24 patterns: payment CRUD, enrollment API, expenses, reports, exports, Stripe, per-student payment-history PDF |
+| **URLs** | 25 patterns: payment CRUD, enrollment API, expenses (create / **update** / delete), reports, exports, Stripe, per-student payment-history PDF |
 
 See [billing/README.md](project/billing/README.md) for details.
 
@@ -2630,7 +2773,8 @@ Multi-step creation form with live price calculator.
 - **Parent selection** — either create new (name, DNI, phone, email, IBAN) or search existing parents with pagination (6 per page).
 - **Student fields** — first name, last name, birth date (validated: not future), school, allergies, GDPR consent, group selector.
 - **Enrollment plan** — dropdown: monthly full-time (2 days/week), monthly part-time (1 day/week), quarterly. Checkboxes: language cheque discount, sibling discount (with sibling search), special/manual price.
-- **Live price calculator** — updates as you change plan/discounts. Shows base price, strikethrough, final price, and breakdown text (e.g., "trimestral incl. -5%, -20 cheque").
+- **Two independent hand-set prices** (v1.17.5) — **Precio manual (€)** is the *recurring* fee (per month, or per quarter on a quarterly plan) and is what every payment of the year is billed at. **Matrícula especial (€)** is the optional one-time matrícula, charged verbatim with no returning-student discount; left blank the standard matrícula applies. It is only accepted with "Precio especial" ticked.
+- **Live price calculator** — updates as you change plan/discounts. Shows base price, strikethrough, final price, and breakdown text (e.g., "trimestral incl. -5%, -20 cheque"). The strike-through uses the **pre-discount** total (`quarterly_gross`) — it used to strike the already-discounted quarterly figure and print the same number twice.
 - **Adult mode** — no parent needed, email/phone on student, fixed adult_group pricing.
 - **On submit** — atomic transaction creates: Student → StudentParent link → Enrollment (active) → Payment (enrollment fee, pending) → HistoryLog entry → Celery welcome email task.
 - **Success page** — shows student name, enrollment fee amount. Auto-redirects to student list after 4 seconds. Option to "create sibling" (pre-fills same parent).
@@ -2651,7 +2795,7 @@ Payment management with search, filtering, pagination, and quick-complete.
 - **Status filter** — 4-state cycle: all → pending → completed → overdue.
 - **Type filter** — 5-state: all → enrollment → monthly → quarterly → other.
 - **Quick complete** — click a pending status badge → dropdown with 3 payment methods (cash / transfer / card) → one click marks as completed with today's date, logs to history.
-- **Create payment** — autocomplete student search → autocomplete parent search → validates student-parent relationship → select type, method, amount, dates, concept.
+- **Create payment** — autocomplete student search fills the read-only **Padre/Tutor** field from the same response (v1.17.5 — it used to fire a second request whose failures were swallowed, leaving the field silently blank) → select type, method, amount, dates, concept. An adult student legitimately has no guardian and the submit guard accepts that.
 - **Detail view** — read-only display of all payment fields.
 - **Export** — CSV download (all payments) and Excel download (full database: students + enrollments + payments as multi-sheet .xlsx).
 
@@ -2662,6 +2806,7 @@ Payment management with search, filtering, pagination, and quick-complete.
 - **Expense list** — description, category, amount, date, with monthly totals per category.
 - **Create expense** — one-off, or recurring with one of three cadences: **monthly** (`recurring_day` 1-28), **weekly** (`recurring_weekdays`, a CSV of ints 0-6 with Monday=0), or **yearly** (`recurring_day` + `recurring_month`). `Expense.clean()` validates the right fields per cadence.
 - **Auto-materialisation** — recurring rows spawn real expense rows: monthly on the 1st (`materialize_recurring`), weekly and yearly daily at 06:15 (`materialize_recurring_for_date`). Both are idempotent, matching on `generated_from` + the exact `expense_date`, so a re-run never double-creates.
+- **Edit** (v1.17.5) — `update_expense` + an edit modal on every row and every recurring template, prefilled from the row's `data-*` attributes. It shares `_expense_fields_from()` with the create path so a cadence can never be parsed two different ways, and **both call `full_clean()`** — nothing else runs `Expense.clean()`, so an invalid recurrence used to persist and then simply never materialise. An unknown `category` falls back to `other`. Rows already materialised are deliberately left alone: they are what the academy actually paid.
 - **Delete** — removes the row; generated children keep their `generated_from` link.
 
 ### Reports
@@ -2696,9 +2841,10 @@ Dedicated attendance management for the weekly Fun Friday event.
 `/lista-espera/` (v1.1) — admin only.
 
 - **Group capacity** — every `Group` has `max_students`; `group_capacity_summary` reports occupancy and free seats.
-- **Waiting students** — `Student.is_waiting` + `waiting_since`. Waiting students are excluded from the main student list and shown here in arrival order.
-- **Add to waiting list** — from the student-creation flow when the chosen group is full.
-- **Assign from waiting list** — moves a waiting student into a group once a seat frees up. This runs the *same* post-enrollment work as a normal creation: the enrollment-fee payment plus `PaymentService.schedule_academic_year_payments`, so the whole academic year is scheduled exactly once.
+- **Waiting students** — `Student.is_waiting` + `waiting_since`. Waiting students are excluded from the main student list and ordered `-waiting_priority, waiting_since, created_at`, so a **Prioritario** entry (v1.17.5) jumps the FIFO queue and the admin can work straight down the page. The flag is set on the create form and edited afterwards from `/admin/`.
+- **Short create form** — a phone enquiry needs only a first name and a contact number. No surname is asked for (v1.17.5 — it is collected when the family is offered a place) and the contact lives on `waiting_contact_name` / `waiting_contact_phone`, **not** a `Parent` row, because `Parent` requires a unique DNI nobody has to hand mid-call.
+- **Add to waiting list** — from the student-creation flow when the chosen group is full, or from an existing student's ficha. Moving a student here **cancels** their active enrollment, otherwise they keep generating pending payments and can never be promoted back.
+- **Matricular** (v1.17.2) — `assign_from_waiting_list` does **not** enroll in place; a waiting entry has no `Parent`, so promoting it produced an active student with no titular. It checks the group cap and redirects into the normal flow (`parent_create?from_waiting=<id>` → `student_create`), which prefills from the entry and discards the placeholder once the real student exists.
 - **Capacity-freed notification** — `notify_capacity_freed` flags a group that dropped below capacity.
 
 ### Apps (Email Tools)
@@ -2713,7 +2859,7 @@ Hub page listing all 10 email communication tools. Each follows a consistent pat
 | App | Email Template | Recipients | Trigger |
 |-----|---------------|------------|---------|
 | Fun Friday | `fun_friday.html` | Parents with active non-adult students | Weekly, manual — persisted as `FunFridayScheduledSend`, sent Monday 14:30 of the event week |
-| Payment Reminder | `payment_reminder.html` | Parents with active students | Monthly, manual |
+| Payment Reminder | `payment_reminder.html` | Parents with active students | Monthly, manual — all five fee rows come from `PricingService.payment_reminder_fees()`; the quarterly and sibling rows used to read *"consultar en la academia"* |
 | Vacation Closure | `vacation_closure.html` | All parents | Manual |
 | Tax Certificate | `tax_certificate.html` | Parents with completed payments in year | Yearly (April) |
 | Monthly Report | `monthly_report.html` | All parents (personalized per parent) | Monthly, manual |
@@ -2794,9 +2940,9 @@ Public flow at `/password-reset/...` that lets a teacher recover access without 
 
 | Metric | Value |
 |--------|-------|
-| **Total tests** | 1,231 |
-| **Test files** | 72 (46 unit + 26 integration) |
-| **Coverage** | 95% (95.25% — 5,161 statements, 245 uncovered) |
+| **Total tests** | 1,375 |
+| **Test files** | 78 (49 unit + 29 integration) |
+| **Coverage** | 95% (95.36% — 5,306 statements, 246 uncovered) |
 | **Coverage thresholds** | **≥ 90%** (target, no warning) / **75-89%** (CI warning, pre-commit still blocks below 75) / **< 75%** (CI fails, pre-commit rejects the commit) |
 | **Runtime** | ~50 seconds (parallel workers via `pytest-xdist -n auto`) |
 | **Database** | PostgreSQL (same as production) — **always use `make test`** |
@@ -2842,35 +2988,38 @@ Within each file, related tests are grouped into classes. Where a large file abs
 
 ### Unit Tests
 
-**48 files, 680 tests.** Direct-call tests — no HTTP stack, no URL resolver, no template rendering.
+**49 files, 718 tests.** Direct-call tests — no HTTP stack, no URL resolver, no template rendering.
 
 | File | Count | Coverage |
 | --- | --- | --- |
-| [`unit/test_models.py`](project/tests/unit/test_models.py) | 53 | Every model across `students`, `billing`, `core` — properties (`full_name`, `age`, `is_overdue`, `remaining_amount`, `is_paid`), `__str__`, unique constraints, FK behavior, academic-year helpers (`current_academic_year`, `academic_year_start_date`, `academic_year_end_date`), SiteConfiguration singleton, HistoryLog cap + debounce |
-| [`unit/test_services.py`](project/tests/unit/test_services.py) | 27 | `PricingService` (all fee + discount combos), `EnrollmentService` (all plans, language cheque, sibling, both, minimum-amount floor, adult enrollment, edge cases), `PaymentService` (monthly + quarterly amounts, June bonus, academic month/quarter validation, payment completion), service error paths |
 | [`unit/test_schedule_utils.py`](project/tests/unit/test_schedule_utils.py) | 63 | `core.schedule_utils` — the single source of truth for how a group's timetable is rendered into the welcome email. Mon–Thu row bands, the Friday per-cell `FRIDAY_TIMES` map (four overlapping sessions), `is_valid_slot` grid validation, out-of-range rows returning a placeholder instead of raising, and `get_group_schedule_lines` (ordering, day grouping, empty group, column collapsing) |
-| [`unit/test_student_view_internals.py`](project/tests/unit/test_student_view_internals.py) | 25 | `StudentUpdateView` view-object method branches (quarterly, part-time, no enrollment, exception-handling) via `RequestFactory` to sidestep missing template, plus unreferenced helper functions `handle_student_form`, `student_detail`, `update_student` called directly |
+| [`unit/test_models.py`](project/tests/unit/test_models.py) | 53 | Every model across `students`, `billing`, `core` — properties (`full_name`, `age`, `is_overdue`, `remaining_amount`, `is_paid`), `__str__`, unique constraints, FK behavior, academic-year helpers (`current_academic_year`, `academic_year_start_date`, `academic_year_end_date`), SiteConfiguration singleton, HistoryLog cap + debounce |
 | [`unit/test_expenses.py`](project/tests/unit/test_expenses.py) | 33 | `Expense` model + `ExpenseService` (v1.5): per-frequency `clean()` validation, monthly totals aggregation, `materialize_recurring` (monthly, 1st-of-month) and `materialize_recurring_for_date` (weekly `recurring_weekdays` CSV + yearly), idempotency on `generated_from` + exact `expense_date`, and `recurring_day` accepting the whole 1–31 range (29–31 clamp to the month's last day) |
+| [`unit/test_bugfix_regressions.py`](project/tests/unit/test_bugfix_regressions.py) | 31 | Regression guards for the v1.15.0 fix pass, each pinning a defect verified broken against the running app: adult-student payments crashing search + CSV export, quarterly discounts (sibling, language cheque, June), completed payments with no `payment_date` vanishing from income, non-idempotent quick-complete rewriting financial history, payments attaching to a finished enrollment, unvalidated choice fields, `str(e)` leaking to the browser, cancelled payments inflating "esperado", query strings that used to 500, negative prices, singleton deletion, and the `enrollment_amount` fallback |
+| [`unit/test_services.py`](project/tests/unit/test_services.py) | 30 | `PricingService` (all fee + discount combos), `EnrollmentService` (all plans, language cheque, sibling, both, minimum-amount floor, adult enrollment, edge cases), `PaymentService` (monthly + quarterly amounts, June bonus, academic month/quarter validation, payment completion), service error paths, and the v1.17.5 `PricingService.calculate_sibling_price` / `payment_reminder_fees()` derivations the payment-reminder email prints |
+| [`unit/test_tasks.py`](project/tests/unit/test_tasks.py) | 26 | Celery tasks called synchronously with `email_service` mocked: `send_welcome_email_task` (parent + adult-student + missing + failure paths), `send_birthday_email_task`, `send_birthday_emails_task`, `send_payment_reminders`, `send_generic_email_task`, `send_enrollment_confirmation_task` (success + missing + attachments + failure), and the welcome email reporting "Especial" as the payment modality for a `special` matrícula while a standard enrollment keeps its cadence (v1.17.5) |
+| [`unit/test_student_view_internals.py`](project/tests/unit/test_student_view_internals.py) | 25 | `StudentUpdateView` view-object method branches (quarterly, part-time, no enrollment, exception-handling) via `RequestFactory` to sidestep missing template, plus unreferenced helper functions `handle_student_form`, `student_detail`, `update_student` called directly |
+| [`unit/test_enrollment_type_service.py`](project/tests/unit/test_enrollment_type_service.py) | 25 | `ensure_enrollment_types()` (v1.17.1): the four matrícula categories `_resolve_enrollment_type` asks for, idempotency, label/amount repair, admin-edited fields left alone, matrícula amounts sourced from `SiteConfiguration`, and the empty-table guard. Category resolution independent of the payment plan, returning-student detection, and the `0008` data migration re-pointing enrollments off the retired cadence types |
 | [`unit/test_coverage_boost.py`](project/tests/unit/test_coverage_boost.py) | 25 | Targeted branch fill-in across the fix set: recurring-expense task, Google Sheets service internals, `SmsService._get_client`, rate-limit edge cases, Stripe view edge cases, expense-form bad input, waiting-list branches, parent-portal edge branches |
-| [`unit/test_tasks.py`](project/tests/unit/test_tasks.py) | 24 | Celery tasks called synchronously with `email_service` mocked: `send_welcome_email_task` (parent + adult-student + missing + failure paths), `send_birthday_email_task`, `send_birthday_emails_task`, `send_payment_reminders`, `send_generic_email_task`, `send_enrollment_confirmation_task` (success + missing + attachments + failure) |
 | [`unit/test_review_fixes.py`](project/tests/unit/test_review_fixes.py) | 23 | Regression locks for the review-loop fixes, one class per bug so a revert fails loudly: Stripe replay safety + checkout URLs, async magic link, `ParentSessionToken` atomicity (`SELECT FOR UPDATE`), rate-limit count methods, waiting-list assign guards, payment-reminder dedup, audit-log PII scrubbing |
 | [`unit/test_email_service.py`](project/tests/unit/test_email_service.py) | 19 | `EmailService.send_email`: string + list recipients, CC/BCC, attachments, inline images (existing + missing path), `fail_silently` on and off, exception-raises-when-not-silent, `send_bulk_emails` mixed success/failure, `get_email_config`, Django 6 inline-image API |
+| [`unit/test_rate_limit.py`](project/tests/unit/test_rate_limit.py) | 19 | Cache-backed IP rate limiter (v1.10): window counting, limit enforcement, per-key isolation, disabled path, and `_client_ip` validation through `ipaddress`. Also pins the `TRUSTED_PROXY_COUNT` behaviour — the client IP is read N hops from the RIGHT of `X-Forwarded-For`, so a spoofed prefix cannot rotate the rate-limit bucket |
 | [`unit/test_two_factor_service.py`](project/tests/unit/test_two_factor_service.py) | 17 | TOTP two-factor service (v1.13): `begin_enrolment`, `confirm_enrolment`, `verify_totp`, `verify_backup_code`, `verify_code`, `disable`, `rotate_backup_codes`, issuer-name derivation |
 | [`unit/test_email_functions.py`](project/tests/unit/test_email_functions.py) | 17 | All convenience wrappers (`send_birthday_email`, `send_welcome_email`, `send_payment_reminder`, `send_monthly_report`, `send_enrollment_confirmation_email`, `send_quarterly_receipt_email`, `send_fun_friday_email`, `send_vacation_closure_email`, `send_tax_certificate_email`, `send_all_tax_certificates`) plus tax-certificate PDF generation branches |
-| [`unit/test_enrollment_type_service.py`](project/tests/unit/test_enrollment_type_service.py) | 20 | `ensure_enrollment_types()` (v1.17.1): the four matrícula categories `_resolve_enrollment_type` asks for, idempotency, label/amount repair, admin-edited fields left alone, matrícula amounts sourced from `SiteConfiguration`, and the empty-table guard. Category resolution independent of the payment plan, returning-student detection, and the `0008` data migration re-pointing enrollments off the retired cadence types |
 | [`unit/test_stripe_service.py`](project/tests/unit/test_stripe_service.py) | 16 | Stripe service (v1.11, `httpx` — no SDK dependency): `is_configured`, `create_checkout_session`, `verify_webhook_signature`, `apply_webhook_event`, singleton accessor |
 | [`unit/test_email_bug_hunt_fixes.py`](project/tests/unit/test_email_bug_hunt_fixes.py) | 16 | Round-2 email regression suite: `payment_reminder_simple` + birthday templates, Fun Friday image guard, welcome email fired `on_commit`, CLI batch per-recipient loop, birthday to all parents, birthday-task timezone (`localdate`), monthly-report template defaults |
-| [`unit/test_rate_limit.py`](project/tests/unit/test_rate_limit.py) | 19 | Cache-backed IP rate limiter (v1.10): window counting, limit enforcement, per-key isolation, disabled path, and `_client_ip` validation through `ipaddress`. Also pins the `TRUSTED_PROXY_COUNT` behaviour — the client IP is read N hops from the RIGHT of `X-Forwarded-For`, so a spoofed prefix cannot rotate the rate-limit bucket |
 | [`unit/test_waiting_list.py`](project/tests/unit/test_waiting_list.py) | 15 | Waiting List & Group Capacity (v1.1) models + helpers: `Group.max_students` capacity properties, `Student.is_waiting`/`waiting_since`, group-capacity summary, capacity-freed notification |
 | [`unit/test_google_sheets_service.py`](project/tests/unit/test_google_sheets_service.py) | 14 | Google Sheets export service (v1.2): configuration detection (inline creds vs file path), student + payment export shaping, result object, lazy `_get_service` construction |
-| [`unit/test_coverage_boost_2.py`](project/tests/unit/test_coverage_boost_2.py) | 10 | Second branch-fill pass: waiting-list exception branches, student-create waiting mode, context-processor exception branches, audit-signal branches, PDF-service academy-info fallback, expense validation, Stripe cross-parent guard, rate-limit disabled path |
 | [`unit/test_context_processors.py`](project/tests/unit/test_context_processors.py) | 13 | `today_notifications`: expected keys, todos due today vs other day, scheduled apps on Friday vs Monday, monthly apps excluded on day 15, history count, unauthenticated early-return |
 | [`unit/test_constants.py`](project/tests/unit/test_constants.py) | 13 | Pure functions: `calculate_discount` (flat/percentage/invalid/edge), `get_monthly_fee_by_schedule`, `get_enrollment_fee` |
 | [`unit/test_sms_service.py`](project/tests/unit/test_sms_service.py) | 12 | Twilio SMS service (v1.8): `is_configured` (all three env vars), `send`, `send_to_parent` (opt-in gate via `Parent.sms_opt_in`), singleton accessor |
+| [`unit/test_beat_tasks.py`](project/tests/unit/test_beat_tasks.py) | 12 | The v1.4 Beat tasks themselves: `generate_monthly_payments_task` (creates the month's pending fees, idempotent) and `send_monthly_report_task` (default + explicit recipient) |
 | [`unit/test_beat_commands.py`](project/tests/unit/test_beat_commands.py) | 12 | The Beat-task management-command wrappers (v1.14.2): each command runs its task synchronously via `.apply()`, `--recipient`/`--month`/`--year`/`--date`/`--days` forwarding, `materialize_recurring_expenses` flag validation (`--daily` vs monthly), real backlog-cleanup run (old done task deleted, fresh survives) |
 | [`unit/test_returning_student_discount.py`](project/tests/unit/test_returning_student_discount.py) | 11 | Returning-student enrollment discount (v1.13): `is_returning_student` detection, `compute_enrollment_fee` with the discount applied, `SiteConfiguration` default, and the `update_site_config` API accepting the new field |
+| [`unit/test_payment_scheduling.py`](project/tests/unit/test_payment_scheduling.py) | 11 | `PaymentService.schedule_academic_year_payments`: monthly enrollment -> 10 pending payments (Sep-Jun) due at month end, quarterly -> 3 (Oct/Jan/Apr), idempotent on re-run, inactive student skipped. Plus the v1.17.5 `special` pricing lock: monthly and quarterly payments use the hand-set amount, the June and sibling/cheque discounts are **not** re-applied on top, a standard enrollment still prices from `SiteConfiguration`, and the `generate_payments` cron agrees with `EnrollmentService` end to end |
 | [`unit/test_log_safe.py`](project/tests/unit/test_log_safe.py) | 11 | `core.log_safe.safe_log` — the log-injection sanitizer (v1.14.4): CR/LF stripping, control characters, non-string coercion, length clamping |
 | [`unit/test_analytics_service.py`](project/tests/unit/test_analytics_service.py) | 11 | Reports analytics service (v1.7): financial summary, collection rate, retention snapshot, group utilisation, and the composed dashboard report |
+| [`unit/test_coverage_boost_2.py`](project/tests/unit/test_coverage_boost_2.py) | 10 | Second branch-fill pass: waiting-list exception branches, student-create waiting mode, context-processor exception branches, audit-signal branches, PDF-service academy-info fallback, expense validation, Stripe cross-parent guard, rate-limit disabled path |
 | [`unit/test_transactions.py`](project/tests/unit/test_transactions.py) | 10 | Query helpers: `get_active_students`, `get_payments_for_last_two_school_years`, `get_all_payments_unrestricted` — ordering, select_related, school-year filtering |
 | [`unit/test_teacher_user_sync.py`](project/tests/unit/test_teacher_user_sync.py) | 10 | `Teacher.ensure_user()` (create + link + sync + password) and the `post_save` mirror signal (`admin` -> `is_staff`/`is_superuser`, email/name/username sync) |
 | [`unit/test_celery_config.py`](project/tests/unit/test_celery_config.py) | 10 | Beat-schedule sanity checks (v1.4): every entry in `app.conf.beat_schedule` names a task that actually exists, queue routing is set, and task autodiscovery finds all four apps |
@@ -2879,37 +3028,38 @@ Within each file, related tests are grouped into classes. Where a large file abs
 | [`unit/test_parent_session_token.py`](project/tests/unit/test_parent_session_token.py) | 8 | Parent-portal session token (v1.9): `issue` (hashing + expiry), validity window, and single-use `consume` under concurrent access |
 | [`unit/test_new_email_tasks.py`](project/tests/unit/test_new_email_tasks.py) | 8 | The two review-pass email tasks: `send_parent_magic_link_task` (v1.9) and `send_payment_receipt_email_task` (v1.11) — success, missing-record, and send-failure paths |
 | [`unit/test_fun_friday_scheduling.py`](project/tests/unit/test_fun_friday_scheduling.py) | 8 | `FunFridayScheduledSend.is_due` semantics + `send_due_fun_friday_emails_task` drain: due rows sent + marked `sent_at`, future rows skipped, idempotent re-run never re-sends, end-to-end send through the real email backend |
-| [`unit/test_beat_tasks.py`](project/tests/unit/test_beat_tasks.py) | 8 | The v1.4 Beat tasks themselves: `generate_monthly_payments_task` (creates the month's pending fees, idempotent) and `send_monthly_report_task` (default + explicit recipient) |
 | [`unit/test_student_forms.py`](project/tests/unit/test_student_forms.py) | 7 | `StudentForm` + `ParentForm` validation: future birth date rejected, DNI minimum length, required fields, both date formats |
 | [`unit/test_pdf_service.py`](project/tests/unit/test_pdf_service.py) | 7 | reportlab PDF service (v1.3): payment receipt, quarterly summary, and tax certificate generation — byte output, academy-info population |
 | [`unit/test_payment_helpers.py`](project/tests/unit/test_payment_helpers.py) | 7 | `parse_date_value` (6 formats including invalid) + `payment_detail` AJAX helper called directly via `RequestFactory` |
 | [`unit/test_exports.py`](project/tests/unit/test_exports.py) | 7 | Excel workbook generation via `openpyxl`: Students, Enrollments, Payments sheets + combined workbook; empty-database edge case |
 | [`unit/test_audit_log.py`](project/tests/unit/test_audit_log.py) | 6 | Immutable audit trail (v1.10): the `post_save`/`post_delete` signal receivers write an `AuditLog` row with the contextvar actor, and the model rejects mutation after creation |
 | [`unit/test_qa_error_middleware.py`](project/tests/unit/test_qa_error_middleware.py) | 5 | `QAErrorEmailMiddleware.process_exception` via `RequestFactory`: pass-through, disabled config, no support email, send success, send failure swallowed |
-| [`unit/test_final_coverage.py`](project/tests/unit/test_final_coverage.py) | 4 | The last uncovered branches: waiting-list assign with a null group in JSON, welcome-email `on_commit` happy path, Stripe checkout `httpx` error, receipt-email PDF-generation error |
-| [`unit/test_bugfix_regressions.py`](project/tests/unit/test_bugfix_regressions.py) | 31 | Regression guards for the v1.15.0 fix pass, each pinning a defect verified broken against the running app: adult-student payments crashing search + CSV export, quarterly discounts (sibling, language cheque, June), completed payments with no `payment_date` vanishing from income, non-idempotent quick-complete rewriting financial history, payments attaching to a finished enrollment, unvalidated choice fields, `str(e)` leaking to the browser, cancelled payments inflating "esperado", query strings that used to 500, negative prices, singleton deletion, and the `enrollment_amount` fallback |
 | [`unit/test_error_handlers.py`](project/tests/unit/test_error_handlers.py) | 5 | `handler400`/`handler403`/`handler404`/`handler405`/`handler500` render with correct status codes |
 | [`unit/test_decorators.py`](project/tests/unit/test_decorators.py) | 5 | `@qa_access_required`: allow when `IS_TESTING_ENV` + the request is a logged-in admin Teacher, 404 when not testing env / authenticated non-teacher / anonymous |
+| [`unit/test_final_coverage.py`](project/tests/unit/test_final_coverage.py) | 4 | The last uncovered branches: waiting-list assign with a null group in JSON, welcome-email `on_commit` happy path, Stripe checkout `httpx` error, receipt-email PDF-generation error |
 | [`unit/test_sms_tasks.py`](project/tests/unit/test_sms_tasks.py) | 4 | `send_payment_reminder_sms_task` (v1.8): opt-in parent gets the SMS, opted-out is skipped, missing payment and send failure handled |
-| [`unit/test_payment_scheduling.py`](project/tests/unit/test_payment_scheduling.py) | 4 | `PaymentService.schedule_academic_year_payments`: monthly enrollment -> 10 pending payments (Sep-Jun) due at month end, quarterly -> 3 (Oct/Jan/Apr), idempotent on re-run, inactive student skipped |
 | [`unit/test_email_service_year.py`](project/tests/unit/test_email_service_year.py) | 3 | Regression: the `year` context value used to be hard-coded to 2025 — it now tracks the current year in every rendered email |
+| [`unit/test_parent_view_internals.py`](project/tests/unit/test_parent_view_internals.py) | 2 | `ParentCreateView` internals called directly through `RequestFactory` — the prefill branch that reads a waiting-list entry from `?from_waiting=<id>`, and the duplicate-DNI reuse path |
 | [`unit/test_testing_tools_helpers.py`](project/tests/unit/test_testing_tools_helpers.py) | 2 | `_git_info` helper: success path + non-zero returncode branch with `subprocess.run` mocked |
 
 ### Integration Tests
 
-**27 files, 525 tests.** Full HTTP stack through Django's test client.
+**29 files, 657 tests.** Full HTTP stack through Django's test client.
 
 | File | Count | Coverage |
 | --- | --- | --- |
 | [`integration/test_app_form_views.py`](project/tests/integration/test_app_form_views.py) | 99 | Every email form GET page, POST `action=preview` (JSON HTML), `test_send` with/without EMAIL_TEST_* env vars, main send-to-parents for every form (fun_friday, payment_reminder, vacation_closure, tax_certificate, monthly_report, birthday, receipts x 3, newsletter, enrollment/welcome), Fun Friday persist-for-Monday-14:30 + immediate drain when the slot passed (v1.14.2), invalid-date fallbacks, missing-field errors, no-parents-with-email edge cases, per-recipient exception swallowing, welcome_form redirect |
 | [`integration/test_views.py`](project/tests/integration/test_views.py) | 73 | Cross-cutting top-level HTTP coverage: auth flow, dashboard, `all_info`, student/parent list + detail + create + search, payment list + create + detail + CRUD + stats + CSV + validation, todos + history API, management admin, email form pages (parametrized), enrollment API, error pages (parametrized), schedule, Fun Friday, support, and the `/health/` probe (shallow stays DB-free, deep reports connectivity + migrations, token gating for row counts, 503 on an unreachable DB, exception text never reaching the client) |
+| [`integration/test_admin_views.py`](project/tests/integration/test_admin_views.py) | 62 | Smoke tests for **every registered Django admin view** (v1.17.5): index, changelist, changelist with search + ordering, and the add form for each model, plus the `EnrollmentAdmin` paid / unpaid / overpaid / cancelled-payments-only branches. `*/admin.py` is excluded from coverage, which is exactly how a `format_html()` call with no interpolation arguments shipped and took `/admin/billing/enrollment/` down on Django 6 as soon as one enrollment was fully paid. The contract is "no admin view 500s" |
+| [`integration/test_bugfix_security_and_features.py`](project/tests/integration/test_bugfix_security_and_features.py) | 57 | Security regressions + the v1.15.0 feature additions. Security: the three stored-XSS sinks (history feed, student autocomplete, schedule JSON block), rate-limit bypass via a spoofed `X-Forwarded-For`, parent-portal session fixation, the service worker caching `/login/`, schedule-slot validation, and teachers created in the UI being able to activate their account. Features: the short waiting-list form, the waiting-list round trip, the payment-history PDF, month and group filters, backlog export, Fun Friday double-send, newsletter fallback, adult receipts, payment receipt emails, enrollment churn, and Spanish enrollment labels |
 | [`integration/test_payment_views.py`](project/tests/integration/test_payment_views.py) | 38 | All HTTP payment endpoints: list (search, stats), create (+ invalid parent + unexpected exception), detail-view (+ 404), update (JSON + FormData + all error branches), delete (success + exception 500), deactivate (success + exception 400), quick-complete (success + invalid method + broken JSON), get-details (success + exception), search payments/parents (short query + hits), validate student-parent (all branches), export DB to Excel |
-| [`integration/test_student_views.py`](project/tests/integration/test_student_views.py) | 23 | `StudentListView` (search, exclude inactive, context), `StudentDetailView` (parents visible, 404), `StudentCreateView` (form + adult mode + success + full POST + error paths including invalid parent, existing-parent mode, create_sibling flag, email-task swallow), `search_students` JSON endpoint (results + short-query empty) |
-| [`integration/test_testing_tools.py`](project/tests/integration/test_testing_tools.py) | 21 | QA dashboard `/testing/` gated by `@qa_access_required` (via `override_settings`): dashboard renders + git failure handled, `api_seed_database` (success + reset + command error 500 + non-QA 404), `api_create_backlog_task` (all branches + screenshot attached to the email but never stored + send/swallow), `api_update_backlog_task` (success + invalid status + 404), `api_toggle_error_email` (on + off + bad JSON) |
-| [`integration/test_teacher_auth_flow.py`](project/tests/integration/test_teacher_auth_flow.py) | 21 | Login dispatcher branches (dev env-var vs `auth.User`-backed Teacher login), OAuth user creation/Teacher-linking, `_finalize_session_login` setting both `_auth_user_id` and `is_authenticated`, `SimpleAuthMiddleware` whitelist behaviour for non-admin Teachers (allowed routes, 403 JSON for `/api/*`, dashboard redirect with flash for HTML), template gating (sidebar swap, read-only management) |
+| [`integration/test_v1175_fixes.py`](project/tests/integration/test_v1175_fixes.py) | 32 | Regression locks for the v1.17.5 fix round, one class per reported problem: Spanish choice labels (`get_<field>_display()` for every payment type/status and enrollment status), every email template defining its own `{% block title %}`, unfiltered dates rendering `dd/mm/yyyy` via `FORMAT_MODULE_PATH`, `search_students` carrying the parent (and reporting no parent for an adult), `update_expense` (amount raise, cadence change, already-generated rows untouched, weekly-without-weekdays rejected, unknown category coerced, zero amount rejected), the create-expense date default, the surname-free waiting-list form, `waiting_priority` ordering, and `StudentForm` still requiring a surname |
+| [`integration/test_testing_tools.py`](project/tests/integration/test_testing_tools.py) | 28 | QA dashboard `/testing/` gated by `@qa_access_required` (via `override_settings`): dashboard renders + git failure handled, `api_seed_database` (success + reset + command error 500 + non-QA 404), `api_create_backlog_task` (all branches + screenshot attached to the email but never stored + send/swallow), `api_update_backlog_task` (success + invalid status + 404), the v1.17.5 `verified` QA tick (defaults off, toggles on/off, never touches `status` nor fires the done email, `done` still works alongside it) and the unfinished-first ordering shared by the dashboard and the export, `api_toggle_error_email` (on + off + bad JSON) |
+| [`integration/test_waiting_list_views.py`](project/tests/integration/test_waiting_list_views.py) | 27 | Waiting List & Group Capacity views (v1.1): waiting-list page, `assign_from_waiting_list` (capacity checks, and since v1.17.2 a redirect into the normal parent-then-student flow rather than an in-place promotion), `add_to_waiting_list`, student list excludes waiting students, dashboard waiting widget. v1.17.5 adds the short create form (no surname asked for, entry created without one, `waiting_priority` off by default, saved when ticked, flagged in the history line), the priority ordering (`-waiting_priority` first, FIFO within each band) and `StudentForm` still demanding a surname |
+| [`integration/test_student_views.py`](project/tests/integration/test_student_views.py) | 27 | `StudentListView` (search, exclude inactive, context), `StudentDetailView` (parents visible, 404), `StudentCreateView` (form + adult mode + success + full POST + error paths including invalid parent, existing-parent mode, create_sibling flag, email-task swallow), `search_students` JSON endpoint (results + short-query empty), and the v1.17.5 pricing surface: `price_config` exposing `quarterly_gross`, both hand-set prices reaching the payments, the matrícula falling back to the standard fee when left blank, and a special matrícula fee rejected without "Precio especial" ticked |
 | [`integration/test_management_views.py`](project/tests/integration/test_management_views.py) | 24 | `gestion_view` + `update_site_config` (all fields + bad JSON), `create_teacher` (success + duplicate + missing field + bad JSON), `create_group` (success + missing fields + duplicate + nonexistent teacher + bad JSON), `api_get_teachers`, `update_enrollment_modality` (success + invalid + no enrollment + student not found), `language_cheque_students` |
+| [`integration/test_teacher_auth_flow.py`](project/tests/integration/test_teacher_auth_flow.py) | 21 | Login dispatcher branches (dev env-var vs `auth.User`-backed Teacher login), OAuth user creation/Teacher-linking, `_finalize_session_login` setting both `_auth_user_id` and `is_authenticated`, `SimpleAuthMiddleware` whitelist behaviour for non-admin Teachers (allowed routes, 403 JSON for `/api/*`, dashboard redirect with flash for HTML), template gating (sidebar swap, read-only management) |
 | [`integration/test_two_factor_views.py`](project/tests/integration/test_two_factor_views.py) | 17 | 2FA views and the login gate (v1.13): setup page (QR + secret), manage page (disable, rotate backup codes), the login gate flow (TOTP accepted, backup code accepted, wrong code rejected), and the `reset_two_factor` management command |
-| [`integration/test_waiting_list_views.py`](project/tests/integration/test_waiting_list_views.py) | 18 | Waiting List & Group Capacity views (v1.1): waiting-list page, `assign_from_waiting_list` (capacity checks + payment scheduling), `add_to_waiting_list`, student list excludes waiting students, dashboard waiting widget |
 | [`integration/test_dashboard_views.py`](project/tests/integration/test_dashboard_views.py) | 15 | `home` view quote-cookie branches (valid cookie, corrupt cookie -> API, API failure, API empty, `[AUTH]` placeholder filtered, with pending payments), `all_info` sort variants (default, first_name, last_name, id_asc, payments_sort=student_asc) |
 | [`integration/test_parent_portal.py`](project/tests/integration/test_parent_portal.py) | 14 | Parent portal (v1.9): magic-link request + token issue, link consumption establishing a scoped session, and the portal pages (payment list, receipt download) restricted to that parent's own children |
 | [`integration/test_schedule_views.py`](project/tests/integration/test_schedule_views.py) | 14 | Schedule page (groups + slots in context), `save_schedule_slot` (assign + clear + reject GET + invalid JSON), Fun Friday page (loads, excludes adults, with attendance) |
@@ -2917,55 +3067,56 @@ Within each file, related tests are grouped into classes. Where a large file abs
 | [`integration/test_expense_views.py`](project/tests/integration/test_expense_views.py) | 11 | Expense CRUD endpoints (v1.5): list page with monthly totals, create (valid + per-frequency validation errors), delete |
 | [`integration/test_password_reset.py`](project/tests/integration/test_password_reset.py) | 10 | Full password-reset round-trip: request form renders, valid email triggers branded HTML email send, confirm page accepts new password with valid uidb64+token, complete page renders, all four URLs reachable while unauthenticated (`SimpleAuthMiddleware.PUBLIC_PREFIXES` exemption) |
 | [`integration/test_middleware.py`](project/tests/integration/test_middleware.py) | 10 | `SimpleAuthMiddleware`: public paths (login, health, static, media, OAuth prefix), protected paths redirect to login, authenticated requests pass; `NoHtmlCacheMiddleware` marks dynamic HTML `no-cache` while leaving hashed static assets immutable |
+| [`integration/test_parent_views.py`](project/tests/integration/test_parent_views.py) | 9 | `ParentCreateView`: GET renders, POST new + existing DNI + invalid + exception-triggers-form-invalid |
+| [`integration/test_auth_views.py`](project/tests/integration/test_auth_views.py) | 9 | Login view: render for unauth'd, redirect for authenticated, valid + invalid credentials, logout, OAuth redirect (no creds -> login) |
 | [`integration/test_todo_views.py`](project/tests/integration/test_todo_views.py) | 8 | `create_todo` (missing text + missing date + invalid date + success), `complete_todo`, `history_list` (default + offset + invalid offset) |
 | [`integration/test_stripe_views.py`](project/tests/integration/test_stripe_views.py) | 8 | Stripe endpoints (v1.11): `create_checkout_link` (configured + not configured + cross-parent guard) and the webhook (valid signature applies the payment, bad signature rejected, unknown event ignored) |
 | [`integration/test_pwa_views.py`](project/tests/integration/test_pwa_views.py) | 8 | PWA endpoints (v1.12): `web_manifest` (JSON shape, icons) and `service_worker` (correct content type, cache-first strategy for hashed static) |
-| [`integration/test_parent_views.py`](project/tests/integration/test_parent_views.py) | 8 | `ParentCreateView`: GET renders, POST new + existing DNI + invalid + exception-triggers-form-invalid |
-| [`integration/test_auth_views.py`](project/tests/integration/test_auth_views.py) | 7 | Login view: render for unauth'd, redirect for authenticated, valid + invalid credentials, logout, OAuth redirect (no creds -> login) |
 | [`integration/test_sheets_views.py`](project/tests/integration/test_sheets_views.py) | 6 | Google Sheets export view (v1.2): `/api/sheets/export/` success, 503 when unconfigured, and error propagation |
 | [`integration/test_fun_friday_attendance_views.py`](project/tests/integration/test_fun_friday_attendance_views.py) | 6 | `toggle_fun_friday_this_week` (adult rejected + toggle on/off), `add_fun_friday_attendance` (success + invalid), `remove_fun_friday_attendance` (success + invalid) |
 | [`integration/test_support_views.py`](project/tests/integration/test_support_views.py) | 5 | `submit_support_ticket`: success (send_mail called), short message rejected, no support email configured -> 500, bad JSON, unexpected exception |
 | [`integration/test_reports_view.py`](project/tests/integration/test_reports_view.py) | 4 | Reports dashboard (v1.7): the HTML page renders every analytics block, and the PDF export returns a reportlab document |
 | [`integration/test_receipt_view.py`](project/tests/integration/test_receipt_view.py) | 2 | Payment-receipt PDF endpoint (v1.3): authorised download returns a PDF, unauthorised is rejected |
-| [`integration/test_bugfix_security_and_features.py`](project/tests/integration/test_bugfix_security_and_features.py) | 57 | Security regressions + the v1.15.0 feature additions. Security: the three stored-XSS sinks (history feed, student autocomplete, schedule JSON block), rate-limit bypass via a spoofed `X-Forwarded-For`, parent-portal session fixation, the service worker caching `/login/`, schedule-slot validation, and teachers created in the UI being able to activate their account. Features: the short waiting-list form, the waiting-list round trip, the payment-history PDF, month and group filters, backlog export, Fun Friday double-send, newsletter fallback, adult receipts, payment receipt emails, enrollment churn, and Spanish enrollment labels |
 
 ### Coverage Report
 
-Live snapshot from the last full run (`make test`) — the 29 source files below 100% coverage:
+Live snapshot from the last full run (`make test`) — the 31 source files below 100% coverage:
 
 | File | Stmts | Miss | Cover | Missing lines |
 | --- | --- | --- | --- | --- |
-| `billing/models.py` | 225 | 22 | 90% | 319-325, 416, 421, 559-587, 600, 602, 614 |
-| `billing/services/enrollment_service.py` | 86 | 6 | 93% | 137, 147-150, 163, 180 |
-| `billing/services/payment_service.py` | 98 | 2 | 98% | 42, 49 |
+| `billing/models.py` | 240 | 29 | 88% | 381-391, 482, 487, 625-653, 666, 668, 680 |
+| `billing/services/enrollment_service.py` | 93 | 3 | 97% | 178, 180, 207 |
+| `billing/services/enrollment_type_service.py` | 42 | 2 | 95% | 94-95 |
+| `billing/services/payment_service.py` | 110 | 2 | 98% | 42, 188 |
 | `billing/services/pdf_service.py` | 148 | 2 | 99% | 314-315 |
 | `billing/services/stripe_service.py` | 102 | 3 | 97% | 139-140, 168 |
 | `comms/services/email_service.py` | 63 | 1 | 98% | 59 |
 | `comms/services/sms_service.py` | 50 | 3 | 94% | 58, 63-64 |
-| `comms/tasks.py` | 239 | 4 | 98% | 386, 477, 626, 706 |
+| `comms/tasks.py` | 242 | 6 | 98% | 400, 491, 640, 685-686, 720 |
 | `core/audit_models.py` | 25 | 1 | 96% | 66 |
 | `core/audit_signals.py` | 92 | 6 | 93% | 109, 115, 131, 142-143, 148 |
 | `core/context_processors.py` | 31 | 1 | 97% | 22 |
-| `core/middleware.py` | 81 | 5 | 94% | 52-57, 172, 217-218 |
-| `core/models.py` | 123 | 5 | 96% | 48, 100, 203, 211, 236 |
+| `core/middleware.py` | 81 | 5 | 94% | 52-57, 173, 218-219 |
+| `core/models.py` | 124 | 5 | 96% | 48, 100, 212, 220, 245 |
 | `core/services/google_sheets_service.py` | 99 | 9 | 91% | 74-76, 112-118 |
 | `core/tasks.py` | 20 | 5 | 75% | 41-46 |
 | `core/transactions.py` | 19 | 1 | 95% | 28 |
-| `core/views/app_forms.py` | 611 | 44 | 93% | 64, 150-152, 166-169, 186-187, 280-281, 304-305, 355-357, 388, 543-545, 551, 687, 709, 728, 802, 806, 828, 839, 915, 941, 954, 967, 979, 1002-1005, 1120, 1166, 1194-1198, 1226-1229 |
+| `core/views/app_forms.py` | 612 | 44 | 93% | 65, 151-153, 167-170, 187-188, 281-282, 305-306, 354-356, 385, 538-540, 546, 682, 704, 723, 797, 801, 823, 834, 910, 936, 949, 962, 974, 997-1000, 1115, 1161, 1189-1193, 1221-1224 |
 | `core/views/auth.py` | 167 | 18 | 89% | 45-48, 179, 183-199, 250, 285, 346-355 |
-| `core/views/dashboard.py` | 131 | 6 | 95% | 129-136, 177, 193 |
-| `core/views/expenses.py` | 83 | 6 | 93% | 52, 55-56, 84, 105-106 |
+| `core/views/dashboard.py` | 131 | 7 | 95% | 129-136, 177, 182, 193 |
+| `core/views/expenses.py` | 123 | 12 | 90% | 72, 75-76, 121, 141-142, 174-176, 208-210 |
 | `core/views/parent_portal.py` | 101 | 3 | 97% | 157, 184, 204 |
+| `core/views/parents.py` | 51 | 1 | 98% | 47 |
 | `core/views/payments.py` | 322 | 16 | 95% | 57-58, 81, 252-257, 307, 313-314, 453, 500-501, 523-524, 538-539 |
-| `core/views/students.py` | 345 | 20 | 94% | 59-60, 109, 173, 219-220, 362, 385, 393, 411-417, 422-424, 620, 623-625 |
-| `core/views/testing_tools.py` | 184 | 28 | 85% | 145, 147, 203-205, 298-302, 315, 333-334, 361-409 |
+| `core/views/students.py` | 369 | 17 | 95% | 202, 256-257, 402, 425, 433, 451-457, 462-464, 682, 685-687 |
+| `core/views/testing_tools.py` | 192 | 28 | 85% | 157, 159, 215-217, 320-324, 337, 355-356, 383-431 |
 | `core/views/two_factor.py` | 90 | 9 | 90% | 38, 49-50, 170-172, 177-178, 193 |
-| `core/views/waiting_list.py` | 133 | 9 | 93% | 105, 129-133, 159, 198, 339 |
-| `students/forms.py` | 67 | 2 | 97% | 182-183 |
-| `students/models.py` | 213 | 3 | 99% | 350, 367-368 |
+| `core/views/waiting_list.py` | 105 | 1 | 99% | 284 |
+| `students/forms.py` | 69 | 2 | 97% | 188-189 |
+| `students/models.py` | 214 | 3 | 99% | 361, 378-379 |
 | `students/parent_portal_models.py` | 41 | 1 | 98% | 44 |
 
-**56 files** have 100% coverage (skipped above). Total coverage: **95%** (95.25%) across 5,161 statements, 245 uncovered. Coverage is **very good**. Coverage is enforced at three levels: pre-commit hook (>= 75%), CI hard floor (>= 75%), and CI warning (< 90%).
+**55 files** have 100% coverage (skipped above). Total coverage: **95%** (95.36%) across 5,306 statements, 246 uncovered. Coverage is **very good**. Coverage is enforced at three levels: pre-commit hook (>= 75%), CI hard floor (>= 75%), and CI warning (< 90%).
 
 > **Reading the number consistently (fixed in v1.14.7).** The CI test step runs with
 > `working-directory: project`, but `[tool.coverage.run]` — including the `omit` list for
@@ -2991,17 +3142,26 @@ All migrations were regenerated from scratch during the v1.0.0 multi-app split.
 | `students` | `0005_add_parent_sms_opt_in` | `Parent.sms_opt_in` (v1.8) | `students.0004` |
 | `students` | `0006_add_parent_session_token` | `ParentSessionToken` — parent-portal magic-link auth (v1.9) | `students.0005` |
 | `students` | `0007_add_teacher_two_factor` | `Teacher.two_factor_secret / _enabled / _backup_codes` (v1.13) | `students.0006` |
+| `students` | `0008_student_course_student_observations_and_more` | `Student.course` / `observations` / `waiting_contact_name` / `waiting_contact_phone`; `birth_date` and `group` made nullable for phone enquiries (v1.15) | `students.0007` |
+| `students` | `0009_alter_group_max_students` | `Group.max_students` defaults to 8 — every group created in the UI used to be uncapped (v1.17.2) | `students.0008` |
+| `students` | `0010_student_waiting_priority_alter_student_last_name` | `Student.waiting_priority` + `last_name` becomes `blank=True` (v1.17.5) | `students.0009` |
 | `billing` | `0001_initial` | SiteConfiguration, EnrollmentType, Enrollment, Payment | `students.0001` |
 | `billing` | `0002` | Enrollment academic_year index | `billing.0001`, `students.0002` |
 | `billing` | `0003_add_expense_model` | `Expense` — recurring templates + auto-materialised rows (v1.5) | `billing.0002` |
 | `billing` | `0004_add_payment_stripe_fields` | `Payment.stripe_session_id`, `stripe_payment_intent` (v1.11) | `billing.0003` |
 | `billing` | `0005_add_returning_student_discount` | `SiteConfiguration.returning_student_enrollment_discount` (v1.13) | `billing.0004` |
 | `billing` | `0006_expense_recurring_frequency_and_more` | `Expense.recurring_frequency` / `recurring_month` / `recurring_weekdays`, `recurring_day` widened — the three recurring cadences (monthly / weekly / yearly) | `billing.0005` |
+| `billing` | `0007_alter_enrollment_options_and_more` | Model `Meta` / field housekeeping across `Enrollment`, `Payment` and `Expense` | `billing.0006` |
+| `billing` | `0008_enrollment_type_categories` | Data migration — re-points every enrollment onto a matrícula **category** (`new_student` / `returning_student` / `adults` / `special`) and drops the retired cadence rows. Deliberately no-ops on an empty table so `seed_enrollment_types` stays the single provisioning path (v1.17.3) | `billing.0007` |
+| `billing` | `0009_alter_enrollment_status_alter_payment_payment_status_and_more` | `AlterField` for the Spanish choice **labels** on `Enrollment.status`, `Payment.payment_status` and `Payment.payment_type` — keys unchanged, so no data moves (v1.17.5) | `billing.0008` |
 | `core` | `0001_initial` | TodoItem, HistoryLog, FunFridayAttendance, ScheduleSlot | `students.0001` |
 | `core` | `0002` | UniqueConstraint for FunFridayAttendance and ScheduleSlot | `core.0001`, `students.0002` |
 | `core` | `0003_qa_backlog_and_config` | QA backlog model and config fields | `core.0002` |
 | `core` | `0004_add_audit_log` | `AuditLog` model + expanded HistoryLog action choices (v1.10) | `core.0003` |
 | `core` | `0005_funfridayscheduledsend` | `FunFridayScheduledSend` — persisted scheduled Fun Friday announcements (v1.14.2) | `core.0004` |
+| `core` | `0006_alter_qaconfiguration_options` | `QAConfiguration` `Meta` options | `core.0005` |
+| `core` | `0007_alter_historylog_action` | Expanded `HistoryLog.action` choices | `core.0006` |
+| `core` | `0008_backlogtask_verified` | `BacklogTask.verified` — QA's tick, independent of `status="done"` (v1.17.5) | `core.0007` |
 | `comms` | — | (no models) | — |
 
 ```bash
@@ -3258,7 +3418,11 @@ Here is a quick checklist of things to try. If anything does not work, take note
   - **Project Info** — shows the current software version, last commit, server status
   - **Error Reporting toggle** — turn this ON so every server error is automatically emailed to the development team with full details
   - **Database Seeding** — click to populate the database with test data, or wipe and start fresh
-  - **QA Backlog** — report bugs and suggestions directly from this page; each new task is emailed to the development team
+  - **QA Backlog** — report bugs and suggestions directly from this page; each new task is emailed to the development team.
+    Unfinished tickets are listed first (a done one used to hold its slot among live work and, with the list capped at 50,
+    push real tickets off the page). The shaded check beside each priority badge is the **tester's** own tick: click it once
+    you have confirmed a fix on testing. It is deliberately independent of the developer's **done** status — verifying a
+    ticket never changes its status nor sends the done notification
 
 ### How to report a problem
 
@@ -3590,7 +3754,7 @@ make up                        # Start Docker (PostgreSQL + Redis + Django + Cel
 1. Work on `development` (or a short-lived branch off `development`)
 2. Make changes following the conventions below
 3. Run `make pc-run` — Ruff + mypy + bandit all pass, offers to auto-bump the patch version on success, and auto-stages `uv.lock` if regenerated
-4. Run `make test` — all 1,231 tests must pass (PostgreSQL via Docker, parallel, with coverage)
+4. Run `make test` — all 1,375 tests must pass (PostgreSQL via Docker, parallel, with coverage)
 5. `git commit` with a message like `v1.14.7 — Short description` (version first, em dash — matches every other release commit in the project)
 6. `git push origin development`
 7. CI runs automatically on your push (see [CI/CD](#cicd--github-actions))
