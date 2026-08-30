@@ -23,7 +23,6 @@ from decimal import Decimal
 from django.core.management.base import BaseCommand
 from django.db import transaction
 
-from billing.constants import ENROLLMENT_TYPE_DISPLAY_ES
 from billing.models import (
     Enrollment,
     EnrollmentType,
@@ -35,6 +34,7 @@ from billing.models import (
     current_academic_year,
 )
 from billing.services.enrollment_service import EnrollmentService
+from billing.services.enrollment_type_service import ensure_enrollment_types
 from billing.services.payment_service import PaymentService
 from core.models import FunFridayAttendance, HistoryLog, ScheduleSlot, TodoItem
 from students.models import Group, Parent, Student, StudentParent, Teacher
@@ -68,7 +68,6 @@ ADDITIONAL_TEACHERS = [
 
 # Enrollment types that must exist. Seeded via the real config defaults so the
 # base amounts always mirror SiteConfiguration.
-ENROLLMENT_TYPE_NAMES = ["monthly", "quarterly", "adults"]
 
 # Group name -> teacher slot. "admin1"/"admin2" resolve to the two existing
 # admin teachers; "add1"/"add2" to the two additional teachers this command
@@ -341,38 +340,13 @@ class Command(BaseCommand):
     # ------------------------------------------------------------------
 
     def _seed_enrollment_types(self):
-        # display_name is parent-facing (it appears in the matriculation and
-        # welcome emails), so it must be Spanish — see ENROLLMENT_TYPE_DISPLAY_ES.
-        amounts = {
-            "monthly": (
-                self.config.full_time_monthly_fee,
-                self.config.part_time_monthly_fee,
-            ),
-            "quarterly": (
-                self.config.full_time_monthly_fee * 3,
-                self.config.part_time_monthly_fee * 3,
-            ),
-            "adults": (
-                self.config.adult_group_monthly_fee,
-                self.config.adult_group_monthly_fee,
-            ),
-        }
-        for name in ENROLLMENT_TYPE_NAMES:
-            ft, pt = amounts[name]
-            display = ENROLLMENT_TYPE_DISPLAY_ES.get(name, name)
-            et, created = EnrollmentType.objects.get_or_create(
-                name=name,
-                defaults={
-                    "display_name": display,
-                    "base_amount_full_time": ft,
-                    "base_amount_part_time": pt,
-                },
-            )
-            # Repair rows seeded before the labels were translated.
-            if not created and et.display_name != display:
-                et.display_name = display
-                et.save(update_fields=["display_name", "updated_at"])
-        self.stdout.write(f"  {len(ENROLLMENT_TYPE_NAMES)} enrollment types.")
+        # Shared with the seed_enrollment_types management command so QA and
+        # testing/production can never disagree on which types exist. It also
+        # creates `special`, which this command used to omit — a special student
+        # could not be enrolled on a QA database.
+        report = ensure_enrollment_types(self.config)
+        total = sum(len(v) for v in report.values())
+        self.stdout.write(f"  {total} enrollment types.")
 
     def _seed_teachers(self):
         """Return {'admin1','admin2','add1','add2'} -> Teacher."""

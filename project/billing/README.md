@@ -35,6 +35,11 @@ The `billing` app owns all financial logic: pricing configuration, enrollment pl
 - `_apply_discounts(config, base, ...)` — applies sibling and language cheque discounts
 - `is_returning_student(student)` / returning-student enrollment discount (v1.13) — a student who previously had an enrollment pays a reduced enrollment fee
 
+### EnrollmentTypeService (`billing/services/enrollment_type_service.py`)
+
+- `ensure_enrollment_types(config=None)` — idempotently creates the four `EnrollmentType` rows `_resolve_plan` can request (`monthly`, `quarterly`, `adults`, `special`) with Spanish `display_name`s and amounts from `SiteConfiguration`. Repairs drifted labels/amounts; never touches admin-edited `description` / `active`. Shared by the `seed_enrollment_types` command and `seed_testdata`.
+- `REQUIRED_ENROLLMENT_TYPES` — the four names. `half_month` and `languages_ticket` are valid choices with Spanish labels but are modelled as discounts, never resolved to a row.
+
 ### PaymentService (`billing/services/payment_service.py`)
 
 - `_get_base_monthly_fee(enrollment, config)` — shared helper that resolves base fee by schedule type (adult_group / full_time / part_time)
@@ -86,6 +91,14 @@ Implemented directly against the Stripe REST API with `httpx` — **no Stripe SD
 - Utility functions: `calculate_discount()`, `get_monthly_fee_by_schedule()`, `get_enrollment_fee()`
 
 ## Management Commands
+
+### `seed_enrollment_types`
+
+```bash
+python manage.py seed_enrollment_types
+```
+
+Provisions the `EnrollmentType` reference table. **Required in every environment** — nothing else creates these rows (`0001_initial` builds the table and inserts nothing), and without them `EnrollmentService._resolve_plan` raises `EnrollmentType '<name>' not found` and no student can be enrolled. `entrypoint.sh` runs it on every testing/production boot beside `seed_teachers`. Idempotent.
 
 ### `generate_payments`
 
