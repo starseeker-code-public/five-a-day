@@ -161,26 +161,14 @@ def random_name(index: int):
 
 
 def ensure_enrollment_types(config: SiteConfiguration):
-    setup = {
-        "adults": ("Adults", config.adult_group_monthly_fee, config.adult_group_monthly_fee),
-        "special": ("Special", Decimal("75.00"), Decimal("55.00")),
-        "languages_ticket": ("Languages Ticket", Decimal("65.00"), Decimal("45.00")),
-        "monthly": ("Monthly", config.full_time_monthly_fee, config.part_time_monthly_fee),
-        "half_month": ("Half-month", config.full_time_monthly_fee / 2, config.part_time_monthly_fee / 2),
-        "quarterly": ("Quarterly", config.full_time_monthly_fee * 3, config.part_time_monthly_fee * 3),
-    }
+    """Provision the four matrícula categories.
 
-    for key, (display_name, full, part) in setup.items():
-        EnrollmentType.objects.update_or_create(
-            name=key,
-            defaults={
-                "display_name": display_name,
-                "base_amount_full_time": full.quantize(Decimal("0.01")),
-                "base_amount_part_time": part.quantize(Decimal("0.01")),
-                "description": f"Tipo {display_name} (seed dev)",
-                "active": True,
-            },
-        )
+    Delegates to the shared service so the dev seed can never drift from what
+    `seed_enrollment_types` puts in testing and production.
+    """
+    from billing.services.enrollment_type_service import ensure_enrollment_types as provision
+
+    provision(config)
 
 
 @transaction.atomic
@@ -336,7 +324,13 @@ def run_seed():
     for idx, s in enumerate(students):
         e_type = enrollment_types[idx % len(enrollment_types)]
         schedule = ["full_time", "part_time", "adult_group"][idx % 3]
-        base = e_type.base_amount_full_time if schedule == "full_time" else e_type.base_amount_part_time
+        # The recurring fee comes from the configured mensualidades, not from the
+        # enrollment type — `base_amount_*` is the one-time matrícula.
+        base = {
+            "full_time": config.full_time_monthly_fee,
+            "part_time": config.part_time_monthly_fee,
+            "adult_group": config.adult_group_monthly_fee,
+        }[schedule]
         discount = Decimal([0, 0, 5, 10, 15][idx % 5])
         final = (base * (Decimal("1") - discount / Decimal("100"))).quantize(Decimal("0.01"))
 

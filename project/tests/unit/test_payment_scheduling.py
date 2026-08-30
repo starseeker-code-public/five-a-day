@@ -35,10 +35,10 @@ class TestScheduleAcademicYearPayments:
         assert second == 0
         assert Payment.objects.filter(enrollment=active_enrollment, payment_type="monthly").count() == 10
 
-    def test_quarterly_generates_three(self, student, enrollment_type_quarterly, site_config, parent):
+    def test_quarterly_generates_three(self, student, enrollment_type_returning_student, site_config, parent):
         enrollment = Enrollment.objects.create(
             student=student,
-            enrollment_type=enrollment_type_quarterly,
+            enrollment_type=enrollment_type_returning_student,
             enrollment_period_start=date(2025, 9, 15),
             enrollment_period_end=date(2026, 6, 27),
             academic_year="2025-2026",

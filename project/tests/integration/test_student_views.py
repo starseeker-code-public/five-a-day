@@ -53,18 +53,18 @@ class TestStudentDetailView:
 
 
 class TestStudentCreateView:
-    def test_get_renders_form(self, authenticated_client, group, site_config, enrollment_type_monthly):
+    def test_get_renders_form(self, authenticated_client, group, site_config, enrollment_type_new_student):
         response = authenticated_client.get(reverse("student_create"))
         assert response.status_code == 200
         assert "enrollment_form" in response.context
 
-    def test_success_page(self, authenticated_client, group, site_config, enrollment_type_monthly):
+    def test_success_page(self, authenticated_client, group, site_config, enrollment_type_new_student):
         url = reverse("student_create") + "?success=1&student_name=Test&fee=40"
         response = authenticated_client.get(url)
         assert response.status_code == 200
         assert response.context["show_success"] is True
 
-    def test_adult_mode_context(self, authenticated_client, group, site_config, enrollment_type_monthly):
+    def test_adult_mode_context(self, authenticated_client, group, site_config, enrollment_type_new_student):
         response = authenticated_client.get(reverse("student_create") + "?mode=adult")
         assert response.status_code == 200
         assert response.context["is_adult_mode"] is True
@@ -72,7 +72,7 @@ class TestStudentCreateView:
 
 class TestStudentCreateViewPost:
     def test_creates_student_with_enrollment(
-        self, authenticated_client, parent, group, site_config, enrollment_type_monthly
+        self, authenticated_client, parent, group, site_config, enrollment_type_new_student
     ):
         response = authenticated_client.post(
             reverse("student_create") + f"?parent_id={parent.id}",
@@ -147,7 +147,7 @@ class TestStudentCreateViewErrors:
         assert response.status_code == 200
         assert response.context["show_success"] is True
 
-    def test_post_without_parent_id_fails(self, authenticated_client, group, enrollment_type_monthly, site_config):
+    def test_post_without_parent_id_fails(self, authenticated_client, group, enrollment_type_new_student, site_config):
         response = authenticated_client.post(
             reverse("student_create"),
             {
@@ -164,7 +164,7 @@ class TestStudentCreateViewErrors:
         # re-renders form with error
         assert response.status_code == 200
 
-    def test_post_with_invalid_parent_id(self, authenticated_client, group, enrollment_type_monthly, site_config):
+    def test_post_with_invalid_parent_id(self, authenticated_client, group, enrollment_type_new_student, site_config):
         response = authenticated_client.post(
             reverse("student_create"),
             {
@@ -182,7 +182,7 @@ class TestStudentCreateViewErrors:
         assert response.status_code == 200
 
     def test_post_with_create_sibling_flag(
-        self, authenticated_client, parent, group, enrollment_type_monthly, site_config
+        self, authenticated_client, parent, group, enrollment_type_new_student, site_config
     ):
         """Creating with create_sibling=1 → redirect URL contains parent_id & create_sibling."""
         response = authenticated_client.post(
@@ -204,7 +204,7 @@ class TestStudentCreateViewErrors:
         assert "create_sibling=1" in response.url
 
     def test_post_email_task_exception_is_swallowed(
-        self, authenticated_client, parent, group, enrollment_type_monthly, site_config
+        self, authenticated_client, parent, group, enrollment_type_new_student, site_config
     ):
         """The welcome email enqueue is wrapped in try/except — failure doesn't break create."""
         with patch("comms.tasks.send_welcome_email_task.delay", side_effect=Exception("broker down")):

@@ -89,7 +89,7 @@
                         {% elif model.object_name == "Enrollment" %}
                             Matrículas activas e históricas de cada alumno por año académico.
                         {% elif model.object_name == "EnrollmentType" %}
-                            Modalidades de inscripción disponibles en la academia.
+                            Las cuatro categorías de matrícula: nuevo estudiante, antiguo estudiante, adulto y especial.
                         {% elif model.object_name == "SiteConfiguration" %}
                             Precios, cuotas, IVA y ajustes generales del sistema. Solo hay un registro.
                         {% elif model.object_name == "HistoryLog" %}
@@ -152,7 +152,7 @@
                         {% if model.object_name == "SiteConfiguration" %}
                             Precios, cuotas, IVA y ajustes generales del sistema. Solo hay un registro.
                         {% elif model.object_name == "EnrollmentType" %}
-                            Modalidades de inscripción disponibles en la academia.
+                            Las cuatro categorías de matrícula: nuevo estudiante, antiguo estudiante, adulto y especial.
                         {% elif model.object_name == "StudentParent" %}
                             Relaciones entre alumnos y sus padres o tutores.
                         {% endif %}

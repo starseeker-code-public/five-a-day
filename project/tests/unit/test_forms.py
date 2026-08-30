@@ -41,7 +41,7 @@ class TestEnrollmentFormValidation:
 
 
 class TestEnrollmentFormCreateEnrollment:
-    def test_creates_enrollment(self, student, enrollment_type_monthly, site_config):
+    def test_creates_enrollment(self, student, enrollment_type_new_student, site_config):
         form = EnrollmentForm(data={"enrollment_plan": "monthly_full"})
         assert form.is_valid()
         enrollment = form.create_enrollment(student, is_adult=False)

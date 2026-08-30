@@ -21,11 +21,11 @@ class TestIsReturningStudent:
         current_year = active_enrollment.academic_year
         assert EnrollmentService.is_returning_student(student, current_year) is False
 
-    def test_prior_year_enrollment_marks_returning(self, student, enrollment_type_monthly, active_enrollment):
+    def test_prior_year_enrollment_marks_returning(self, student, enrollment_type_new_student, active_enrollment):
         """Add a prior-year Enrollment → student is returning."""
         Enrollment.objects.create(
             student=student,
-            enrollment_type=enrollment_type_monthly,
+            enrollment_type=enrollment_type_new_student,
             enrollment_period_start=date(2023, 9, 15),
             enrollment_period_end=date(2024, 6, 27),
             academic_year="2023-2024",

@@ -51,8 +51,11 @@ class EnrollmentService:
         has_lc = enrollment_data.get("has_language_cheque", False)
         has_sibling = enrollment_data.get("is_sibling_discount", False)
 
-        enrollment_type, base_amount, schedule_type, payment_modality = EnrollmentService._resolve_plan(
+        base_amount, schedule_type, payment_modality = EnrollmentService._resolve_plan(
             config, enrollment_data, is_adult, is_special, manual_amount
+        )
+        enrollment_type = EnrollmentService._resolve_enrollment_type(
+            student, is_adult, is_special, manual_amount, academic_year
         )
 
         discount_pct, final_amount = EnrollmentService._apply_discounts(
@@ -120,10 +123,17 @@ class EnrollmentService:
         return final, discount
 
     @staticmethod
-    def _resolve_plan(config, data, is_adult, is_special, manual_amount):
+    def _resolve_enrollment_type(student, is_adult, is_special, manual_amount, academic_year=None):
         """
-        Determine enrollment type, base amount, schedule type, and payment modality.
-        Returns: (enrollment_type, base_amount, schedule_type, payment_modality)
+        Pick the matrícula category this enrollment belongs to.
+
+        The four categories are mutually exclusive and ordered by precedence: a
+        hand-priced enrollment is `special` whoever it is for, an adult pays the adult
+        matrícula, and a child is either re-enrolling (`returning_student`, the
+        discounted matrícula) or signing up for the first time (`new_student`).
+
+        This is deliberately independent of `enrollment_plan` — monthly vs quarterly is
+        `payment_modality`, not a kind of matrícula.
         """
 
         def _get_type(name):
@@ -132,35 +142,41 @@ class EnrollmentService:
             except EnrollmentType.DoesNotExist as err:
                 raise ValueError(f"EnrollmentType '{name}' not found. Run seed data or create it in admin.") from err
 
+        if is_special and manual_amount:
+            return _get_type("special")
         if is_adult:
-            if is_special and manual_amount:
-                return _get_type("special"), manual_amount, "adult_group", "monthly"
-            else:
-                return _get_type("adults"), config.adult_group_monthly_fee, "adult_group", "monthly"
+            return _get_type("adults")
+        if EnrollmentService.is_returning_student(student, academic_year):
+            return _get_type("returning_student")
+        return _get_type("new_student")
+
+    @staticmethod
+    def _resolve_plan(config, data, is_adult, is_special, manual_amount):
+        """
+        Determine the recurring period fee and how it is scheduled.
+        Returns: (base_amount, schedule_type, payment_modality)
+        """
+        if is_adult:
+            base = manual_amount if (is_special and manual_amount) else config.adult_group_monthly_fee
+            return base, "adult_group", "monthly"
 
         plan = data.get("enrollment_plan", "monthly_full")
 
         if is_special and manual_amount:
-            et = _get_type("special")
-            if plan == "monthly_full":
-                return et, manual_amount, "full_time", "monthly"
-            elif plan == "monthly_part":
-                return et, manual_amount, "part_time", "monthly"
-            else:
-                return et, manual_amount, "full_time", "quarterly"
+            if plan == "monthly_part":
+                return manual_amount, "part_time", "monthly"
+            elif plan == "quarterly":
+                return manual_amount, "full_time", "quarterly"
+            return manual_amount, "full_time", "monthly"
 
-        if plan == "monthly_full":
-            return _get_type("monthly"), config.full_time_monthly_fee, "full_time", "monthly"
-        elif plan == "monthly_part":
-            return _get_type("monthly"), config.part_time_monthly_fee, "part_time", "monthly"
+        if plan == "monthly_part":
+            return config.part_time_monthly_fee, "part_time", "monthly"
         elif plan == "quarterly":
-            et = _get_type("quarterly")
             quarterly_base = config.full_time_monthly_fee * 3
             quarterly_discount = config.quarterly_enrollment_discount
             base_amount = quarterly_base * (1 - quarterly_discount / Decimal("100"))
-            return et, base_amount, "full_time", "quarterly"
-        else:
-            return _get_type("monthly"), config.full_time_monthly_fee, "full_time", "monthly"
+            return base_amount, "full_time", "quarterly"
+        return config.full_time_monthly_fee, "full_time", "monthly"
 
     @staticmethod
     def _apply_discounts(config, base_amount, has_lc, has_sibling, is_adult, payment_modality):

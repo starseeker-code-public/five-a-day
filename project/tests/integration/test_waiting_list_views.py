@@ -148,7 +148,7 @@ class TestWaitingEntryIsDiscardedOnEnrollment:
         )
 
     def test_entry_is_deleted_and_the_new_student_is_enrolled(
-        self, authenticated_client, waiting_student, parent, group, site_config, enrollment_type_monthly
+        self, authenticated_client, waiting_student, parent, group, site_config, enrollment_type_new_student
     ):
         response = self._post_student(authenticated_client, parent, group, waiting_student)
         assert response.status_code == 302
@@ -159,7 +159,7 @@ class TestWaitingEntryIsDiscardedOnEnrollment:
         assert created.enrollments.filter(status="active").exists()
 
     def test_entry_with_payment_history_is_archived_instead(
-        self, authenticated_client, waiting_student, parent, group, site_config, enrollment_type_monthly
+        self, authenticated_client, waiting_student, parent, group, site_config, enrollment_type_new_student
     ):
         """A student moved *back* onto the list keeps PROTECTed payments, so the
         placeholder is archived rather than deleted — the enrollment must still

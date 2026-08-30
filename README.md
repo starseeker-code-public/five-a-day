@@ -20,7 +20,7 @@ Built to centralize student records, automate billing cycles, and streamline par
 ### Project Status
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v1.17.2-brightgreen?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-v1.17.3-brightgreen?style=flat-square" alt="Version">
   &nbsp;|&nbsp;
   <a href="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml?query=branch%3Amain"><img src="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml/badge.svg?branch=main&style=flat-square" alt="CI main"></a>
   &nbsp;|&nbsp;
@@ -41,9 +41,9 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 | Version | Date | Description |
 |---------|------|-------------|
-| **v1.17.2** | 2026-08-30 | Group quota at creation; waiting list enrolls properly |
+| **v1.17.3** | 2026-08-30 | Enrollment types are matrícula categories, not cadences |
+| v1.17.2 | 2026-08-30 | Group quota at creation; waiting list enrolls properly |
 | v1.17.1 | 2026-08-30 | Provision enrollment types; production could not enroll |
-| v1.17.0 | 2026-08-30 | Hold-to-reveal eye button on the login password |
 
 ---
 
@@ -150,8 +150,68 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 ## Version History & Roadmap
 
-<details id="v1172" open>
-<summary><strong>v1.17.2 — Group quota, a waiting list that enrolls properly, and the May rollover (current)</strong></summary>
+<details id="v1173" open>
+<summary><strong>v1.17.3 — Enrollment types are matrícula categories (current)</strong></summary>
+
+**What prompted it**
+
+- The `EnrollmentType` table mixed two unrelated ideas. `monthly` and `quarterly` describe a
+  **payment cadence**, which `Enrollment.payment_modality` already stores; `adults` and
+  `special` describe **who is being enrolled**. Only the second is a kind of matrícula.
+- The cost was visible to parents: the matriculation and welcome emails print "Tipo de
+  matrícula" directly above "Forma de pago", and the first read *"Mensual"* — duplicating the
+  line under it while saying nothing about the matrícula actually charged.
+- The academy's four categories are **Nuevo estudiante**, **Antiguo estudiante**, **Adulto** and
+  **Especial** (priced by hand), and their amounts were already configured in `/management/`.
+
+**The four categories**
+
+| `name` | `display_name` | `base_amount_*` | Source in `SiteConfiguration` |
+| ------ | -------------- | --------------- | ----------------------------- |
+| `new_student` | Nuevo estudiante | 40,00 € | `children_enrollment_fee` |
+| `returning_student` | Antiguo estudiante | 20,00 € | `children_enrollment_fee` − `returning_student_enrollment_discount` |
+| `adults` | Adulto | 20,00 € | `adult_enrollment_fee` |
+| `special` | Especial | manual | 0,01 minimum placeholder |
+
+- `base_amount_full_time` / `base_amount_part_time` now hold the **one-time matrícula fee**, not
+  a mensualidad. A matrícula does not vary with the schedule, so both columns carry the same
+  figure; they are kept apart only because the schema has always had two.
+
+**Resolution is split in two**
+
+- `EnrollmentService._resolve_enrollment_type()` picks the category by precedence: hand-priced →
+  `special`, adult → `adults`, has an enrollment in an earlier academic year → `returning_student`,
+  otherwise `new_student`. It is deliberately independent of `enrollment_plan`.
+- `_resolve_plan()` keeps its old job and now returns only `(base_amount, schedule_type,
+  payment_modality)` — the recurring period fee and how it is scheduled.
+
+**`Enrollment.save()` no longer prices from the enrollment type**
+
+- The `final_amount` fallback read `enrollment_type.base_amount_*`, which under the new meaning
+  would charge a €40 matrícula as a monthly fee. It now reads the mensualidades from
+  `SiteConfiguration` per `schedule_type`, ×3 for a quarterly modality. `EnrollmentService`
+  always supplies `final_amount`, so the fallback only covers enrollments created by hand.
+
+**Migration**
+
+- `billing/migrations/0008_enrollment_type_categories` re-points every existing enrollment onto
+  the category it belongs to (adult schedule → `adults`; an earlier academic year →
+  `returning_student`; otherwise `new_student`), corrects the amounts, and drops the retired
+  rows. `adults` and `special` keep their existing rows and primary keys.
+- It **no-ops on an empty table**: `0001_initial` inserts no reference data and
+  `seed_enrollment_types` must stay the single provisioning path, or every fresh test database
+  would arrive pre-seeded.
+
+**Tests**
+
+- 1,248 passing at 95.35 % coverage. `unit/test_enrollment_type_service.py` grew to 20 cases,
+  including five that drive the data migration directly — production and dev both had zero
+  enrollments, so the re-pointing branch had no other coverage.
+
+</details>
+
+<details id="v1172">
+<summary><strong>v1.17.2 — Group quota, a waiting list that enrolls properly, and the May rollover</strong></summary>
 
 **Group quota is set when the group is created**
 
@@ -2420,7 +2480,7 @@ five-a-day/
 │   │   └── management/commands/  send_email, test_all_emails, plus 4 Beat-task wrappers
 │   │                             (v1.14.2 — birthday, reminders, report, Fun Friday drain)
 │   │
-│   ├── tests/                    pytest suite (1,241 tests, 95.43 % coverage) — unit/ + integration/
+│   ├── tests/                    pytest suite (1,248 tests, 95.35 % coverage) — unit/ + integration/
 │   ├── templates/registration/   Password-reset templates (form, done, confirm, complete + email body)
 │   ├── templates/admin/          Django admin overrides (branded theme)
 │   └── conftest.py               Shared fixtures (models + authenticated_client)
@@ -2797,7 +2857,7 @@ Within each file, related tests are grouped into classes. Where a large file abs
 | [`unit/test_email_service.py`](project/tests/unit/test_email_service.py) | 19 | `EmailService.send_email`: string + list recipients, CC/BCC, attachments, inline images (existing + missing path), `fail_silently` on and off, exception-raises-when-not-silent, `send_bulk_emails` mixed success/failure, `get_email_config`, Django 6 inline-image API |
 | [`unit/test_two_factor_service.py`](project/tests/unit/test_two_factor_service.py) | 17 | TOTP two-factor service (v1.13): `begin_enrolment`, `confirm_enrolment`, `verify_totp`, `verify_backup_code`, `verify_code`, `disable`, `rotate_backup_codes`, issuer-name derivation |
 | [`unit/test_email_functions.py`](project/tests/unit/test_email_functions.py) | 17 | All convenience wrappers (`send_birthday_email`, `send_welcome_email`, `send_payment_reminder`, `send_monthly_report`, `send_enrollment_confirmation_email`, `send_quarterly_receipt_email`, `send_fun_friday_email`, `send_vacation_closure_email`, `send_tax_certificate_email`, `send_all_tax_certificates`) plus tax-certificate PDF generation branches |
-| [`unit/test_enrollment_type_service.py`](project/tests/unit/test_enrollment_type_service.py) | 18 | `ensure_enrollment_types()` (v1.17.1): the four types `_resolve_plan` asks for, idempotency, label/amount repair, admin-edited fields left alone, amounts sourced from `SiteConfiguration`, and the empty-table guard |
+| [`unit/test_enrollment_type_service.py`](project/tests/unit/test_enrollment_type_service.py) | 20 | `ensure_enrollment_types()` (v1.17.1): the four matrícula categories `_resolve_enrollment_type` asks for, idempotency, label/amount repair, admin-edited fields left alone, matrícula amounts sourced from `SiteConfiguration`, and the empty-table guard. Category resolution independent of the payment plan, returning-student detection, and the `0008` data migration re-pointing enrollments off the retired cadence types |
 | [`unit/test_stripe_service.py`](project/tests/unit/test_stripe_service.py) | 16 | Stripe service (v1.11, `httpx` — no SDK dependency): `is_configured`, `create_checkout_session`, `verify_webhook_signature`, `apply_webhook_event`, singleton accessor |
 | [`unit/test_email_bug_hunt_fixes.py`](project/tests/unit/test_email_bug_hunt_fixes.py) | 16 | Round-2 email regression suite: `payment_reminder_simple` + birthday templates, Fun Friday image guard, welcome email fired `on_commit`, CLI batch per-recipient loop, birthday to all parents, birthday-task timezone (`localdate`), monthly-report template defaults |
 | [`unit/test_rate_limit.py`](project/tests/unit/test_rate_limit.py) | 19 | Cache-backed IP rate limiter (v1.10): window counting, limit enforcement, per-key isolation, disabled path, and `_client_ip` validation through `ipaddress`. Also pins the `TRUSTED_PROXY_COUNT` behaviour — the client IP is read N hops from the RIGHT of `X-Forwarded-For`, so a spoofed prefix cannot rotate the rate-limit bucket |
