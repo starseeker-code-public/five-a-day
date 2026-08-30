@@ -206,11 +206,11 @@ class TestEnrollment:
         assert active_enrollment.is_paid is True
         assert active_enrollment.remaining_amount == Decimal("0.00")
 
-    def test_unique_active_enrollment_per_student(self, active_enrollment, student, enrollment_type_monthly):
+    def test_unique_active_enrollment_per_student(self, active_enrollment, student, enrollment_type_new_student):
         with pytest.raises(IntegrityError):
             Enrollment.objects.create(
                 student=student,
-                enrollment_type=enrollment_type_monthly,
+                enrollment_type=enrollment_type_new_student,
                 enrollment_period_start=date(2025, 9, 15),
                 enrollment_period_end=date(2026, 6, 27),
                 academic_year="2025-2026",
@@ -409,8 +409,8 @@ class TestBillingModelBranches:
     def test_site_config_str(self, site_config):
         assert "Configuración" in str(site_config) or "Site" in str(site_config).title() or str(site_config)
 
-    def test_enrollment_type_str(self, enrollment_type_monthly):
-        assert str(enrollment_type_monthly)
+    def test_enrollment_type_str(self, enrollment_type_new_student):
+        assert str(enrollment_type_new_student)
 
     def test_payment_str(self, pending_payment):
         assert str(pending_payment)

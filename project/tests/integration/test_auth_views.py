@@ -17,6 +17,19 @@ class TestLoginView:
         assert 'data-password-toggle="password"' in html
         assert "js/password_toggle.js" in html
 
+    def test_eye_icon_is_inline_svg_not_a_webfont_glyph(self, client):
+        """The icon must render without a third-party font round-trip.
+
+        It was drawn with a Material Symbols glyph, so on the plain-HTTP testing
+        host — where the Google Fonts stylesheet is likelier to be blocked or
+        slow — the button rendered with no visible icon at all.
+        """
+        html = client.get(reverse("login")).content.decode()
+        assert 'data-pw-icon="masked"' in html
+        assert 'data-pw-icon="revealed"' in html
+        # The glyph name must not be what draws the eye any more.
+        assert ">visibility</span>" not in html
+
     def test_authenticated_user_redirects_to_home(self, authenticated_client):
         response = authenticated_client.get(reverse("login"))
         assert response.status_code == 302

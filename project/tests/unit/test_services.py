@@ -42,7 +42,7 @@ class TestPricingService:
 
 
 class TestEnrollmentService:
-    def test_create_monthly_full_time(self, student, site_config, enrollment_type_monthly):
+    def test_create_monthly_full_time(self, student, site_config, enrollment_type_new_student):
         data = {
             "enrollment_plan": "monthly_full",
             "has_language_cheque": False,
@@ -56,7 +56,7 @@ class TestEnrollmentService:
         assert enrollment.payment_modality == "monthly"
         assert enrollment.final_amount == Decimal("54.00")
 
-    def test_create_monthly_part_time(self, student, site_config, enrollment_type_monthly):
+    def test_create_monthly_part_time(self, student, site_config, enrollment_type_new_student):
         data = {
             "enrollment_plan": "monthly_part",
             "has_language_cheque": False,
@@ -68,7 +68,7 @@ class TestEnrollmentService:
         assert enrollment.schedule_type == "part_time"
         assert enrollment.final_amount == Decimal("36.00")
 
-    def test_create_quarterly(self, student, site_config, enrollment_type_quarterly):
+    def test_create_quarterly(self, student, site_config, enrollment_type_new_student):
         data = {
             "enrollment_plan": "quarterly",
             "has_language_cheque": False,
@@ -80,7 +80,7 @@ class TestEnrollmentService:
         assert enrollment.payment_modality == "quarterly"
         assert enrollment.final_amount == Decimal("153.90")
 
-    def test_sibling_discount_applied(self, student, site_config, enrollment_type_monthly):
+    def test_sibling_discount_applied(self, student, site_config, enrollment_type_new_student):
         data = {
             "enrollment_plan": "monthly_full",
             "has_language_cheque": False,
@@ -93,7 +93,7 @@ class TestEnrollmentService:
         assert enrollment.final_amount == Decimal("51.30")
         assert enrollment.is_sibling_discount is True
 
-    def test_language_cheque_discount_applied(self, student, site_config, enrollment_type_monthly):
+    def test_language_cheque_discount_applied(self, student, site_config, enrollment_type_new_student):
         data = {
             "enrollment_plan": "monthly_full",
             "has_language_cheque": True,
@@ -106,7 +106,7 @@ class TestEnrollmentService:
         assert enrollment.final_amount == Decimal("34.00")
         assert enrollment.has_language_cheque is True
 
-    def test_both_discounts_combined(self, student, site_config, enrollment_type_monthly):
+    def test_both_discounts_combined(self, student, site_config, enrollment_type_new_student):
         data = {
             "enrollment_plan": "monthly_full",
             "has_language_cheque": True,
@@ -142,7 +142,7 @@ class TestEnrollmentService:
         assert enrollment.schedule_type == "adult_group"
         assert enrollment.final_amount == Decimal("60.00")
 
-    def test_minimum_amount_enforced(self, student, site_config, enrollment_type_monthly):
+    def test_minimum_amount_enforced(self, student, site_config, enrollment_type_new_student):
         # Force a scenario where discounts exceed base amount
         config = site_config
         config.language_cheque_discount = Decimal("100.00")
@@ -242,7 +242,7 @@ class TestEnrollmentServiceErrors:
 
 
 class TestEnrollmentServiceEdgeCases:
-    def test_create_enrollment_with_sibling_discount(self, db, student, enrollment_type_monthly, site_config):
+    def test_create_enrollment_with_sibling_discount(self, db, student, enrollment_type_new_student, site_config):
         """Exercise the sibling-discount branch of enrollment creation."""
         from billing.services.enrollment_service import EnrollmentService
 

@@ -14,7 +14,7 @@ pytestmark = pytest.mark.django_db
 
 class TestWelcomeEmailOnCommitHappyPath:
     def test_successful_create_queues_welcome_task_after_commit(
-        self, authenticated_client, parent, group, site_config, enrollment_type_monthly
+        self, authenticated_client, parent, group, site_config, enrollment_type_new_student
     ):
         """Happy-path counterpart to the rollback test: when create SUCCEEDS,
         transaction.on_commit fires and the task is delivered exactly once.
@@ -45,7 +45,7 @@ class TestWelcomeEmailOnCommitHappyPath:
         mock_task.assert_called_once()
 
     def test_welcome_task_delay_error_does_not_break_request(
-        self, authenticated_client, parent, group, site_config, enrollment_type_monthly
+        self, authenticated_client, parent, group, site_config, enrollment_type_new_student
     ):
         """The inner try/except around .delay() swallows Celery-broker errors."""
         with patch(

@@ -7,7 +7,7 @@ The `billing` app owns all financial logic: pricing configuration, enrollment pl
 | Model | Table | Key Fields |
 | ----- | ----- | ---------- |
 | **SiteConfiguration** | `site_configuration` | Singleton (pk=1). All pricing: enrollment fees, monthly fees, discount percentages/amounts |
-| **EnrollmentType** | `enrollment_types` | name (monthly, quarterly, adults, special), display_name, base amounts |
+| **EnrollmentType** | `enrollment_types` | The matrícula category: name (new_student, returning_student, adults, special), display_name, and `base_amount_*` = the one-time matrícula fee. Payment cadence lives on `Enrollment.payment_modality`, not here. |
 | **Enrollment** | `enrollments` | FK to Student + EnrollmentType. schedule_type, payment_modality, discounts, amounts, status, academic_year. Indexed on `academic_year` for payment generation queries. |
 | **Payment** | `payments` | FK to Student + Parent + Enrollment. amount, type, method, status, due_date, payment_date, stripe_session_id / stripe_payment_intent (v1.11). **`parent` is nullable** — adult students have no guardian. There is no `active` field; soft-delete was never implemented, so never filter on `active=True`. |
 | **Expense** | `expenses` | description, category, amount, expense_date, notes + recurrence: is_recurring, recurring_frequency (`monthly` / `weekly` / `yearly`), recurring_day (1-28), recurring_month, recurring_weekdays (CSV of ints 0-6, Monday=0), generated_from (self-FK). v1.5 |
@@ -31,14 +31,15 @@ The `billing` app owns all financial logic: pricing configuration, enrollment pl
 ### EnrollmentService (`billing/services/enrollment_service.py`)
 
 - `create_enrollment(student, enrollment_data, is_adult)` — creates an Enrollment within `transaction.atomic()` with proper pricing and discounts. Raises `ValueError` if required EnrollmentType is missing.
-- `_resolve_plan(config, data, ...)` — determines enrollment type, base amount, schedule type, payment modality
+- `_resolve_enrollment_type(student, is_adult, is_special, manual_amount, academic_year)` — picks the matrícula category by precedence: hand-priced → `special`, adult → `adults`, has an earlier academic year → `returning_student`, otherwise `new_student`. Independent of `enrollment_plan`.
+- `_resolve_plan(config, data, is_adult, is_special, manual_amount)` — returns `(base_amount, schedule_type, payment_modality)`, i.e. the recurring period fee and how it is scheduled.
 - `_apply_discounts(config, base, ...)` — applies sibling and language cheque discounts
 - `is_returning_student(student)` / returning-student enrollment discount (v1.13) — a student who previously had an enrollment pays a reduced enrollment fee
 
 ### EnrollmentTypeService (`billing/services/enrollment_type_service.py`)
 
-- `ensure_enrollment_types(config=None)` — idempotently creates the four `EnrollmentType` rows `_resolve_plan` can request (`monthly`, `quarterly`, `adults`, `special`) with Spanish `display_name`s and amounts from `SiteConfiguration`. Repairs drifted labels/amounts; never touches admin-edited `description` / `active`. Shared by the `seed_enrollment_types` command and `seed_testdata`.
-- `REQUIRED_ENROLLMENT_TYPES` — the four names. `half_month` and `languages_ticket` are valid choices with Spanish labels but are modelled as discounts, never resolved to a row.
+- `ensure_enrollment_types(config=None)` — idempotently creates the four `EnrollmentType` rows `_resolve_enrollment_type` can request (`new_student`, `returning_student`, `adults`, `special`) with Spanish `display_name`s and the matrícula fees from `SiteConfiguration` (`children_enrollment_fee`, that minus `returning_student_enrollment_discount`, `adult_enrollment_fee`, and the minimum for hand-priced `special`). Repairs drifted labels/amounts; never touches admin-edited `description` / `active`. Shared by the `seed_enrollment_types` command and `seed_testdata`.
+- `REQUIRED_ENROLLMENT_TYPES` — the four categories (`new_student`, `returning_student`, `adults`, `special`). This is the complete set: every enrollment is exactly one of them.
 
 ### PaymentService (`billing/services/payment_service.py`)
 
@@ -98,7 +99,7 @@ Implemented directly against the Stripe REST API with `httpx` — **no Stripe SD
 python manage.py seed_enrollment_types
 ```
 
-Provisions the `EnrollmentType` reference table. **Required in every environment** — nothing else creates these rows (`0001_initial` builds the table and inserts nothing), and without them `EnrollmentService._resolve_plan` raises `EnrollmentType '<name>' not found` and no student can be enrolled. `entrypoint.sh` runs it on every testing/production boot beside `seed_teachers`. Idempotent.
+Provisions the `EnrollmentType` reference table. **Required in every environment** — nothing else creates these rows (`0001_initial` builds the table and inserts nothing), and without them `EnrollmentService._resolve_enrollment_type` raises `EnrollmentType '<name>' not found` and no student can be enrolled. `entrypoint.sh` runs it on every testing/production boot beside `seed_teachers`. Idempotent.
 
 ### `generate_payments`
 

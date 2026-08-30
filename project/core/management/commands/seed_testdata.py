@@ -508,11 +508,13 @@ class Command(BaseCommand):
         is detected as 'returning' (drives the returning-student discount)."""
         prev_start = self.start_year - 1
         prev_year = f"{prev_start}-{prev_start + 1}"
-        monthly_type = EnrollmentType.objects.get(name="monthly")
+        # This IS the student's first enrollment — it is what makes the current-year one
+        # count as returning, so the prior year itself is a new-student matrícula.
+        enrollment_type = EnrollmentType.objects.get(name="new_student")
         base = self.config.full_time_monthly_fee
         Enrollment.objects.create(
             student=student,
-            enrollment_type=monthly_type,
+            enrollment_type=enrollment_type,
             enrollment_period_start=academic_year_start_date(prev_start),
             enrollment_period_end=academic_year_end_date(prev_start + 1),
             academic_year=prev_year,
@@ -543,11 +545,11 @@ class Command(BaseCommand):
         )
         StudentParent.objects.create(student=student, parent=parents[2])
 
-        monthly_type = EnrollmentType.objects.get(name="monthly")
+        enrollment_type = EnrollmentType.objects.get(name="new_student")
         base = self.config.full_time_monthly_fee
         enrollment = Enrollment.objects.create(
             student=student,
-            enrollment_type=monthly_type,
+            enrollment_type=enrollment_type,
             enrollment_period_start=self.sept_start,
             enrollment_period_end=academic_year_end_date(self.end_year),
             academic_year=self.acad_year,

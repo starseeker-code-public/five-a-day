@@ -131,8 +131,8 @@ Watch the logs after `docker compose up -d` for `✅ Teacher created/updated: ..
 
 #### 5. Routine updates
 
-Use the `/deploy testing` skill, which does all of this plus the post-deploy version check.
-By hand, from your workstation:
+Use the `/deploy` skill and pick **Solo testing** when it asks for the target — it does all of
+this plus the post-deploy version check. By hand, from your workstation:
 
 ```bash
 gcloud compute ssh fiveaday-testing --zone=us-east1-c --project=five-a-day-evolution
@@ -533,7 +533,8 @@ the custom domain and redeploy.
 
 The `/deploy` skill (`.claude/skills/deploy/SKILL.md`) automates everything below, including the
 branch guard, the Cloud SQL backup and the post-deploy version check. Prefer it over running these
-by hand.
+by hand. It always asks first which target to deploy — testing only, production only, or both —
+so production is never reached without an explicit choice.
 
 Order matters: **migrate before the service rolls**, not after. Rolling the service first puts new
 code in front of an old schema for the length of the rollout.

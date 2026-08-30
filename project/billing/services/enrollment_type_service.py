@@ -1,17 +1,18 @@
 """
 Provisioning for the EnrollmentType reference table.
 
-EnrollmentType rows are reference data, not user data: `EnrollmentService._resolve_plan`
+EnrollmentType rows are reference data, not user data: `EnrollmentService._resolve_enrollment_type`
 looks them up by `name` and raises when one is missing, so an environment with an empty
 table cannot enroll anybody. Nothing in the schema creates them — `0001_initial` builds
 the table only — so every environment needs this command run once. `entrypoint.sh` calls
 it on boot for testing and production; QA seeding calls the same function so the two can
 never drift.
 
-Amounts come from SiteConfiguration, the single source of truth for pricing. They are only
-a fallback: `EnrollmentService` computes `final_amount` up front, and `Enrollment.save()`
-reads `base_amount_*` solely when `final_amount` was not supplied. They still have to be
-right, because that fallback is what an admin-created enrollment is charged.
+Amounts come from SiteConfiguration, the single source of truth for pricing. Because an
+EnrollmentType is a *matrícula* category, `base_amount_*` holds the one-time MATRÍCULA fee
+for that category — the figures an admin edits under "Matrículas" in /management/ — not a
+mensualidad. The matrícula does not vary with the schedule, so both columns carry the same
+value; they are kept apart only because the schema has always had two.
 """
 
 from decimal import Decimal
@@ -19,26 +20,36 @@ from decimal import Decimal
 from billing.constants import ENROLLMENT_TYPE_DISPLAY_ES
 from billing.models import EnrollmentType, SiteConfiguration
 
-# The four types `EnrollmentService._resolve_plan` can ask for. `half_month` and
-# `languages_ticket` are valid choices with Spanish labels but are never resolved
-# to a row — they are modelled as discounts, not as enrollment types.
-REQUIRED_ENROLLMENT_TYPES = ("monthly", "quarterly", "adults", "special")
+# The four categories `EnrollmentService._resolve_enrollment_type` can ask for. This is
+# the complete set — every enrollment is exactly one of them.
+REQUIRED_ENROLLMENT_TYPES = ("new_student", "returning_student", "adults", "special")
 
 # Below this the DecimalField's MinValueValidator(0.01) rejects the row.
 _MIN_AMOUNT = Decimal("0.01")
 
 
 def _amounts_for(name: str, config: SiteConfiguration) -> tuple[Decimal, Decimal]:
-    """Return (full_time, part_time) base amounts for an enrollment type."""
-    if name == "quarterly":
-        return config.full_time_monthly_fee * 3, config.part_time_monthly_fee * 3
+    """Return the (full_time, part_time) matrícula fee for an enrollment category.
+
+    Both columns get the same figure — a matrícula is charged per student, not per
+    schedule. `EnrollmentService.compute_enrollment_fee` is the live calculation; these
+    rows mirror it so the table an admin reads in /admin/ agrees with what is billed.
+    """
     if name == "adults":
-        # Adults are a single group rate — there is no part-time adult schedule.
-        return config.adult_group_monthly_fee, config.adult_group_monthly_fee
-    # `monthly` and `special` both fall back to the standard monthly fees. A special
-    # enrollment always carries a manual amount, so its fallback is never the real
-    # price; it exists to satisfy the NOT NULL + MinValueValidator constraints.
-    return config.full_time_monthly_fee, config.part_time_monthly_fee
+        # Adults pay their own, lower matrícula and are not eligible for the
+        # returning-student discount.
+        amount = config.adult_enrollment_fee
+    elif name == "returning_student":
+        # Re-enrolling in a later academic year takes a flat discount off the matrícula.
+        discount = config.returning_student_enrollment_discount or Decimal("0.00")
+        amount = config.children_enrollment_fee - discount
+    elif name == "special":
+        # A special enrollment is always priced by hand, so there is no meaningful
+        # figure here; the minimum exists only to satisfy NOT NULL + MinValueValidator.
+        amount = _MIN_AMOUNT
+    else:
+        amount = config.children_enrollment_fee
+    return amount, amount
 
 
 def ensure_enrollment_types(config: SiteConfiguration | None = None) -> dict[str, list[str]]:

@@ -722,7 +722,7 @@ class TestStudentEditDoesNotChurnEnrollments:
         assert student_with_parent.school == "COLEGIO NUEVO"
 
     def test_changing_the_plan_does_issue_a_new_enrollment(
-        self, student_with_parent, active_enrollment, enrollment_type_quarterly
+        self, student_with_parent, active_enrollment, enrollment_type_returning_student
     ):
         before = student_with_parent.enrollments.count()
         _client().post(
@@ -752,8 +752,10 @@ class TestEnrollmentTypeLabelsAreSpanish:
     def test_seed_labels_are_translated(self):
         from billing.constants import ENROLLMENT_TYPE_DISPLAY_ES
 
-        assert ENROLLMENT_TYPE_DISPLAY_ES["monthly"] == "Mensual"
-        assert ENROLLMENT_TYPE_DISPLAY_ES["quarterly"] == "Trimestral"
+        assert ENROLLMENT_TYPE_DISPLAY_ES["new_student"] == "Nuevo estudiante"
+        assert ENROLLMENT_TYPE_DISPLAY_ES["returning_student"] == "Antiguo estudiante"
+        assert ENROLLMENT_TYPE_DISPLAY_ES["adults"] == "Adulto"
+        assert ENROLLMENT_TYPE_DISPLAY_ES["special"] == "Especial"
 
     def test_welcome_email_states_the_payment_frequency(self, student_with_parent, parent, active_enrollment):
         from django.core import mail

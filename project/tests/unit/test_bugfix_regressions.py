@@ -104,57 +104,59 @@ class TestQuarterlyAmountAppliesDiscounts:
         )
 
     def test_plain_quarterly_is_three_months_minus_the_quarterly_percentage(
-        self, student, enrollment_type_quarterly, site_config
+        self, student, enrollment_type_returning_student, site_config
     ):
         from billing.services.payment_service import PaymentService
 
-        e = self._enrollment(student, enrollment_type_quarterly)
+        e = self._enrollment(student, enrollment_type_returning_student)
         expected = site_config.full_time_monthly_fee * 3
         expected -= expected * (site_config.quarterly_enrollment_discount / Decimal("100"))
         assert PaymentService.calculate_quarterly_amount(e, site_config, 10) == expected
 
-    def test_sibling_discount_lowers_the_quarterly_amount(self, student, enrollment_type_quarterly, site_config):
+    def test_sibling_discount_lowers_the_quarterly_amount(
+        self, student, enrollment_type_returning_student, site_config
+    ):
         from billing.services.payment_service import PaymentService
 
         plain = PaymentService.calculate_quarterly_amount(
-            self._enrollment(student, enrollment_type_quarterly), site_config, 10
+            self._enrollment(student, enrollment_type_returning_student), site_config, 10
         )
         Enrollment.objects.all().delete()
         with_sibling = PaymentService.calculate_quarterly_amount(
-            self._enrollment(student, enrollment_type_quarterly, sibling=True), site_config, 10
+            self._enrollment(student, enrollment_type_returning_student, sibling=True), site_config, 10
         )
         assert with_sibling < plain, "sibling discount must change the quarterly amount"
 
-    def test_language_cheque_is_applied_three_times(self, student, enrollment_type_quarterly, site_config):
+    def test_language_cheque_is_applied_three_times(self, student, enrollment_type_returning_student, site_config):
         """A quarter covers three months, so it carries three cheques."""
         from billing.services.payment_service import PaymentService
 
         plain = PaymentService.calculate_quarterly_amount(
-            self._enrollment(student, enrollment_type_quarterly), site_config, 10
+            self._enrollment(student, enrollment_type_returning_student), site_config, 10
         )
         Enrollment.objects.all().delete()
         with_cheque = PaymentService.calculate_quarterly_amount(
-            self._enrollment(student, enrollment_type_quarterly, cheque=True), site_config, 10
+            self._enrollment(student, enrollment_type_returning_student, cheque=True), site_config, 10
         )
         assert plain - with_cheque == site_config.language_cheque_discount * 3
 
-    def test_q3_carries_the_june_discount(self, student, enrollment_type_quarterly, site_config):
+    def test_q3_carries_the_june_discount(self, student, enrollment_type_returning_student, site_config):
         """Q3 (due April) covers April-June, so it picks up the June discount
         that calculate_monthly_amount applies to month 6. `quarter_due_month`
         was an unused parameter before this."""
         from billing.services.payment_service import PaymentService
 
-        e = self._enrollment(student, enrollment_type_quarterly)
+        e = self._enrollment(student, enrollment_type_returning_student)
         q1 = PaymentService.calculate_quarterly_amount(e, site_config, 10)
         q3 = PaymentService.calculate_quarterly_amount(e, site_config, 4)
         assert q1 - q3 == site_config.june_discount
 
-    def test_adult_group_keeps_the_flat_rate(self, student, enrollment_type_quarterly, site_config):
+    def test_adult_group_keeps_the_flat_rate(self, student, enrollment_type_returning_student, site_config):
         """Adults pay a flat rate — no sibling/cheque/June discounts, matching
         calculate_monthly_amount's early return."""
         from billing.services.payment_service import PaymentService
 
-        e = self._enrollment(student, enrollment_type_quarterly, sibling=True, cheque=True)
+        e = self._enrollment(student, enrollment_type_returning_student, sibling=True, cheque=True)
         e.schedule_type = "adult_group"
         e.save()
         expected = site_config.adult_group_monthly_fee * 3
@@ -241,10 +243,10 @@ class TestPaymentAttachesToTheActiveEnrollment:
     returning student's new payment attached to their OLD finished enrollment.
     """
 
-    def test_prefers_active_over_finished(self, student_with_parent, parent, enrollment_type_monthly, site_config):
+    def test_prefers_active_over_finished(self, student_with_parent, parent, enrollment_type_new_student, site_config):
         common = {
             "student": student_with_parent,
-            "enrollment_type": enrollment_type_monthly,
+            "enrollment_type": enrollment_type_new_student,
             "schedule_type": "full_time",
             "payment_modality": "monthly",
             "enrollment_amount": Decimal("54.00"),
@@ -494,10 +496,10 @@ class TestEnrollmentAmountFallback:
     and the insert died on a NOT NULL violation.
     """
 
-    def test_final_amount_without_enrollment_amount_saves(self, student, enrollment_type_monthly):
+    def test_final_amount_without_enrollment_amount_saves(self, student, enrollment_type_new_student):
         enrollment = Enrollment(
             student=student,
-            enrollment_type=enrollment_type_monthly,
+            enrollment_type=enrollment_type_new_student,
             enrollment_period_start=date(2025, 9, 15),
             enrollment_period_end=date(2026, 6, 27),
             academic_year="2025-2026",

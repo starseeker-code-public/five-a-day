@@ -369,15 +369,24 @@ class Enrollment(models.Model):
 
     def save(self, *args, **kwargs):
         """
-        Auto-calculate final_amount based on enrollment_type and schedule_type
+        Auto-calculate final_amount from the configured fees for this schedule/modality.
+
+        `final_amount` is the recurring period fee, so it is read from SiteConfiguration
+        and NOT from `enrollment_type.base_amount_*` — an EnrollmentType is a matrícula
+        category and its amounts are the one-time matrícula fee. EnrollmentService always
+        supplies `final_amount`; this fallback only covers enrollments created by hand
+        (admin, shell, data migrations).
         """
-        base_amount = None
         if not self.final_amount:
-            base_amount = (
-                self.enrollment_type.base_amount_full_time
-                if self.schedule_type == "full_time"
-                else self.enrollment_type.base_amount_part_time
-            )
+            config = SiteConfiguration.get_config()
+            if self.schedule_type == "adult_group":
+                base_amount = config.adult_group_monthly_fee
+            elif self.schedule_type == "part_time":
+                base_amount = config.part_time_monthly_fee
+            else:
+                base_amount = config.full_time_monthly_fee
+            if self.payment_modality == "quarterly":
+                base_amount = base_amount * 3
             discount_amount = base_amount * (self.discount_percentage / Decimal("100"))
             self.final_amount = base_amount - discount_amount
 

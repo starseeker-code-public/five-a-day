@@ -44,14 +44,16 @@ class TestStudentUpdateView:
         assert "enrollment_form" in ctx
         assert "parents" in ctx
 
-    def test_get_context_quarterly_enrollment(self, student_with_parent, enrollment_type_quarterly, site_config):
+    def test_get_context_quarterly_enrollment(
+        self, student_with_parent, enrollment_type_returning_student, site_config
+    ):
         from billing.models import Enrollment
         from core.views.students import StudentUpdateView
 
         Enrollment.objects.filter(student=student_with_parent).delete()
         Enrollment.objects.create(
             student=student_with_parent,
-            enrollment_type=enrollment_type_quarterly,
+            enrollment_type=enrollment_type_returning_student,
             enrollment_period_start=date(2025, 9, 15),
             enrollment_period_end=date(2026, 6, 27),
             academic_year="2025-2026",
@@ -68,14 +70,14 @@ class TestStudentUpdateView:
         ctx = view.get_context_data()
         assert "enrollment_form" in ctx
 
-    def test_get_context_part_time(self, student_with_parent, enrollment_type_monthly, site_config):
+    def test_get_context_part_time(self, student_with_parent, enrollment_type_new_student, site_config):
         from billing.models import Enrollment
         from core.views.students import StudentUpdateView
 
         Enrollment.objects.filter(student=student_with_parent).delete()
         Enrollment.objects.create(
             student=student_with_parent,
-            enrollment_type=enrollment_type_monthly,
+            enrollment_type=enrollment_type_new_student,
             enrollment_period_start=date(2025, 9, 15),
             enrollment_period_end=date(2026, 6, 27),
             academic_year="2025-2026",
