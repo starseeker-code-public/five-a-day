@@ -77,6 +77,14 @@
     padding: 0.125rem 0.5rem; border-radius: 9999px; letter-spacing: 0.05em;
 }
 .priority-high { background: #fecaca; color: #991b1b; }
+/* QA verification tick — shaded until the tester clicks it, then green. */
+.verify-btn { background: none; border: 0; padding: 0; line-height: 0; cursor: pointer; color: #cbd5e1; transition: color .15s ease, transform .15s ease; }
+.verify-btn:hover { color: #94a3b8; transform: scale(1.1); }
+.verify-btn.is-verified { color: #16a34a; }
+.verify-btn.is-verified:hover { color: #15803d; }
+html.dark .verify-btn { color: #475569; }
+html.dark .verify-btn:hover { color: #64748b; }
+html.dark .verify-btn.is-verified { color: #4ade80; }
 .priority-medium { background: #fef3c7; color: #92400e; }
 .priority-low { background: #d1fae5; color: #065f46; }
 .status-badge {
@@ -392,6 +400,13 @@
             {% for task in tasks %}
             <div class="backlog-item" data-task-id="{{ task.id }}">
                 <span class="priority-badge priority-{{ task.priority }}">{{ task.get_priority_display }}</span>
+                <button type="button"
+                        class="verify-btn backlog-verify-btn{% if task.verified %} is-verified{% endif %}"
+                        data-task-id="{{ task.id }}"
+                        aria-pressed="{% if task.verified %}true{% else %}false{% endif %}"
+                        title="{% if task.verified %}Verificado por QA — pulsa para desmarcar{% else %}Marcar como verificado por QA{% endif %}">
+                    <span class="material-symbols-outlined text-[20px]">check_circle</span>
+                </button>
                 <div class="flex-1 min-w-0">
                     <p class="text-sm font-medium text-neutral-800 truncate">{{ task.title }}</p>
                     {% if task.description %}<p class="text-xs text-neutral-500 truncate">{{ task.description }}</p>{% endif %}
@@ -572,6 +587,9 @@
                 item.dataset.taskId = t.id;
                 item.innerHTML = `
                     <span class="priority-badge priority-${escapeHtml(t.priority)}">${escapeHtml(t.priority)}</span>
+                    <button type="button" class="verify-btn backlog-verify-btn" data-task-id="${t.id}" aria-pressed="false" title="Marcar como verificado por QA">
+                        <span class="material-symbols-outlined text-[20px]">check_circle</span>
+                    </button>
                     <div class="flex-1 min-w-0">
                         <p class="text-sm font-medium text-neutral-800 truncate">${escapeHtml(t.title)}</p>
                         ${description ? '<p class="text-xs text-neutral-500 truncate">' + escapeHtml(description) + '</p>' : ''}
@@ -592,6 +610,28 @@
             });
     });
 
+    // Tick de verificacion QA (delegacion de eventos). Solo envia `verified`, asi
+    // que no toca el estado de la tarea ni dispara el email de "hecho" — es la
+    // marca del tester, no la del desarrollador.
+    backlogList?.addEventListener('click', function(e) {
+        const btn = e.target.closest('.backlog-verify-btn');
+        if (!btn) return;
+        const taskId = btn.dataset.taskId;
+        const next = !btn.classList.contains('is-verified');
+        btn.disabled = true;
+        post(`/api/testing/backlog/${taskId}/update/`, {verified: next})
+            .then(data => {
+                if (data.success) {
+                    btn.classList.toggle('is-verified', data.verified);
+                    btn.setAttribute('aria-pressed', data.verified ? 'true' : 'false');
+                    btn.title = data.verified
+                        ? 'Verificado por QA — pulsa para desmarcar'
+                        : 'Marcar como verificado por QA';
+                }
+            })
+            .finally(() => { btn.disabled = false; });
+    });
+
     // Marcar tarea como hecha (delegacion de eventos)
     backlogList?.addEventListener('click', function(e) {
         const btn = e.target.closest('.backlog-done-btn');
@@ -605,6 +645,8 @@
                     badge.className = 'status-badge status-done';
                     badge.textContent = 'Done';
                     btn.remove();
+                    // Las hechas van al final, igual que al recargar la pagina.
+                    backlogList.appendChild(item);
                 }
             });
     });

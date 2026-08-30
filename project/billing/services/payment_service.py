@@ -25,7 +25,7 @@ MONTH_NAMES_ES = {
 }
 
 QUARTER_NAMES_ES = {
-    10: "1er Trimestre (Sep-Dic)",
+    10: "1er Trimestre (Oct-Dic)",
     1: "2do Trimestre (Ene-Mar)",
     4: "3er Trimestre (Abr-Jun)",
 }
@@ -42,8 +42,34 @@ class PaymentService:
         return config.part_time_monthly_fee
 
     @staticmethod
+    def hand_priced_amount(enrollment):
+        """The agreed period fee of a `special` matrícula, or None if there isn't one.
+
+        A special enrollment is priced BY HAND: the admin types the amount, and
+        ``EnrollmentService._resolve_plan`` stores it on the enrollment itself
+        (already carrying whatever sibling / cheque discount was ticked — see
+        ``_apply_discounts``). Its ``schedule_type`` is then just the timetable the
+        student happens to attend, NOT a price band.
+
+        Both generators used to re-derive the fee from SiteConfiguration via
+        ``_get_base_monthly_fee``, so a hand-priced student was billed the standard
+        1-day / 2-day rate every month while the enrollment record showed the custom
+        one. ``final_amount`` is the per-PERIOD figure in both modalities (for
+        quarterly specials the admin types the price of the whole quarter), so it is
+        used as-is: no further config discount is layered on top of a negotiated price.
+        """
+        enrollment_type = enrollment.enrollment_type
+        if enrollment_type is not None and enrollment_type.name == "special":
+            return max(enrollment.final_amount, Decimal("0.01"))
+        return None
+
+    @staticmethod
     def calculate_monthly_amount(enrollment, config, month):
         """Calculate the monthly payment amount for a given enrollment."""
+        special = PaymentService.hand_priced_amount(enrollment)
+        if special is not None:
+            return special
+
         base = PaymentService._get_base_monthly_fee(enrollment, config)
         if enrollment.schedule_type == "adult_group":
             return base
@@ -78,7 +104,14 @@ class PaymentService:
         Oct-Dec, 1 = Q2 Jan-Mar, 4 = Q3 Apr-Jun). Q3 covers June, so it also
         picks up the June "complete the year" discount that
         ``calculate_monthly_amount`` applies to month 6.
+
+        A ``special`` matrícula short-circuits all of it — see
+        ``hand_priced_amount``.
         """
+        special = PaymentService.hand_priced_amount(enrollment)
+        if special is not None:
+            return special
+
         base = PaymentService._get_base_monthly_fee(enrollment, config)
         total = base * 3
         total -= total * (config.quarterly_enrollment_discount / Decimal("100"))

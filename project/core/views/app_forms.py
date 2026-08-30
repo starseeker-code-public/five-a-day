@@ -13,6 +13,7 @@ from django.shortcuts import redirect, render
 from django.template.loader import render_to_string
 from django.utils.html import strip_tags
 
+from billing.services.pricing_service import PricingService
 from comms.services.email_functions import (
     send_all_tax_certificates,
     send_monthly_report,
@@ -313,9 +314,7 @@ def payment_reminder_form(request):
                 "iban_holder": _iban_holder,
                 "reduced_price_cheque_idioma": _cheque,
                 "telephone_number_bizum": _bizum,
-                "full_time_fee": int(_config.full_time_monthly_fee),
-                "part_time_fee": int(_config.part_time_monthly_fee),
-                "adult_fee": int(_config.adult_group_monthly_fee),
+                **PricingService.payment_reminder_fees(_config),
             }
             if action == "preview":
                 return JsonResponse({"html": render_to_string("emails/payment_reminder.html", _ctx)})
@@ -378,9 +377,7 @@ def payment_reminder_form(request):
                         iban_holder=iban_holder,
                         reduced_price_cheque_idioma=reduced_price_cheque_idioma,
                         telephone_number_bizum=telephone_number_bizum,
-                        full_time_fee=int(_config.full_time_monthly_fee),
-                        part_time_fee=int(_config.part_time_monthly_fee),
-                        adult_fee=int(_config.adult_group_monthly_fee),
+                        **PricingService.payment_reminder_fees(_config),
                     )
                     if result:
                         success_count += 1
@@ -416,9 +413,7 @@ def payment_reminder_form(request):
             "iban_holder": os.getenv("ACADEMY_IBAN_HOLDER", ""),
             "reduced_price_cheque_idioma": cheque_price,
             "telephone_number_bizum": default_bizum,
-            "full_time_fee": int(config.full_time_monthly_fee),
-            "part_time_fee": int(config.part_time_monthly_fee),
-            "adult_fee": int(config.adult_group_monthly_fee),
+            **PricingService.payment_reminder_fees(config),
         },
     )
     return render(

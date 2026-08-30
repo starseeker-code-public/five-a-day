@@ -227,7 +227,11 @@ class Parent(models.Model):
 
 
 class Student(models.Model):
-    last_name = models.CharField(max_length=100)
+    # Optional for the same reason `birth_date` and `group` are: a waiting-list
+    # entry is taken over the phone with a first name and a number, and pressing
+    # for surnames before the family has even been offered a place lost calls.
+    # The full StudentForm still requires it when the student is enrolled.
+    last_name = models.CharField(max_length=100, blank=True)
     first_name = models.CharField(max_length=100)
     # Optional so a waiting-list entry can be taken down from a phone call with
     # nothing but a name and a number. It is filled in when the student is
@@ -286,6 +290,12 @@ class Student(models.Model):
         verbose_name="En espera desde",
         help_text="Auto-set the first time is_waiting is flipped on; used to prioritize assignments FIFO.",
     )
+    waiting_priority = models.BooleanField(
+        default=False,
+        verbose_name="Prioritario",
+        help_text="Jumps ahead of the FIFO order on the waiting list. Set when a family should be offered "
+        "the next free spot regardless of how long others have waited (a sibling, a returning student).",
+    )
     withdrawal_date = models.DateField(null=True, blank=True)
     withdrawal_reason = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -301,11 +311,12 @@ class Student(models.Model):
         ]
 
     def __str__(self):
-        return f"{self.first_name} {self.last_name}"
+        return self.full_name
 
     @property
     def full_name(self):
-        return f"{self.first_name} {self.last_name}"
+        # `last_name` is blank for a waiting-list entry taken over the phone.
+        return f"{self.first_name} {self.last_name}".strip()
 
     @property
     def age(self):

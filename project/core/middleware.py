@@ -136,6 +136,7 @@ NON_ADMIN_ALLOWED_URL_NAMES = frozenset(
         # Expenses (v1.5) — visible to non-admin teachers for read + create
         "expenses_list",
         "create_expense",
+        "update_expense",
         "delete_expense",
         # Reports (v1.7) — read-only for non-admin teachers
         "reports_view",

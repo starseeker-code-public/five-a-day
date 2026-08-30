@@ -43,6 +43,9 @@ class StudentForm(ModelForm):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.fields["birth_date"].input_formats = DATE_INPUT_FORMATS
+        # `Student.last_name` is blank=True so a waiting-list entry can be taken
+        # over the phone without one. The real ficha still demands it.
+        self.fields["last_name"].required = True
 
     def clean_birth_date(self):
         from datetime import date
@@ -88,12 +91,14 @@ class WaitingListForm(ModelForm):
 
     class Meta:
         model = Student
-        fields = ["first_name", "last_name", "course", "group", "observations"]
+        # No `last_name`: the surname is asked for when the family is offered a
+        # place and the real ficha is filled in, not during the first call.
+        fields = ["first_name", "course", "group", "waiting_priority", "observations"]
         widgets = {
             "first_name": forms.TextInput(attrs={"class": "form-control", "placeholder": "Nombre del alumno"}),
-            "last_name": forms.TextInput(attrs={"class": "form-control", "placeholder": "Apellidos del alumno"}),
             "course": forms.TextInput(attrs={"class": "form-control", "placeholder": "3º Primaria"}),
             "group": forms.Select(attrs={"class": "form-control"}),
+            "waiting_priority": forms.CheckboxInput(attrs={"class": "form-check-input"}),
             "observations": forms.Textarea(
                 attrs={
                     "class": "form-control",
@@ -104,9 +109,9 @@ class WaitingListForm(ModelForm):
         }
         labels = {
             "first_name": "Nombre del alumno",
-            "last_name": "Apellidos del alumno",
             "course": "Curso",
             "group": "Grupo preferido (opcional)",
+            "waiting_priority": "Prioritario",
             "observations": "Observaciones",
         }
 
@@ -117,6 +122,7 @@ class WaitingListForm(ModelForm):
         self.fields["group"].queryset = Group.objects.filter(active=True).order_by("group_name")
         self.fields["course"].required = False
         self.fields["observations"].required = False
+        self.fields["waiting_priority"].required = False
 
     def save(self, commit=True):
         student = super().save(commit=False)

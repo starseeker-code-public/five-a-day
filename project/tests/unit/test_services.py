@@ -37,6 +37,24 @@ class TestPricingService:
         result = PricingService.calculate_quarterly_price()
         assert result == Decimal("153.90")
 
+    def test_calculate_sibling_price(self, site_config):
+        # 54 minus the 5% sibling discount = 51.30 — same figure
+        # PaymentService.calculate_monthly_amount bills a sibling.
+        assert PricingService.calculate_sibling_price() == Decimal("51.30")
+
+    def test_calculate_sibling_price_part_time(self, site_config):
+        assert PricingService.calculate_sibling_price(schedule_type="part_time") == Decimal("34.20")
+
+    def test_payment_reminder_fees(self, site_config):
+        # The quarterly and sibling rows used to read "consultar en la academia".
+        assert PricingService.payment_reminder_fees() == {
+            "full_time_fee": "54",
+            "part_time_fee": "36",
+            "adult_fee": "60",
+            "quarterly_fee": "153,90",
+            "sibling_full_time_fee": "51,30",
+        }
+
 
 # ── EnrollmentService ────────────────────────────────────────────────────────
 

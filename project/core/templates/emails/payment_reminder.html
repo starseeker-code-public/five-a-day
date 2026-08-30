@@ -1,6 +1,8 @@
 {% extends 'emails/base_email.html' %}
 {% load static %}
 
+{% block title %}Recordatorio de pago · Five a Day{% endblock %}
+
 {% block content %}
 <div style="text-align: center; padding: 40px 20px;">
     <h1 style="color: #6d28d9; font-size: 32px; margin-bottom: 20px;">
@@ -60,7 +62,7 @@
                     Cuota trimestral
                 </td>
                 <td style="padding: 8px 0; border-bottom: 1px solid #C7D2FE; text-align: right;">
-                    consultar en la academia
+                    {{ quarterly_fee }} euros
                 </td>
             </tr>
             <tr>
@@ -76,7 +78,7 @@
                     Cuota 2 sesiones semanales descuento hermano
                 </td>
                 <td style="padding: 8px 0; border-bottom: 1px solid #C7D2FE; text-align: right;">
-                    consultar en la academia
+                    {{ sibling_full_time_fee }} euros
                 </td>
             </tr>
             <tr>

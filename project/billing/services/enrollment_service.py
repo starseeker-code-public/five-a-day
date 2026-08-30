@@ -99,7 +99,7 @@ class EnrollmentService:
         return student.enrollments.exclude(academic_year=this_academic_year).exists()
 
     @staticmethod
-    def compute_enrollment_fee(config, student, is_adult: bool) -> tuple:
+    def compute_enrollment_fee(config, student, is_adult: bool, special_fee=None) -> tuple:
         """
         Return `(final_fee, returning_discount_applied)` — the enrollment fee
         for this student, minus the returning-student discount when the
@@ -107,7 +107,18 @@ class EnrollmentService:
 
         Adults are NOT eligible for the returning-student discount (they
         already have `adult_enrollment_fee` which is a separate rate).
+
+        `special_fee` is the optional hand-set matrícula (the form's
+        "Matrícula especial (€)"). It is a NEGOTIATED figure, so it is returned
+        verbatim: no returning-student discount is taken off a price that was
+        already agreed with the family. It is deliberately separate from the
+        enrollment's `manual_amount`, which prices the recurring fee only — a
+        special monthly price does not imply a special matrícula, and before
+        v1.17.5 a special enrollment was silently charged the standard one.
         """
+        if special_fee:
+            return Decimal(special_fee), Decimal("0.00")
+
         base = config.adult_enrollment_fee if is_adult else config.children_enrollment_fee
         if is_adult:
             return base, Decimal("0.00")

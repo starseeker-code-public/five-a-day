@@ -28,6 +28,7 @@ from core.views import (
     student_payments_pdf,
     # Enrollment API
     update_enrollment_modality,
+    update_expense,
     update_payment,
     update_site_config,
 )
@@ -91,5 +92,6 @@ urlpatterns = [
     # ============================================================================
     path("expenses/", expenses_list, name="expenses_list"),
     path("expenses/create/", create_expense, name="create_expense"),
+    path("expenses/<int:expense_id>/update/", update_expense, name="update_expense"),
     path("expenses/<int:expense_id>/delete/", delete_expense, name="delete_expense"),
 ]

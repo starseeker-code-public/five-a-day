@@ -144,6 +144,14 @@
                                 <a href="{% url 'student_detail' student.id %}" class="font-medium text-neutral-800 hover:text-primary-700 no-underline">
                                     {{ student.full_name }}
                                 </a>
+                                {% if student.waiting_priority %}
+                                <span class="inline-flex items-center gap-1 ml-1.5 px-2 py-0.5 rounded-full text-xs font-semibold align-middle"
+                                      style="background-color:#fee2e2;color:#b91c1c;"
+                                      title="Prioritario: se le ofrece la próxima plaza libre">
+                                    <span class="material-symbols-outlined" style="font-size:13px;vertical-align:-2px;">priority_high</span>
+                                    Prioritario
+                                </span>
+                                {% endif %}
                                 {% if student.school %}
                                 <div class="text-sm text-neutral-500">{{ student.school }}</div>
                                 {% elif student.course %}
@@ -197,6 +205,9 @@
                             {{ student.waiting_since|date:"d/m/Y" }}
                         {% else %}
                             <span class="text-neutral-400">—</span>
+                        {% endif %}
+                        {% if student.waiting_priority %}
+                            <div class="text-xs mt-0.5" style="color:#b91c1c;">Pasa por delante</div>
                         {% endif %}
                     </td>
                     <td class="px-6 py-4 text-center">

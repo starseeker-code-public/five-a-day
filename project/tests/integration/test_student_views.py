@@ -1,10 +1,12 @@
 """Tests for core.views.students — list, detail, create, update, search."""
 
+from decimal import Decimal
 from unittest.mock import patch
 
 import pytest
 from django.urls import reverse
 
+from billing.models import Payment
 from students.models import Student
 
 pytestmark = pytest.mark.django_db
@@ -68,6 +70,21 @@ class TestStudentCreateView:
         response = authenticated_client.get(reverse("student_create") + "?mode=adult")
         assert response.status_code == 200
         assert response.context["is_adult_mode"] is True
+
+    def test_price_config_exposes_the_gross_quarterly(
+        self, authenticated_client, group, site_config, enrollment_type_new_student
+    ):
+        """The price widget strikes through the PRE-discount total.
+
+        `quarterly` is already net of the -5%, so on its own it made the widget
+        strike through the discounted figure and print the same number twice.
+        """
+        response = authenticated_client.get(reverse("student_create"))
+        price_config = response.context["price_config"]
+
+        gross = site_config.full_time_monthly_fee * 3
+        assert Decimal(price_config["quarterly_gross"]) == gross
+        assert Decimal(price_config["quarterly"]) == gross * (1 - site_config.quarterly_enrollment_discount / 100)
 
 
 class TestStudentCreateViewPost:
@@ -238,3 +255,72 @@ class TestSearchStudentsExtra:
     def test_get_renders(self, authenticated_client, student_with_parent):
         response = authenticated_client.get(reverse("search_students"))
         assert response.status_code == 200
+
+
+class TestSpecialEnrollmentPricing:
+    """A hand-priced enrolment must be billed at its own prices, not the standard ones.
+
+    Two prices, two fields: `manual_amount` is the recurring cuota and
+    `special_enrollment_fee` the one-time matrícula. Both used to be ignored once the
+    payments were generated — the ficha showed the custom figures while every payment
+    carried the configured 1-day / 2-day fee and the standard matrícula.
+    """
+
+    def _post(self, client, parent, group, **extra):
+        data = {
+            "first_name": "Especial",
+            "last_name": "Alumno",
+            "birth_date": "2018-03-10",
+            "school": "CEIP Nuevo",
+            "gdpr_signed": "on",
+            "group": group.id,
+            "parent_id": parent.id,
+            "enrollment_plan": "monthly_full",
+        }
+        data.update(extra)
+        return client.post(reverse("student_create") + f"?parent_id={parent.id}", data)
+
+    def test_both_custom_prices_reach_the_payments(
+        self, authenticated_client, parent, group, site_config, enrollment_type_special
+    ):
+        response = self._post(
+            authenticated_client,
+            parent,
+            group,
+            is_special="on",
+            manual_amount="35.00",
+            special_enrollment_fee="25.00",
+        )
+        assert response.status_code == 302
+
+        student = Student.objects.get(first_name="Especial")
+        matricula = Payment.objects.get(student=student, payment_type="enrollment")
+        assert matricula.amount == Decimal("25.00")
+        assert "matrícula especial" in matricula.concept
+        assert matricula.amount != site_config.children_enrollment_fee
+
+        monthly = Payment.objects.filter(student=student, payment_type="monthly")
+        assert monthly.count() == 10
+        assert set(monthly.values_list("amount", flat=True)) == {Decimal("35.00")}
+
+    def test_matricula_falls_back_to_the_standard_fee_when_left_blank(
+        self, authenticated_client, parent, group, site_config, enrollment_type_special
+    ):
+        """A special cuota does not imply a special matrícula."""
+        response = self._post(authenticated_client, parent, group, is_special="on", manual_amount="35.00")
+        assert response.status_code == 302
+
+        student = Student.objects.get(first_name="Especial")
+        matricula = Payment.objects.get(student=student, payment_type="enrollment")
+        assert matricula.amount == site_config.children_enrollment_fee
+        assert set(
+            Payment.objects.filter(student=student, payment_type="monthly").values_list("amount", flat=True)
+        ) == {Decimal("35.00")}
+
+    def test_matricula_fee_without_the_special_checkbox_is_rejected(
+        self, authenticated_client, parent, group, site_config, enrollment_type_new_student
+    ):
+        """Silently ignoring it would charge the standard matrícula behind the admin's back."""
+        response = self._post(authenticated_client, parent, group, special_enrollment_fee="25.00")
+        assert response.status_code == 200  # re-rendered form, not a redirect
+        assert not Student.objects.filter(first_name="Especial").exists()
