@@ -155,7 +155,7 @@ class Group(models.Model):
     color = models.CharField(max_length=7, default="#6366f1")
     teacher = models.ForeignKey(Teacher, on_delete=models.PROTECT, related_name="groups")
     max_students = models.PositiveIntegerField(
-        default=0,
+        default=8,
         verbose_name="Cupo máximo",
         help_text="Soft limit on active enrolled students. 0 means no cap.",
     )

@@ -7,9 +7,25 @@
 
 {% block content %}
 <div class="max-w-3xl mx-auto">
+    {% if waiting_entry %}
+    <div class="bg-amber-50 border border-amber-200 rounded-lg p-4 mb-6">
+        <div class="flex items-center gap-3">
+            <span class="material-symbols-outlined text-amber-600">hourglass_top</span>
+            <div>
+                <p class="font-medium text-amber-800">Matriculando a {{ waiting_entry.full_name }} (lista de espera)</p>
+                <p class="text-sm text-amber-700">
+                    Crea primero su padre/tutor. Contacto de la espera:
+                    {{ waiting_entry.waiting_contact_name|default:"—" }}
+                    {% if waiting_entry.waiting_contact_phone %} · {{ waiting_entry.waiting_contact_phone }}{% endif %}
+                </p>
+            </div>
+        </div>
+    </div>
+    {% endif %}
     <div class="bg-white rounded-lg shadow-lg p-8">
         <form method="post" novalidate>
             {% csrf_token %}
+            {% if waiting_entry %}<input type="hidden" name="from_waiting" value="{{ waiting_entry.id }}">{% endif %}
             
             <!-- Información Personal -->
             <div class="mb-6">

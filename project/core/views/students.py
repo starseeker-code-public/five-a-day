@@ -11,7 +11,7 @@ from django.urls import reverse, reverse_lazy
 from django.views.generic import CreateView, DetailView, ListView, UpdateView
 
 from billing.forms import EnrollmentForm
-from billing.models import Enrollment, Payment, SiteConfiguration, current_academic_year
+from billing.models import Enrollment, Payment, SiteConfiguration, relevant_academic_years
 from core.models import FunFridayAttendance, HistoryLog
 from students.forms import StudentForm
 from students.models import Group, Parent, Student
@@ -32,6 +32,23 @@ class StudentCreateView(CreateView):
     model = Student
     form_class = StudentForm
     template_name = "student_create.html"
+
+    def get_waiting_entry(self):
+        """Waiting-list entry this enrollment came from (`?from_waiting=<id>`), if any."""
+        from core.views.waiting_list import waiting_entry_from_request
+
+        return waiting_entry_from_request(self.request)
+
+    def get_initial(self):
+        """Prefill from the waiting-list entry so nothing is retyped."""
+        initial = super().get_initial()
+        waiting = self.get_waiting_entry()
+        if waiting:
+            initial["first_name"] = waiting.first_name
+            initial["last_name"] = waiting.last_name
+            initial["birth_date"] = waiting.birth_date
+            initial["group"] = waiting.group_id
+        return initial
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -68,6 +85,7 @@ class StudentCreateView(CreateView):
             context["enrollment_form"] = EnrollmentForm(self.request.POST or None)
 
         context["groups"] = Group.objects.filter(active=True)
+        context["waiting_entry"] = self.get_waiting_entry()
 
         config = SiteConfiguration.get_config()
         # Quarterly = 3 * full_time - 5%
@@ -192,6 +210,14 @@ class StudentCreateView(CreateView):
 
                 PaymentService.schedule_academic_year_payments(enrollment, parent)
 
+                # Came from the waiting list: the real student now exists with a
+                # parent and an enrollment, so drop the placeholder entry.
+                waiting = self.get_waiting_entry()
+                if waiting and waiting.id != student.id:
+                    from core.views.waiting_list import discard_waiting_entry
+
+                    discard_waiting_entry(waiting, student)
+
                 HistoryLog.log(
                     "student_enrolled",
                     f"Alumno matriculado: {student.full_name} — {enrollment.get_schedule_type_display()}",
@@ -263,12 +289,15 @@ class StudentListView(ListView):
     context_object_name = "students"
 
     def get_queryset(self):
-        academic_year = current_academic_year()
+        # Both cohorts during the May–August overlap: students finishing the
+        # running course and those already enrolled for the next one. Filtering
+        # on one year alone makes half the academy vanish from the list.
+        academic_years = relevant_academic_years()
         queryset = (
             Student.objects.filter(
                 active=True,
                 is_waiting=False,
-                enrollments__academic_year=academic_year,
+                enrollments__academic_year__in=academic_years,
             )
             .distinct()
             .select_related("group")
@@ -291,10 +320,10 @@ class StudentListView(ListView):
         context["last_week_ids"] = get_ff_student_ids(get_last_friday())
 
         # Language cheque info for current academic year
-        academic_year = current_academic_year()
+        academic_years = relevant_academic_years()
         lc_student_ids = set(
             Enrollment.objects.filter(
-                academic_year=academic_year,
+                academic_year__in=academic_years,
                 has_language_cheque=True,
                 student__active=True,
             ).values_list("student_id", flat=True)

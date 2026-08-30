@@ -20,7 +20,7 @@ Built to centralize student records, automate billing cycles, and streamline par
 ### Project Status
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v1.17.1-brightgreen?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-v1.17.2-brightgreen?style=flat-square" alt="Version">
   &nbsp;|&nbsp;
   <a href="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml?query=branch%3Amain"><img src="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml/badge.svg?branch=main&style=flat-square" alt="CI main"></a>
   &nbsp;|&nbsp;
@@ -41,9 +41,9 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 | Version | Date | Description |
 |---------|------|-------------|
-| **v1.17.1** | 2026-08-30 | Provision enrollment types; production could not enroll |
+| **v1.17.2** | 2026-08-30 | Group quota at creation; waiting list enrolls properly |
+| v1.17.1 | 2026-08-30 | Provision enrollment types; production could not enroll |
 | v1.17.0 | 2026-08-30 | Hold-to-reveal eye button on the login password |
-| v1.16.0 | 2026-08-27 | Deep health probe, verified backups, tiered retention |
 
 ---
 
@@ -150,8 +150,79 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 ## Version History & Roadmap
 
-<details id="v1171" open>
-<summary><strong>v1.17.1 — Enrollment types are provisioned, not seeded (current)</strong></summary>
+<details id="v1172" open>
+<summary><strong>v1.17.2 — Group quota, a waiting list that enrolls properly, and the May rollover (current)</strong></summary>
+
+**Group quota is set when the group is created**
+
+- The "Nuevo Grupo" modal in `/management/` now has a required **Cupo máximo** field, defaulting
+  to **8** — the academy's standard group size. `Group.max_students` used to default to `0`
+  ("no cap"), so every group created through the UI was uncapped and the waiting list could
+  never tell anyone a group was full.
+- `0` still means "no cap"; it just has to be asked for explicitly now. `create_group` validates
+  the value (integer, non-negative) and the groups table on the same page shows
+  `matriculados/cupo` with a **Completo** flag.
+- Deliberately creation-only — there is no edit control. An existing cap is changed from
+  `/admin/`.
+
+**The waiting list no longer enrolls students without a parent**
+
+- **The bug**: "Asignar" promoted the waiting entry in place — flipped `is_waiting` off, created
+  a monthly enrollment and generated the whole year of payments. A waiting entry is taken over
+  the phone with only a name and a contact number and has **no `Parent` row**, so the result was
+  an active student with no padre/tutor and payments with no titular.
+- `assign_from_waiting_list` is now a GET that only **redirects** into the normal "Matricular"
+  flow: `parent_create?from_waiting=<id>` → `student_create?parent_id=…&from_waiting=…`. The
+  real `StudentCreateView` does the enrollment, so the student is created the same way as any
+  other, with a parent.
+- Both forms prefill from the waiting entry (contact name + phone → padre/tutor; name, birth
+  date and preferred group → alumno) via `waiting_entry_from_request()`, and show an amber
+  banner naming the entry being enrolled.
+- Once the real student is saved, `discard_waiting_entry()` removes the placeholder — deleted
+  outright, or archived (`active=False`) when `Payment`/`Enrollment` `PROTECT` its FK, which is
+  the case for a student who was moved *back* onto the list. The group cap is still checked
+  before the redirect, and the button is now labelled **Matricular**.
+
+**Academic year: enrolment rolls over in May, teaching months do not**
+
+- Enrolment for the next course opens in May, so `current_academic_year()` now rolls over in
+  **May** rather than September. A student enrolled in August 2026 was being given 2025-2026,
+  whose teaching period had already ended — their `enrollment_period_start` landed in September
+  2025 and the entire schedule of monthly payments was generated in the past.
+- `academic_year_for_month()` is the separate, deliberately distinct helper for attributing an
+  existing **teaching month** to a course (classes run September→June). `generate_payments` uses
+  it: billing a May fee against the year families are only just signing up for would match no
+  active enrollment and silently generate nothing.
+- `relevant_academic_years()` returns both when they differ (May–August, when two cohorts
+  coexist), so student and payment views stop hiding one of the two. Outside that window it is a
+  single value and nothing changes.
+
+**Smaller fixes**
+
+- The welcome email's "Fecha de inicio" now shows `enrollment_period_start` (when classes start)
+  instead of `enrollment_date` (the day the family signed up) — a family enrolling in August was
+  told their start date was that same August afternoon.
+- The Fun Friday dropdown on `/schedule/` lists **who is actually signed up** for the coming
+  Friday instead of every active student, and its checkboxes are gone: they only struck the name
+  through in the DOM and never saved anything. Attendance is edited in the Fun Friday view.
+- Welcome-email signature line reads "Kind Regards".
+
+**Migrations**
+
+- `students/0009_alter_group_max_students` — the new default of 8.
+- `core/0007_alter_historylog_action` — captures pre-existing `ACTION_CHOICES` drift. Choices
+  only; no schema change.
+
+**Testing**
+
+- Suite at **1,241 tests, 95.43 % coverage**. The tests that encoded the old in-place promotion
+  were rewritten around the redirect; new cases cover the quota (default, explicit, `0`, garbage,
+  negative), both prefill paths, and the delete/archive branches of `discard_waiting_entry`.
+
+</details>
+
+<details id="v1171">
+<summary><strong>v1.17.1 — Enrollment types are provisioned, not seeded</strong></summary>
 
 **What prompted it**
 
@@ -2349,7 +2420,7 @@ five-a-day/
 │   │   └── management/commands/  send_email, test_all_emails, plus 4 Beat-task wrappers
 │   │                             (v1.14.2 — birthday, reminders, report, Fun Friday drain)
 │   │
-│   ├── tests/                    pytest suite (1,231 tests, 95.25 % coverage) — unit/ + integration/
+│   ├── tests/                    pytest suite (1,241 tests, 95.43 % coverage) — unit/ + integration/
 │   ├── templates/registration/   Password-reset templates (form, done, confirm, complete + email body)
 │   ├── templates/admin/          Django admin overrides (branded theme)
 │   └── conftest.py               Shared fixtures (models + authenticated_client)
@@ -2715,7 +2786,7 @@ Within each file, related tests are grouped into classes. Where a large file abs
 
 | File | Count | Coverage |
 | --- | --- | --- |
-| [`unit/test_models.py`](project/tests/unit/test_models.py) | 48 | Every model across `students`, `billing`, `core` — properties (`full_name`, `age`, `is_overdue`, `remaining_amount`, `is_paid`), `__str__`, unique constraints, FK behavior, academic-year helpers (`current_academic_year`, `academic_year_start_date`, `academic_year_end_date`), SiteConfiguration singleton, HistoryLog cap + debounce |
+| [`unit/test_models.py`](project/tests/unit/test_models.py) | 53 | Every model across `students`, `billing`, `core` — properties (`full_name`, `age`, `is_overdue`, `remaining_amount`, `is_paid`), `__str__`, unique constraints, FK behavior, academic-year helpers (`current_academic_year`, `academic_year_start_date`, `academic_year_end_date`), SiteConfiguration singleton, HistoryLog cap + debounce |
 | [`unit/test_services.py`](project/tests/unit/test_services.py) | 27 | `PricingService` (all fee + discount combos), `EnrollmentService` (all plans, language cheque, sibling, both, minimum-amount floor, adult enrollment, edge cases), `PaymentService` (monthly + quarterly amounts, June bonus, academic month/quarter validation, payment completion), service error paths |
 | [`unit/test_schedule_utils.py`](project/tests/unit/test_schedule_utils.py) | 63 | `core.schedule_utils` — the single source of truth for how a group's timetable is rendered into the welcome email. Mon–Thu row bands, the Friday per-cell `FRIDAY_TIMES` map (four overlapping sessions), `is_valid_slot` grid validation, out-of-range rows returning a placeholder instead of raising, and `get_group_schedule_lines` (ordering, day grouping, empty group, column collapsing) |
 | [`unit/test_student_view_internals.py`](project/tests/unit/test_student_view_internals.py) | 25 | `StudentUpdateView` view-object method branches (quarterly, part-time, no enrollment, exception-handling) via `RequestFactory` to sidestep missing template, plus unreferenced helper functions `handle_student_form`, `student_detail`, `update_student` called directly |
@@ -2726,12 +2797,13 @@ Within each file, related tests are grouped into classes. Where a large file abs
 | [`unit/test_email_service.py`](project/tests/unit/test_email_service.py) | 19 | `EmailService.send_email`: string + list recipients, CC/BCC, attachments, inline images (existing + missing path), `fail_silently` on and off, exception-raises-when-not-silent, `send_bulk_emails` mixed success/failure, `get_email_config`, Django 6 inline-image API |
 | [`unit/test_two_factor_service.py`](project/tests/unit/test_two_factor_service.py) | 17 | TOTP two-factor service (v1.13): `begin_enrolment`, `confirm_enrolment`, `verify_totp`, `verify_backup_code`, `verify_code`, `disable`, `rotate_backup_codes`, issuer-name derivation |
 | [`unit/test_email_functions.py`](project/tests/unit/test_email_functions.py) | 17 | All convenience wrappers (`send_birthday_email`, `send_welcome_email`, `send_payment_reminder`, `send_monthly_report`, `send_enrollment_confirmation_email`, `send_quarterly_receipt_email`, `send_fun_friday_email`, `send_vacation_closure_email`, `send_tax_certificate_email`, `send_all_tax_certificates`) plus tax-certificate PDF generation branches |
+| [`unit/test_enrollment_type_service.py`](project/tests/unit/test_enrollment_type_service.py) | 18 | `ensure_enrollment_types()` (v1.17.1): the four types `_resolve_plan` asks for, idempotency, label/amount repair, admin-edited fields left alone, amounts sourced from `SiteConfiguration`, and the empty-table guard |
 | [`unit/test_stripe_service.py`](project/tests/unit/test_stripe_service.py) | 16 | Stripe service (v1.11, `httpx` — no SDK dependency): `is_configured`, `create_checkout_session`, `verify_webhook_signature`, `apply_webhook_event`, singleton accessor |
 | [`unit/test_email_bug_hunt_fixes.py`](project/tests/unit/test_email_bug_hunt_fixes.py) | 16 | Round-2 email regression suite: `payment_reminder_simple` + birthday templates, Fun Friday image guard, welcome email fired `on_commit`, CLI batch per-recipient loop, birthday to all parents, birthday-task timezone (`localdate`), monthly-report template defaults |
 | [`unit/test_rate_limit.py`](project/tests/unit/test_rate_limit.py) | 19 | Cache-backed IP rate limiter (v1.10): window counting, limit enforcement, per-key isolation, disabled path, and `_client_ip` validation through `ipaddress`. Also pins the `TRUSTED_PROXY_COUNT` behaviour — the client IP is read N hops from the RIGHT of `X-Forwarded-For`, so a spoofed prefix cannot rotate the rate-limit bucket |
-| [`unit/test_waiting_list.py`](project/tests/unit/test_waiting_list.py) | 14 | Waiting List & Group Capacity (v1.1) models + helpers: `Group.max_students` capacity properties, `Student.is_waiting`/`waiting_since`, group-capacity summary, capacity-freed notification |
+| [`unit/test_waiting_list.py`](project/tests/unit/test_waiting_list.py) | 15 | Waiting List & Group Capacity (v1.1) models + helpers: `Group.max_students` capacity properties, `Student.is_waiting`/`waiting_since`, group-capacity summary, capacity-freed notification |
 | [`unit/test_google_sheets_service.py`](project/tests/unit/test_google_sheets_service.py) | 14 | Google Sheets export service (v1.2): configuration detection (inline creds vs file path), student + payment export shaping, result object, lazy `_get_service` construction |
-| [`unit/test_coverage_boost_2.py`](project/tests/unit/test_coverage_boost_2.py) | 13 | Second branch-fill pass: waiting-list exception branches, student-create waiting mode, context-processor exception branches, audit-signal branches, PDF-service academy-info fallback, expense validation, Stripe cross-parent guard, rate-limit disabled path |
+| [`unit/test_coverage_boost_2.py`](project/tests/unit/test_coverage_boost_2.py) | 10 | Second branch-fill pass: waiting-list exception branches, student-create waiting mode, context-processor exception branches, audit-signal branches, PDF-service academy-info fallback, expense validation, Stripe cross-parent guard, rate-limit disabled path |
 | [`unit/test_context_processors.py`](project/tests/unit/test_context_processors.py) | 13 | `today_notifications`: expected keys, todos due today vs other day, scheduled apps on Friday vs Monday, monthly apps excluded on day 15, history count, unauthenticated early-return |
 | [`unit/test_constants.py`](project/tests/unit/test_constants.py) | 13 | Pure functions: `calculate_discount` (flat/percentage/invalid/edge), `get_monthly_fee_by_schedule`, `get_enrollment_fee` |
 | [`unit/test_sms_service.py`](project/tests/unit/test_sms_service.py) | 12 | Twilio SMS service (v1.8): `is_configured` (all three env vars), `send`, `send_to_parent` (opt-in gate via `Parent.sms_opt_in`), singleton accessor |
@@ -2754,7 +2826,7 @@ Within each file, related tests are grouped into classes. Where a large file abs
 | [`unit/test_exports.py`](project/tests/unit/test_exports.py) | 7 | Excel workbook generation via `openpyxl`: Students, Enrollments, Payments sheets + combined workbook; empty-database edge case |
 | [`unit/test_audit_log.py`](project/tests/unit/test_audit_log.py) | 6 | Immutable audit trail (v1.10): the `post_save`/`post_delete` signal receivers write an `AuditLog` row with the contextvar actor, and the model rejects mutation after creation |
 | [`unit/test_qa_error_middleware.py`](project/tests/unit/test_qa_error_middleware.py) | 5 | `QAErrorEmailMiddleware.process_exception` via `RequestFactory`: pass-through, disabled config, no support email, send success, send failure swallowed |
-| [`unit/test_final_coverage.py`](project/tests/unit/test_final_coverage.py) | 5 | The last uncovered branches: waiting-list assign with a null group in JSON, welcome-email `on_commit` happy path, Stripe checkout `httpx` error, receipt-email PDF-generation error |
+| [`unit/test_final_coverage.py`](project/tests/unit/test_final_coverage.py) | 4 | The last uncovered branches: waiting-list assign with a null group in JSON, welcome-email `on_commit` happy path, Stripe checkout `httpx` error, receipt-email PDF-generation error |
 | [`unit/test_bugfix_regressions.py`](project/tests/unit/test_bugfix_regressions.py) | 31 | Regression guards for the v1.15.0 fix pass, each pinning a defect verified broken against the running app: adult-student payments crashing search + CSV export, quarterly discounts (sibling, language cheque, June), completed payments with no `payment_date` vanishing from income, non-idempotent quick-complete rewriting financial history, payments attaching to a finished enrollment, unvalidated choice fields, `str(e)` leaking to the browser, cancelled payments inflating "esperado", query strings that used to 500, negative prices, singleton deletion, and the `enrollment_amount` fallback |
 | [`unit/test_error_handlers.py`](project/tests/unit/test_error_handlers.py) | 5 | `handler400`/`handler403`/`handler404`/`handler405`/`handler500` render with correct status codes |
 | [`unit/test_decorators.py`](project/tests/unit/test_decorators.py) | 5 | `@qa_access_required`: allow when `IS_TESTING_ENV` + the request is a logged-in admin Teacher, 404 when not testing env / authenticated non-teacher / anonymous |
@@ -2775,12 +2847,12 @@ Within each file, related tests are grouped into classes. Where a large file abs
 | [`integration/test_student_views.py`](project/tests/integration/test_student_views.py) | 23 | `StudentListView` (search, exclude inactive, context), `StudentDetailView` (parents visible, 404), `StudentCreateView` (form + adult mode + success + full POST + error paths including invalid parent, existing-parent mode, create_sibling flag, email-task swallow), `search_students` JSON endpoint (results + short-query empty) |
 | [`integration/test_testing_tools.py`](project/tests/integration/test_testing_tools.py) | 21 | QA dashboard `/testing/` gated by `@qa_access_required` (via `override_settings`): dashboard renders + git failure handled, `api_seed_database` (success + reset + command error 500 + non-QA 404), `api_create_backlog_task` (all branches + screenshot attached to the email but never stored + send/swallow), `api_update_backlog_task` (success + invalid status + 404), `api_toggle_error_email` (on + off + bad JSON) |
 | [`integration/test_teacher_auth_flow.py`](project/tests/integration/test_teacher_auth_flow.py) | 21 | Login dispatcher branches (dev env-var vs `auth.User`-backed Teacher login), OAuth user creation/Teacher-linking, `_finalize_session_login` setting both `_auth_user_id` and `is_authenticated`, `SimpleAuthMiddleware` whitelist behaviour for non-admin Teachers (allowed routes, 403 JSON for `/api/*`, dashboard redirect with flash for HTML), template gating (sidebar swap, read-only management) |
-| [`integration/test_management_views.py`](project/tests/integration/test_management_views.py) | 19 | `gestion_view` + `update_site_config` (all fields + bad JSON), `create_teacher` (success + duplicate + missing field + bad JSON), `create_group` (success + missing fields + duplicate + nonexistent teacher + bad JSON), `api_get_teachers`, `update_enrollment_modality` (success + invalid + no enrollment + student not found), `language_cheque_students` |
+| [`integration/test_management_views.py`](project/tests/integration/test_management_views.py) | 24 | `gestion_view` + `update_site_config` (all fields + bad JSON), `create_teacher` (success + duplicate + missing field + bad JSON), `create_group` (success + missing fields + duplicate + nonexistent teacher + bad JSON), `api_get_teachers`, `update_enrollment_modality` (success + invalid + no enrollment + student not found), `language_cheque_students` |
 | [`integration/test_two_factor_views.py`](project/tests/integration/test_two_factor_views.py) | 17 | 2FA views and the login gate (v1.13): setup page (QR + secret), manage page (disable, rotate backup codes), the login gate flow (TOTP accepted, backup code accepted, wrong code rejected), and the `reset_two_factor` management command |
-| [`integration/test_waiting_list_views.py`](project/tests/integration/test_waiting_list_views.py) | 16 | Waiting List & Group Capacity views (v1.1): waiting-list page, `assign_from_waiting_list` (capacity checks + payment scheduling), `add_to_waiting_list`, student list excludes waiting students, dashboard waiting widget |
+| [`integration/test_waiting_list_views.py`](project/tests/integration/test_waiting_list_views.py) | 18 | Waiting List & Group Capacity views (v1.1): waiting-list page, `assign_from_waiting_list` (capacity checks + payment scheduling), `add_to_waiting_list`, student list excludes waiting students, dashboard waiting widget |
 | [`integration/test_dashboard_views.py`](project/tests/integration/test_dashboard_views.py) | 15 | `home` view quote-cookie branches (valid cookie, corrupt cookie -> API, API failure, API empty, `[AUTH]` placeholder filtered, with pending payments), `all_info` sort variants (default, first_name, last_name, id_asc, payments_sort=student_asc) |
 | [`integration/test_parent_portal.py`](project/tests/integration/test_parent_portal.py) | 14 | Parent portal (v1.9): magic-link request + token issue, link consumption establishing a scoped session, and the portal pages (payment list, receipt download) restricted to that parent's own children |
-| [`integration/test_schedule_views.py`](project/tests/integration/test_schedule_views.py) | 13 | Schedule page (groups + slots in context), `save_schedule_slot` (assign + clear + reject GET + invalid JSON), Fun Friday page (loads, excludes adults, with attendance) |
+| [`integration/test_schedule_views.py`](project/tests/integration/test_schedule_views.py) | 14 | Schedule page (groups + slots in context), `save_schedule_slot` (assign + clear + reject GET + invalid JSON), Fun Friday page (loads, excludes adults, with attendance) |
 | [`integration/test_auth_oauth.py`](project/tests/integration/test_auth_oauth.py) | 13 | OAuth callback flow with `google_auth_oauthlib.flow.Flow` mocked: state missing, state mismatch, `fetch_token` failure, id-token verification failure, email whitelist mismatch, successful session establishment; login view extras (already-auth redirect, missing env, OAuth-available flag); logout clears session |
 | [`integration/test_expense_views.py`](project/tests/integration/test_expense_views.py) | 11 | Expense CRUD endpoints (v1.5): list page with monthly totals, create (valid + per-frequency validation errors), delete |
 | [`integration/test_password_reset.py`](project/tests/integration/test_password_reset.py) | 10 | Full password-reset round-trip: request form renders, valid email triggers branded HTML email send, confirm page accepts new password with valid uidb64+token, complete page renders, all four URLs reachable while unauthenticated (`SimpleAuthMiddleware.PUBLIC_PREFIXES` exemption) |

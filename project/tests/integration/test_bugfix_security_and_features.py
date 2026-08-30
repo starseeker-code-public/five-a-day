@@ -377,19 +377,14 @@ class TestWaitingListRoundTrip:
         assert student_with_parent.is_waiting is True
         assert student_with_parent.enrollments.filter(status="active").count() == 0
 
-    def test_the_student_can_be_promoted_back(
-        self, student_with_parent, active_enrollment, enrollment_type_monthly, site_config
-    ):
+    def test_the_student_can_be_promoted_back(self, student_with_parent, active_enrollment):
+        """Promotion now hands over to the normal creation flow, which is what
+        keeps it out of the unique-active-enrollment constraint entirely."""
         client = _client()
         client.post(reverse("add_to_waiting_list", args=[student_with_parent.id]))
-        response = client.post(
-            reverse("assign_from_waiting_list", args=[student_with_parent.id]),
-            HTTP_X_REQUESTED_WITH="XMLHttpRequest",
-        )
-        assert response.status_code == 200, "promotion must not hit the unique-enrollment constraint"
-        student_with_parent.refresh_from_db()
-        assert student_with_parent.is_waiting is False
-        assert student_with_parent.enrollments.filter(status="active").count() == 1
+        response = client.get(reverse("assign_from_waiting_list", args=[student_with_parent.id]))
+        assert response.status_code == 302
+        assert response.url == f"{reverse('parent_create')}?from_waiting={student_with_parent.id}"
 
 
 class TestStudentPaymentHistoryPdf:

@@ -8,7 +8,7 @@ from django.views.decorators.http import require_http_methods
 
 from core.models import FunFridayAttendance, HistoryLog, ScheduleSlot
 from core.schedule_utils import is_valid_slot, slot_time_range
-from core.views.students import get_last_friday, get_next_friday
+from core.views.students import get_ff_student_ids, get_last_friday, get_next_friday
 from students.models import Group, Student
 
 logger = logging.getLogger(__name__)
@@ -48,8 +48,12 @@ def schedule_view(request):
             {"row": s.row, "day": s.day, "col": s.col, "group_id": s.group_id, "start": start, "end": end}
         )
 
-    all_students_qs = Student.objects.filter(active=True).order_by("first_name", "last_name")
-    students_data = [{"first_name": s.first_name, "last_name": s.last_name} for s in all_students_qs]
+    # Only the students actually signed up for the coming Fun Friday. This used
+    # to send every active student, so the dropdown listed the whole academy and
+    # said nothing about who is attending.
+    ff_student_ids = get_ff_student_ids(get_next_friday())
+    ff_students_qs = Student.objects.filter(active=True, id__in=ff_student_ids).order_by("first_name", "last_name")
+    students_data = [{"first_name": s.first_name, "last_name": s.last_name} for s in ff_students_qs]
 
     # Passed as plain objects (not json.dumps strings) so the template can use
     # `|json_script`, which escapes `<`, `>` and `&`. Inlining JSON with `|safe`

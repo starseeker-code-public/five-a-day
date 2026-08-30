@@ -8,7 +8,7 @@ from django.shortcuts import get_object_or_404, render
 from django.views.decorators.http import require_http_methods
 
 from billing import constants
-from billing.models import Enrollment, SiteConfiguration, current_academic_year
+from billing.models import Enrollment, SiteConfiguration, current_academic_year, relevant_academic_years
 from core.models import HistoryLog
 from students.models import Group, Student, Teacher
 
@@ -177,15 +177,37 @@ def create_group(request):
                 status=400,
             )
 
+        # Cupo máximo: chosen at creation only (there is no edit UI). Defaults to
+        # the model default (8) when the field is left empty; 0 means "no cap".
+        raw_max = data.get("max_students", "")
+        if raw_max in (None, ""):
+            max_students = Group._meta.get_field("max_students").default
+        else:
+            try:
+                max_students = int(raw_max)
+            except (TypeError, ValueError):
+                return JsonResponse(
+                    {"success": False, "message": "El cupo máximo debe ser un número entero"},
+                    status=400,
+                )
+            if max_students < 0:
+                return JsonResponse(
+                    {"success": False, "message": "El cupo máximo no puede ser negativo"},
+                    status=400,
+                )
+
         group = Group.objects.create(
             group_name=data["group_name"],
             color=data.get("color", "#6366f1"),
             teacher=teacher,
+            max_students=max_students,
             active=True,
         )
 
         HistoryLog.log(
-            "group_created", f"Grupo creado: {group.group_name} (Prof. {teacher.full_name})", icon="group_add"
+            "group_created",
+            f"Grupo creado: {group.group_name} (Prof. {teacher.full_name}) — cupo {group.max_students or 'sin límite'}",
+            icon="group_add",
         )
 
         return JsonResponse(
@@ -196,6 +218,7 @@ def create_group(request):
                     "id": group.id,
                     "group_name": group.group_name,
                     "teacher_name": teacher.full_name,
+                    "max_students": group.max_students,
                 },
             }
         )
@@ -263,11 +286,11 @@ def language_cheque_students(request):
     """
     API endpoint to fetch students with active language cheque (cheque idioma).
     """
-    academic_year = current_academic_year()
+    academic_years = relevant_academic_years()
     enrollments = (
         Enrollment.objects.filter(
             status="active",
-            academic_year=academic_year,
+            academic_year__in=academic_years,
             has_language_cheque=True,
         )
         .select_related("student", "student__group")
@@ -294,7 +317,7 @@ def language_cheque_students(request):
     return JsonResponse(
         {
             "success": True,
-            "academic_year": academic_year,
+            "academic_year": current_academic_year(),
             "count": len(students_data),
             "students": students_data,
         }

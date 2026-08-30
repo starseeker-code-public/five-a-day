@@ -327,15 +327,19 @@ document.addEventListener('DOMContentLoaded', function () {
         (function () {
             const sid = 'ff-section';
             const iid = 'ff-icon';
+            // A read-only roster of who is signed up. The checkboxes that used to
+            // be here only struck the name through in the DOM — nothing was ever
+            // saved — and the list showed every active student regardless of
+            // whether they were attending. Attendance is edited in the Fun Friday
+            // view; this is just a glance at it from the schedule.
             let list = '';
             allStudents.forEach(st => {
-                list += '<div style="display:flex;align-items:center;gap:12px;padding:8px 0;">' +
-                    '<input type="checkbox" class="ff-checkbox" style="width:14px;height:14px;accent-color:#8b5cf6;cursor:pointer;">' +
+                list += '<div style="padding:8px 0;">' +
                     '<span style="font-size:0.875rem;color:var(--sched-strong);">' + esc(st.first_name) + ' ' + esc(st.last_name) + '</span>' +
                 '</div>';
             });
             if (!allStudents.length) {
-                list = '<p style="font-size:0.875rem;color:var(--sched-dim);padding:12px 0;text-align:center;">No hay estudiantes activos</p>';
+                list = '<p style="font-size:0.875rem;color:var(--sched-dim);padding:12px 0;text-align:center;">Nadie apuntado al Fun Friday</p>';
             }
 
             const w = document.createElement('div');
@@ -361,13 +365,6 @@ document.addEventListener('DOMContentLoaded', function () {
             });
         });
 
-        // Checkbox strike-through
-        document.addEventListener('change', function (e) {
-            if (!e.target.matches('.ff-checkbox')) return;
-            const span = e.target.nextElementSibling;
-            if (e.target.checked) { span.style.textDecoration = 'line-through'; span.style.color = 'var(--sched-dim)'; }
-            else { span.style.textDecoration = ''; span.style.color = 'var(--sched-strong)'; }
-        });
     }
 
     renderDropdowns();

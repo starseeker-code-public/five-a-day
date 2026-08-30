@@ -22,6 +22,28 @@ class TestScheduleView:
         assert len(groups) == 1
         assert groups[0]["name"] == "Group A"
 
+    def test_students_json_only_lists_fun_friday_attendees(self, authenticated_client, student, group):
+        """The Fun Friday dropdown is a roster, not the whole academy.
+
+        `students_json` used to be every active student, so the schedule's Fun
+        Friday panel listed people who were not going.
+        """
+        from core.models import FunFridayAttendance
+        from core.views.students import get_next_friday
+        from students.models import Student
+
+        not_attending = Student.objects.create(first_name="Nadie", last_name="Apuntado", group=group, active=True)
+
+        response = authenticated_client.get(reverse("schedule_view"))
+        assert response.context["students_json"] == []
+
+        FunFridayAttendance.objects.create(student=student, date=get_next_friday())
+        response = authenticated_client.get(reverse("schedule_view"))
+
+        names = [f"{s['first_name']} {s['last_name']}" for s in response.context["students_json"]]
+        assert names == [f"{student.first_name} {student.last_name}"]
+        assert f"{not_attending.first_name} {not_attending.last_name}" not in names
+
     def test_slots_in_context(self, authenticated_client, group):
         ScheduleSlot.objects.create(row=0, day=0, col=0, group=group)
         response = authenticated_client.get(reverse("schedule_view"))
