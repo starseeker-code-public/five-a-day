@@ -8,12 +8,21 @@
 (function () {
     'use strict';
 
-    var ICON_SHOWN = 'visibility_off';
-    var ICON_HIDDEN = 'visibility';
-
     function setIcon(btn, revealed) {
-        var icon = btn.querySelector('.material-symbols-outlined');
-        if (icon) icon.textContent = revealed ? ICON_SHOWN : ICON_HIDDEN;
+        var masked = btn.querySelector('[data-pw-icon="masked"]');
+        var shown = btn.querySelector('[data-pw-icon="revealed"]');
+
+        if (masked && shown) {
+            masked.hidden = revealed;
+            shown.hidden = !revealed;
+        } else {
+            // Fallback for a cached copy of the pre-SVG template, which drew the
+            // icon with a Material Symbols glyph. Keeps the button usable rather
+            // than throwing and leaving it dead.
+            var glyph = btn.querySelector('.material-symbols-outlined');
+            if (glyph) glyph.textContent = revealed ? 'visibility_off' : 'visibility';
+        }
+
         btn.setAttribute('aria-pressed', revealed ? 'true' : 'false');
     }
 

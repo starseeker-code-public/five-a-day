@@ -26,12 +26,17 @@ logger = logging.getLogger(__name__)
 
 
 def _waiting_students_qs():
-    """Active, waiting students sorted FIFO (oldest waiter first)."""
+    """Active, waiting students: priority entries first, then FIFO within each band.
+
+    `waiting_priority` is what makes the checkbox mean something — without it in
+    the ordering the flag would be decorative, and the admin offering the next
+    free spot works straight down this list.
+    """
     return (
         Student.objects.filter(active=True, is_waiting=True)
         .select_related("group", "group__teacher")
         .prefetch_related("parents")
-        .order_by("waiting_since", "created_at")
+        .order_by("-waiting_priority", "waiting_since", "created_at")
     )
 
 
@@ -91,9 +96,10 @@ def waiting_list_create(request):
         if form.is_valid():
             student = form.save()
             group_label = student.group.group_name if student.group_id else "sin grupo preferido"
+            priority_label = " (prioritario)" if student.waiting_priority else ""
             HistoryLog.log(
                 "waiting_list_added",
-                f"Nuevo en lista de espera: {student.full_name} — {group_label}",
+                f"Nuevo en lista de espera: {student.full_name} — {group_label}{priority_label}",
                 icon="hourglass_top",
             )
             messages.success(request, f"✅ {student.full_name} añadido/a a la lista de espera.")

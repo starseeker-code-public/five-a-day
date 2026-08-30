@@ -240,13 +240,13 @@ class TestUpdateEnrollmentModality:
 
 
 class TestLanguageChequeStudents:
-    def test_returns_list(self, authenticated_client, student_with_parent, enrollment_type_monthly, site_config):
+    def test_returns_list(self, authenticated_client, student_with_parent, enrollment_type_new_student, site_config):
         from billing.models import Enrollment
 
         Enrollment.objects.filter(student=student_with_parent).delete()
         Enrollment.objects.create(
             student=student_with_parent,
-            enrollment_type=enrollment_type_monthly,
+            enrollment_type=enrollment_type_new_student,
             enrollment_period_start=date(2025, 9, 15),
             enrollment_period_end=date(2026, 6, 27),
             academic_year="2025-2026",

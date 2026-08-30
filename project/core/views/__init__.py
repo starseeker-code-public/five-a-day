@@ -47,6 +47,7 @@ from core.views.expenses import (
     create_expense,
     delete_expense,
     expenses_list,
+    update_expense,
 )
 
 # Fun Friday attendance

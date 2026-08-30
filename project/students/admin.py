@@ -27,8 +27,8 @@ class ParentStudentInline(admin.TabularInline):
 
 @admin.register(Student)
 class StudentAdmin(admin.ModelAdmin):
-    list_display = ["first_name", "last_name", "group", "active", "is_waiting", "birth_date"]
-    list_filter = ["group", "active", "is_waiting", "gdpr_signed"]
+    list_display = ["first_name", "last_name", "group", "active", "is_waiting", "waiting_priority", "birth_date"]
+    list_filter = ["group", "active", "is_waiting", "waiting_priority", "gdpr_signed"]
     search_fields = ["first_name", "last_name"]
     inlines = [StudentParentInline]
     readonly_fields = ["waiting_since"]
@@ -39,7 +39,16 @@ class StudentAdmin(admin.ModelAdmin):
         ("Health & Preferences", {"fields": ("allergies", "gdpr_signed")}),
         (
             "Status",
-            {"fields": ("active", "is_waiting", "waiting_since", "withdrawal_date", "withdrawal_reason")},
+            {
+                "fields": (
+                    "active",
+                    "is_waiting",
+                    "waiting_since",
+                    "waiting_priority",
+                    "withdrawal_date",
+                    "withdrawal_reason",
+                )
+            },
         ),
     )
 

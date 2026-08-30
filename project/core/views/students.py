@@ -89,11 +89,16 @@ class StudentCreateView(CreateView):
 
         config = SiteConfiguration.get_config()
         # Quarterly = 3 * full_time - 5%
-        quarterly_price = config.full_time_monthly_fee * 3 * (1 - config.quarterly_enrollment_discount / 100)
+        quarterly_gross = config.full_time_monthly_fee * 3
+        quarterly_price = quarterly_gross * (1 - config.quarterly_enrollment_discount / 100)
         context["price_config"] = {
             "monthly_full": str(config.full_time_monthly_fee),
             "monthly_part": str(config.part_time_monthly_fee),
             "quarterly": str(quarterly_price),
+            # The pre-discount total (3 mensualidades). `quarterly` already has the
+            # -5% baked in, so the price widget was striking through the discounted
+            # figure and showing the very same number twice.
+            "quarterly_gross": str(quarterly_gross),
             "adult_group": str(config.adult_group_monthly_fee),
         }
         context["enrollment_fee_children"] = str(config.children_enrollment_fee)
@@ -183,11 +188,17 @@ class StudentCreateView(CreateView):
                 last_day = calendar.monthrange(today.year, today.month)[1]
                 due_date = date(today.year, today.month, last_day)
 
+                # "Matrícula especial (€)" overrides the configured fee outright. It is
+                # its own field: `manual_amount` prices the recurring cuota, so a
+                # special monthly price left the matrícula on the standard rate.
+                special_fee = enrollment_form.cleaned_data.get("special_enrollment_fee")
                 enrollment_fee, returning_discount = EnrollmentService.compute_enrollment_fee(
-                    config, student, is_adult=is_adult_mode
+                    config, student, is_adult=is_adult_mode, special_fee=special_fee
                 )
                 concept = f"Matrícula {enrollment.academic_year} — {student.full_name}"
-                if returning_discount:
+                if special_fee:
+                    concept += " (matrícula especial)"
+                elif returning_discount:
                     concept += f" (dto. alumno recurrente −{returning_discount:.2f} €)"
 
                 Payment.objects.create(
@@ -506,9 +517,19 @@ def get_ff_student_ids(friday_date):
 def search_students(request):
     """AJAX endpoint to search active students by name (JSON).
 
-    Mirrors ``search_parents``: returns ``{"results": [{id, full_name, school}]}``
-    so the create-payment student autocomplete can populate suggestions (and,
-    on selection, auto-fetch the student's parent via ``validate_student_parent``).
+    Returns ``{"results": [{id, full_name, school, parent_id, parent_name}]}``.
+
+    The parent is included in THIS response on purpose. Picking a student in the
+    create-payment form used to fire a second request to
+    ``validate_student_parent`` with ``parent_id: 0``, whose handler returned
+    ``{"valid": false, "parents": [...]}`` — a lookup dressed up as a validation
+    — and whose failure was swallowed by a bare ``.catch(() => {})``. Any hiccup
+    on that hop (a 403, a dropped request) left "Padre/Tutor" silently empty with
+    nothing in the UI to say why. One request, filled in synchronously, has no
+    such failure mode.
+
+    ``parent_id`` is ``None`` for an adult student, who legitimately has no
+    parent/guardian; the form treats that as valid rather than as missing data.
     """
     query = request.GET.get("q", "").strip()
 
@@ -518,10 +539,22 @@ def search_students(request):
     students = (
         Student.objects.filter(active=True)
         .filter(Q(first_name__icontains=query) | Q(last_name__icontains=query))
-        .select_related("group")[:10]
+        .select_related("group")
+        .prefetch_related("parents")[:10]
     )
 
-    results = [{"id": s.id, "full_name": s.full_name, "school": s.school or ""} for s in students]
+    results = []
+    for s in students:
+        parent = s.parents.all()[0] if s.parents.all() else None
+        results.append(
+            {
+                "id": s.id,
+                "full_name": s.full_name,
+                "school": s.school or "",
+                "parent_id": parent.id if parent else None,
+                "parent_name": parent.full_name if parent else "",
+            }
+        )
     return JsonResponse({"results": results})
 
 

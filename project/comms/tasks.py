@@ -62,14 +62,22 @@ def send_welcome_email_task(self, parent_id: int, student_id: int, enrollment_id
 
         from core.schedule_utils import get_group_schedule_lines
 
+        enrollment_type = enrollment.enrollment_type
+        is_special = bool(enrollment_type and enrollment_type.name == "special")
+
+        # Spanish "Mensual" / "Trimestral" — parents were shown the English
+        # EnrollmentType label and had no explicit payment frequency. A `special`
+        # matrícula is priced and arranged by hand, so its cadence is whatever was
+        # agreed with the family: report "Especial" rather than a standard cadence
+        # the family never signed up for.
+        payment_modality = "Especial" if is_special else enrollment.get_payment_modality_display()
+
         context = {
             "parent_name": recipient_name,
             "student_name": student.full_name,
             "group_name": student.group.group_name if student.group else None,
-            "enrollment_type": enrollment.enrollment_type.display_name if enrollment.enrollment_type else None,
-            # Spanish "Mensual" / "Trimestral" — parents were shown the English
-            # EnrollmentType label and had no explicit payment frequency.
-            "payment_modality": enrollment.get_payment_modality_display(),
+            "enrollment_type": enrollment_type.display_name if enrollment_type else None,
+            "payment_modality": payment_modality,
             "schedule_type": enrollment.get_schedule_type_display(),
             "schedule_lines": get_group_schedule_lines(student.group),
             # "Fecha de inicio" is when CLASSES start, not when the family signed

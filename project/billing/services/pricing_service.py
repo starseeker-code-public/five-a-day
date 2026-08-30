@@ -1,4 +1,4 @@
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 
 
 class PricingService:
@@ -37,3 +37,43 @@ class PricingService:
         base = config.full_time_monthly_fee * 3
         discount = base * (config.quarterly_enrollment_discount / Decimal("100"))
         return base - discount
+
+    @staticmethod
+    def calculate_sibling_price(config=None, schedule_type="full_time"):
+        """Monthly fee with the sibling discount applied.
+
+        Same percentage and order of operations as
+        ``PaymentService.calculate_monthly_amount`` so the figure advertised in
+        the payment-reminder email matches what the sibling is actually billed.
+        """
+        if config is None:
+            config = PricingService.get_config()
+        base = PricingService.get_monthly_fee(schedule_type, config)
+        return base - base * (config.sibling_discount / Decimal("100"))
+
+    @staticmethod
+    def payment_reminder_fees(config=None):
+        """Display-ready fee table for the `payment_reminder` email.
+
+        The quarterly and sibling rows used to read "consultar en la academia";
+        both are plain derivations of SiteConfiguration (the same ones
+        PaymentService bills), so they are computed here and every caller that
+        renders the template shares one source of truth.
+        """
+        if config is None:
+            config = PricingService.get_config()
+        return {
+            "full_time_fee": _euros(config.full_time_monthly_fee),
+            "part_time_fee": _euros(config.part_time_monthly_fee),
+            "adult_fee": _euros(config.adult_group_monthly_fee),
+            "quarterly_fee": _euros(PricingService.calculate_quarterly_price(config)),
+            "sibling_full_time_fee": _euros(PricingService.calculate_sibling_price(config)),
+        }
+
+
+def _euros(amount) -> str:
+    """Format a money amount the way the Spanish emails print it: comma
+    decimal separator, and no ",00" tail on whole euros ("54", "51,30")."""
+    value = Decimal(amount).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    text = f"{value:.2f}".replace(".", ",")
+    return text[:-3] if text.endswith(",00") else text

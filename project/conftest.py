@@ -91,14 +91,16 @@ def student_with_parent(db, student, parent):
     return student
 
 
+# The four matrícula categories. `base_amount_*` is the one-time matrícula fee, so both
+# columns carry the same figure — see billing/services/enrollment_type_service.py.
 @pytest.fixture
-def enrollment_type_monthly(db):
+def enrollment_type_new_student(db):
     et, _ = EnrollmentType.objects.get_or_create(
-        name="monthly",
+        name="new_student",
         defaults={
-            "display_name": "Mensual",
-            "base_amount_full_time": Decimal("54.00"),
-            "base_amount_part_time": Decimal("36.00"),
+            "display_name": "Nuevo estudiante",
+            "base_amount_full_time": Decimal("40.00"),
+            "base_amount_part_time": Decimal("40.00"),
             "active": True,
         },
     )
@@ -106,13 +108,13 @@ def enrollment_type_monthly(db):
 
 
 @pytest.fixture
-def enrollment_type_quarterly(db):
+def enrollment_type_returning_student(db):
     et, _ = EnrollmentType.objects.get_or_create(
-        name="quarterly",
+        name="returning_student",
         defaults={
-            "display_name": "Trimestral",
-            "base_amount_full_time": Decimal("153.90"),
-            "base_amount_part_time": Decimal("102.60"),
+            "display_name": "Antiguo estudiante",
+            "base_amount_full_time": Decimal("20.00"),
+            "base_amount_part_time": Decimal("20.00"),
             "active": True,
         },
     )
@@ -124,9 +126,9 @@ def enrollment_type_adults(db):
     et, _ = EnrollmentType.objects.get_or_create(
         name="adults",
         defaults={
-            "display_name": "Adultos",
-            "base_amount_full_time": Decimal("60.00"),
-            "base_amount_part_time": Decimal("60.00"),
+            "display_name": "Adulto",
+            "base_amount_full_time": Decimal("20.00"),
+            "base_amount_part_time": Decimal("20.00"),
             "active": True,
         },
     )
@@ -148,10 +150,10 @@ def enrollment_type_special(db):
 
 
 @pytest.fixture
-def active_enrollment(db, student, enrollment_type_monthly, site_config):
+def active_enrollment(db, student, enrollment_type_new_student, site_config):
     return Enrollment.objects.create(
         student=student,
-        enrollment_type=enrollment_type_monthly,
+        enrollment_type=enrollment_type_new_student,
         enrollment_period_start=date(2025, 9, 15),
         enrollment_period_end=date(2026, 6, 27),
         academic_year="2025-2026",
@@ -211,10 +213,10 @@ def inactive_student(db, group):
 
 
 @pytest.fixture
-def cancelled_enrollment(db, student, enrollment_type_monthly, site_config):
+def cancelled_enrollment(db, student, enrollment_type_new_student, site_config):
     return Enrollment.objects.create(
         student=student,
-        enrollment_type=enrollment_type_monthly,
+        enrollment_type=enrollment_type_new_student,
         enrollment_period_start=date(2024, 9, 15),
         enrollment_period_end=date(2025, 6, 27),
         academic_year="2024-2025",

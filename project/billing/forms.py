@@ -57,6 +57,25 @@ class EnrollmentForm(forms.Form):
         ),
         label="Precio manual (€)",
     )
+    # Optional second price: `manual_amount` is the RECURRING fee (per month, or per
+    # quarter for a quarterly plan), which says nothing about the one-time matrícula.
+    # Leave this blank and the standard matrícula is charged, returning-student
+    # discount included; fill it and it is charged verbatim.
+    special_enrollment_fee = forms.DecimalField(
+        required=False,
+        min_value=Decimal("0.01"),
+        decimal_places=2,
+        widget=forms.NumberInput(
+            attrs={
+                "class": "form-control",
+                "step": "0.01",
+                "min": "0.01",
+                "placeholder": "Dejar vacío para la matrícula estándar",
+                "id": "id_special_enrollment_fee",
+            }
+        ),
+        label="Matrícula especial (€)",
+    )
 
     def clean(self):
         cleaned_data = super().clean()
@@ -64,6 +83,10 @@ class EnrollmentForm(forms.Form):
         manual_amount = cleaned_data.get("manual_amount")
         if is_special and not manual_amount:
             raise forms.ValidationError("Debes especificar un precio manual para matrícula especial")
+        # Silently ignoring it would charge the standard matrícula while the admin
+        # believes they set one — say so instead.
+        if cleaned_data.get("special_enrollment_fee") and not is_special:
+            raise forms.ValidationError("Marca «Precio especial» para fijar una matrícula personalizada")
         return cleaned_data
 
     def create_enrollment(self, student, is_adult=False):

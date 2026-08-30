@@ -51,13 +51,16 @@ DEFAULT_CURRENCY = "EUR"
 # CHOICES - Opciones para modelos
 # ============================================================================
 
+# An EnrollmentType is a MATRÍCULA category — who is being enrolled — not a payment
+# cadence. Monthly vs quarterly is `Enrollment.payment_modality`, and full/part time is
+# `Enrollment.schedule_type`; modelling them here too meant "Mensual" / "Trimestral"
+# appeared as the enrolment type in the matriculation email while saying nothing about
+# the matrícula actually charged. There are exactly four.
 ENROLLMENT_TYPE_CHOICES = [
+    ("new_student", "New Student"),
+    ("returning_student", "Returning Student"),
     ("adults", "Adults"),
     ("special", "Special"),
-    ("languages_ticket", "Languages Ticket"),
-    ("monthly", "Monthly"),
-    ("half_month", "Half-month"),
-    ("quarterly", "Quarterly"),
 ]
 
 # Spanish labels for EnrollmentType.display_name. The keys above are internal
@@ -66,12 +69,10 @@ ENROLLMENT_TYPE_CHOICES = [
 # `enrollment.enrollment_type.display_name`. Seeding those rows with the English
 # key meant the Spanish email said "Monthly" / "Quarterly".
 ENROLLMENT_TYPE_DISPLAY_ES = {
-    "adults": "Adultos",
+    "new_student": "Nuevo estudiante",
+    "returning_student": "Antiguo estudiante",
+    "adults": "Adulto",
     "special": "Especial",
-    "languages_ticket": "Cheque idioma",
-    "monthly": "Mensual",
-    "half_month": "Medio mes",
-    "quarterly": "Trimestral",
 }
 
 SCHEDULE_TYPE_CHOICES = [
@@ -92,12 +93,16 @@ QUARTERS = [
     {"name": "Q3", "months": [4, 5, 6], "includes_sept": False, "due_month": 4},  # Apr-Jun
 ]
 
+# Every label below is rendered directly to the user through
+# `get_<field>_display()` — the payment detail page, the payments list, the
+# student detail page and the admin all read them. They must be Spanish: an
+# English "Monthly Fee" in the middle of a Spanish page is what prompted this.
 ENROLLMENT_STATUS_CHOICES = [
-    ("pending", "Pending"),
-    ("active", "Active"),
-    ("finished", "Finished"),
-    ("cancelled", "Cancelled"),
-    ("suspended", "Suspended"),
+    ("pending", "Pendiente"),
+    ("active", "Activa"),
+    ("finished", "Finalizada"),
+    ("cancelled", "Cancelada"),
+    ("suspended", "Suspendida"),
 ]
 
 PAYMENT_METHOD_CHOICES = [
@@ -107,18 +112,18 @@ PAYMENT_METHOD_CHOICES = [
 ]
 
 PAYMENT_STATUS_CHOICES = [
-    ("pending", "Pending"),
-    ("completed", "Completed"),
-    ("failed", "Failed"),
-    ("cancelled", "Cancelled"),
-    ("refunded", "Refunded"),
+    ("pending", "Pendiente"),
+    ("completed", "Completado"),
+    ("failed", "Fallido"),
+    ("cancelled", "Cancelado"),
+    ("refunded", "Reembolsado"),
 ]
 
 PAYMENT_TYPE_CHOICES = [
-    ("enrollment", "Enrollment Fee"),
-    ("monthly", "Monthly Fee"),
-    ("quarterly", "Quarterly Fee"),
-    ("other", "Other"),
+    ("enrollment", "Matrícula"),
+    ("monthly", "Mensualidad"),
+    ("quarterly", "Trimestre"),
+    ("other", "Otro"),
 ]
 
 # Statuses that represent money the academy still expects to collect (or has

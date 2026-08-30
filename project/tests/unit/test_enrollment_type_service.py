@@ -1,5 +1,6 @@
 """Tests for the EnrollmentType provisioning service and its management command."""
 
+from datetime import date
 from decimal import Decimal
 from io import StringIO
 
@@ -36,27 +37,30 @@ class TestEnsureEnrollmentTypes:
         ensure_enrollment_types()
 
         labels = dict(EnrollmentType.objects.values_list("name", "display_name"))
-        assert labels["monthly"] == "Mensual"
-        assert labels["quarterly"] == "Trimestral"
-        assert labels["adults"] == "Adultos"
+        assert labels["new_student"] == "Nuevo estudiante"
+        assert labels["returning_student"] == "Antiguo estudiante"
+        assert labels["adults"] == "Adulto"
         assert labels["special"] == "Especial"
 
-    def test_amounts_come_from_site_configuration(self):
+    def test_amounts_are_the_matricula_fees_from_site_configuration(self):
         EnrollmentType.objects.all().delete()
         config = SiteConfiguration.get_config()
 
         ensure_enrollment_types(config)
 
-        monthly = EnrollmentType.objects.get(name="monthly")
-        assert monthly.base_amount_full_time == config.full_time_monthly_fee
-        assert monthly.base_amount_part_time == config.part_time_monthly_fee
+        new_student = EnrollmentType.objects.get(name="new_student")
+        assert new_student.base_amount_full_time == config.children_enrollment_fee
+        # A matrícula does not vary with the schedule, so both columns agree.
+        assert new_student.base_amount_part_time == config.children_enrollment_fee
 
-        quarterly = EnrollmentType.objects.get(name="quarterly")
-        assert quarterly.base_amount_full_time == config.full_time_monthly_fee * 3
+        returning = EnrollmentType.objects.get(name="returning_student")
+        assert returning.base_amount_full_time == (
+            config.children_enrollment_fee - config.returning_student_enrollment_discount
+        )
 
         adults = EnrollmentType.objects.get(name="adults")
-        assert adults.base_amount_full_time == config.adult_group_monthly_fee
-        assert adults.base_amount_part_time == config.adult_group_monthly_fee
+        assert adults.base_amount_full_time == config.adult_enrollment_fee
+        assert adults.base_amount_part_time == config.adult_enrollment_fee
 
     def test_is_idempotent(self):
         EnrollmentType.objects.all().delete()
@@ -72,22 +76,22 @@ class TestEnsureEnrollmentTypes:
     def test_repairs_an_english_display_name(self):
         EnrollmentType.objects.all().delete()
         ensure_enrollment_types()
-        EnrollmentType.objects.filter(name="monthly").update(display_name="Monthly")
+        EnrollmentType.objects.filter(name="new_student").update(display_name="New Student")
 
         report = ensure_enrollment_types()
 
-        assert any("monthly" in entry for entry in report["updated"])
-        assert EnrollmentType.objects.get(name="monthly").display_name == "Mensual"
+        assert any("new_student" in entry for entry in report["updated"])
+        assert EnrollmentType.objects.get(name="new_student").display_name == "Nuevo estudiante"
 
     def test_repairs_a_drifted_amount(self):
         EnrollmentType.objects.all().delete()
         ensure_enrollment_types()
-        EnrollmentType.objects.filter(name="monthly").update(base_amount_full_time=Decimal("1.00"))
+        EnrollmentType.objects.filter(name="new_student").update(base_amount_full_time=Decimal("1.00"))
 
         ensure_enrollment_types()
 
         config = SiteConfiguration.get_config()
-        assert EnrollmentType.objects.get(name="monthly").base_amount_full_time == config.full_time_monthly_fee
+        assert EnrollmentType.objects.get(name="new_student").base_amount_full_time == config.children_enrollment_fee
 
     def test_does_not_clobber_admin_edited_description_or_active(self):
         EnrollmentType.objects.all().delete()
@@ -125,34 +129,48 @@ class TestSeedEnrollmentTypesCommand:
 class TestEnrollmentUnblocked:
     """The regression this whole change exists to prevent."""
 
-    def test_resolve_plan_raises_on_an_empty_table(self):
+    def test_resolve_type_raises_on_an_empty_table(self, student):
         EnrollmentType.objects.all().delete()
-        config = SiteConfiguration.get_config()
 
-        with pytest.raises(ValueError, match="EnrollmentType 'monthly' not found"):
-            EnrollmentService._resolve_plan(config, {"enrollment_plan": "monthly_full"}, False, False, None)
+        with pytest.raises(ValueError, match="EnrollmentType 'new_student' not found"):
+            EnrollmentService._resolve_enrollment_type(student, False, False, None)
 
     @pytest.mark.parametrize(
-        ("is_adult", "is_special", "manual", "plan", "expected"),
+        ("is_adult", "is_special", "manual", "expected"),
         [
-            (False, False, None, "monthly_full", "monthly"),
-            (False, False, None, "monthly_part", "monthly"),
-            (False, False, None, "quarterly", "quarterly"),
-            (True, False, None, "monthly_full", "adults"),
-            (True, True, Decimal("50.00"), "monthly_full", "special"),
-            (False, True, Decimal("50.00"), "monthly_full", "special"),
+            (False, False, None, "new_student"),
+            (True, False, None, "adults"),
+            (True, True, Decimal("50.00"), "special"),
+            (False, True, Decimal("50.00"), "special"),
         ],
     )
-    def test_every_plan_resolves_after_seeding(self, is_adult, is_special, manual, plan, expected):
+    def test_every_category_resolves_after_seeding(self, student, is_adult, is_special, manual, expected):
         EnrollmentType.objects.all().delete()
         ensure_enrollment_types()
-        config = SiteConfiguration.get_config()
 
-        enrollment_type, _, _, _ = EnrollmentService._resolve_plan(
-            config, {"enrollment_plan": plan}, is_adult, is_special, manual
-        )
+        enrollment_type = EnrollmentService._resolve_enrollment_type(student, is_adult, is_special, manual)
 
         assert enrollment_type.name == expected
+
+    @pytest.mark.parametrize("plan", ["monthly_full", "monthly_part", "quarterly"])
+    def test_the_category_does_not_depend_on_the_payment_plan(self, student, plan):
+        """Monthly vs quarterly is `payment_modality`, never a kind of matrícula."""
+        EnrollmentType.objects.all().delete()
+        ensure_enrollment_types()
+
+        enrollment = EnrollmentService.create_enrollment(student, {"enrollment_plan": plan}, is_adult=False)
+
+        assert enrollment.enrollment_type.name == "new_student"
+
+    def test_re_enrolling_in_a_later_year_resolves_to_returning_student(self, student):
+        EnrollmentType.objects.all().delete()
+        ensure_enrollment_types()
+        EnrollmentService.create_enrollment(student, {"enrollment_plan": "monthly_full"}, is_adult=False)
+        student.enrollments.update(academic_year="2000-2001", status="finished")
+
+        enrollment = EnrollmentService.create_enrollment(student, {"enrollment_plan": "monthly_full"}, is_adult=False)
+
+        assert enrollment.enrollment_type.name == "returning_student"
 
 
 class TestEnrolmentYearRollover:
@@ -183,3 +201,100 @@ class TestEnrolmentYearRollover:
         assert enrollment.enrollment_period_start == academic_year_start_date(2026)
         assert enrollment.enrollment_period_start > date(2026, 8, 30)
         assert enrollment.enrollment_period_end == academic_year_end_date(2027)
+
+
+class TestCategoryDataMigration:
+    """`billing/migrations/0008` re-points enrollments off the retired cadence types.
+
+    The dev and production databases both had zero enrollments when it was written, so
+    the interesting branch — a live enrollment sitting on `monthly` or `quarterly` — is
+    only covered here. The migration functions take the real app registry, and
+    `Model.objects.create()` does not enforce `choices`, so a retired name can be staged.
+    """
+
+    @staticmethod
+    def _migration():
+        import importlib
+
+        return importlib.import_module("billing.migrations.0008_enrollment_type_categories")
+
+    @staticmethod
+    def _stale_type(name):
+        return EnrollmentType.objects.create(
+            name=name,
+            display_name=name.title(),
+            base_amount_full_time=Decimal("54.00"),
+            base_amount_part_time=Decimal("36.00"),
+        )
+
+    @staticmethod
+    def _enrollment(student, enrollment_type, academic_year, schedule_type="full_time", status="active"):
+        from billing.models import Enrollment
+
+        return Enrollment.objects.create(
+            student=student,
+            enrollment_type=enrollment_type,
+            enrollment_period_start=date(2025, 9, 15),
+            enrollment_period_end=date(2026, 6, 26),
+            academic_year=academic_year,
+            schedule_type=schedule_type,
+            payment_modality="monthly",
+            enrollment_amount=Decimal("54.00"),
+            final_amount=Decimal("54.00"),
+            status=status,
+            enrollment_date=date(2025, 9, 1),
+        )
+
+    def _run(self):
+        from django.apps import apps
+
+        self._migration().migrate_types(apps, None)
+
+    def test_a_first_time_enrollment_becomes_new_student(self, student, site_config):
+        EnrollmentType.objects.all().delete()
+        enrollment = self._enrollment(student, self._stale_type("monthly"), "2025-2026")
+
+        self._run()
+
+        enrollment.refresh_from_db()
+        assert enrollment.enrollment_type.name == "new_student"
+
+    def test_an_earlier_academic_year_makes_it_returning(self, student, site_config):
+        EnrollmentType.objects.all().delete()
+        stale = self._stale_type("quarterly")
+        # `unique_active_enrollment_per_student` allows only one live row.
+        self._enrollment(student, stale, "2024-2025", status="finished")
+        enrollment = self._enrollment(student, stale, "2025-2026")
+
+        self._run()
+
+        enrollment.refresh_from_db()
+        assert enrollment.enrollment_type.name == "returning_student"
+
+    def test_an_adult_schedule_becomes_adults(self, student, site_config):
+        EnrollmentType.objects.all().delete()
+        enrollment = self._enrollment(student, self._stale_type("monthly"), "2025-2026", schedule_type="adult_group")
+
+        self._run()
+
+        enrollment.refresh_from_db()
+        assert enrollment.enrollment_type.name == "adults"
+
+    def test_retired_rows_are_dropped_and_amounts_become_matricula_fees(self, student, site_config):
+        EnrollmentType.objects.all().delete()
+        self._enrollment(student, self._stale_type("monthly"), "2025-2026")
+
+        self._run()
+
+        assert set(EnrollmentType.objects.values_list("name", flat=True)) == set(REQUIRED_ENROLLMENT_TYPES)
+        assert EnrollmentType.objects.get(name="new_student").base_amount_full_time == (
+            site_config.children_enrollment_fee
+        )
+
+    def test_does_nothing_on_a_fresh_empty_table(self, site_config):
+        """`seed_enrollment_types` stays the only path that provisions reference data."""
+        EnrollmentType.objects.all().delete()
+
+        self._run()
+
+        assert EnrollmentType.objects.count() == 0

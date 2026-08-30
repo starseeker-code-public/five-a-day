@@ -134,6 +134,11 @@ class TestPaymentReminderForm:
         assert response.status_code == 200
         data = response.json()
         assert "html" in data
+        # Every row of the tarifas table is priced from SiteConfiguration —
+        # the quarterly and sibling rows used to say "consultar en la academia".
+        assert "consultar en la academia" not in data["html"]
+        assert "153,90 euros" in data["html"]
+        assert "51,30 euros" in data["html"]
 
     def test_send_missing_fields_shows_error(self, authenticated_client):
         response = authenticated_client.post(

@@ -59,7 +59,10 @@ class Command(BaseCommand):
                 status="active",
                 academic_year=academic_year,
             )
-            .select_related("student", "student__group")
+            # enrollment_type is read for every enrollment (a `special` matrícula is
+            # billed at its own hand-set price), so join it rather than paying a
+            # query per student.
+            .select_related("student", "student__group", "enrollment_type")
             .prefetch_related("student__parents")
         )
 

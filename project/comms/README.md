@@ -16,6 +16,8 @@ Generic email sending service with HTML template rendering and inline images.
 
 Templates live in `core/templates/emails/` and extend `emails/base_email.html`. There are currently **18 content templates** (19 files including the shared base): `happy_birthday`, `welcome_student`, `enrollment_child`, `enrollment_adult`, `fun_friday`, `payment_reminder`, `payment_reminder_simple`, `payment_receipt`, `receipt_quarterly_child`, `receipt_adult`, `receipt_enrollment`, `vacation_closure`, `tax_certificate`, `monthly_report`, `admin_monthly_report`, `newsletter`, `parent_magic_link`, `password_reset`, plus the shared `base_email`.
 
+**Every content template must define its own `{% block title %}`** (v1.20.0). `base_email.html` supplies a generic "Five a Day" fallback and 11 of the 18 were silently taking it, so the document title bore no relation to the subject line. Give a new template a title matching its `subject=`, in the shared `"<asunto> · Five a Day"` shape.
+
 ### SmsService (`comms/services/sms_service.py`)
 
 Twilio SMS sender (v1.8). The `twilio` client is imported lazily so the app runs fine without it.
@@ -35,7 +37,7 @@ Convenience functions for each email type. Each wraps `email_service.send_email(
 | `send_welcome_email` | `welcome_student` | On student creation |
 | `send_enrollment_confirmation_email` | `enrollment_child` / `enrollment_adult` | On enrollment |
 | `send_fun_friday_email` | `fun_friday` | Weekly manual |
-| `send_payment_reminder_email` | `payment_reminder` | Monthly manual |
+| `send_payment_reminder_email` | `payment_reminder` | Monthly manual — takes five fee figures (`full_time_fee`, `part_time_fee`, `adult_fee`, `quarterly_fee`, `sibling_full_time_fee`). Any left `None` are filled from `PricingService.payment_reminder_fees()`, so no caller can send the tariff table blank (v1.20.0) |
 | `send_quarterly_receipt_email` | `receipt_quarterly_child` | Quarterly manual |
 | `send_vacation_closure_email` | `vacation_closure` | Manual |
 | `send_tax_certificate_email` | `tax_certificate` | Yearly (April) |
@@ -67,7 +69,7 @@ All tasks have retry logic (3 retries, exponential backoff):
 
 | Task | Purpose | Trigger |
 | ---- | ------- | ------- |
-| `send_welcome_email_task` | Async welcome email (includes the group's timetable) | On student creation, fired `on_commit` |
+| `send_welcome_email_task` | Async welcome email (includes the group's timetable). Reports the payment modality in Spanish, and "Especial" for a `special` matrícula — its cadence is whatever was agreed with the family, not a standard one (v1.20.0) | On student creation, fired `on_commit` |
 | `send_birthday_email_task` | Individual birthday email | Called by batch task |
 | `send_birthday_emails_task` | Daily birthday batch — goes to **all** of a student's parents, dated with `localdate()` | Celery Beat (daily 08:00) / `send_birthday_emails` command |
 | `send_payment_reminders` | Weekly payment reminder batch, deduped against the SMS channel | Celery Beat (Mondays 09:00) / `send_payment_reminders` command |

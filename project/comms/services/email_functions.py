@@ -236,9 +236,11 @@ def send_payment_reminder_email(
     reduced_price_cheque_idioma: str,
     telephone_number_bizum: str,
     iban_holder: str = "",
-    full_time_fee: int = 0,
-    part_time_fee: int = 0,
-    adult_fee: int = 0,
+    full_time_fee: str | int | None = None,
+    part_time_fee: str | int | None = None,
+    adult_fee: str | int | None = None,
+    quarterly_fee: str | int | None = None,
+    sibling_full_time_fee: str | int | None = None,
     attachments: list | None = None,
 ) -> bool:
     """
@@ -258,11 +260,32 @@ def send_payment_reminder_email(
         full_time_fee: Cuota 2 sesiones semanales
         part_time_fee: Cuota 1 sesion semanal
         adult_fee: Cuota adultos
+        quarterly_fee: Cuota trimestral (3 mensualidades - descuento trimestral)
+        sibling_full_time_fee: Cuota 2 sesiones con descuento hermano
         attachments: Lista de PDFs (tarifas, instrucciones)
+
+    Las cinco tarifas se calculan desde SiteConfiguration cuando la llamada no
+    las pasa (PricingService.payment_reminder_fees), para que ningun emisor
+    mande la tabla de tarifas en blanco.
 
     Returns:
         True si se envio correctamente
     """
+    fees = {
+        "full_time_fee": full_time_fee,
+        "part_time_fee": part_time_fee,
+        "adult_fee": adult_fee,
+        "quarterly_fee": quarterly_fee,
+        "sibling_full_time_fee": sibling_full_time_fee,
+    }
+    if any(value is None for value in fees.values()):
+        # Only hit SiteConfiguration when the caller left a gap — the batch
+        # senders pass all five and loop over every parent.
+        from billing.services.pricing_service import PricingService
+
+        defaults = PricingService.payment_reminder_fees()
+        fees = {key: (defaults[key] if value is None else value) for key, value in fees.items()}
+
     return email_service.send_email(
         template_name="payment_reminder",
         recipients=recipients,
@@ -277,9 +300,7 @@ def send_payment_reminder_email(
             "iban_holder": iban_holder,
             "reduced_price_cheque_idioma": reduced_price_cheque_idioma,
             "telephone_number_bizum": telephone_number_bizum,
-            "full_time_fee": full_time_fee,
-            "part_time_fee": part_time_fee,
-            "adult_fee": adult_fee,
+            **fees,
         },
         attachments=attachments,
         fail_silently=True,

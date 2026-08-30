@@ -131,8 +131,8 @@ Watch the logs after `docker compose up -d` for `✅ Teacher created/updated: ..
 
 #### 5. Routine updates
 
-Use the `/deploy testing` skill, which does all of this plus the post-deploy version check.
-By hand, from your workstation:
+Use the `/deploy` skill and pick **Solo testing** when it asks for the target — it does all of
+this plus the post-deploy version check. By hand, from your workstation:
 
 ```bash
 gcloud compute ssh fiveaday-testing --zone=us-east1-c --project=five-a-day-evolution
@@ -355,7 +355,9 @@ harmless when unset. Add them to the same `gcloud run deploy` invocation:
   --set-secrets="SUPPORT_EMAIL=SUPPORT_EMAIL:latest" \
   # Restrict Google login to a single address (defaults to EMAIL_HOST_USER)
   --set-secrets="GOOGLE_ALLOWED_EMAIL=GOOGLE_ALLOWED_EMAIL:latest" \
-  # Prefilled into the payment-reminder email forms
+  # Prefilled into the payment-reminder email forms. NOTE: on the live production
+  # service these three are currently PLAIN env vars, set by hand, not Secret Manager
+  # refs. See "Repairing a single env var" below before changing them.
   --set-secrets="ACADEMY_IBAN=ACADEMY_IBAN:latest" \
   --set-secrets="ACADEMY_IBAN_HOLDER=ACADEMY_IBAN_HOLDER:latest" \
   --set-secrets="ACADEMY_PHONE=ACADEMY_PHONE:latest" \
@@ -390,6 +392,33 @@ update:
 - `DJANGO_ALLOWED_HOSTS` with the actual URL
 - `GOOGLE_REDIRECT_URI` with `https://YOUR_URL/auth/google/callback/`
 - Google Cloud Console → OAuth credentials → Authorized redirect URIs (add the callback URL)
+
+### Repairing a single env var
+
+Nothing in the repo provisions the `ACADEMY_*` values — they were set by hand, so nothing
+re-asserts them either and a bad value survives every future deploy.
+
+Use **`--update-env-vars`**, which *merges*. `--set-env-vars` **replaces the whole set** and would
+silently drop the ~30 vars and 6 Secret Manager refs you did not repeat on the line:
+
+```bash
+gcloud run services update fiveaday --project=$PROJECT_ID --region=$REGION \
+  --update-env-vars="^@^ACADEMY_IBAN_HOLDER=Silvia Yubitza Moreno Carlín"
+```
+
+The `^@^` prefix makes `@` the delimiter, so spaces and commas in the value are safe. Run it from a
+**UTF-8 shell**: passing `í` from a legacy-codepage cmd/PowerShell prompt transcodes it through the
+console codepage and gcloud stores a literal `?`. That is how production ended up holding
+`Silvia Yubitza Moreno Carl?n`, which every payment-reminder email it sends still prints. It is the
+only non-ASCII value among the 35 env vars, so it is the only one exposed to this — check any new
+one you add.
+
+Snapshot the env before and after (the count must not move — expect 35 vars and 6 `secretKeyRef`
+entries) and verify through a request path that prints the value; `/apps/payment-reminder/` renders
+`{{ iban_holder }}` in its preview. The full procedure, including the snapshot command, is in
+`.claude/skills/deploy/SKILL.md`.
+
+This rolls a new revision with zero downtime.
 
 ### Run migrations
 
@@ -533,7 +562,8 @@ the custom domain and redeploy.
 
 The `/deploy` skill (`.claude/skills/deploy/SKILL.md`) automates everything below, including the
 branch guard, the Cloud SQL backup and the post-deploy version check. Prefer it over running these
-by hand.
+by hand. It always asks first which target to deploy — testing only, production only, or both —
+so production is never reached without an explicit choice.
 
 Order matters: **migrate before the service rolls**, not after. Rolling the service first puts new
 code in front of an old schema for the length of the rollout.

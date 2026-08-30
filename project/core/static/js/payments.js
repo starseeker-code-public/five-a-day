@@ -407,7 +407,7 @@
                 row.appendChild(school);
             }
 
-            row.addEventListener('click', () => selectStudent(s.id, s.full_name, s.school || ''));
+            row.addEventListener('click', () => selectStudent(s));
             studentSuggestions.appendChild(row);
         });
         studentSuggestions.classList.remove('hidden');
@@ -415,72 +415,36 @@
 
 
 
-    function selectStudent(id, name, school) {
-        selectedStudent = { id, name };
-        studentSearch.value = name;
-        document.getElementById('student_id').value = id;
+    // The parent arrives with the search result, so it is filled in synchronously.
+    // This used to be a second POST to /api/validate/student-parent/ whose errors
+    // were swallowed by a bare .catch(() => {}) — any failure on that hop left the
+    // Padre/Tutor box silently blank with no clue as to why.
+    function selectStudent(student) {
+        selectedStudent = { id: student.id, name: student.full_name };
+        studentSearch.value = student.full_name;
+        document.getElementById('student_id').value = student.id;
         studentSuggestions.classList.add('hidden');
 
-        // Auto-fetch first parent for this student
-        fetch(`/api/validate/student-parent/`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'X-CSRFToken': document.querySelector('[name=csrfmiddlewaretoken]').value },
-            body: JSON.stringify({ student_id: id, parent_id: 0 })
-        })
-        .then(r => r.json())
-        .then(data => {
-            if (data.parents && data.parents.length > 0) {
-                const p = data.parents[0];
-                selectedParent = { id: p.id, name: p.full_name };
-                if (selectedStudent) selectedStudent.noParent = false;
-                document.getElementById('parent_id').value = p.id;
-                if (parentDisplay) parentDisplay.value = p.full_name;
-            } else {
-                // Adult students have no parent/guardian — this is valid.
-                selectedParent = null;
-                if (selectedStudent) selectedStudent.noParent = true;
-                document.getElementById('parent_id').value = '';
-                if (parentDisplay) parentDisplay.value = 'Sin padre/tutor (estudiante adulto)';
-            }
-        })
-        .catch(() => {});
+        if (student.parent_id) {
+            selectedParent = { id: student.parent_id, name: student.parent_name };
+            selectedStudent.noParent = false;
+            document.getElementById('parent_id').value = student.parent_id;
+            if (parentDisplay) parentDisplay.value = student.parent_name;
+        } else {
+            // Adult students have no parent/guardian — this is valid.
+            selectedParent = null;
+            selectedStudent.noParent = true;
+            document.getElementById('parent_id').value = '';
+            if (parentDisplay) parentDisplay.value = 'Sin padre/tutor (estudiante adulto)';
+        }
     }
 
-    function selectParent(id, name, email) {
-        selectedParent = { id, name };
-        if (parentDisplay) parentDisplay.value = name;
-        document.getElementById('parent_id').value = id;
-    }
-
-    // Expose for inline onclick handlers in dynamic HTML
-    window._paymentSelectStudent = selectStudent;
-    window._paymentSelectParent = selectParent;
-
-    function validateRelation() {
-        if (!selectedStudent || !selectedParent) { validationMessage.classList.add('hidden'); return; }
-        fetch('/api/validate/student-parent/', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'X-CSRFToken': document.querySelector('[name=csrfmiddlewaretoken]').value },
-            body: JSON.stringify({ student_id: selectedStudent.id, parent_id: selectedParent.id })
-        })
-        .then(r => r.json())
-        .then(data => {
-            validationMessage.classList.remove('hidden');
-            if (data.valid) {
-                validationMessage.style.color = '#16a34a';
-                validationMessage.textContent = '\u2713 Relaci\u00f3n v\u00e1lida entre estudiante y padre/tutor';
-                if (data.enrollment && data.enrollment.remaining_amount > 0) {
-                    document.getElementById('amount').value = data.enrollment.remaining_amount;
-                    document.getElementById('concept').value = `Pago de matr\u00edcula - ${data.enrollment.enrollment_type}`;
-                    document.getElementById('payment_type').value = 'enrollment';
-                }
-            } else {
-                validationMessage.style.color = '#dc2626';
-                validationMessage.textContent = '\u26A0 El padre/tutor seleccionado no est\u00e1 asociado con este estudiante';
-            }
-        })
-        .catch(e => console.error(e));
-    }
+    // `selectParent()` and `validateRelation()` lived here and were never called
+    // by anything: the parent field is read-only and filled from the student, so
+    // there is no parent picker to validate against. Removed rather than left as
+    // unreachable code claiming a contract the form no longer has. The enrollment
+    // amount/concept prefill validateRelation() carried was dead with it — ask for
+    // it back as a feature if it is wanted.
 
     // Hide suggestions when clicking outside
     document.addEventListener('click', function(e) {

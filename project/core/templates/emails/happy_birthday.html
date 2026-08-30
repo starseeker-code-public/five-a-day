@@ -1,12 +1,16 @@
 {% extends 'emails/base_email.html' %}
 {% load static %}
 
+{% block title %}¡Feliz cumpleaños! · Five a Day{% endblock %}
+
 {% block content %}
 <div style="text-align: center; padding: 40px 20px;">
     <h1 style="color: #6d28d9; font-size: 32px; margin-bottom: 4px;">
         🎂 Happy Birthday!
     </h1>
     <p style="color:#666; margin-top:0;">May this special day bring you endless happiness and unforgettable memories.</p>
+    <br>
+    <img src="{% static 'images/happy-birthday.png' %}" width="210" height="134" alt="Logo" style="text-align: center;">
     <br>
     <p>Esperamos que {{ name }} tenga un cumpleaños fantástico. Esperamos que este día especial le traiga felicidad infinita y recuerdos inolvidables.</p>
     <br>

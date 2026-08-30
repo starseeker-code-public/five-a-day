@@ -1,6 +1,6 @@
 ---
 name: deploy
-description: Use when the user wants to deploy Five a Day to GCP — the testing branch to the Compute Engine VM (http://34.26.130.187:8000/) and/or the main branch to Cloud Run production (https://fiveaday-332600671945.europe-southwest1.run.app/). Handles build, image-pinned Cloud Run jobs, migrations, and post-deploy version verification against GitHub. Triggers on "deploy", "ship to testing", "deploy to production", "push to prod".
+description: Use when the user wants to deploy Five a Day to GCP — the testing branch to the Compute Engine VM (http://34.26.130.187:8000/) and/or the main branch to Cloud Run production (https://fiveaday-332600671945.europe-southwest1.run.app/). Always asks first which target to deploy (testing only, production only, or both). Handles build, image-pinned Cloud Run jobs, migrations, and post-deploy version verification against GitHub. Triggers on "deploy", "ship to testing", "deploy to production", "push to prod".
 ---
 
 # deploy
@@ -53,12 +53,38 @@ This convention matters: it is what lets you diff the deployed commit against th
 
 ---
 
-## Invocation
+## Invocation — ALWAYS ask which target first
 
-- `/deploy testing` → testing only
-- `/deploy production` (or `prod` / `main`) → production only
-- `/deploy` with no argument → **both, in sequence**: testing first, fully verified, then
-  production. If testing fails at any point, STOP and do not touch production.
+**The first thing this skill does, every single time, is ask the user to pick the target
+with `AskUserQuestion`.** There is no inferred default and no silent path to production:
+the choice is always made by hand, on the spot, even when the invocation already named a
+target and even when the answer seems obvious from the conversation.
+
+Ask before Step 0 — before the auth check, before the backup check, before any `gcloud`
+call. Nothing in this document runs until the answer is in.
+
+```
+Question: "¿Qué despliegue quieres hacer?"
+Header:   "Deploy"
+Options:
+  1. "Solo testing"      — testing branch → Compute Engine VM (http://34.26.130.187:8000/).
+                           Reversible, no real data at risk.
+  2. "Solo producción"   — main branch → Cloud Run + Cloud SQL. Serves the real academy.
+  3. "Testing y producción" — both, in sequence: testing first and fully verified, then
+                           production. If testing fails at any point, STOP and do not touch
+                           production.
+```
+
+Rules for the question:
+
+- If the invocation named a target (`/deploy testing`, `/deploy prod`, …), put that option
+  **first** and mark it `(Recomendado)` — but still ask. A typed argument is a suggestion,
+  never the decision.
+- Never add a fourth option that skips or reorders the verification steps.
+- If the user answers anything other than these three (via "Other"), do not improvise a
+  target: restate the three and ask again.
+
+Whatever is chosen, run only the steps for that target and report on that target only.
 
 ---
 
@@ -114,8 +140,8 @@ If the branch is behind, fast-forward it and say so. If it is *ahead* or the tre
 checkout to the academy's live system — that is the whole point of the guard.
 
 **Checkout matters for production, not for testing.** The two targets consume the branch
-differently, so `/deploy` with no argument is *not* asking you to check out two branches at
-once:
+differently, so choosing "Testing y producción" is *not* asking you to check out two branches
+at once:
 
 - **testing** — the VM pulls `origin/testing` itself (Step 1a), so your local checkout is
   irrelevant and only the remote-sync check above applies. Fast-forward without switching:
@@ -510,6 +536,58 @@ gcloud compute ssh $VM_NAME --zone=$VM_ZONE --project=$PROJECT \
   --command='sudo grep APP_VERSION /home/Proye/five-a-day/.env.testing'
 ```
 
+### Repairing a single env var — and the known `ACADEMY_IBAN_HOLDER` corruption
+
+Production reads its env from Cloud Run, never from `.env.production`, and the `ACADEMY_*`
+values were set by hand. Nothing in the repo provisions them, so nothing re-asserts them
+either — a bad value stays bad across every future deploy.
+
+One is currently wrong. `ACADEMY_IBAN_HOLDER` on the production service is:
+
+```text
+Silvia Yubitza Moreno Carl?n     # should be: Silvia Yubitza Moreno Carlín
+```
+
+The `í` was lost to a console-codepage transcode when the var was first set from a cmd or
+PowerShell prompt; gcloud stored a literal `?`. It is the only non-ASCII value among the 35
+env vars, so it is the only one exposed to this. Every payment-reminder email production
+sends names the account holder with the `?` — see the matching gotcha in `CLAUDE.md`.
+
+To fix it, or any single env var, use **`--update-env-vars`**, which merges:
+
+```bash
+gcloud run services update $SERVICE --project=$PROJECT --region=$REGION \
+  --update-env-vars="^@^ACADEMY_IBAN_HOLDER=Silvia Yubitza Moreno Carlín"
+```
+
+Three things matter here:
+
+- **`--update-env-vars` merges; `--set-env-vars` replaces.** Never reach for `--set-env-vars`
+  to change one value — it drops the ~30 vars and 6 Secret Manager refs you did not repeat.
+- **Run it from a UTF-8 shell.** The Bash tool passes `í` through correctly (verified: gcloud
+  received `U+00ED`). A Windows console with a legacy codepage is what created the bug in the
+  first place — if you are unsure, probe first with a command that echoes the argument back,
+  e.g. `gcloud run services describe "Carlín-probe" --region=$REGION --project=$PROJECT`, and
+  check that the error names `Carl\xedn` and not `Carl?n`.
+- **The `^@^` prefix sets `@` as the delimiter** so spaces and commas in the value are safe.
+
+Snapshot before and diff after — the whole risk of an env change is the vars you did not
+mean to touch:
+
+```bash
+gcloud run services describe $SERVICE --project=$PROJECT --region=$REGION --format=json \
+  | python -c "import json,sys; e=json.load(sys.stdin)['spec']['template']['spec']['containers'][0]['env']; \
+print(len(e)); [print(x['name'], '=', repr(x.get('value')) if 'value' in x else '<secretKeyRef>') for x in sorted(e, key=lambda k: k['name'])]"
+```
+
+Expect 35 vars and 6 `<secretKeyRef>` entries both before and after. Verifying the value
+reached the container needs a request path that prints it — the payment-reminder form at
+`/apps/payment-reminder/` renders `{{ iban_holder }}` in its preview.
+
+This rolls a new revision (zero-downtime). Roll back by retargeting traffic to the previous
+revision, per **Rollback** below.
+
+---
 ---
 
 ## Step 4 — Reconcile production, and stop if anything is odd

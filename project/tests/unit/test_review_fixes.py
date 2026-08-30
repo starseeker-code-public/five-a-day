@@ -263,7 +263,7 @@ class TestWaitingListAssignGuards:
 
 
 class TestPaymentReminderDedupe:
-    def test_sms_deduped_by_parent(self, group, parent, enrollment_type_monthly, site_config):
+    def test_sms_deduped_by_parent(self, group, parent, enrollment_type_new_student, site_config):
         """Parents with several kids should only get one SMS per weekly run."""
         from datetime import date, timedelta
         from decimal import Decimal
@@ -293,7 +293,7 @@ class TestPaymentReminderDedupe:
         for child in kids:
             enrollment = Enrollment.objects.create(
                 student=child,
-                enrollment_type=enrollment_type_monthly,
+                enrollment_type=enrollment_type_new_student,
                 enrollment_period_start=date.today(),
                 enrollment_period_end=date.today() + timedelta(days=365),
                 academic_year="2025-2026",
