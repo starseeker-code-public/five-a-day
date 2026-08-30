@@ -119,7 +119,7 @@ The matching CSS (`project/static/css/admin_custom.css`) overrides all Django ad
 - `css/theme.css` — the **entire dark theme**, written as `html.dark .<utility>` overrides (not Tailwind `dark:` variants). Add an override here whenever a template gains a new surface/text utility or a `primary-*` shade.
 - `css/email.css` — shared email styling reference
 - `css/admin_custom.css` — Django admin theme override (CSS variables, login card, welcome banner)
-- **16 JS modules** in `js/`: `base.js` (notification/history dropdowns, keyboard nav via `data-hotkey`, per-view help modal, `window.CSRF_TOKEN`), `theme.js` (toggles `html.dark`), `support.js`, `home.js`, `students.js`, `student-create.js`, `student-detail.js`, `payments.js`, `schedule.js`, `fun-friday.js`, `expenses.js`, `management.js`, `all-info.js`, `app-forms.js`, `login_effects.js`, `login_seasonal.js`
+- **17 JS modules** in `js/`: `base.js` (notification/history dropdowns, keyboard nav via `data-hotkey`, per-view help modal, `window.CSRF_TOKEN`), `theme.js` (toggles `html.dark`), `support.js`, `home.js`, `students.js`, `student-create.js`, `student-detail.js`, `payments.js`, `schedule.js`, `fun-friday.js`, `expenses.js`, `management.js`, `all-info.js`, `app-forms.js`, `login_effects.js`, `login_seasonal.js`, `password_toggle.js` (hold-to-reveal eye button for any `[data-password-toggle]`)
 
 ## Tests
 

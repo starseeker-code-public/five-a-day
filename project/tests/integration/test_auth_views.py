@@ -11,6 +11,12 @@ class TestLoginView:
         response = client.get(reverse("login"))
         assert response.status_code == 200
 
+    def test_password_field_has_hold_to_reveal_toggle(self, client):
+        response = client.get(reverse("login"))
+        html = response.content.decode()
+        assert 'data-password-toggle="password"' in html
+        assert "js/password_toggle.js" in html
+
     def test_authenticated_user_redirects_to_home(self, authenticated_client):
         response = authenticated_client.get(reverse("login"))
         assert response.status_code == 302
