@@ -9,35 +9,6 @@ from django.urls import reverse
 pytestmark = pytest.mark.django_db
 
 
-# ── waiting_list.py:95-99 — null group defensive branch ────────────────────
-
-
-class TestAssignWithNullGroupJson:
-    def test_ajax_no_parent_returns_400(self, authenticated_client, group, site_config, enrollment_type_monthly):
-        """Cover waiting_list.py:122 AJAX-branch for the "no parent + non-adult" guard."""
-        from datetime import date
-
-        from students.models import Student
-
-        s = Student.objects.create(
-            first_name="OrphanAjax",
-            last_name="Test",
-            birth_date=date(2018, 1, 1),
-            gdpr_signed=True,
-            group=group,
-            is_adult=False,
-            is_waiting=True,
-        )
-        response = authenticated_client.post(
-            reverse("assign_from_waiting_list", args=[s.id]),
-            HTTP_X_REQUESTED_WITH="XMLHttpRequest",
-        )
-        assert response.status_code == 400
-        body = response.json()
-        assert body["success"] is False
-        assert "titular" in body["error"]
-
-
 # ── students.py view:191-198 — on_commit welcome dispatch happy path ───────
 
 

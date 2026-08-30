@@ -281,9 +281,8 @@ class TestWaitingListBranches:
         response = authenticated_client.get(reverse("waiting_list"), {"group": "abc"})
         assert response.status_code == 200
 
-    def test_assign_when_group_full_ajax_returns_409(
-        self, authenticated_client, group, student, site_config, enrollment_type_monthly
-    ):
+    def test_assign_when_group_full_redirects_back(self, authenticated_client, group, student, site_config):
+        """A full group blocks the enrollment shortcut and bounces back to the list."""
         from datetime import date
 
         from students.models import Student
@@ -298,12 +297,9 @@ class TestWaitingListBranches:
             group=group,
             is_waiting=True,
         )
-        response = authenticated_client.post(
-            reverse("assign_from_waiting_list", args=[waiter.id]),
-            HTTP_X_REQUESTED_WITH="XMLHttpRequest",
-        )
-        assert response.status_code == 409
-        assert response.json()["success"] is False
+        response = authenticated_client.get(reverse("assign_from_waiting_list", args=[waiter.id]))
+        assert response.status_code == 302
+        assert response.url == reverse("waiting_list")
 
     def test_add_to_waiting_list_logs_history(self, authenticated_client, student):
         from core.models import HistoryLog

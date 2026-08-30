@@ -11,6 +11,7 @@ from billing.models import (
     Payment,
     SiteConfiguration,
     academic_year_end_date,
+    academic_year_for_month,
     academic_year_start_date,
     current_academic_year,
 )
@@ -26,19 +27,54 @@ from students.models import Group, Parent, Student
 
 
 class TestCurrentAcademicYear:
-    def test_september_onwards_is_current_year(self):
-        assert current_academic_year(date(2025, 9, 1)) == "2025-2026"
-        assert current_academic_year(date(2025, 12, 31)) == "2025-2026"
+    """The year being ENROLLED INTO. Rolls over in May, when signups open."""
 
-    def test_before_september_is_previous_year(self):
+    def test_may_onwards_is_the_next_course(self):
+        # The bug this replaced: August 2026 resolved to 2025-2026, a course
+        # whose teaching period had already ended.
+        assert current_academic_year(date(2026, 5, 1)) == "2026-2027"
+        assert current_academic_year(date(2026, 6, 30)) == "2026-2027"
+        assert current_academic_year(date(2026, 8, 31)) == "2026-2027"
+        assert current_academic_year(date(2026, 9, 1)) == "2026-2027"
+        assert current_academic_year(date(2026, 12, 31)) == "2026-2027"
+
+    def test_before_may_is_the_running_course(self):
         assert current_academic_year(date(2026, 1, 1)) == "2025-2026"
-        assert current_academic_year(date(2026, 6, 30)) == "2025-2026"
-        assert current_academic_year(date(2026, 8, 31)) == "2025-2026"
+        assert current_academic_year(date(2026, 4, 30)) == "2025-2026"
+
+    def test_rollover_boundary_is_the_first_of_may(self):
+        assert current_academic_year(date(2026, 4, 30)) == "2025-2026"
+        assert current_academic_year(date(2026, 5, 1)) == "2026-2027"
 
     def test_defaults_to_today(self):
         result = current_academic_year()
         assert len(result) == 9  # "YYYY-YYYY"
         assert "-" in result
+
+
+class TestAcademicYearForMonth:
+    """The year a TEACHING MONTH belongs to. Still keyed on September."""
+
+    def test_september_onwards_is_current_year(self):
+        assert academic_year_for_month(date(2025, 9, 1)) == "2025-2026"
+        assert academic_year_for_month(date(2025, 12, 31)) == "2025-2026"
+
+    def test_before_september_is_previous_year(self):
+        assert academic_year_for_month(date(2026, 1, 1)) == "2025-2026"
+        assert academic_year_for_month(date(2026, 6, 30)) == "2025-2026"
+        assert academic_year_for_month(date(2026, 8, 31)) == "2025-2026"
+
+    def test_diverges_from_enrolment_year_between_may_and_august(self):
+        # This gap is the whole reason the two functions exist. Billing a May
+        # fee against the enrolment year would match no active enrollment.
+        for month in (5, 6, 7, 8):
+            reference = date(2026, month, 1)
+            assert academic_year_for_month(reference) == "2025-2026"
+            assert current_academic_year(reference) == "2026-2027"
+
+    def test_agrees_with_enrolment_year_from_september_to_april(self):
+        for reference in (date(2026, 9, 1), date(2026, 12, 1), date(2027, 4, 30)):
+            assert academic_year_for_month(reference) == current_academic_year(reference)
 
 
 class TestAcademicYearDates:

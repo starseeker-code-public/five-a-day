@@ -3,23 +3,21 @@ Waiting list & group capacity — views.
 
 Waiting-list students have `is_waiting=True` and no active enrollment. Their
 `group` field represents their *preferred* group; when a spot opens the admin
-promotes them via `assign_from_waiting_list`, which flips is_waiting off and
-kicks the admin over to the standard update form to finalise the enrollment.
+hits `assign_from_waiting_list`, which does NOT promote the entry in place —
+it redirects into the normal "Matricular" flow (parent → student) so the new
+student is created properly, with a parent/tutor. The waiting entry is deleted
+once that student is saved.
 """
 
-import calendar
 import logging
-from datetime import date
 
 from django.contrib import messages
 from django.db import transaction
-from django.http import JsonResponse
+from django.db.models import ProtectedError
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.views.decorators.http import require_http_methods
 
-from billing.models import Payment, SiteConfiguration
-from billing.services.enrollment_service import EnrollmentService
 from core.models import HistoryLog
 from students.forms import WaitingListForm
 from students.models import Group, Student
@@ -107,13 +105,19 @@ def waiting_list_create(request):
     return render(request, "waiting_list_create.html", {"form": form})
 
 
-@require_http_methods(["POST"])
+@require_http_methods(["GET", "POST"])
 def assign_from_waiting_list(request, student_id):
     """
-    Quick-assign a waiting-list student. Flips is_waiting=False and creates a
-    default full-time monthly enrollment + pending enrollment-fee payment so the
-    student ends up in a consistent state. Admin can later tweak the enrollment
-    plan/discounts from the standard update flow.
+    Start the real enrollment for a waiting-list entry.
+
+    This used to promote the waiting entry in place: it flipped `is_waiting`
+    off and created an enrollment + payments straight away. A waiting entry is
+    taken over the phone with only a name and a contact number, so the result
+    was a student with **no parent/guardian** and a payment with no titular.
+    Now the button only redirects into the normal "Matricular" flow
+    (parent → student), carrying `?from_waiting=<id>` so both forms can
+    prefill from the waiting entry and the old entry is removed once the new
+    student is saved.
     """
     student = get_object_or_404(
         Student.objects.select_related("group"),
@@ -121,129 +125,64 @@ def assign_from_waiting_list(request, student_id):
         is_waiting=True,
     )
 
-    # `Student.group` is nullable — a waiting-list entry taken over the phone
-    # may have no preferred group yet. Tell the admin what to do rather than
-    # blowing up on `.is_full` below.
     target_group = student.group
-    if target_group is None:
-        error_msg = "El estudiante no tiene grupo preferido asignado. Edítalo y elige un grupo antes de promoverlo."
-        if request.headers.get("X-Requested-With") == "XMLHttpRequest":
-            return JsonResponse({"success": False, "error": error_msg}, status=400)
-        messages.error(request, f"❌ {error_msg}")
-        return redirect("waiting_list")
-
-    # Enforce the group cap. `available_spots is None` means "no cap" — always allow.
-    if target_group.is_full:
-        error_msg = (
-            f"El grupo {target_group.group_name} está completo "
-            f"({target_group.enrolled_count}/{target_group.max_students})."
+    if target_group is not None and target_group.is_full:
+        messages.error(
+            request,
+            (
+                f"❌ El grupo {target_group.group_name} está completo "
+                f"({target_group.enrolled_count}/{target_group.max_students})."
+            ),
         )
-        if request.headers.get("X-Requested-With") == "XMLHttpRequest":
-            return JsonResponse({"success": False, "error": error_msg}, status=409)
-        messages.error(request, f"❌ {error_msg}")
         return redirect("waiting_list")
 
-    default_parent = student.parents.first()
-    # Non-adult students must have at least one parent linked; otherwise the
-    # generated Payment would be orphaned (Payment.parent is nullable but
-    # tax certificates and reminders both key off parent).
-    if default_parent is None and not student.is_adult:
-        # Expected for entries created from the short waiting-list form, which
-        # only stores a contact name + phone (a Parent needs a unique DNI).
-        error_msg = (
-            f"{student.full_name} no tiene padre/tutor (titular) registrado. "
-            "Crea primero su ficha de padre/madre y vincúlala al alumno."
-        )
-        contact = " · ".join(p for p in (student.waiting_contact_name, student.waiting_contact_phone) if p)
-        if contact:
-            error_msg += f" Contacto de la lista de espera: {contact}."
-        if request.headers.get("X-Requested-With") == "XMLHttpRequest":
-            return JsonResponse({"success": False, "error": error_msg}, status=400)
-        messages.error(request, f"❌ {error_msg}")
-        return redirect("waiting_list")
+    return redirect(f"{reverse('parent_create')}?from_waiting={student.id}")
 
+
+def waiting_entry_from_request(request):
+    """Return the waiting-list Student referenced by `?from_waiting=<id>`, or None.
+
+    Shared by `ParentCreateView` and `StudentCreateView` to prefill the
+    enrollment forms from a waiting-list entry. Silently returns None for a
+    missing/!numeric/already-promoted id — the forms then behave as a normal
+    creation instead of 500-ing on a hand-edited URL.
+    """
+    raw_id = request.GET.get("from_waiting") or request.POST.get("from_waiting")
+    if not raw_id:
+        return None
+    try:
+        return Student.objects.select_related("group").get(id=int(raw_id), is_waiting=True, active=True)
+    except (Student.DoesNotExist, TypeError, ValueError):
+        return None
+
+
+def discard_waiting_entry(waiting, new_student=None):
+    """Remove a waiting-list entry once its real student record has been created.
+
+    The entry is deleted outright when nothing references it (the normal case:
+    a phone entry with no enrollment and no payments). A student who was moved
+    *back* onto the waiting list keeps their payment history, and `Payment` /
+    `Enrollment` protect their FK to Student, so those are archived instead
+    (`active=False`) rather than blowing up the enrollment that just succeeded.
+    """
+    label = waiting.full_name
     try:
         with transaction.atomic():
-            student.is_waiting = False
-            student.save(update_fields=["is_waiting", "waiting_since", "updated_at"])
+            waiting.parents.clear()
+            waiting.delete()
+        outcome = "eliminada"
+    except ProtectedError:
+        waiting.active = False
+        waiting.is_waiting = False
+        waiting.save(update_fields=["active", "is_waiting", "updated_at"])
+        outcome = "archivada (tenía pagos asociados)"
 
-            # Rescue students stranded by the older behaviour, where being moved
-            # onto the waiting list left the enrollment active: creating a
-            # second active one violates unique_active_enrollment_per_student
-            # and the promotion died with a 500 every time.
-            student.enrollments.filter(status="active").update(status="cancelled")
-
-            enrollment = EnrollmentService.create_enrollment(
-                student,
-                {
-                    "enrollment_plan": "monthly_full",
-                    "has_language_cheque": False,
-                    "is_sibling_discount": False,
-                    "is_special": False,
-                    "manual_amount": None,
-                },
-                is_adult=student.is_adult,
-            )
-
-            config = SiteConfiguration.get_config()
-            today = date.today()
-            last_day = calendar.monthrange(today.year, today.month)[1]
-            due_date = date(today.year, today.month, last_day)
-            # v1.13 — apply returning-student discount when applicable.
-            enrollment_fee, returning_discount = EnrollmentService.compute_enrollment_fee(
-                config, student, is_adult=student.is_adult
-            )
-            concept = f"Matrícula {enrollment.academic_year} — {student.full_name}"
-            if returning_discount:
-                concept += f" (dto. alumno recurrente −{returning_discount:.2f} €)"
-            Payment.objects.create(
-                student=student,
-                parent=default_parent,
-                enrollment=enrollment,
-                payment_type="enrollment",
-                payment_method="transfer",
-                amount=enrollment_fee,
-                currency="EUR",
-                payment_status="pending",
-                due_date=due_date,
-                concept=concept,
-            )
-
-            # Schedule the recurring academic-year fees (idempotent).
-            from billing.services.payment_service import PaymentService
-
-            PaymentService.schedule_academic_year_payments(enrollment, default_parent)
-
-            HistoryLog.log(
-                "waiting_list_assigned",
-                f"Asignado desde lista de espera: {student.full_name} → {target_group.group_name}",
-                icon="person_add",
-            )
-    except Exception:  # noqa: BLE001 — surface a failure to the user, details to the log
-        logger.exception("Error assigning student %d from the waiting list", int(student_id))
-        error_msg = "Error al asignar al estudiante. Revisa los datos e inténtalo de nuevo."
-        if request.headers.get("X-Requested-With") == "XMLHttpRequest":
-            return JsonResponse({"success": False, "error": error_msg}, status=500)
-        messages.error(request, f"❌ {error_msg}")
-        return redirect("waiting_list")
-
-    if request.headers.get("X-Requested-With") == "XMLHttpRequest":
-        return JsonResponse(
-            {
-                "success": True,
-                "student_id": student.id,
-                "redirect_url": reverse("student_detail", args=[student.id]),
-            }
-        )
-
-    messages.success(
-        request,
-        (
-            f"✅ {student.full_name} promovido/a al grupo {target_group.group_name}. "
-            "Matrícula mensual creada — ajústala desde la ficha si es necesario."
-        ),
+    detail = f" → nueva ficha: {new_student.full_name}" if new_student else ""
+    HistoryLog.log(
+        "waiting_list_assigned",
+        f"Lista de espera {outcome}: {label}{detail}",
+        icon="person_add",
     )
-    return redirect("waiting_list")
 
 
 @require_http_methods(["POST"])
@@ -359,6 +298,8 @@ __all__ = [
     "waiting_list_create",
     "assign_from_waiting_list",
     "add_to_waiting_list",
+    "waiting_entry_from_request",
+    "discard_waiting_entry",
     "group_capacity_summary",
     "notify_capacity_freed",
 ]

@@ -38,6 +38,17 @@
 
 {% else %}
 <div class="max-w-4xl mx-auto">
+    {% if waiting_entry %}
+    <div class="bg-amber-50 border border-amber-200 rounded-lg p-4 mb-6">
+        <div class="flex items-center gap-3">
+            <span class="material-symbols-outlined text-amber-600">hourglass_top</span>
+            <div>
+                <p class="font-medium text-amber-800">Desde la lista de espera: {{ waiting_entry.full_name }}</p>
+                <p class="text-sm text-amber-700">Al guardar se creará la ficha completa y la entrada de espera se quitará de la lista.</p>
+            </div>
+        </div>
+    </div>
+    {% endif %}
     {% if is_adult_mode %}
     <div class="bg-amber-50 border border-amber-200 rounded-lg p-4 mb-6">
         <div class="flex items-center gap-3">
@@ -68,6 +79,7 @@
         <form method="post" novalidate>
             {% csrf_token %}
             <input type="hidden" name="parent_id" value="{{ parent_id }}" id="hidden_parent_id">
+            {% if waiting_entry %}<input type="hidden" name="from_waiting" value="{{ waiting_entry.id }}">{% endif %}
             <input type="hidden" name="is_adult_mode" value="{% if is_adult_mode %}true{% else %}false{% endif %}">
 
             <!-- Información del Estudiante -->

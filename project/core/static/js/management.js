@@ -201,7 +201,9 @@ document.getElementById('form-group').addEventListener('submit', async function(
     const data = {
         group_name: formData.get('group_name'),
         color: formData.get('color') || '#6366f1',
-        teacher_id: parseInt(formData.get('teacher_id'))
+        teacher_id: parseInt(formData.get('teacher_id')),
+        // Cupo máximo: only set at creation. Empty falls back to the server default (8).
+        max_students: formData.get('max_students')
     };
 
     try {

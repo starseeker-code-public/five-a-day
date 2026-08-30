@@ -7,15 +7,72 @@ from django.db import models
 
 from billing import constants
 
+# Enrolment for the next course opens in May, so from May onwards "the current
+# academic year" is the one families are signing up for — not the one whose
+# classes are still finishing. Before this, a student enrolled in, say, August
+# 2026 was given the 2025-2026 year, whose teaching period had already ended:
+# their enrollment_period_start landed in September 2025 and the whole schedule
+# of monthly payments was generated in the past.
+ACADEMIC_YEAR_ROLLOVER_MONTH = 5  # May
+
+# Classes themselves run September→June. That is a different question from the
+# one above and must not be conflated — see academic_year_for_month().
+TEACHING_YEAR_START_MONTH = 9  # September
+
+
+def _academic_year_from(reference_date, rollover_month):
+    start_year = reference_date.year if reference_date.month >= rollover_month else reference_date.year - 1
+    return f"{start_year}-{start_year + 1}"
+
 
 def current_academic_year(reference_date=None):
-    """Return academic year in YYYY-YYYY format (starts in September)."""
+    """
+    Return the academic year being enrolled into, in YYYY-YYYY format.
+
+    Rolls over in **May**, when enrolment for the next course opens — not in
+    September when classes start. So in August 2026 this is "2026-2027": the
+    course a family signing up today is joining.
+
+    For attributing an existing teaching month to a course, use
+    `academic_year_for_month()` instead.
+    """
     reference_date = reference_date or date.today()
-    if reference_date.month >= 9:
-        start_year = reference_date.year
-    else:
-        start_year = reference_date.year - 1
-    return f"{start_year}-{start_year + 1}"
+    return _academic_year_from(reference_date, ACADEMIC_YEAR_ROLLOVER_MONTH)
+
+
+def academic_year_for_month(reference_date=None):
+    """
+    Return the academic year a given **teaching month** belongs to.
+
+    Classes run September→June, so May 2026 belongs to 2025-2026 even though
+    enrolment for 2026-2027 is already open by then. Payment generation must use
+    this: billing a May fee against the year families are only just signing up
+    for would match no active enrollment and silently generate nothing.
+    """
+    reference_date = reference_date or date.today()
+    return _academic_year_from(reference_date, TEACHING_YEAR_START_MONTH)
+
+
+def relevant_academic_years(reference_date=None):
+    """
+    Return every academic year that counts as "current" for display and queries.
+
+    Between May and August two cohorts coexist: the students finishing the
+    running course, and those already signed up for the next one. A view that
+    filters on a single year hides one of them — filtering on the enrolment year
+    alone would empty the student list every 1 May, mid-course, while filtering
+    on the teaching year alone would make a student enrolled in August invisible
+    until September.
+
+    Outside that window both helpers agree and this is a single value, so the
+    behaviour is unchanged for eight months of the year.
+    """
+    reference_date = reference_date or date.today()
+    years = {
+        academic_year_for_month(reference_date),
+        current_academic_year(reference_date),
+    }
+    return sorted(years)
 
 
 def academic_year_start_date(year):

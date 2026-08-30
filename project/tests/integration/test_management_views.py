@@ -145,6 +145,56 @@ class TestCreateGroup:
         )
         assert response.status_code == 400
 
+    def test_max_students_defaults_to_eight(self, authenticated_client, teacher):
+        from students.models import Group
+
+        authenticated_client.post(
+            reverse("create_group"),
+            data=json.dumps({"group_name": "Default Cupo", "teacher_id": teacher.id}),
+            content_type="application/json",
+        )
+        assert Group.objects.get(group_name="Default Cupo").max_students == 8
+
+    def test_max_students_is_stored(self, authenticated_client, teacher):
+        from students.models import Group
+
+        response = authenticated_client.post(
+            reverse("create_group"),
+            data=json.dumps({"group_name": "Cupo 12", "teacher_id": teacher.id, "max_students": 12}),
+            content_type="application/json",
+        )
+        assert response.json()["group"]["max_students"] == 12
+        assert Group.objects.get(group_name="Cupo 12").max_students == 12
+
+    def test_max_students_zero_means_no_cap(self, authenticated_client, teacher):
+        from students.models import Group
+
+        authenticated_client.post(
+            reverse("create_group"),
+            data=json.dumps({"group_name": "Sin Cupo", "teacher_id": teacher.id, "max_students": 0}),
+            content_type="application/json",
+        )
+        group = Group.objects.get(group_name="Sin Cupo")
+        assert group.max_students == 0
+        assert group.available_spots is None
+
+    def test_max_students_rejects_garbage(self, authenticated_client, teacher):
+        response = authenticated_client.post(
+            reverse("create_group"),
+            data=json.dumps({"group_name": "Bad Cupo", "teacher_id": teacher.id, "max_students": "ocho"}),
+            content_type="application/json",
+        )
+        assert response.status_code == 400
+        assert response.json()["success"] is False
+
+    def test_max_students_rejects_negative(self, authenticated_client, teacher):
+        response = authenticated_client.post(
+            reverse("create_group"),
+            data=json.dumps({"group_name": "Neg Cupo", "teacher_id": teacher.id, "max_students": -3}),
+            content_type="application/json",
+        )
+        assert response.status_code == 400
+
 
 class TestApiGetTeachers:
     def test_returns_active_teachers(self, authenticated_client, teacher):

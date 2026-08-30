@@ -72,7 +72,13 @@ def send_welcome_email_task(self, parent_id: int, student_id: int, enrollment_id
             "payment_modality": enrollment.get_payment_modality_display(),
             "schedule_type": enrollment.get_schedule_type_display(),
             "schedule_lines": get_group_schedule_lines(student.group),
-            "start_date": enrollment.enrollment_date.strftime("%d/%m/%Y") if enrollment.enrollment_date else None,
+            # "Fecha de inicio" is when CLASSES start, not when the family signed
+            # the enrolment. enrollment_date is the signup day, so a family
+            # enrolling in August was told their start date was that same August
+            # afternoon rather than the September Monday classes actually begin.
+            "start_date": (
+                enrollment.enrollment_period_start.strftime("%d/%m/%Y") if enrollment.enrollment_period_start else None
+            ),
         }
 
         success = email_service.send_email(

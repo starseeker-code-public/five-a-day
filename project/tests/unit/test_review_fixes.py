@@ -231,11 +231,13 @@ class TestRateLimitCountMethods:
 
 
 class TestWaitingListAssignGuards:
-    def test_assign_rejects_when_student_has_no_parent(
-        self, authenticated_client, group, site_config, enrollment_type_monthly
-    ):
-        """Non-adult students must have a parent linked — assigning without
-        one would orphan the resulting Payment."""
+    def test_waiting_entry_without_parent_goes_through_the_full_creation_flow(self, authenticated_client, group):
+        """A waiting entry has no parent/tutor, so it can't be promoted in place.
+
+        The old shortcut created the enrollment (and a payment with no titular)
+        straight from the list. Now the button hands over to the normal
+        "Matricular" flow, which asks for the padre/tutor first.
+        """
         from datetime import date
 
         from students.models import Student
@@ -249,32 +251,12 @@ class TestWaitingListAssignGuards:
             is_adult=False,
             is_waiting=True,
         )
-        authenticated_client.post(reverse("assign_from_waiting_list", args=[s.id]))
+        response = authenticated_client.get(reverse("assign_from_waiting_list", args=[s.id]))
+        assert response.status_code == 302
+        assert response.url == f"{reverse('parent_create')}?from_waiting={s.id}"
         s.refresh_from_db()
         assert s.is_waiting is True  # Still on the waiting list
-
-    def test_adult_student_without_parent_can_be_assigned(
-        self, authenticated_client, group, site_config, enrollment_type_adults
-    ):
-        """Adult students are their own titular — no parent required."""
-        from datetime import date
-
-        from students.models import Student
-
-        s = Student.objects.create(
-            first_name="Adult",
-            last_name="Waiter",
-            birth_date=date(1990, 1, 1),
-            gdpr_signed=True,
-            group=group,
-            is_adult=True,
-            is_waiting=True,
-            email="adult@example.com",
-        )
-        response = authenticated_client.post(reverse("assign_from_waiting_list", args=[s.id]))
-        assert response.status_code == 302
-        s.refresh_from_db()
-        assert s.is_waiting is False
+        assert not s.enrollments.exists()
 
 
 # ── Payment reminders: SMS dedupe + Decimal ─────────────────────────────────
