@@ -123,6 +123,8 @@ VM reboot — no manual intervention needed.
 
 **Teacher seeding (testing/production only)** — `entrypoint.sh` runs `manage.py seed_teachers` on container start when `DJANGO_ENV` is `testing` or `production`. The command reads numbered `TEACHER_SEED_<N>_*` env vars (see [README → .env template](../README.md#env-template)) and idempotently creates Teacher rows + linked `auth.User` accounts so teachers can log in with email + password.
 
+**Enrollment-type seeding (testing/production only)** — `entrypoint.sh` also runs `manage.py seed_enrollment_types` on container start for the same environments. It provisions the `EnrollmentType` reference table (`monthly`, `quarterly`, `adults`, `special`) from `SiteConfiguration`. This is **not** optional test data: nothing else creates these rows, and without them `EnrollmentService` raises and no student can be enrolled. The command is idempotent, so it is a no-op once the rows exist.
+
 Keep these vars directly in `.env.testing` (alongside the rest of the testing config). There is no overlay file system — `.env.testing` is self-contained and is renamed to `.env` on the VM before bringing the stack up. It's gitignored via `.env*`.
 
 Watch the logs after `docker compose up -d` for `✅ Teacher created/updated: ...` lines confirming the seeds landed. Gmail SMTP (`EMAIL_HOST_USER` + `EMAIL_SECRET`) must work in this environment: any seed block that omits `TEACHER_SEED_<N>_PASSWORD` requires the teacher to activate via the password-reset email.

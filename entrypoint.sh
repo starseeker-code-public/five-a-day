@@ -6,7 +6,7 @@
 # Behaviour is driven entirely by env vars:
 #   - DATABASE_URL set       → Cloud SQL via socket, skip the wait-for-Postgres
 #   - DATABASE_URL unset     → TCP Postgres (Docker), wait until it answers
-#   - DJANGO_ENV != dev      → collectstatic + seed_teachers run
+#   - DJANGO_ENV != dev      → collectstatic + seed_teachers + seed_enrollment_types run
 #   - Always                 → migrate, then exec the Dockerfile CMD (gunicorn)
 # ============================================================================
 
@@ -33,7 +33,7 @@ fi
 FIRST_ARG="$1"
 case "$FIRST_ARG" in
     celery)
-        echo "⏭️  Skipping migrations + collectstatic + seed_teachers (Celery container)"
+        echo "⏭️  Skipping migrations + collectstatic + seeding (Celery container)"
         ;;
     *)
         echo "📦 Applying database migrations..."
@@ -45,6 +45,10 @@ case "$FIRST_ARG" in
 
             echo "🧑‍🏫 Seeding teachers from TEACHER_SEED_* env vars..."
             python project/manage.py seed_teachers || echo "⚠️  seed_teachers reported an issue (non-fatal)"
+            # Reference data, not test data: without these rows EnrollmentService
+            # raises and no student can be enrolled. Idempotent, so it runs every boot.
+            echo "🎓 Ensuring enrollment types exist..."
+            python project/manage.py seed_enrollment_types || echo "⚠️  seed_enrollment_types reported an issue (non-fatal)"
         fi
         ;;
 esac
