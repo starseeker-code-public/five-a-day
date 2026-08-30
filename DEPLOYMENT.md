@@ -298,11 +298,36 @@ not land on the wrong database. Without it the deep probe still reports connecti
 migration state, just not the counts:
 
 ```bash
-openssl rand -hex 32 | gcloud secrets create HEALTH_PROBE_TOKEN --data-file=-
+PROJECT=five-a-day-evolution
+REGION=europe-southwest1
+RUN_SA=fiveaday-run@five-a-day-evolution.iam.gserviceaccount.com
+
+openssl rand -hex 32 | gcloud secrets create HEALTH_PROBE_TOKEN \
+  --data-file=- --replication-policy=automatic --project=$PROJECT
+
+# REQUIRED. The runtime service account holds only roles/cloudsql.client and
+# roles/logging.logWriter at the project level — it has NO project-wide
+# secretAccessor. Every existing secret (DATABASE_URL, DJANGO_SECRET_KEY, …)
+# carries its own per-secret binding, so a new secret without one cannot be
+# read: the revision fails to become ready and traffic silently stays on the
+# old one. Skipping this step is the failure mode, not an optimisation.
+gcloud secrets add-iam-policy-binding HEALTH_PROBE_TOKEN \
+  --member=serviceAccount:$RUN_SA \
+  --role=roles/secretmanager.secretAccessor --project=$PROJECT
 
 # --update-secrets is ADDITIVE, unlike --set-env-vars, so it will not drop the
-# existing env set. Verify the variable count before and after regardless.
-gcloud run services update fiveaday --region=$REGION   --update-secrets=HEALTH_PROBE_TOKEN=HEALTH_PROBE_TOKEN:latest
+# existing env set. Verify the variable count before and after regardless
+# (expect 35 vars / 6 secret refs before, 36 / 7 after).
+gcloud run services update fiveaday --region=$REGION --project=$PROJECT \
+  --update-secrets=HEALTH_PROBE_TOKEN=HEALTH_PROBE_TOKEN:latest
+```
+
+Confirm it took effect — the deep probe gains a `database.counts` object:
+
+```bash
+TOKEN=$(gcloud secrets versions access latest --secret=HEALTH_PROBE_TOKEN --project=$PROJECT)
+curl -s -H "X-Probe-Token: $TOKEN" \
+  "https://fiveaday-332600671945.europe-southwest1.run.app/health/?deep=1"
 ```
 
 ### Build & Deploy

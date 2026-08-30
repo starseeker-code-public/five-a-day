@@ -1,0 +1,354 @@
+{% extends 'base.html' %}
+
+{% block title %}Five a Day - {{ feature.title }}{% endblock %}
+{% block page_title %}Desarrollo{% endblock %}
+{% block page_subtitle %}{{ feature.title }}{% endblock %}
+
+{% block extra_css %}
+{% include "qa/_qa_styles.html" %}
+{% endblock %}
+
+{% block help_content %}
+<p>El <strong>detalle de un desarrollo</strong> es su ficha completa, al estilo de una épica de Jira: la descripción larga a la izquierda y, a la derecha, el estado, la fecha límite y las tareas que lo componen.</p>
+
+<h4 style="font-weight:700;margin-top:1rem;">Editar</h4>
+<p>El <strong>título</strong> y la <strong>descripción</strong> se editan en el mismo sitio: cambia el texto y pulsa <strong>Guardar</strong>. La descripción conserva los saltos de línea tal cual los escribes.</p>
+
+<h4 style="font-weight:700;margin-top:1rem;">Estado y fecha límite</h4>
+<ul style="list-style:disc;margin:0.4rem 0 0 1.25rem;line-height:1.7;">
+    <li>El <strong>estado</strong> (Abierto / En progreso / Hecho) se guarda al cambiarlo. Al marcarlo como <strong>Hecho</strong> se avisa por email a los profesores administradores.</li>
+    <li>La <strong>fecha límite</strong> es opcional: guárdala con el botón, o vacíala y guarda para dejar el desarrollo <strong>sin fecha</strong>.</li>
+</ul>
+
+<h4 style="font-weight:700;margin-top:1rem;">Crear tareas</h4>
+<p>El bloque <strong>Tareas</strong> es lo que convierte el desarrollo en trabajo real. Cada tarea que creas aquí:</p>
+<ul style="list-style:disc;margin:0.4rem 0 0 1.25rem;line-height:1.7;">
+    <li>Entra <strong>directamente en el Backlog</strong> del panel de Testing, como una tarea normal.</li>
+    <li>Lleva su propia <strong>prioridad</strong> (Baja / Media / Alta) — la prioridad vive en la tarea, no en el desarrollo.</li>
+    <li>Se crea <strong>sin imagen</strong>: describe trabajo por hacer, no un fallo visto en pantalla.</li>
+    <li>Se <strong>envía por email</strong> al equipo, indicando de qué desarrollo sale.</li>
+</ul>
+<p>Las tareas se marcan como hechas desde el Backlog; aquí se ven en solo lectura, con las pendientes primero.</p>
+{% endblock %}
+
+{% block content %}
+{% csrf_token %}
+<div class="px-4 py-6" id="feature-detail-page"
+     data-update-url="{% url 'api_update_feature' feature.id %}"
+     data-task-create-url="{% url 'api_create_feature_task' feature.id %}">
+
+    <div class="mb-6 flex items-center gap-3">
+        <a href="{% url 'features' %}" title="Volver a Desarrollos"
+           class="qa-card-icon bg-violet-100 no-underline" style="width:2.5rem;height:2.5rem;">
+            <span class="material-symbols-outlined text-violet-600">arrow_back</span>
+        </a>
+        <span class="material-symbols-outlined text-violet-600 text-4xl">menu_book</span>
+        <h1 class="text-2xl font-bold tracking-tight text-neutral-800" id="feature-heading">{{ feature.title }}</h1>
+        <span class="status-badge status-{{ feature.status }} ml-2" id="feature-status-badge">{{ feature.get_status_display }}</span>
+    </div>
+
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+
+        <!-- Descripción (2 cols) -->
+        <div class="qa-card lg:col-span-2">
+            <div class="qa-card-header">
+                <div class="qa-card-icon bg-indigo-100">
+                    <span class="material-symbols-outlined text-indigo-600">description</span>
+                </div>
+                <div class="flex-1">
+                    <h2 class="text-lg font-bold text-neutral-800">Descripción</h2>
+                    <p class="text-xs text-neutral-500">Resumen, contexto, alcance y criterios de aceptación</p>
+                </div>
+                <button type="button" id="edit-toggle-btn"
+                        class="inline-flex items-center gap-1 px-3 py-2 text-xs font-semibold rounded-lg border border-neutral-300 text-neutral-600 hover:bg-primary-50 hover:text-primary-700 hover:border-primary-300 transition-colors">
+                    <span class="material-symbols-outlined text-sm">edit</span> Editar
+                </button>
+            </div>
+
+            <div id="feature-read">
+                <p class="feature-description">{{ feature.description|default:"(sin descripción)" }}</p>
+            </div>
+
+            <div id="feature-edit" class="hidden">
+                <input type="text" id="edit-title" maxlength="300" value="{{ feature.title }}"
+                       class="w-full mb-3 px-3 py-2 border border-gray-300 rounded-lg text-sm font-semibold focus:ring-2 focus:ring-primary-300 focus:border-primary-400 outline-none">
+                <textarea id="edit-desc" rows="18" spellcheck="false"
+                          class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm font-mono focus:ring-2 focus:ring-primary-300 focus:border-primary-400 outline-none">{{ feature.description }}</textarea>
+                <div class="flex items-center gap-2 mt-3">
+                    <button type="button" id="edit-save-btn"
+                            class="px-4 py-2 rounded-lg text-sm font-semibold text-white bg-primary-500 hover:bg-primary-600">Guardar</button>
+                    <button type="button" id="edit-cancel-btn"
+                            class="px-4 py-2 rounded-lg text-sm font-semibold bg-primary-100 text-primary-700 hover:bg-primary-200">Cancelar</button>
+                    <p id="edit-msg" class="text-xs hidden"></p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Detalles (1 col) -->
+        <div class="qa-card">
+            <div class="qa-card-header">
+                <div class="qa-card-icon bg-violet-100">
+                    <span class="material-symbols-outlined text-violet-600">tune</span>
+                </div>
+                <div>
+                    <h2 class="text-lg font-bold text-neutral-800">Detalles</h2>
+                    <p class="text-xs text-neutral-500">Estado, fecha límite y progreso</p>
+                </div>
+            </div>
+
+            <div class="qa-info-row"><span class="qa-info-label">Creado por</span><span class="qa-info-value">{{ feature.created_by }}</span></div>
+            <div class="qa-info-row"><span class="qa-info-label">Creado el</span><span class="qa-info-value">{{ feature.created_at|date:"d/m/Y H:i" }}</span></div>
+            <div class="qa-info-row"><span class="qa-info-label">Actualizado</span><span class="qa-info-value">{{ feature.updated_at|date:"d/m/Y H:i" }}</span></div>
+            <div class="qa-info-row">
+                <span class="qa-info-label">Tareas</span>
+                <span class="qa-info-value" id="task-progress">{{ feature.done_task_count }}/{{ feature.task_count }} hechas</span>
+            </div>
+
+            <label class="block text-xs font-semibold text-neutral-500 uppercase tracking-wider mt-4 mb-1" for="feature-status">Estado</label>
+            <select id="feature-status"
+                    class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-primary-300 outline-none">
+                {% for value, label in status_choices %}
+                <option value="{{ value }}" {% if feature.status == value %}selected{% endif %}>{{ label }}</option>
+                {% endfor %}
+            </select>
+
+            <label class="block text-xs font-semibold text-neutral-500 uppercase tracking-wider mt-4 mb-1" for="feature-deadline">Fecha límite</label>
+            {# Value must be YYYY-MM-DD for <input type="date"> — anything else renders blank. #}
+            <div class="flex items-center gap-2">
+                <input type="date" id="feature-deadline" value="{{ feature.deadline|date:'Y-m-d' }}"
+                       class="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-primary-300 outline-none">
+                <button type="button" id="deadline-save-btn" title="Guardar la fecha límite (vacía = sin fecha)"
+                        class="w-9 h-9 bg-primary-500 text-white rounded-lg hover:bg-primary-600 inline-flex items-center justify-center shrink-0">
+                    <span class="material-symbols-outlined text-[18px]">save</span>
+                </button>
+            </div>
+            <p class="text-[11px] text-neutral-400 mt-1">Opcional. Déjala vacía y guarda para quitarla.</p>
+            <p id="detail-msg" class="text-xs mt-2 hidden"></p>
+        </div>
+    </div>
+
+    <!-- Tareas del desarrollo -->
+    <div class="qa-card mt-6">
+        <div class="qa-card-header">
+            <div class="qa-card-icon bg-amber-100">
+                <span class="material-symbols-outlined text-amber-600">assignment</span>
+            </div>
+            <div class="flex-1">
+                <h2 class="text-lg font-bold text-neutral-800">Tareas</h2>
+                <p class="text-xs text-neutral-500">Cada tarea creada aquí entra en el <a href="{% url 'testing_tools' %}" class="text-primary-600 font-semibold">Backlog</a> — sin imagen — y se envía por email.</p>
+            </div>
+        </div>
+
+        <div class="bg-gray-50 rounded-xl p-4 mb-4">
+            <div class="grid grid-cols-1 md:grid-cols-12 gap-3 items-center">
+                <input type="text" id="task-title" placeholder="Titulo de la tarea..." maxlength="300"
+                       class="md:col-span-3 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-primary-300 focus:border-primary-400 outline-none">
+                <input type="text" id="task-desc" placeholder="Descripcion (cuanto mas detalle, mejor)" maxlength="500"
+                       class="md:col-span-7 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-primary-300 focus:border-primary-400 outline-none">
+                <select id="task-priority" class="md:col-span-1 px-2 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-primary-300 outline-none">
+                    <option value="low">Baja</option>
+                    <option value="medium" selected>Media</option>
+                    <option value="high">Alta</option>
+                </select>
+                <button id="task-add-btn" title="Crear tarea en el backlog"
+                        class="md:col-span-1 justify-self-end w-9 h-9 bg-primary-500 text-white rounded-lg hover:bg-primary-600 transition-colors inline-flex items-center justify-center">
+                    <span class="material-symbols-outlined text-[18px]">add</span>
+                </button>
+            </div>
+            <p id="task-error" class="text-red-600 text-xs mt-2 hidden"></p>
+        </div>
+
+        <div id="task-list" class="space-y-2">
+            {% for task in tasks %}
+            <div class="backlog-item" data-task-id="{{ task.id }}">
+                <span class="priority-badge priority-{{ task.priority }}">{{ task.get_priority_display }}</span>
+                <div class="flex-1 min-w-0">
+                    <p class="text-sm font-medium text-neutral-800 truncate">{{ task.title }}</p>
+                    {% if task.description %}<p class="text-xs text-neutral-500 truncate">{{ task.description }}</p>{% endif %}
+                </div>
+                <span class="status-badge status-{{ task.status }}">{{ task.get_status_display }}</span>
+                <span class="text-xs text-neutral-400">{{ task.created_by }} &middot; {{ task.created_at|date:"d/m/Y" }}</span>
+            </div>
+            {% empty %}
+            <p class="text-sm text-neutral-400 text-center py-6" id="task-empty">Este desarrollo aun no tiene tareas.</p>
+            {% endfor %}
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+(function() {
+    const page = document.getElementById('feature-detail-page');
+    if (!page) return;
+
+    // CSRF from the hidden input first — the cookie is HttpOnly whenever DEBUG=False.
+    function getCsrfToken() {
+        const el = document.querySelector('[name=csrfmiddlewaretoken]');
+        if (el && el.value) return el.value;
+        const cookie = document.cookie.split(';').find(c => c.trim().startsWith('csrftoken='));
+        return cookie ? cookie.split('=')[1] : '';
+    }
+
+    function post(url, body) {
+        return fetch(url, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json', 'X-CSRFToken': getCsrfToken()},
+            body: JSON.stringify(body),
+        }).then(r => r.json());
+    }
+
+    function flash(el, ok, text) {
+        el.classList.remove('hidden');
+        el.style.color = ok ? '#16a34a' : '#dc2626';
+        el.textContent = text;
+    }
+
+    // ── Editar título + descripción ─────────────────
+    const readBlock = document.getElementById('feature-read');
+    const editBlock = document.getElementById('feature-edit');
+    const editMsg = document.getElementById('edit-msg');
+
+    document.getElementById('edit-toggle-btn')?.addEventListener('click', function() {
+        const editing = !editBlock.classList.contains('hidden');
+        editBlock.classList.toggle('hidden', editing);
+        readBlock.classList.toggle('hidden', !editing);
+    });
+
+    document.getElementById('edit-cancel-btn')?.addEventListener('click', function() {
+        editBlock.classList.add('hidden');
+        readBlock.classList.remove('hidden');
+        editMsg.classList.add('hidden');
+    });
+
+    document.getElementById('edit-save-btn')?.addEventListener('click', function() {
+        const title = document.getElementById('edit-title').value.trim();
+        const description = document.getElementById('edit-desc').value;
+        if (!title) { flash(editMsg, false, 'El titulo es obligatorio.'); return; }
+        this.disabled = true;
+        post(page.dataset.updateUrl, {title: title, description: description})
+            .then(data => {
+                if (!data.success) { flash(editMsg, false, data.message); return; }
+                // textContent, never innerHTML — this text is user-supplied.
+                document.getElementById('feature-heading').textContent = data.feature.title;
+                readBlock.querySelector('.feature-description').textContent =
+                    data.feature.description || '(sin descripción)';
+                editBlock.classList.add('hidden');
+                readBlock.classList.remove('hidden');
+                editMsg.classList.add('hidden');
+            })
+            .catch(() => flash(editMsg, false, 'Error en la peticion.'))
+            .finally(() => { this.disabled = false; });
+    });
+
+    // ── Estado + fecha límite ───────────────────────
+    const detailMsg = document.getElementById('detail-msg');
+    const statusBadge = document.getElementById('feature-status-badge');
+
+    document.getElementById('feature-status')?.addEventListener('change', function() {
+        const status = this.value;
+        post(page.dataset.updateUrl, {status: status})
+            .then(data => {
+                if (!data.success) { flash(detailMsg, false, data.message); return; }
+                statusBadge.className = 'status-badge status-' + data.feature.status + ' ml-2';
+                statusBadge.textContent = data.feature.status_display;
+                flash(detailMsg, true, '✓ Estado guardado');
+            })
+            .catch(() => flash(detailMsg, false, 'Error en la peticion.'));
+    });
+
+    document.getElementById('deadline-save-btn')?.addEventListener('click', function() {
+        // Empty box = no deadline; the endpoint takes null and clears the field.
+        const value = document.getElementById('feature-deadline').value || null;
+        this.disabled = true;
+        post(page.dataset.updateUrl, {deadline: value})
+            .then(data => {
+                if (!data.success) { flash(detailMsg, false, data.message); return; }
+                flash(detailMsg, true, data.feature.deadline_display
+                    ? '✓ Fecha límite: ' + data.feature.deadline_display
+                    : '✓ Desarrollo sin fecha límite');
+            })
+            .catch(() => flash(detailMsg, false, 'Error en la peticion.'))
+            .finally(() => { this.disabled = false; });
+    });
+
+    // ── Crear tareas (van al backlog) ───────────────
+    const taskList = document.getElementById('task-list');
+    const taskError = document.getElementById('task-error');
+    const taskProgress = document.getElementById('task-progress');
+
+    document.getElementById('task-add-btn')?.addEventListener('click', function() {
+        const titleInput = document.getElementById('task-title');
+        const descInput = document.getElementById('task-desc');
+        const priority = document.getElementById('task-priority').value;
+        const title = titleInput.value.trim();
+
+        if (!title) {
+            taskError.textContent = 'El titulo es obligatorio.';
+            taskError.classList.remove('hidden');
+            return;
+        }
+        taskError.classList.add('hidden');
+        this.disabled = true;
+
+        post(page.dataset.taskCreateUrl, {
+            title: title,
+            description: descInput.value.trim(),
+            priority: priority,
+        })
+            .then(data => {
+                if (!data.success) {
+                    taskError.textContent = data.message;
+                    taskError.classList.remove('hidden');
+                    return;
+                }
+                document.getElementById('task-empty')?.remove();
+                const t = data.task;
+
+                // DOM nodes + textContent: task titles are user-supplied text.
+                const item = document.createElement('div');
+                item.className = 'backlog-item';
+                item.dataset.taskId = t.id;
+
+                const prio = document.createElement('span');
+                prio.className = 'priority-badge priority-' + t.priority;
+                prio.textContent = t.priority_display;
+
+                const main = document.createElement('div');
+                main.className = 'flex-1 min-w-0';
+                const title_p = document.createElement('p');
+                title_p.className = 'text-sm font-medium text-neutral-800 truncate';
+                title_p.textContent = t.title;
+                main.appendChild(title_p);
+                if (t.description) {
+                    const desc_p = document.createElement('p');
+                    desc_p.className = 'text-xs text-neutral-500 truncate';
+                    desc_p.textContent = t.description;
+                    main.appendChild(desc_p);
+                }
+
+                const status = document.createElement('span');
+                status.className = 'status-badge status-' + t.status;
+                status.textContent = t.status_display;
+
+                const meta = document.createElement('span');
+                meta.className = 'text-xs text-neutral-400';
+                meta.textContent = t.created_by + ' · ' + t.created_at;
+
+                item.append(prio, main, status, meta);
+                taskList.insertBefore(item, taskList.firstChild);
+
+                taskProgress.textContent = data.done_task_count + '/' + data.task_count + ' hechas';
+                titleInput.value = '';
+                descInput.value = '';
+            })
+            .catch(() => {
+                taskError.textContent = 'Error en la peticion.';
+                taskError.classList.remove('hidden');
+            })
+            .finally(() => { this.disabled = false; });
+    });
+})();
+</script>
+{% endblock %}

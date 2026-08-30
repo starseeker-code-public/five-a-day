@@ -226,6 +226,19 @@ html.dark .priority-low,
 html.dark .status-done { background: #16301f; color: #86efac; }
 html.dark .status-open { background: #1a2842; color: #93c5fd; }
 
+/* Desarrollos (QA epics) — board rows, deadline pill, task counter */
+html.dark .feature-item {
+    background: var(--fad-surface-2);
+    border-color: var(--fad-border);
+    color: var(--fad-ink);
+}
+html.dark .feature-item:hover { background: var(--fad-active); border-color: #7c3aed; }
+html.dark .deadline-pill { background: #2a1f4a; color: #c4b5fd; }
+html.dark .deadline-pill.is-overdue { background: #3a1d24; color: #fca5a5; }
+html.dark .deadline-pill.is-none { background: var(--fad-surface-2); color: var(--fad-faint); }
+html.dark .task-counter { background: #232a4d; color: #a5b4fc; }
+html.dark .feature-description { color: var(--fad-ink); }
+
 /* ── Apps view cards (dark) ────────────────────────────────────────────── */
 html.dark .app-card {
     background: var(--fad-surface);

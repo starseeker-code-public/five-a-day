@@ -1,13 +1,29 @@
 repos:
+  # Ruff runs over the whole tree, not just the staged files, so a green hook
+  # means the same thing CI's `ruff check project/` does. Without
+  # pass_filenames: false a violation in a file you edited but did not stage
+  # (or one that pre-dates the hook install) passes locally and fails CI.
+  # scripts/ is included even though CI only checks project/ — stricter than CI
+  # is safe; the reverse is not.
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.11.6
     hooks:
       - id: ruff
-        args: [--fix]
+        args: [--fix, project/, scripts/]
+        pass_filenames: false
+        always_run: true
       - id: ruff-format
+        args: [project/, scripts/]
+        pass_filenames: false
+        always_run: true
 
   - repo: local
     hooks:
+      # always_run because this hook already scans all of project/ regardless
+      # of what you staged (pass_filenames: false). Without it the default
+      # types: [python] gate skips the hook entirely on a commit that touches
+      # only the Dockerfile, a workflow, pyproject.toml or a template — while
+      # CI runs it over the whole tree anyway.
       - id: mypy
         name: mypy
         # Env comes from tools/static-analysis.env: django-stubs imports
@@ -20,15 +36,15 @@ repos:
         # found". --env-file is shell-free and behaves the same on Linux CI.
         entry: uv run --env-file tools/static-analysis.env mypy project/
         language: system
-        types: [python]
         pass_filenames: false
+        always_run: true
 
       - id: bandit
         name: bandit
         entry: uv run --env-file tools/static-analysis.env bandit -r project/ -c pyproject.toml
         language: system
-        types: [python]
         pass_filenames: false
+        always_run: true
 
       # Runs the full pytest suite inside Docker and fails the commit if
       # coverage drops below 75%. Requires `make up` (containers running).
@@ -39,4 +55,5 @@ repos:
         entry: make test-cov-gate
         language: system
         pass_filenames: false
+        always_run: true
         stages: [pre-commit]

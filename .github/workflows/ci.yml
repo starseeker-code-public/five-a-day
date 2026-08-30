@@ -131,7 +131,7 @@ jobs:
           # Coverage only looks for config in the CURRENT directory, so without this
           # flag the omit list is silently ignored: ~993 extra statements get measured
           # and the reported figure drops from 95.49% to 86.44%, firing the <90%
-          # warning on every run and sending the wrong number to Codecov.
+          # warning on every run.
           uv run python -m pytest tests/ -v --tb=short -n auto \
             --cov=core --cov=students --cov=billing --cov=comms \
             --cov-config=../pyproject.toml \
@@ -164,14 +164,6 @@ jobs:
           else
             echo "Coverage ${COV}% meets the ${TARGET}% target."
           fi
-
-      - name: Upload coverage to Codecov
-        if: always()
-        uses: codecov/codecov-action@v7
-        with:
-          files: project/coverage.xml
-          fail_ci_if_error: false
-          token: ${{ secrets.CODECOV_TOKEN }}
 
       - name: Upload coverage artifact
         if: always()
