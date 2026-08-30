@@ -34,7 +34,7 @@ The `billing` app owns all financial logic: pricing configuration, enrollment pl
 - `_resolve_enrollment_type(student, is_adult, is_special, manual_amount, academic_year)` — picks the matrícula category by precedence: hand-priced → `special`, adult → `adults`, has an earlier academic year → `returning_student`, otherwise `new_student`. Independent of `enrollment_plan`.
 - `_resolve_plan(config, data, is_adult, is_special, manual_amount)` — returns `(base_amount, schedule_type, payment_modality)`, i.e. the recurring period fee and how it is scheduled.
 - `_apply_discounts(config, base, ...)` — applies sibling and language cheque discounts
-- `compute_enrollment_fee(config, student, is_adult, special_fee=None)` — returns `(final_fee, returning_discount_applied)`. `special_fee` (v1.17.5) is the form's optional **Matrícula especial (€)**: a negotiated figure, so it is returned verbatim with no returning-student discount taken off it. It is deliberately separate from `manual_amount`, which prices the *recurring* fee only — a special monthly price does not imply a special matrícula, and before v1.17.5 such an enrollment was silently charged the standard one.
+- `compute_enrollment_fee(config, student, is_adult, special_fee=None)` — returns `(final_fee, returning_discount_applied)`. `special_fee` (v1.20.0) is the form's optional **Matrícula especial (€)**: a negotiated figure, so it is returned verbatim with no returning-student discount taken off it. It is deliberately separate from `manual_amount`, which prices the *recurring* fee only — a special monthly price does not imply a special matrícula, and before v1.20.0 such an enrollment was silently charged the standard one.
 - `is_returning_student(student)` / returning-student enrollment discount (v1.13) — a student who previously had an enrollment pays a reduced enrollment fee
 
 ### EnrollmentTypeService (`billing/services/enrollment_type_service.py`)
@@ -45,7 +45,7 @@ The `billing` app owns all financial logic: pricing configuration, enrollment pl
 ### PaymentService (`billing/services/payment_service.py`)
 
 - `_get_base_monthly_fee(enrollment, config)` — shared helper that resolves base fee by schedule type (adult_group / full_time / part_time)
-- `hand_priced_amount(enrollment)` (v1.17.5) — the agreed **period** fee of a `special` matrícula, or `None`. A hand-priced enrollment stores the admin's amount on the enrollment itself (`final_amount`, already carrying whatever sibling / cheque discount was ticked), and its `schedule_type` is only the timetable the student attends, **not** a price band. Both generators used to re-derive the fee from `SiteConfiguration`, so the ficha showed the custom price while every payment of the year charged the standard 1-day / 2-day rate. Any new amount calculation must go through this helper, and any queryset feeding it needs `select_related("enrollment_type")`.
+- `hand_priced_amount(enrollment)` (v1.20.0) — the agreed **period** fee of a `special` matrícula, or `None`. A hand-priced enrollment stores the admin's amount on the enrollment itself (`final_amount`, already carrying whatever sibling / cheque discount was ticked), and its `schedule_type` is only the timetable the student attends, **not** a price band. Both generators used to re-derive the fee from `SiteConfiguration`, so the ficha showed the custom price while every payment of the year charged the standard 1-day / 2-day rate. Any new amount calculation must go through this helper, and any queryset feeding it needs `select_related("enrollment_type")`.
 - `calculate_monthly_amount(enrollment, config, month)` — monthly payment with discounts + June bonus (delegates to `_get_base_monthly_fee`). Short-circuits on `hand_priced_amount()`: sibling / cheque / June discounts are **not** layered on top of a negotiated price, because `EnrollmentService._apply_discounts` already folded them in at creation.
 - `calculate_quarterly_amount(enrollment, config, quarter_due_month)` — 3 months minus the quarterly discount, **then** the sibling percentage, the language cheque (x3, one per covered month) and — for Q3, which covers June — the June discount. Mirrors `EnrollmentService._apply_discounts` so the enrollment row and the generated payments agree. Before v1.15 only the quarterly percentage was applied, so a quarterly student with a sibling discount or a cheque was billed full price. Adult groups keep their flat rate. A `special` matrícula short-circuits all of it via `hand_priced_amount()` — for a quarterly special the admin types the price of the whole quarter.
 - `complete_payment(payment_id)` — marks payment completed with today's date (within `transaction.atomic()`)
@@ -59,8 +59,8 @@ The `billing` app owns all financial logic: pricing configuration, enrollment pl
 - `get_monthly_fee(schedule_type)` — fee by full_time/part_time/adult_group
 - `get_enrollment_fee(is_adult)` — child vs adult enrollment fee
 - `calculate_quarterly_price()` — 3 months * full_time - discount%
-- `calculate_sibling_price(config=None, schedule_type="full_time")` (v1.17.5) — the monthly fee with the sibling discount applied, in the same order of operations as `PaymentService.calculate_monthly_amount`, so the figure advertised in the payment-reminder email matches what the sibling is actually billed
-- `payment_reminder_fees(config=None)` (v1.17.5) — the display-ready five-row fee table for the `payment_reminder` email (full-time, part-time, adult, quarterly, sibling full-time), formatted the way the Spanish emails print money (comma decimal, no `,00` tail). The quarterly and sibling rows used to read *"consultar en la academia"*; every caller that renders the template now shares one source of truth
+- `calculate_sibling_price(config=None, schedule_type="full_time")` (v1.20.0) — the monthly fee with the sibling discount applied, in the same order of operations as `PaymentService.calculate_monthly_amount`, so the figure advertised in the payment-reminder email matches what the sibling is actually billed
+- `payment_reminder_fees(config=None)` (v1.20.0) — the display-ready five-row fee table for the `payment_reminder` email (full-time, part-time, adult, quarterly, sibling full-time), formatted the way the Spanish emails print money (comma decimal, no `,00` tail). The quarterly and sibling rows used to read *"consultar en la academia"*; every caller that renders the template now shares one source of truth
 
 ### ExpenseService (`billing/services/expense_service.py`)
 
@@ -96,7 +96,7 @@ Implemented directly against the Stripe REST API with `httpx` — **no Stripe SD
   - `enrollment_plan`, `has_language_cheque`, `is_sibling_discount`, `sibling_id`, `is_special`
   - `manual_amount` — **Precio manual (€)**, the *recurring* fee (per month, or per quarter on a
     quarterly plan). Required when `is_special` is ticked.
-  - `special_enrollment_fee` (v1.17.5) — **Matrícula especial (€)**, the optional *one-time*
+  - `special_enrollment_fee` (v1.20.0) — **Matrícula especial (€)**, the optional *one-time*
     matrícula. Left blank the standard matrícula applies; a special cuota does **not** imply a
     special matrícula. `clean()` rejects it unless "Precio especial" is ticked, because silently
     ignoring it would charge the standard fee while the admin believes they set one. It is not
@@ -106,7 +106,7 @@ Implemented directly against the Stripe REST API with `httpx` — **no Stripe SD
 
 - Pricing seed values (used in SiteConfiguration defaults)
 - Choice tuples: ENROLLMENT_TYPE_CHOICES, SCHEDULE_TYPE_CHOICES, PAYMENT_MODALITY_CHOICES, etc.
-- **Choice labels are Spanish** (v1.17.5) — `get_<field>_display()` output goes straight onto the payment detail page, the payments list, the student ficha and the admin, and `PAYMENT_TYPE_CHOICES` / `PAYMENT_STATUS_CHOICES` / `ENROLLMENT_STATUS_CHOICES` shipped English labels in the middle of a Spanish UI. The *keys* stay English, so no data migration is involved — but Django still generates an `AlterField` (`0009`), which must be committed
+- **Choice labels are Spanish** (v1.20.0) — `get_<field>_display()` output goes straight onto the payment detail page, the payments list, the student ficha and the admin, and `PAYMENT_TYPE_CHOICES` / `PAYMENT_STATUS_CHOICES` / `ENROLLMENT_STATUS_CHOICES` shipped English labels in the middle of a Spanish UI. The *keys* stay English, so no data migration is involved — but Django still generates an `AlterField` (`0009`), which must be committed
 - `QUARTER_NAMES_ES[10]` reads "1er Trimestre (Oct-Dic)" — Q1 does not cover September
 - QUARTERS definition (Q1: Oct-Dec, Q2: Jan-Mar, Q3: Apr-Jun)
 - Utility functions: `calculate_discount()`, `get_monthly_fee_by_schedule()`, `get_enrollment_fee()`
@@ -157,7 +157,7 @@ immediately.
 
 ## URL Patterns (billing/urls.py)
 
-Payment CRUD, enrollment API, management panel, expenses (create / **update** (v1.17.5) / delete),
+Payment CRUD, enrollment API, management panel, expenses (create / **update** (v1.20.0) / delete),
 reports, search/statistics, Stripe endpoints, CSV/Excel export, per-student payment-history PDF
 (v1.15). **25 URL patterns** total.
 

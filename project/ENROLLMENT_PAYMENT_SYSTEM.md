@@ -19,7 +19,7 @@ An enrollment represents a student being "inside the system" for an academic yea
 | New child          | 40€   | Default enrollment fee                           |
 | Returning child    | 20€   | Old student discount: -20€ (already had an enrollment) |
 | Adult (18+)        | 20€   | Fixed, no discounts                              |
-| Special            | manual | **Matrícula especial (€)** on the enrollment form, charged verbatim (v1.17.5) |
+| Special            | manual | **Matrícula especial (€)** on the enrollment form, charged verbatim (v1.20.0) |
 
 The four rows above are exactly the four `EnrollmentType` categories — `new_student`, `returning_student`, `adults`, `special`. An `EnrollmentType` is a **matrícula category, not a payment cadence**; the cadence lives on `Enrollment.payment_modality`.
 
@@ -55,7 +55,7 @@ Monthly payments are due every month from **September** to **June**.
 
 Quarters:
 - **Q1**: October–December — billed as **three** months, due 1 October. The Spanish label is
-  "1er Trimestre (Oct-Dic)" (corrected in v1.17.5; it read "Sep-Dic" while charging three months).
+  "1er Trimestre (Oct-Dic)" (corrected in v1.20.0; it read "Sep-Dic" while charging three months).
   `QUARTERS[0]["includes_sept"]` is `True` but is read by nothing — see the note under
   *Automatic Payment Generation*.
 - **Q2**: January–March
@@ -84,7 +84,7 @@ monthly student would receive**.
 - The admin types the price by hand. It is stored on the enrollment (`enrollment_amount` / `final_amount`) and is the **per-period** figure: per month, or per quarter for a quarterly special.
 - `schedule_type` is only the timetable the student actually attends — it is **not** a price band. A special enrollment can be monthly or quarterly, 1 day or 2 days a week.
 - Every payment of the year is billed at that amount via `PaymentService.hand_priced_amount()`. Sibling / language-cheque / June discounts are **not** layered on top: `EnrollmentService._apply_discounts` already folded whatever was ticked into the stored figure at creation.
-- Before v1.17.5 both generators re-derived the fee from `SiteConfiguration`, so the ficha showed the custom price while every payment charged the standard 1-day / 2-day rate.
+- Before v1.20.0 both generators re-derived the fee from `SiteConfiguration`, so the ficha showed the custom price while every payment charged the standard 1-day / 2-day rate.
 
 ---
 

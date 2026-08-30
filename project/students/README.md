@@ -9,7 +9,7 @@ The `students` app owns all people-related models: students, parents, teachers, 
 | **Teacher** | `teachers` | first_name, last_name, email (unique), phone, active, admin, user (OneToOne → `auth.User`), two_factor_secret / _enabled / _backup_codes (v1.13) | Has many Groups; linked to a Django auth user for login |
 | **Group** | `groups` | group_name (unique), color (hex), max_students (v1.1 capacity), active | FK to Teacher; has many Students |
 | **Parent** | `parents` | first_name, last_name, dni (unique), phone, email, iban, sms_opt_in (v1.8) | M2M to Students via StudentParent |
-| **Student** | `students` | first_name, last_name (blank, v1.17.5), birth_date (nullable, v1.15), gender (m/f), is_adult, school, allergies, gdpr_signed, active, is_waiting / waiting_since (v1.1) / waiting_priority (v1.17.5), withdrawal_date / withdrawal_reason, course / observations / waiting_contact_name / waiting_contact_phone (v1.15) | FK to Group (nullable, v1.15); M2M to Parents |
+| **Student** | `students` | first_name, last_name (blank, v1.20.0), birth_date (nullable, v1.15), gender (m/f), is_adult, school, allergies, gdpr_signed, active, is_waiting / waiting_since (v1.1) / waiting_priority (v1.20.0), withdrawal_date / withdrawal_reason, course / observations / waiting_contact_name / waiting_contact_phone (v1.15) | FK to Group (nullable, v1.15); M2M to Parents |
 | **StudentParent** | `student_parents` | student, parent | Through table for Student-Parent M2M |
 | **ParentSessionToken** | `parent_session_tokens` | parent, token (hashed), expires_at, used_at — in `parent_portal_models.py` (v1.9) | FK to Parent; single-use magic-link token for the parent portal |
 
@@ -22,7 +22,7 @@ The `students` app owns all people-related models: students, parents, teachers, 
 - `Teacher.full_name` — "{first_name} {last_name}"
 - `Group.max_students` / capacity properties — occupancy and free seats, used by the waiting list (v1.1)
 - `Student.is_waiting` / `waiting_since` — waiting students are excluded from the main student list (v1.1)
-- `Student.waiting_priority` (v1.17.5) — jumps the FIFO queue. It is part of the waiting list's `ORDER BY` (`-waiting_priority, waiting_since, created_at`), not just a badge. Set on the create form, edited afterwards from `/admin/`
+- `Student.waiting_priority` (v1.20.0) — jumps the FIFO queue. It is part of the waiting list's `ORDER BY` (`-waiting_priority, waiting_since, created_at`), not just a badge. Set on the create form, edited afterwards from `/admin/`
 - `ParentSessionToken.consume()` — single-use redemption under `SELECT FOR UPDATE`, so a magic link can't be redeemed twice concurrently (v1.9)
 
 ### Teacher → auth.User link
@@ -38,7 +38,7 @@ Dev environment (`DJANGO_ENV=development`) keeps using the legacy env-var basic-
 ## Forms
 
 - **StudentForm** — ModelForm for Student (first_name, last_name, birth_date, school, allergies, gdpr_signed, group). Validates birth_date is not in the future, and re-asserts `last_name.required = True` — the model field is `blank=True` for the waiting-list form, which would otherwise make the surname optional on the real ficha too.
-- **WaitingListForm** (v1.15) — deliberately minimal form for taking a waiting-list entry over the phone. Only the student's first name and a contact phone are required; the **surname is not asked for at all** (v1.17.5 — it is collected when the family is offered a place), and parent name, `course`, `age`, `waiting_priority` and `observations` are optional with the preferred group blank-able. The contact is stored on the Student (`waiting_contact_*`) rather than as a `Parent`, because `Parent` requires a unique DNI that nobody has to hand during a call. An `age` is converted to an approximate `birth_date` so the age column has something to show.
+- **WaitingListForm** (v1.15) — deliberately minimal form for taking a waiting-list entry over the phone. Only the student's first name and a contact phone are required; the **surname is not asked for at all** (v1.20.0 — it is collected when the family is offered a place), and parent name, `course`, `age`, `waiting_priority` and `observations` are optional with the preferred group blank-able. The contact is stored on the Student (`waiting_contact_*`) rather than as a `Parent`, because `Parent` requires a unique DNI that nobody has to hand during a call. An `age` is converted to an approximate `birth_date` so the age column has something to show.
 - **ParentForm** — (v1.15: DNI uniqueness is deliberately NOT enforced at form level, so `ParentCreateView` can reuse an existing parent when a second sibling is enrolled instead of showing a raw uniqueness error)  ModelForm for Parent (first_name, last_name, dni, phone, email, iban). Validates DNI minimum 8 characters.
 - **ParentFormSet** — Inline formset for StudentParent through model.
 
