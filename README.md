@@ -20,7 +20,7 @@ Built to centralize student records, automate billing cycles, and streamline par
 ### Project Status
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v1.16.0-brightgreen?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-v1.17.0-brightgreen?style=flat-square" alt="Version">
   &nbsp;|&nbsp;
   <a href="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml?query=branch%3Amain"><img src="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml/badge.svg?branch=main&style=flat-square" alt="CI main"></a>
   &nbsp;|&nbsp;
@@ -41,9 +41,9 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 | Version | Date | Description |
 |---------|------|-------------|
-| **v1.16.0** | 2026-08-27 | Deep health probe, verified backups, tiered retention |
+| **v1.17.0** | 2026-08-30 | Hold-to-reveal eye button on the login password |
+| v1.16.0 | 2026-08-27 | Deep health probe, verified backups, tiered retention |
 | v1.15.2 | 2026-08-27 | LF line-ending normalisation, unblocks the release PR |
-| v1.15.1 | 2026-08-27 | Portable test paths, gunicorn bound raised to <27 |
 
 ---
 
@@ -150,8 +150,38 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 ## Version History & Roadmap
 
-<details id="v1160" open>
-<summary><strong>v1.16.0 — Deep health probe, verified backups, tiered retention (current)</strong></summary>
+<details id="v1170" open>
+<summary><strong>v1.17.0 — Hold-to-reveal password on the login page (current)</strong></summary>
+
+**What prompted it**
+
+- Typing a password blind into the login form is the one place in the app where a typo
+  costs a full round-trip and, after enough tries, the login rate limit. Teachers asked
+  for the standard eye button.
+
+**Login page**
+
+- Added an eye button inside the password field's `.input-wrap`. The password is shown as
+  plain text only **while the button is held down** — pointer or keyboard — and is re-masked
+  the instant it is released, the pointer leaves the button, focus is lost, the window is
+  blurred, or the form is submitted. A plain click never leaves the value on screen.
+- The icon swaps between `visibility` and `visibility_off` and the button carries
+  `aria-pressed` so screen readers announce the current state. It sits in the tab order
+  after the password input.
+- Styled to match the login card's standalone palette, with `html.dark` overrides beside
+  the existing `.input-wrap` dark rules — `login.html` carries its own CSS and is not
+  covered by `theme.css`.
+
+**New file**
+
+- `core/static/js/password_toggle.js` — binds any
+  `<button data-password-toggle="<input id>">` to the input with that id, so the same
+  hold-to-reveal behaviour can be dropped onto other password fields without new JS.
+
+</details>
+
+<details id="v1160">
+<summary><strong>v1.16.0 — Deep health probe, verified backups, tiered retention</strong></summary>
 
 **What prompted it**
 
@@ -205,7 +235,7 @@ Built to centralize student records, automate billing cycles, and streamline par
 </details>
 
 <details id="v1152">
-<summary><strong>v1.15.2 — LF line-ending normalisation (current)</strong></summary>
+<summary><strong>v1.15.2 — LF line-ending normalisation</strong></summary>
 
 **Repository hygiene**
 
@@ -2234,7 +2264,7 @@ five-a-day/
 │   │   │                         two_factor/ (v1.13), plus expenses/reports/waiting_list
 │   │   │                         and waiting_list_create (v1.15)
 │   │   ├── static/               CSS (app.css, theme.css, email.css, admin_custom.css)
-│   │   │                         + JS (16 modules) + images
+│   │   │                         + JS (17 modules) + images
 │   │   └── management/commands/  seed_teachers, seed_testdata, export_to_sheets (v1.2),
 │   │                             reset_two_factor (v1.13), cleanup_backlog_tasks (v1.14.2),
 │   │                             prune_audit_log (v1.15)
@@ -2279,7 +2309,7 @@ five-a-day/
 │   │   └── management/commands/  send_email, test_all_emails, plus 4 Beat-task wrappers
 │   │                             (v1.14.2 — birthday, reminders, report, Fun Friday drain)
 │   │
-│   ├── tests/                    pytest suite (1,213 tests, 95.30 % coverage) — unit/ + integration/
+│   ├── tests/                    pytest suite (1,214 tests, 95.24 % coverage) — unit/ + integration/
 │   ├── templates/registration/   Password-reset templates (form, done, confirm, complete + email body)
 │   ├── templates/admin/          Django admin overrides (branded theme)
 │   └── conftest.py               Shared fixtures (models + authenticated_client)
@@ -2332,7 +2362,7 @@ Dashboard, authentication, scheduling, and shared utilities. Owns all views and 
 | **Services** | 3 — analytics_service, google_sheets_service, two_factor_service |
 | **Middleware** | 4 — NoHtmlCacheMiddleware (no-cache on dynamic HTML), QAErrorEmailMiddleware, SimpleAuthMiddleware (session auth public allow-list incl. `/password-reset/` + non-admin teacher URL-name whitelist), AuditActorMiddleware |
 | **Templates** | base.html (layout), 23 page templates, 18 email templates + `base_email.html` (common violet style + dark-mode support), error pages, plus `templates/registration/` for the password-reset flow |
-| **Static** | 4 CSS files (app.css, theme.css, email.css, admin_custom.css), 16 JS modules, images |
+| **Static** | 4 CSS files (app.css, theme.css, email.css, admin_custom.css), 17 JS modules, images |
 | **Commands** | seed_teachers (Teacher + auth.User from env vars), seed_testdata, export_to_sheets, reset_two_factor, cleanup_backlog_tasks, prune_audit_log (v1.15) |
 | **URLs** | 46 patterns: dashboard, auth, password reset, schedule, todos, support, QA (incl. backlog export), PWA, 2FA, parent portal |
 
@@ -2593,9 +2623,9 @@ Public flow at `/password-reset/...` that lets a teacher recover access without 
 
 | Metric | Value |
 |--------|-------|
-| **Total tests** | 1,213 |
+| **Total tests** | 1,214 |
 | **Test files** | 72 (46 unit + 26 integration) |
-| **Coverage** | 95% (95.30% — 5,123 statements, 241 uncovered) |
+| **Coverage** | 95% (95.24% — 5,123 statements, 244 uncovered) |
 | **Coverage thresholds** | **≥ 90%** (target, no warning) / **75-89%** (CI warning, pre-commit still blocks below 75) / **< 75%** (CI fails, pre-commit rejects the commit) |
 | **Runtime** | ~50 seconds (parallel workers via `pytest-xdist -n auto`) |
 | **Database** | PostgreSQL (same as production) — **always use `make test`** |
@@ -2763,7 +2793,7 @@ Live snapshot from the last full run (`make test`) — the 29 source files below
 | `students/models.py` | 213 | 3 | 99% | 350, 367-368 |
 | `students/parent_portal_models.py` | 41 | 1 | 98% | 44 |
 
-**56 files** have 100% coverage (skipped above). Total coverage: **95%** (95.30%) across 5,123 statements, 241 uncovered. Coverage is **very good**. Coverage is enforced at three levels: pre-commit hook (>= 75%), CI hard floor (>= 75%), and CI warning (< 90%).
+**56 files** have 100% coverage (skipped above). Total coverage: **95%** (95.24%) across 5,123 statements, 244 uncovered. Coverage is **very good**. Coverage is enforced at three levels: pre-commit hook (>= 75%), CI hard floor (>= 75%), and CI warning (< 90%).
 
 > **Reading the number consistently (fixed in v1.14.7).** The CI test step runs with
 > `working-directory: project`, but `[tool.coverage.run]` — including the `omit` list for
@@ -3388,7 +3418,7 @@ make up                        # Start Docker (PostgreSQL + Redis + Django + Cel
 1. Work on `development` (or a short-lived branch off `development`)
 2. Make changes following the conventions below
 3. Run `make pc-run` — Ruff + mypy + bandit all pass, offers to auto-bump the patch version on success, and auto-stages `uv.lock` if regenerated
-4. Run `make test` — all 1,213 tests must pass (PostgreSQL via Docker, parallel, with coverage)
+4. Run `make test` — all 1,214 tests must pass (PostgreSQL via Docker, parallel, with coverage)
 5. `git commit` with a message like `v1.14.7 — Short description` (version first, em dash — matches every other release commit in the project)
 6. `git push origin development`
 7. CI runs automatically on your push (see [CI/CD](#cicd--github-actions))
