@@ -1,6 +1,6 @@
 ---
 name: deploy
-description: Use when the user wants to deploy Five a Day to GCP — the testing branch to the Compute Engine VM (http://34.26.130.187:8000/) and/or the main branch to Cloud Run production (https://fiveaday-332600671945.europe-southwest1.run.app/). Handles build, image-pinned Cloud Run jobs, migrations, and post-deploy version verification against GitHub. Triggers on "deploy", "ship to testing", "deploy to production", "push to prod".
+description: Use when the user wants to deploy Five a Day to GCP — the testing branch to the Compute Engine VM (http://34.26.130.187:8000/) and/or the main branch to Cloud Run production (https://fiveaday-332600671945.europe-southwest1.run.app/). Always asks first which target to deploy (testing only, production only, or both). Handles build, image-pinned Cloud Run jobs, migrations, and post-deploy version verification against GitHub. Triggers on "deploy", "ship to testing", "deploy to production", "push to prod".
 ---
 
 # deploy
@@ -53,12 +53,38 @@ This convention matters: it is what lets you diff the deployed commit against th
 
 ---
 
-## Invocation
+## Invocation — ALWAYS ask which target first
 
-- `/deploy testing` → testing only
-- `/deploy production` (or `prod` / `main`) → production only
-- `/deploy` with no argument → **both, in sequence**: testing first, fully verified, then
-  production. If testing fails at any point, STOP and do not touch production.
+**The first thing this skill does, every single time, is ask the user to pick the target
+with `AskUserQuestion`.** There is no inferred default and no silent path to production:
+the choice is always made by hand, on the spot, even when the invocation already named a
+target and even when the answer seems obvious from the conversation.
+
+Ask before Step 0 — before the auth check, before the backup check, before any `gcloud`
+call. Nothing in this document runs until the answer is in.
+
+```
+Question: "¿Qué despliegue quieres hacer?"
+Header:   "Deploy"
+Options:
+  1. "Solo testing"      — testing branch → Compute Engine VM (http://34.26.130.187:8000/).
+                           Reversible, no real data at risk.
+  2. "Solo producción"   — main branch → Cloud Run + Cloud SQL. Serves the real academy.
+  3. "Testing y producción" — both, in sequence: testing first and fully verified, then
+                           production. If testing fails at any point, STOP and do not touch
+                           production.
+```
+
+Rules for the question:
+
+- If the invocation named a target (`/deploy testing`, `/deploy prod`, …), put that option
+  **first** and mark it `(Recomendado)` — but still ask. A typed argument is a suggestion,
+  never the decision.
+- Never add a fourth option that skips or reorders the verification steps.
+- If the user answers anything other than these three (via "Other"), do not improvise a
+  target: restate the three and ask again.
+
+Whatever is chosen, run only the steps for that target and report on that target only.
 
 ---
 
@@ -114,8 +140,8 @@ If the branch is behind, fast-forward it and say so. If it is *ahead* or the tre
 checkout to the academy's live system — that is the whole point of the guard.
 
 **Checkout matters for production, not for testing.** The two targets consume the branch
-differently, so `/deploy` with no argument is *not* asking you to check out two branches at
-once:
+differently, so choosing "Testing y producción" is *not* asking you to check out two branches
+at once:
 
 - **testing** — the VM pulls `origin/testing` itself (Step 1a), so your local checkout is
   irrelevant and only the remote-sync check above applies. Fast-forward without switching:
