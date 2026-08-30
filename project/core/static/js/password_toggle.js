@@ -19,7 +19,11 @@
 
     function bind(btn) {
         var input = document.getElementById(btn.getAttribute('data-password-toggle'));
-        if (!input) return;
+        /* Only ever act on a real password field — pointed at anything else the
+           button would silently convert that input into one. */
+        if (!input || input.type !== 'password') return;
+
+        var maskedType = input.type;
 
         function reveal(e) {
             if (e) e.preventDefault();   /* keep focus on the input */
@@ -28,7 +32,7 @@
         }
 
         function mask() {
-            input.type = 'password';
+            input.type = maskedType;
             setIcon(btn, false);
         }
 
