@@ -20,7 +20,7 @@ Built to centralize student records, automate billing cycles, and streamline par
 ### Project Status
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v1.17.0-brightgreen?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-v1.17.1-brightgreen?style=flat-square" alt="Version">
   &nbsp;|&nbsp;
   <a href="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml?query=branch%3Amain"><img src="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml/badge.svg?branch=main&style=flat-square" alt="CI main"></a>
   &nbsp;|&nbsp;
@@ -41,9 +41,9 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 | Version | Date | Description |
 |---------|------|-------------|
-| **v1.17.0** | 2026-08-30 | Hold-to-reveal eye button on the login password |
+| **v1.17.1** | 2026-08-30 | Provision enrollment types; production could not enroll |
+| v1.17.0 | 2026-08-30 | Hold-to-reveal eye button on the login password |
 | v1.16.0 | 2026-08-27 | Deep health probe, verified backups, tiered retention |
-| v1.15.2 | 2026-08-27 | LF line-ending normalisation, unblocks the release PR |
 
 ---
 
@@ -150,8 +150,48 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 ## Version History & Roadmap
 
-<details id="v1170" open>
-<summary><strong>v1.17.0 — Hold-to-reveal password on the login page (current)</strong></summary>
+<details id="v1171" open>
+<summary><strong>v1.17.1 — Enrollment types are provisioned, not seeded (current)</strong></summary>
+
+**What prompted it**
+
+- Production had **zero `EnrollmentType` rows**, so `EnrollmentService._resolve_plan` raised
+  `EnrollmentType '<name>' not found` and **no student could be enrolled at all** — child,
+  adult, monthly or quarterly. Found while checking a backlog item that assumed the rows
+  existed with English labels; the admin showed `0 Tipos de matrícula`.
+- The rows are reference data, but nothing ever created them: `billing/migrations/0001_initial`
+  builds the table and inserts nothing, and `entrypoint.sh` provisioned only `migrate`,
+  `collectstatic` and `seed_teachers`. The only code that created them was `seed_testdata`,
+  a QA fixture generator whose `--reset` flag wipes every student, parent and payment —
+  unusable on production.
+- Production was still empty of real data, so nothing broke for the academy; the gap had been
+  latent since the first production deploy on 2026-08-21.
+
+**New: `seed_enrollment_types`**
+
+- `billing/services/enrollment_type_service.ensure_enrollment_types()` creates the four types
+  `_resolve_plan` can ask for — `monthly`, `quarterly`, `adults`, `special` — with Spanish
+  `display_name`s and amounts read from `SiteConfiguration`. Idempotent: re-running repairs a
+  drifted label or amount and leaves admin-edited `description` / `active` alone.
+- `billing/management/commands/seed_enrollment_types.py` is a thin wrapper over it, and
+  `entrypoint.sh` now runs it on every testing/production boot beside `seed_teachers`, so no
+  environment can start up unable to enroll.
+- `special` was missing from `seed_testdata` too, so a special-rate student could not be
+  enrolled even on QA. `seed_testdata` now delegates to the same function, so QA and
+  production can no longer disagree about which types exist.
+
+**Notes**
+
+- `EnrollmentType.base_amount_*` is not cosmetic: `Enrollment.save()` uses it as the pricing
+  fallback whenever `final_amount` is not supplied, which is why the command sources those
+  amounts from `SiteConfiguration` rather than from `billing/constants.py`.
+- 17 new tests, including a parametrised case per enrollment plan asserting each one resolves
+  after seeding, and a guard asserting the empty table still raises.
+
+</details>
+
+<details id="v1170">
+<summary><strong>v1.17.0 — Hold-to-reveal password on the login page</strong></summary>
 
 **What prompted it**
 
@@ -2309,7 +2349,7 @@ five-a-day/
 │   │   └── management/commands/  send_email, test_all_emails, plus 4 Beat-task wrappers
 │   │                             (v1.14.2 — birthday, reminders, report, Fun Friday drain)
 │   │
-│   ├── tests/                    pytest suite (1,214 tests, 95.24 % coverage) — unit/ + integration/
+│   ├── tests/                    pytest suite (1,231 tests, 95.25 % coverage) — unit/ + integration/
 │   ├── templates/registration/   Password-reset templates (form, done, confirm, complete + email body)
 │   ├── templates/admin/          Django admin overrides (branded theme)
 │   └── conftest.py               Shared fixtures (models + authenticated_client)
@@ -2623,9 +2663,9 @@ Public flow at `/password-reset/...` that lets a teacher recover access without 
 
 | Metric | Value |
 |--------|-------|
-| **Total tests** | 1,214 |
+| **Total tests** | 1,231 |
 | **Test files** | 72 (46 unit + 26 integration) |
-| **Coverage** | 95% (95.24% — 5,123 statements, 244 uncovered) |
+| **Coverage** | 95% (95.25% — 5,161 statements, 245 uncovered) |
 | **Coverage thresholds** | **≥ 90%** (target, no warning) / **75-89%** (CI warning, pre-commit still blocks below 75) / **< 75%** (CI fails, pre-commit rejects the commit) |
 | **Runtime** | ~50 seconds (parallel workers via `pytest-xdist -n auto`) |
 | **Database** | PostgreSQL (same as production) — **always use `make test`** |
@@ -2793,7 +2833,7 @@ Live snapshot from the last full run (`make test`) — the 29 source files below
 | `students/models.py` | 213 | 3 | 99% | 350, 367-368 |
 | `students/parent_portal_models.py` | 41 | 1 | 98% | 44 |
 
-**56 files** have 100% coverage (skipped above). Total coverage: **95%** (95.24%) across 5,123 statements, 244 uncovered. Coverage is **very good**. Coverage is enforced at three levels: pre-commit hook (>= 75%), CI hard floor (>= 75%), and CI warning (< 90%).
+**56 files** have 100% coverage (skipped above). Total coverage: **95%** (95.25%) across 5,161 statements, 245 uncovered. Coverage is **very good**. Coverage is enforced at three levels: pre-commit hook (>= 75%), CI hard floor (>= 75%), and CI warning (< 90%).
 
 > **Reading the number consistently (fixed in v1.14.7).** The CI test step runs with
 > `working-directory: project`, but `[tool.coverage.run]` — including the `omit` list for
@@ -3418,7 +3458,7 @@ make up                        # Start Docker (PostgreSQL + Redis + Django + Cel
 1. Work on `development` (or a short-lived branch off `development`)
 2. Make changes following the conventions below
 3. Run `make pc-run` — Ruff + mypy + bandit all pass, offers to auto-bump the patch version on success, and auto-stages `uv.lock` if regenerated
-4. Run `make test` — all 1,214 tests must pass (PostgreSQL via Docker, parallel, with coverage)
+4. Run `make test` — all 1,231 tests must pass (PostgreSQL via Docker, parallel, with coverage)
 5. `git commit` with a message like `v1.14.7 — Short description` (version first, em dash — matches every other release commit in the project)
 6. `git push origin development`
 7. CI runs automatically on your push (see [CI/CD](#cicd--github-actions))
