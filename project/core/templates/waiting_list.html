@@ -13,7 +13,7 @@
 {% endblock %}
 
 {% block help_content %}
-<p>La <strong>Lista de espera</strong> gestiona a los alumnos que quieren entrar pero todavía no tienen plaza en su grupo. Se ordena por antigüedad: el primero que se apuntó es el primero en asignarse cuando queda un hueco.</p>
+<p>La <strong>Lista de espera</strong> gestiona a los alumnos que quieren entrar pero todavía no tienen plaza en su grupo. Se ordena por antigüedad: el primero que se apuntó es el primero en matricularse cuando queda un hueco.</p>
 
 <h4 style="font-weight:700;margin-top:1rem;">Ocupación de los grupos</h4>
 <p>Arriba, una tarjeta por grupo muestra de un vistazo cómo está de lleno:</p>
@@ -26,9 +26,10 @@
 <h4 style="font-weight:700;margin-top:1rem;">La tabla de espera</h4>
 <p>Cada fila muestra el alumno, su edad, el <strong>grupo preferido</strong> (con aviso de si está completo o tiene huecos), los padres/tutores y la fecha en la que entró en espera. El nombre y el icono del ojo abren su ficha completa.</p>
 
-<h4 style="font-weight:700;margin-top:1rem;">Asignar a un grupo</h4>
+<h4 style="font-weight:700;margin-top:1rem;">Matricular a un alumno en espera</h4>
 <ul style="list-style:disc;margin:0.4rem 0 0 1.25rem;line-height:1.7;">
-    <li>Cuando se libera una plaza, pulsa <strong>Asignar</strong> en la fila del alumno: pasa a ser alumno activo de su grupo y se le generan la matrícula y los pagos del curso.</li>
+    <li>Cuando se libera una plaza, pulsa <strong>Matricular</strong> en la fila del alumno: te lleva al alta normal (primero el padre/tutor y después la ficha del alumno), con los datos de la espera ya rellenados.</li>
+    <li>Una entrada de espera se toma por teléfono y <strong>no tiene padre/tutor</strong>, por eso hay que crear la ficha completa: al guardarla se generan la matrícula y los pagos del curso, y la entrada de espera desaparece de esta lista.</li>
     <li>Si el grupo está completo, el botón aparece atenuado y no se puede pulsar: primero hay que liberar una plaza (por ejemplo, dando de baja a otro alumno).</li>
 </ul>
 
@@ -53,7 +54,7 @@
     </div>
     <p class="text-neutral-600">
         {{ waiting_count }} estudiante{{ waiting_count|pluralize:"s" }} en espera.
-        Ordenados por antigüedad (primero en llegar, primero en asignar).
+        Ordenados por antigüedad (primero en llegar, primero en matricular).
     </p>
 </div>
 
@@ -200,15 +201,20 @@
                     </td>
                     <td class="px-6 py-4 text-center">
                         <div class="flex items-center justify-center gap-2">
-                            <form method="post" action="{% url 'assign_from_waiting_list' student.id %}" class="inline">
-                                {% csrf_token %}
-                                <button type="submit"
-                                        class="inline-flex items-center gap-1 px-3 py-1.5 bg-green-500 hover:bg-green-600 text-white rounded-md text-sm font-medium transition-colors {% if student.group.is_full %}opacity-40 cursor-not-allowed{% endif %}"
-                                        {% if student.group.is_full %}disabled title="El grupo está completo"{% else %}title="Asignar al grupo"{% endif %}>
-                                    <span class="material-symbols-outlined text-sm">person_add</span>
-                                    Asignar
-                                </button>
-                            </form>
+                            {% if student.group.is_full %}
+                            <span class="inline-flex items-center gap-1 px-3 py-1.5 bg-green-500 text-white rounded-md text-sm font-medium opacity-40 cursor-not-allowed"
+                                  title="El grupo está completo">
+                                <span class="material-symbols-outlined text-sm">person_add</span>
+                                Matricular
+                            </span>
+                            {% else %}
+                            <a href="{% url 'assign_from_waiting_list' student.id %}"
+                               class="inline-flex items-center gap-1 px-3 py-1.5 bg-green-500 hover:bg-green-600 text-white rounded-md text-sm font-medium transition-colors no-underline"
+                               title="Matricular: crea el padre/tutor y la ficha del alumno">
+                                <span class="material-symbols-outlined text-sm">person_add</span>
+                                Matricular
+                            </a>
+                            {% endif %}
                             <a href="{% url 'student_detail' student.id %}"
                                class="inline-flex items-center gap-1 px-3 py-1.5 bg-neutral-100 hover:bg-neutral-200 text-neutral-700 rounded-md text-sm font-medium transition-colors no-underline"
                                title="Ver ficha">

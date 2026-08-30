@@ -12,8 +12,14 @@ pytestmark = pytest.mark.django_db
 
 
 class TestGroupCapacityProperties:
-    def test_no_cap_by_default(self, group):
-        assert group.max_students == 0
+    def test_groups_are_capped_at_eight_by_default(self, group):
+        assert group.max_students == 8
+
+    def test_zero_means_no_cap(self, group):
+        # 0 is still the documented "no cap" sentinel; it is just no longer the
+        # default, so the behaviour has to be asked for explicitly.
+        group.max_students = 0
+        group.save()
         assert group.available_spots is None
         assert group.is_full is False
 

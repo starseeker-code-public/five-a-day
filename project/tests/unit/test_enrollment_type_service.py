@@ -153,3 +153,33 @@ class TestEnrollmentUnblocked:
         )
 
         assert enrollment_type.name == expected
+
+
+class TestEnrolmentYearRollover:
+    """A student enrolled between May and August joins the NEXT course.
+
+    Before the May rollover, `current_academic_year()` returned the course whose
+    classes had already finished, so `create_enrollment` set an
+    `enrollment_period_start` in the past and `schedule_academic_year_payments`
+    generated a whole year of fees against months that had already gone by.
+    """
+
+    def test_august_enrolment_starts_in_the_coming_september(self, student):
+        from datetime import date
+        from unittest.mock import patch
+
+        from billing.models import academic_year_end_date, academic_year_start_date
+
+        ensure_enrollment_types()
+
+        with patch("billing.services.enrollment_service.date") as mock_date:
+            mock_date.today.return_value = date(2026, 8, 30)
+            enrollment = EnrollmentService.create_enrollment(
+                student, {"enrollment_plan": "monthly_full"}, is_adult=False
+            )
+
+        assert enrollment.academic_year == "2026-2027"
+        # Classes start in the September AFTER the signup, never before it.
+        assert enrollment.enrollment_period_start == academic_year_start_date(2026)
+        assert enrollment.enrollment_period_start > date(2026, 8, 30)
+        assert enrollment.enrollment_period_end == academic_year_end_date(2027)

@@ -5,7 +5,6 @@ from datetime import date
 import pytest
 from django.urls import reverse
 
-from core.models import HistoryLog
 from students.models import Student
 
 pytestmark = pytest.mark.django_db
@@ -67,52 +66,128 @@ class TestWaitingListView:
 
 
 class TestAssignFromWaitingList:
-    def test_requires_post(self, authenticated_client, waiting_student):
+    """The button no longer promotes the entry in place — it redirects into the
+    normal "Matricular" flow (parent → student), because a waiting entry has no
+    parent/tutor and promoting it produced a student (and payments) with none."""
+
+    def test_redirects_to_parent_creation(self, authenticated_client, waiting_student):
         response = authenticated_client.get(reverse("assign_from_waiting_list", args=[waiting_student.id]))
-        assert response.status_code == 405
-
-    def test_flips_is_waiting_off(self, authenticated_client, waiting_student, site_config, enrollment_type_monthly):
-        response = authenticated_client.post(reverse("assign_from_waiting_list", args=[waiting_student.id]))
         assert response.status_code == 302
-        waiting_student.refresh_from_db()
-        assert waiting_student.is_waiting is False
-        assert waiting_student.waiting_since is None
+        assert response.url == f"{reverse('parent_create')}?from_waiting={waiting_student.id}"
 
-    def test_creates_default_enrollment(
-        self, authenticated_client, waiting_student, site_config, enrollment_type_monthly
-    ):
-        authenticated_client.post(reverse("assign_from_waiting_list", args=[waiting_student.id]))
-        assert waiting_student.enrollments.filter(status="active").exists()
-
-    def test_creates_enrollment_fee_payment(
-        self, authenticated_client, waiting_student, site_config, enrollment_type_monthly
-    ):
+    def test_does_not_promote_or_enroll(self, authenticated_client, waiting_student, site_config):
         from billing.models import Payment
 
-        before = Payment.objects.count()
-        authenticated_client.post(reverse("assign_from_waiting_list", args=[waiting_student.id]))
-        assert Payment.objects.filter(student=waiting_student, payment_type="enrollment").count() == 1
-        assert Payment.objects.count() == before + 1
+        authenticated_client.get(reverse("assign_from_waiting_list", args=[waiting_student.id]))
+        waiting_student.refresh_from_db()
+        assert waiting_student.is_waiting is True
+        assert not waiting_student.enrollments.exists()
+        assert not Payment.objects.filter(student=waiting_student).exists()
 
-    def test_rejects_when_group_full(
-        self, authenticated_client, waiting_student, group, student, site_config, enrollment_type_monthly
-    ):
+    def test_rejects_when_group_full(self, authenticated_client, waiting_student, group, student):
         group.max_students = 1  # `student` already fills it
         group.save()
-        response = authenticated_client.post(reverse("assign_from_waiting_list", args=[waiting_student.id]))
+        response = authenticated_client.get(reverse("assign_from_waiting_list", args=[waiting_student.id]))
         assert response.status_code == 302
+        assert response.url == reverse("waiting_list")
         waiting_student.refresh_from_db()
         assert waiting_student.is_waiting is True  # Still waiting
 
-    def test_logs_history(self, authenticated_client, waiting_student, site_config, enrollment_type_monthly):
-        before = HistoryLog.objects.filter(action="waiting_list_assigned").count()
-        authenticated_client.post(reverse("assign_from_waiting_list", args=[waiting_student.id]))
-        after = HistoryLog.objects.filter(action="waiting_list_assigned").count()
-        assert after == before + 1
-
     def test_404_when_not_waiting(self, authenticated_client, student):
-        response = authenticated_client.post(reverse("assign_from_waiting_list", args=[student.id]))
+        response = authenticated_client.get(reverse("assign_from_waiting_list", args=[student.id]))
         assert response.status_code == 404
+
+
+class TestWaitingPrefill:
+    def test_parent_form_prefills_the_phone_contact(self, authenticated_client, waiting_student):
+        waiting_student.waiting_contact_name = "Ana Gómez"
+        waiting_student.waiting_contact_phone = "600111222"
+        waiting_student.save()
+
+        response = authenticated_client.get(reverse("parent_create"), {"from_waiting": waiting_student.id})
+        initial = response.context["form"].initial
+        assert initial["first_name"] == "Ana"
+        assert initial["last_name"] == "Gómez"
+        assert initial["phone"] == "600111222"
+        assert response.context["waiting_entry"].id == waiting_student.id
+
+    def test_student_form_prefills_from_the_waiting_entry(self, authenticated_client, waiting_student, parent):
+        response = authenticated_client.get(
+            reverse("student_create"),
+            {"parent_id": parent.id, "from_waiting": waiting_student.id},
+        )
+        initial = response.context["form"].initial
+        assert initial["first_name"] == waiting_student.first_name
+        assert initial["last_name"] == waiting_student.last_name
+        assert initial["group"] == waiting_student.group_id
+
+    def test_bad_from_waiting_id_is_ignored(self, authenticated_client, parent):
+        response = authenticated_client.get(reverse("parent_create"), {"from_waiting": "abc"})
+        assert response.status_code == 200
+        assert response.context["waiting_entry"] is None
+
+
+class TestWaitingEntryIsDiscardedOnEnrollment:
+    """Saving the real student must clear the placeholder from the list."""
+
+    def _post_student(self, client, parent, group, waiting):
+        return client.post(
+            reverse("student_create"),
+            {
+                "first_name": waiting.first_name,
+                "last_name": waiting.last_name,
+                "birth_date": "2018-01-01",
+                "school": "S",
+                "allergies": "",
+                "gdpr_signed": "on",
+                "group": group.id,
+                "parent_id": parent.id,
+                "enrollment_plan": "monthly_full",
+                "from_waiting": waiting.id,
+            },
+        )
+
+    def test_entry_is_deleted_and_the_new_student_is_enrolled(
+        self, authenticated_client, waiting_student, parent, group, site_config, enrollment_type_monthly
+    ):
+        response = self._post_student(authenticated_client, parent, group, waiting_student)
+        assert response.status_code == 302
+        assert not Student.objects.filter(id=waiting_student.id).exists()
+
+        created = Student.objects.get(first_name=waiting_student.first_name, is_waiting=False)
+        assert created.parents.filter(id=parent.id).exists()
+        assert created.enrollments.filter(status="active").exists()
+
+    def test_entry_with_payment_history_is_archived_instead(
+        self, authenticated_client, waiting_student, parent, group, site_config, enrollment_type_monthly
+    ):
+        """A student moved *back* onto the list keeps PROTECTed payments, so the
+        placeholder is archived rather than deleted — the enrollment must still
+        go through."""
+        from datetime import date
+
+        from billing.models import Payment
+
+        Payment.objects.create(
+            student=waiting_student,
+            parent=parent,
+            payment_type="monthly",
+            payment_method="transfer",
+            amount=100,
+            currency="EUR",
+            payment_status="pending",
+            due_date=date(2026, 1, 31),
+            concept="Histórico",
+        )
+
+        response = self._post_student(authenticated_client, parent, group, waiting_student)
+        assert response.status_code == 302
+        waiting_student.refresh_from_db()
+        assert waiting_student.active is False
+        assert waiting_student.is_waiting is False
+
+        response = authenticated_client.get(reverse("waiting_list"))
+        assert waiting_student.id not in {s.id for s in response.context["waiting_students"]}
 
 
 class TestAddToWaitingList:

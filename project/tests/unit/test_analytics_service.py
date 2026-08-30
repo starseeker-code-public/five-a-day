@@ -73,6 +73,8 @@ class TestGroupUtilisation:
         assert group.id in ids
 
     def test_no_cap_returns_none_utilisation(self, group):
+        group.max_students = 0  # no cap — no longer the default
+        group.save()
         row = next(r for r in group_utilisation() if r["id"] == group.id)
         assert row["utilisation_percent"] is None
 

@@ -10,91 +10,10 @@ from django.urls import reverse
 pytestmark = pytest.mark.django_db
 
 
-# ── waiting_list.py: exception branch + edge cases ─────────────────────────
+# ── waiting_list.py: edge cases ────────────────────────────────────────────
 
 
 class TestWaitingListExceptionBranches:
-    def test_assign_wraps_enrollment_service_error_html(
-        self, authenticated_client, group, parent, site_config, enrollment_type_monthly
-    ):
-        """Cover lines 144-149: EnrollmentService failure surfaces as a
-        redirect + flash message rather than a 500."""
-        from datetime import date
-
-        from students.models import Student, StudentParent
-
-        s = Student.objects.create(
-            first_name="Waiter",
-            last_name="Boom",
-            birth_date=date(2018, 1, 1),
-            gdpr_signed=True,
-            group=group,
-            is_waiting=True,
-        )
-        StudentParent.objects.create(student=s, parent=parent)
-
-        with patch(
-            "billing.services.enrollment_service.EnrollmentService.create_enrollment",
-            side_effect=RuntimeError("boom"),
-        ):
-            response = authenticated_client.post(reverse("assign_from_waiting_list", args=[s.id]))
-        assert response.status_code == 302
-        s.refresh_from_db()
-        # Because the transaction rolled back, is_waiting stays True.
-        assert s.is_waiting is True
-
-    def test_assign_ajax_returns_json_error_on_failure(
-        self, authenticated_client, group, parent, site_config, enrollment_type_monthly
-    ):
-        from datetime import date
-
-        from students.models import Student, StudentParent
-
-        s = Student.objects.create(
-            first_name="AjaxBoom",
-            last_name="Test",
-            birth_date=date(2018, 1, 1),
-            gdpr_signed=True,
-            group=group,
-            is_waiting=True,
-        )
-        StudentParent.objects.create(student=s, parent=parent)
-
-        with patch(
-            "billing.services.enrollment_service.EnrollmentService.create_enrollment",
-            side_effect=RuntimeError("boom"),
-        ):
-            response = authenticated_client.post(
-                reverse("assign_from_waiting_list", args=[s.id]),
-                HTTP_X_REQUESTED_WITH="XMLHttpRequest",
-            )
-        assert response.status_code == 500
-        assert response.json()["success"] is False
-
-    def test_assign_ajax_success_returns_json(
-        self, authenticated_client, group, parent, site_config, enrollment_type_monthly
-    ):
-        """Cover the AJAX success branch (lines 151-158)."""
-        from datetime import date
-
-        from students.models import Student, StudentParent
-
-        s = Student.objects.create(
-            first_name="AjaxOK",
-            last_name="Test",
-            birth_date=date(2018, 1, 1),
-            gdpr_signed=True,
-            group=group,
-            is_waiting=True,
-        )
-        StudentParent.objects.create(student=s, parent=parent)
-        response = authenticated_client.post(
-            reverse("assign_from_waiting_list", args=[s.id]),
-            HTTP_X_REQUESTED_WITH="XMLHttpRequest",
-        )
-        assert response.status_code == 200
-        assert response.json()["success"] is True
-
     def test_add_to_waiting_list_when_already_waiting_is_idempotent(self, authenticated_client, group):
         from datetime import date
 

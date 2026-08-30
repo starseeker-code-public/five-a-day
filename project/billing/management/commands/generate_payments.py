@@ -19,7 +19,7 @@ from billing.models import (
     Enrollment,
     Payment,
     SiteConfiguration,
-    current_academic_year,
+    academic_year_for_month,
 )
 from billing.services.payment_service import (
     MONTH_NAMES_ES,
@@ -49,7 +49,10 @@ class Command(BaseCommand):
         dry_run = options["dry_run"]
 
         config = SiteConfiguration.get_config()
-        academic_year = current_academic_year(date(year, month, 1))
+        # The course this teaching month belongs to — NOT the one enrolment is
+        # currently open for. In May/June those differ, and using the enrolment
+        # year here would match no active enrollment and generate nothing.
+        academic_year = academic_year_for_month(date(year, month, 1))
 
         enrollments = (
             Enrollment.objects.filter(
