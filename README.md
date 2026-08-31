@@ -2848,6 +2848,8 @@ five-a-day/
 │   ├── workflows/
 │   │   ├── ci.yml                     Lint + typecheck + tests + Docker build + CVE scan on every push/PR
 │   │   ├── auto-merge.yml             Hourly development → testing merge + PR to main
+│   │   ├── deploy-testing.yml         Nightly 02:00 Madrid — deploys testing when versions differ
+│   │   ├── deploy-production.yml      Arms on push to main, deploys only after reviewer approval
 │   │   ├── codeql.yml                 Weekly Python security scan
 │   │   ├── notify-production.yml      Email on push to main
 │   │   ├── dependency-review.yml      Block PRs introducing HIGH/CRITICAL CVEs
@@ -2862,7 +2864,8 @@ five-a-day/
 │   ├── CELERY.md                 Celery worker/beat reference
 │   └── TODO.md                   Open tasks
 │
-├── scripts/                      Dev helpers + backup_retention.sh (Cloud SQL tiers)
+├── scripts/                      Dev helpers, backup_retention.sh (Cloud SQL tiers),
+│                                 setup_cicd.sh (deploy credentials — see DEPLOYMENT.md §4)
 ├── backups/                      DB dumps from `make backup` (gitignored)
 │
 ├── Dockerfile                    Multi-stage build (builder + runtime)
@@ -3807,7 +3810,7 @@ Email to hellofiveaday@gmail.com
 | `testing`     | Staging. Auto-merged from development.   | Minimal (no force/delete)| Only from auto-merge flow|
 | `development` | Active development. Day-to-day work.     | None                     | Yes                      |
 
-Feature branches off `development` are welcome for non-trivial work, but the expected flow is: work on `development` → wait 24 h → auto-promoted to `testing` → manual merge to `main`.
+Feature branches off `development` are welcome for non-trivial work, but the expected flow is: work on `development` → wait 24 h → auto-promoted to `testing` → **auto-deployed to the testing VM at 02:00** → manual merge to `main` → production deploy **arms itself and waits for your approval**. See [DEPLOYMENT.md → CI/CD](DEPLOYMENT.md#4-cicd--automated-deploys).
 
 ### Workflows
 
@@ -3815,6 +3818,8 @@ Feature branches off `development` are welcome for non-trivial work, but the exp
 |----------|------|----------|---------|
 | **CI** | [`ci.yml`](.github/workflows/ci.yml) | Push to `development`/`testing`/`main`; PRs to `development`/`testing`/`main` | Six jobs — **Lint** (Ruff + Bandit + pip-audit + Hadolint), **Type check** (mypy), **Tests** (pytest + PostgreSQL 16 + coverage artifact), **Docker build** (validates Dockerfile), **Trivy** (filesystem CVE scan → Security tab), **Docker publish** (GHCR push + image scan, on `main`/`testing` only) |
 | **Auto-merge** | [`auto-merge.yml`](.github/workflows/auto-merge.yml) | Hourly cron + manual dispatch | Merges `development` → `testing` when conditions pass, creates PR to `main`, emails owners |
+| **Deploy testing** | [`deploy-testing.yml`](.github/workflows/deploy-testing.yml) | Daily 02:00 Europe/Madrid + manual dispatch | Compares `/health/` on the VM against `pyproject.toml` on `origin/testing`; deploys only when they differ. Gates the DB volume and diffs row counts, then emails the result |
+| **Deploy production** | [`deploy-production.yml`](.github/workflows/deploy-production.yml) | Push to `main` + manual dispatch | Waits for CI to go green, lists the migrations, then **blocks on the `production` environment's required reviewer**. On approval: verified backup → repoint every Cloud Run job → migrate → roll out → verify |
 | **CodeQL** | [`codeql.yml`](.github/workflows/codeql.yml) | Push to `main`/`testing`/`development`; PRs to `main`; Monday 04:30 UTC | Python static security analysis (OWASP Top 10, Django-specific queries) |
 | **Notify production** | [`notify-production.yml`](.github/workflows/notify-production.yml) | Push to `main` | Emails `hellofiveaday@gmail.com` with commit info and `gcloud` deploy instructions |
 | **Dependency review** | [`dependency-review.yml`](.github/workflows/dependency-review.yml) | Pull request | Blocks PRs that introduce a HIGH/CRITICAL CVE dependency |
@@ -3936,6 +3941,12 @@ Configure at **Settings → Secrets and variables → Actions**:
 | `TESTING_URL` | auto-merge.yml | Base URL of the testing environment, used for the "Open testing environment" button (falls back to the testing VM IP) |
 | `SUPPORT_EMAIL` | notify-production.yml | Support address added (alongside `hellofiveaday@gmail.com`) to the production deploy email |
 | `PRODUCTION_URL` | notify-production.yml | Base URL of production — adds the "Abrir producción" button to the production email. **Set** (v1.14.7) to `https://fiveaday-332600671945.europe-southwest1.run.app` |
+| `TESTING_VM_SSH_KEY` | deploy-testing.yml | ed25519 private key for the VM's `fiveaday-ci` user. The nightly deploy holds **no** GCP credential, so its blast radius is one rebuildable VM. Provisioned by `scripts/setup_cicd.sh` |
+| `TESTING_VM_KNOWN_HOSTS` | deploy-testing.yml | Pinned host key for the testing VM. If unset the workflow falls back to `StrictHostKeyChecking=accept-new` and warns |
+| `TESTING_VM_HOST` / `TESTING_VM_USER` | deploy-testing.yml | Default to `34.26.130.187` / `fiveaday-ci` when unset |
+| `GCP_WIF_PROVIDER` | deploy-production.yml | Workload Identity Federation provider resource. No key is stored — and the service-account binding is scoped to `attribute.environment/production`, so only an approved job can mint a token |
+| `GCP_DEPLOY_SA` | deploy-production.yml | `fiveaday-deploy@five-a-day-evolution.iam.gserviceaccount.com` |
+| `HEALTH_PROBE_TOKEN` | deploy-production.yml | **Set** (2026-08-31). Unlocks row counts on `/health/?deep=1` so a production deploy can prove the release landed on the right database. Must match the Secret Manager secret of the same name that Cloud Run reads |
 
 **Rotate `GH_PAT` annually.** Without it, the auto-merge falls back to the default `GITHUB_TOKEN`, which cannot trigger CI on PRs it creates — breaking the pipeline silently.
 
@@ -3944,7 +3955,9 @@ Configure at **Settings → Secrets and variables → Actions**:
 | Event | Recipient | Sent by |
 |-------|-----------|---------|
 | `development → testing` merged + PR opened to `main` | `TESTING_NOTIFY_EMAILS`, falling back to `OWNER_EMAILS` | auto-merge.yml |
+| Nightly deploy to testing succeeded or failed | `TESTING_NOTIFY_EMAILS`, falling back to `OWNER_EMAILS` | deploy-testing.yml |
 | New commit on `main` (production ready to deploy) | `hellofiveaday@gmail.com` (hardcoded) + `SUPPORT_EMAIL` when set | notify-production.yml |
+| Production deploy succeeded or failed | `hellofiveaday@gmail.com` + `SUPPORT_EMAIL` when set | deploy-production.yml |
 
 Both use Gmail SMTP via the `dawidd6/action-send-mail@v18` action. Emails include HTML formatting, links to the commit/PR, and actionable next steps.
 

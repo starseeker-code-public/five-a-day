@@ -131,8 +131,11 @@ Watch the logs after `docker compose up -d` for `✅ Teacher created/updated: ..
 
 #### 5. Routine updates
 
-Use the `/deploy` skill and pick **Solo testing** when it asks for the target — it does all of
-this plus the post-deploy version check. By hand, from your workstation:
+**Normally you do nothing.** The `Deploy testing` workflow runs every night at 02:00
+Europe/Madrid, compares `/health/` against `pyproject.toml` on `origin/testing`, and deploys
+only when they differ — see [CI/CD — automated deploys](#4-cicd--automated-deploys). Use the
+`/deploy` skill and pick **Solo testing** when you need it *now*. By hand, from your
+workstation:
 
 ```bash
 gcloud compute ssh fiveaday-testing --zone=us-east1-c --project=five-a-day-evolution
@@ -146,8 +149,23 @@ is *not* the user `gcloud compute ssh` logs you in as. So every git call needs
 D=/home/Proye/five-a-day
 sudo git -c safe.directory=* -C $D pull --ff-only origin testing
 sudo docker system prune -f          # required — see below
-sudo docker compose -f $D/docker-compose.yml up -d --build
+sudo docker compose -f $D/docker-compose.yml -f $D/docker-compose.testing.yml up -d --build
 ```
+
+> **Both `-f` files, every time.** `docker-compose.testing.yml` is not cosmetic: it overrides the
+> `db` service to mount `testing_postgres_data` instead of the base file's dev volume, and replaces
+> `runserver` with Gunicorn. Bringing the stack up with only the base file starts a **different,
+> valid, wrong** stack — the database attaches to the dev volume (a months-old snapshot on this
+> host) and nothing errors. `/health/` even reports the correct new version, because the code
+> really did deploy. Confirm the mount afterwards:
+>
+> ```bash
+> sudo docker inspect fiveaday_postgres --format '{{range .Mounts}}{{.Name}}{{println}}{{end}}'
+> # must contain five-a-day_testing_postgres_data
+> ```
+>
+> If it does not, the real data is intact in an orphaned volume. **Never run
+> `docker volume prune` or `system prune --volumes` on this VM.**
 
 > **The prune is not optional.** The e2-micro has ~969 MB RAM (~380 MB free with the stack up) plus
 > 2 GB swap, and the boot disk runs around 58% of 30 GB. A `--build` here can be OOM-killed. If it
@@ -293,7 +311,10 @@ echo -n "True"                      | gcloud secrets create TEACHER_SEED_1_ADMIN
 echo -n "your-initial-password"     | gcloud secrets create TEACHER_SEED_1_PASSWORD   --data-file=-
 ```
 
-**Optional — `HEALTH_PROBE_TOKEN` (v1.16).** Not currently configured. It unlocks the
+**`HEALTH_PROBE_TOKEN` (v1.16).** **Configured** as of 2026-08-31: a Secret Manager secret with
+a per-secret `secretAccessor` binding for `fiveaday-run`, attached to the service as a secret
+ref (env entries 35 → 36, secret refs 6 → 7), and mirrored to the `HEALTH_PROBE_TOKEN` GitHub
+secret so `Deploy production` can use it. It unlocks the
 row-count fingerprint on `/health/?deep=1`, which is what lets a deploy prove the release did
 not land on the wrong database. Without it the deep probe still reports connectivity and
 migration state, just not the counts:
@@ -843,7 +864,191 @@ backups are the Cloud SQL ones above, and a portable production dump is
 
 ---
 
-## 4. Cost Estimates
+## 4. CI/CD — automated deploys
+
+Two workflows, deliberately asymmetric. Testing is unattended because it is disposable;
+production is never deployed by a timer.
+
+| | `Deploy testing` | `Deploy production` |
+|---|---|---|
+| File | `.github/workflows/deploy-testing.yml` | `.github/workflows/deploy-production.yml` |
+| Trigger | cron, 02:00 Europe/Madrid | push to `main` (the release PR merge) |
+| Human in the loop | no | **yes — required reviewer** |
+| Target | Compute Engine VM | Cloud Run + Cloud SQL |
+| Credential | SSH deploy key (repo secret) | Workload Identity Federation (no stored key) |
+| Manual run | `workflow_dispatch`, with a `force` input | `workflow_dispatch`, with a `force` input |
+
+Both are additions to the pipeline, not replacements: the `/deploy` skill is still the
+by-hand path when you need to ship right now, and it is the documented fallback if a workflow
+is broken.
+
+> **Neither workflow does anything until it is on `main`.** `on: schedule` only ever fires for
+> the repository's default branch, and the production workflow triggers on `push` to `main`.
+> A change to either file takes effect only after it has travelled
+> `development → testing → main` through the normal release path.
+
+### Nightly testing deploy
+
+The contract is a single equality: **the version answering `/health/` on the VM must equal
+`pyproject.toml` on `origin/testing`**. Every night the workflow reads both and deploys only
+when they differ, so a quiet night costs one `curl`.
+
+```text
+02:00  →  check   read pyproject.toml on origin/testing
+                  read /health/ on the VM
+                  equal? stop. different (or unreachable)? continue
+       →  deploy  record row counts
+                  git pull --ff-only + docker compose up -d --build  (BOTH -f files)
+                  gate: db mounted *_testing_postgres_data
+                  gate: no dangling testing volume
+                  wait for /health/ to report the new version (10 min budget)
+                  re-read row counts and diff against the baseline
+       →  email   success or failure, to TESTING_NOTIFY_EMAILS
+```
+
+Three details that are load-bearing:
+
+- **Two cron entries, one deploy.** GitHub cron is UTC and has no DST. `0 0 * * *` is 02:00
+  CEST and `0 1 * * *` is 02:00 CET, and the first step discards whichever tick is not 02:00
+  in Madrid. Exactly one check runs per night, year-round.
+- **A dirty tree on the VM aborts *before* the pull.** `git status --porcelain` exits 0 on a
+  dirty tree, so under `set -e` a bare call stops nothing and the pull clobbers the changes on
+  the next line. The gate exits non-zero. If it fires, fix the VM — do not re-run without it.
+- **The version check is necessary, not sufficient.** It passes even when the stack came up on
+  the dev volume, because the *code* really did deploy. The volume assertion and the
+  row-count diff are what actually prove the deploy is sound.
+
+An unreachable VM counts as a reason to deploy: a stack that is not answering gets rebuilt.
+
+### Production deploy — armed automatically, shipped by hand
+
+When the `testing → main` release PR merges, the workflow arms itself and then stops:
+
+```text
+push to main  →  preflight   read pyproject.toml on main + /health/ on production
+                             already the same version? stop
+                             WAIT for CI to go green on this exact commit (45 min budget)
+                             list the migrations in this release
+                             write it all to the run summary
+              →  deploy      ⏸ BLOCKED on the `production` environment
+                             (required reviewer + 5-minute wait timer)
+```
+
+Nothing touches GCP until somebody opens the run and clicks **Review deployments →
+production → Approve and deploy**. The automation does the waiting and the reporting; the
+only manual act left is the decision.
+
+The approval gate is enforced in two independent places, which is the point:
+
+1. **GitHub** — the `production` environment has a required reviewer and a `main`-only branch
+   policy, so the job will not start.
+2. **Google Cloud** — the `fiveaday-deploy` service account's `workloadIdentityUser` binding
+   is scoped to `principalSet://…/attribute.environment/production`. A job that does not
+   declare `environment: production` cannot mint a token at all. This is why the preflight job
+   is deliberately credential-free: it can read GitHub and public HTTP, and nothing else.
+
+Once approved, the deploy runs the full ordering from the `/deploy` skill, with every check as
+a hard gate:
+
+| Step | Why it is in this order |
+|---|---|
+| Assert HEAD == the approved SHA | the runner checks out the exact commit, so the image tag always describes the code inside the image |
+| Backup health (4 assertions) | deploying on a broken backup chain is the one state with no way back |
+| Resolve the deployed image tag → migration diff | image tags are git short SHAs, so pending migrations are a `git diff` |
+| Take a backup, assert `SUCCESSFUL` | an unverified backup is not a rollback plan |
+| Pre-deploy `/health/?deep=1` fingerprint | gives the post-deploy report something to reconcile against |
+| Build and push `web:<short-sha>` | skipped when the tag already exists — only the rollout was missing |
+| Repoint **every** Cloud Run job, then verify | jobs pin their own tag; `gcloud run deploy` touches only the *service* |
+| Assert every job's Cloud SQL attachment | a job on another instance would migrate somewhere invisible and exit 0 |
+| Execute `fiveaday-migrate` | **before** the rollout, so new code never meets an old schema |
+| `gcloud run deploy --image` and nothing else | `--set-env-vars` would replace the whole set and drop ~30 vars and 6 secret refs |
+| Verify version, Cloud SQL, `DATABASE_URL` secret ref, `unapplied_migrations == 0` | a green shallow `/health/` proves only that the right *image* runs |
+
+Two places the workflow is stricter than the by-hand procedure:
+
+- **The Cloud Run job list is enumerated, not hard-coded.** A job added later would otherwise
+  keep running last release's code forever, silently. The step fails if it finds fewer than 8.
+- **Migrations run when they cannot be ruled out.** If the deployed image tag is not a commit
+  in the repo the diff is impossible, so `fiveaday-migrate` runs anyway — `manage.py migrate`
+  on an up-to-date schema is a no-op, whereas a skipped migration is not.
+
+### Credentials
+
+Provisioned by **`scripts/setup_cicd.sh`** (idempotent; `--dry-run` prints every action and
+changes nothing). Re-run it after rotating anything.
+
+| Secret | Used by | Notes |
+|---|---|---|
+| `TESTING_VM_SSH_KEY` | testing | ed25519 private key for the `fiveaday-ci` user |
+| `TESTING_VM_KNOWN_HOSTS` | testing | pins the VM host key; absent ⇒ falls back to `accept-new` |
+| `TESTING_VM_HOST` / `TESTING_VM_USER` | testing | default to `34.26.130.187` / `fiveaday-ci` |
+| `GCP_WIF_PROVIDER` | production | `projects/332600671945/locations/global/workloadIdentityPools/github/providers/github` |
+| `GCP_DEPLOY_SA` | production | `fiveaday-deploy@five-a-day-evolution.iam.gserviceaccount.com` |
+| `HEALTH_PROBE_TOKEN` | production | **optional.** Without it `/health/?deep=1` reports connectivity and migration state but no row counts, so a deploy cannot prove the data survived |
+| `EMAIL_HOST_USER`, `EMAIL_SECRET`, `TESTING_NOTIFY_EMAILS`, `SUPPORT_EMAIL`, `TESTING_URL`, `PRODUCTION_URL` | both | pre-existing; shared with the other workflows |
+
+**Why the testing pipeline uses a stored SSH key and production does not.** The nightly job is
+the only unattended pipeline in this repo, so it is given no Google Cloud credential of any
+kind — it cannot reach production even if it is compromised, and its blast radius is one
+rebuildable VM. Revoking it is one line of instance metadata. Production, where a stolen
+credential matters, uses federation and stores no key at all.
+
+The public key lives in the VM's **instance** metadata under `fiveaday-ci`. The project-wide
+`ssh-keys` entry (the maintainer's `Proye` key) is untouched; both scopes are additive.
+`gcloud compute instances add-metadata` **replaces** the whole `ssh-keys` value, so the setup
+script reads the existing entries out of JSON, carries them forward verbatim, and refuses to
+write a value with fewer entries than it found. Do not hand-edit that key with a gcloud format
+string — `--format='value[](…extract("value"))'` renders the list as a Python repr with
+literal `\n`, and writing that back collapses every key into one corrupt line.
+
+To revoke CI's access to the VM:
+
+```bash
+# Drop the fiveaday-ci line from the instance's ssh-keys metadata, or simply:
+gh secret delete TESTING_VM_SSH_KEY --repo starseeker-code-public/five-a-day
+```
+
+To revoke CI's access to production:
+
+```bash
+gcloud iam service-accounts remove-iam-policy-binding \
+  fiveaday-deploy@five-a-day-evolution.iam.gserviceaccount.com \
+  --project=five-a-day-evolution --role=roles/iam.workloadIdentityUser \
+  --member="principalSet://iam.googleapis.com/projects/332600671945/locations/global/workloadIdentityPools/github/attribute.environment/production"
+```
+
+### The row-count fingerprint
+
+Already configured. It is the only check that can distinguish a deploy onto the right database
+from a deploy onto a valid but *wrong* one, so `Deploy production` uses it to compare student
+and payment counts either side of a release.
+
+The token is a **Secret Manager secret, not a plain env var** — it authenticates a caller to a
+public endpoint, and every other secret here follows the same pattern, including the per-secret
+`secretAccessor` binding that `fiveaday-run` needs because it holds no project-wide accessor.
+The procedure is in [Store secrets in Secret Manager](#4-store-secrets-in-secret-manager).
+
+To rotate it: add a new secret version, then re-run `gh secret set HEALTH_PROBE_TOKEN` with the
+same value so GitHub and Cloud Run stay in agreement. A mismatch is not fatal — the deploy just
+loses the row-count comparison and says so.
+
+### Operating it
+
+```bash
+gh workflow run "Deploy testing" --ref main                      # check + deploy now
+gh workflow run "Deploy testing" --ref main -f force=true        # redeploy the same version
+gh workflow run "Deploy production" --ref main                   # re-arm; still needs approval
+gh run list --workflow="Deploy production" --limit 5
+gh run watch                                                     # follow the active run
+```
+
+Failures email `TESTING_NOTIFY_EMAILS` (testing) or the academy inbox plus `SUPPORT_EMAIL`
+(production), and the run summary carries the version table, the migration list and the
+rollback commands.
+
+---
+
+## 5. Cost Estimates
 
 ### GCP free credits — first 90 days
 
@@ -898,7 +1103,7 @@ gcloud run services update fiveaday --min-instances=1 --region=$REGION
 
 ---
 
-## 5. Optional Services for Future Evolution
+## 6. Optional Services for Future Evolution
 
 These are not needed at launch. They are the natural next steps as the system or user base grows.
 

