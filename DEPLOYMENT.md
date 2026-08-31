@@ -638,6 +638,67 @@ gcloud run revisions list --service=fiveaday --region=$REGION
 gcloud run services update-traffic fiveaday --region=$REGION --to-revisions=<PREVIOUS>=100
 ```
 
+### One-off: reconciling the billing schedule (v1.22)
+
+v1.22 anchors quarterly blocks to the month a student enrolled instead of a fixed
+Oct/Jan/Apr calendar, and prorates the first period by join date. **There is no
+database migration** — the models did not change, only the logic that decides which
+payments exist. Rows already in the database therefore still carry the old shape,
+and they will not repair themselves: the generator's idempotency check matches on
+due month/year, and the new due dates differ, so simply running `generate_payments`
+would create a **second, overlapping set of payments**.
+
+Run `reconcile_payment_schedule` once per environment after deploying. It is a dry
+run unless `--apply` is passed, it never modifies a payment that was already
+collected, and it cancels superseded rows rather than deleting them.
+
+**Always read the dry run first.** On testing:
+
+```bash
+# On the VM, inside the two-file compose stack
+docker compose -f docker-compose.yml -f docker-compose.testing.yml exec -w /app/project web python manage.py reconcile_payment_schedule
+
+# Happy with the plan? Apply it.
+docker compose -f docker-compose.yml -f docker-compose.testing.yml exec -w /app/project web python manage.py reconcile_payment_schedule --apply --cancel-stale
+```
+
+**Production currently has no students**, so the dry run there should report all
+zeros. That makes it a useful sanity check rather than a repair: a non-zero count
+means production is not in the state you expect — most likely you are pointed at
+the wrong database (see the v1.16.0 testing-VM incident above, where a stale
+volume served a months-old dataset while `/health/` still reported the right
+version). Investigate before passing `--apply`.
+
+Run it via the ad-hoc job (take an on-demand backup first — `--apply` writes to
+the payments table):
+
+```bash
+gcloud sql backups create --instance=fiveaday-db --description="pre-v1.22-schedule-reconcile"
+
+gcloud run jobs update fiveaday-cmd --image=$IMAGE --region=$REGION --args="project/manage.py,reconcile_payment_schedule"
+gcloud run jobs execute fiveaday-cmd --region=$REGION --wait
+gcloud run jobs logs read fiveaday-cmd --region=$REGION   # READ THIS BEFORE APPLYING
+
+gcloud run jobs update fiveaday-cmd --image=$IMAGE --region=$REGION --args="project/manage.py,reconcile_payment_schedule,--apply,--cancel-stale"
+gcloud run jobs execute fiveaday-cmd --region=$REGION --wait
+```
+
+What the output means:
+
+| Line | Meaning |
+| ---- | ------- |
+| `+ <student>: <concept> due <date>` | A period the new schedule wants that has no payment. Created with `--apply`. |
+| `- <student>: cancelling <concept>` | A **pending** row whose due date matches no period. Cancelled (not deleted) with `--apply --cancel-stale`. |
+| `REVIEW <student>` | The enrollment has **collected** payments, so it is left untouched. Its gaps and stale rows are listed for a human to settle by hand. |
+| `N already correct` | Nothing to do — safe to re-run any time. |
+
+`REVIEW` rows are the ones that need judgement: money has changed hands against the
+old schedule, so the fix is a business decision (issue the missing month? absorb it?)
+rather than something a script should guess. `--force` reconciles them anyway and
+should only be used when you have decided that is right.
+
+Re-running is safe and idempotent — a second pass reports `0 payment(s) to create`.
+
 ### Monitoring & maintenance
 
 ```bash

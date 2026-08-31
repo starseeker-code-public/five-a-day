@@ -129,6 +129,37 @@ document.addEventListener('DOMContentLoaded', function () {
             calculatedPrice.textContent = gross.toFixed(2);
             priceBreakdown.textContent = '';
         }
+
+        updateFirstPeriodPrice(final);
+    }
+
+    // The first period is prorated by join date: a student starting on the 15th of
+    // a 30-day month pays 16/30 of it. Only the FIRST month is ever reduced, so this
+    // row appears once and never applies to the recurring fee above it.
+    function updateFirstPeriodPrice(final) {
+        const container = document.getElementById('first-period-container');
+        if (!container) return;
+
+        const fraction = parseFloat(cfg.firstPeriodFraction);
+        if (!cfg.firstPeriodIsPartial || !(fraction > 0 && fraction < 1) || !isFinite(final)) {
+            container.classList.add('hidden');
+            return;
+        }
+
+        // A quarter bills three months; only its first one is prorated, so the
+        // period is worth (2 + fraction)/3 of a full quarter.
+        const monthsInPeriod = (planSelect && planSelect.value === 'quarterly') ? 3 : 1;
+        const effective = (monthsInPeriod - 1) + fraction;
+        const firstAmount = final * (effective / monthsInPeriod);
+
+        const priceEl = document.getElementById('first-period-price');
+        const noteEl = document.getElementById('first-period-note');
+        if (priceEl) priceEl.textContent = firstAmount.toFixed(2);
+        if (noteEl) {
+            const pct = Math.round(fraction * 100);
+            noteEl.textContent = `${cfg.firstPeriodLabel} — ${pct}% del periodo; después ${final.toFixed(2)}€`;
+        }
+        container.classList.remove('hidden');
     }
 
     if (planSelect) planSelect.addEventListener('change', updateCalculatedPrice);
