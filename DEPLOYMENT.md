@@ -165,7 +165,8 @@ curl -s http://34.26.130.187:8000/health/
 
 `version` must equal the `version` in `pyproject.toml` on `origin/testing`. If it does not, the
 build did not actually replace the running container. Note that an `APP_VERSION` env var overrides
-the baked-in value and would make this check lie — neither environment sets one today.
+the value `settings.py` derives from `pyproject.toml`, and would make this check lie — neither
+environment sets one today.
 
 ### Free tier limits (permanent, never expire)
 
@@ -638,9 +639,9 @@ gcloud run revisions list --service=fiveaday --region=$REGION
 gcloud run services update-traffic fiveaday --region=$REGION --to-revisions=<PREVIOUS>=100
 ```
 
-### One-off: reconciling the billing schedule (v1.22)
+### One-off: reconciling the billing schedule (v1.22.0)
 
-v1.22 anchors quarterly blocks to the month a student enrolled instead of a fixed
+v1.22.0 anchors quarterly blocks to the month a student enrolled instead of a fixed
 Oct/Jan/Apr calendar, and prorates the first period by join date. **There is no
 database migration** — the models did not change, only the logic that decides which
 payments exist. Rows already in the database therefore still carry the old shape,
@@ -673,7 +674,7 @@ Run it via the ad-hoc job (take an on-demand backup first — `--apply` writes t
 the payments table):
 
 ```bash
-gcloud sql backups create --instance=fiveaday-db --description="pre-v1.22-schedule-reconcile"
+gcloud sql backups create --instance=fiveaday-db --description="pre-v1.22.0-schedule-reconcile"
 
 gcloud run jobs update fiveaday-cmd --image=$IMAGE --region=$REGION --args="project/manage.py,reconcile_payment_schedule"
 gcloud run jobs execute fiveaday-cmd --region=$REGION --wait

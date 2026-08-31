@@ -127,7 +127,7 @@ class PaymentService:
         """Price a standard 3-month quarter. Thin wrapper over ``calculate_period_amount``.
 
         ``quarter_due_month`` names the quarter by its first month under the old
-        FIXED calendar (10 = Oct-Dec, 1 = Jan-Mar, 4 = Apr-Jun). Since v1.22 the
+        FIXED calendar (10 = Oct-Dec, 1 = Jan-Mar, 4 = Apr-Jun). Since v1.22.0 the
         generator anchors quarters to the enrollment month instead, so this helper
         is kept for the standard-price question "what does a full quarter cost?" —
         the reminder email and the pricing preview still ask exactly that.

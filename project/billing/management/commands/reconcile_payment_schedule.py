@@ -1,4 +1,4 @@
-"""Reconcile existing enrollments against the v1.22 billing schedule.
+"""Reconcile existing enrollments against the v1.22.0 billing schedule.
 
 Quarters used to be pinned to a fixed Oct/Jan/Apr calendar. Two silent gaps came
 out of that: September was outside every quarter, so quarterly students never

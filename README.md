@@ -20,7 +20,7 @@ Built to centralize student records, automate billing cycles, and streamline par
 ### Project Status
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v1.22.0-brightgreen?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-v1.22.1-brightgreen?style=flat-square" alt="Version">
   &nbsp;|&nbsp;
   <a href="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml?query=branch%3Amain"><img src="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml/badge.svg?branch=main&style=flat-square" alt="CI main"></a>
   &nbsp;|&nbsp;
@@ -41,9 +41,9 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 | Version | Date | Description |
 |---------|------|-------------|
-| **v1.22.0** | 2026-08-31 | Quarters anchored to enrollment month, first period prorated |
+| **v1.22.1** | 2026-08-31 | Version derived from `pyproject.toml`, drift now fails the build |
+| v1.22.0 | 2026-08-31 | Quarters anchored to enrollment month, first period prorated |
 | v1.21.1 | 2026-08-31 | Hadolint action bumped to v3.5.0 (Hadolint 2.15.1) |
-| v1.21.0 | 2026-08-30 | Desarrollos board — Jira-style epics feeding the QA backlog |
 
 ---
 
@@ -150,8 +150,52 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 ## Version History & Roadmap
 
-<details id="v1220" open>
-<summary><strong>v1.22.0 — Quarters follow the student, and the first period is prorated (current)</strong></summary>
+<details id="v1221" open>
+<summary><strong>v1.22.1 — One version, one source of truth (current)</strong></summary>
+
+**`pyproject.toml` is now the only place the version is written**
+
+- `APP_VERSION` in `project/project/settings.py` was a hand-maintained literal that
+  `make version` kept in step with a `sed`. It reads `pyproject.toml` at import time
+  instead, via `tomllib`, so there is nothing left in that file to forget.
+- The copies genuinely drifted: **v1.20.0 shipped with the `settings.py` bump missing**
+  and needed a follow-up commit that did nothing but repair the number. `/health/`
+  reported the wrong version in the meantime, and nothing about it looked wrong.
+- `make version x.y.z` and the `make pc-run` auto patch-bump both lost their
+  `settings.py` `sed`. They now touch three things: `pyproject.toml` (the source),
+  the README badge URL, and `uv.lock`.
+
+**Why not `importlib.metadata`**
+
+- The Docker build runs `uv sync --no-install-project`, so the app is never installed
+  as a distribution and there is no package metadata to read. `COPY . .` does place
+  `pyproject.toml` at `/app/pyproject.toml`, one level above `BASE_DIR` — which is the
+  only reason the file is reachable at all.
+- If it cannot be read the value becomes the literal `"unknown"`, deliberately. A
+  hard-coded fallback would be indistinguishable from a correct answer; `"unknown"` on
+  `/health/` says plainly that the deploy cannot see its own `pyproject.toml`.
+- The `APP_VERSION` environment variable still wins, so Cloud Run can pin or override a
+  version without a rebuild.
+
+**Drift now fails the build**
+
+- New `tests/unit/test_version_consistency.py` (6 tests): pyproject is semver,
+  `settings.APP_VERSION` equals it and is never `"unknown"`, and the README badge,
+  `uv.lock`'s own `[[package]]` entry and the **Recent Versions** table's lead row all
+  agree with it.
+- That last assertion is the one with teeth. The Recent Versions table is prose, so
+  nothing updates it automatically — a bare `make pc-run` auto-bump leaves the suite red
+  until the `update-readme` skill adds the changelog row.
+
+**Testing**
+
+- Suite at **1,447 tests, 95.18 % coverage** (5,558 statements, 268 uncovered, 55 files
+  at 100 %). Coverage is unchanged: the new file is a test, not covered source.
+
+</details>
+
+<details id="v1220">
+<summary><strong>v1.22.0 — Quarters follow the student, and the first period is prorated</strong></summary>
 
 **Two silent revenue holes in the quarterly schedule**
 
@@ -2625,7 +2669,7 @@ The table below describes every variable in the [.env template](#env-template) a
 | **Logging / misc** | | | |
 | `LOG_LEVEL` | App log level | No | `DEBUG` in dev, `INFO` in prod |
 | `DJANGO_LOG_LEVEL` | Django framework log level | No | inherits `LOG_LEVEL` |
-| `APP_VERSION` | Version string override | No | from `settings.py` default |
+| `APP_VERSION` | Version string override | No | read from `pyproject.toml` |
 | `DJANGO_SUPERUSER_EMAIL` | Email given to the auto-created dev superuser, and last fallback for the Google-login allow-list | No | `<LOGIN_USERNAME>@local.dev` |
 | **Security headers & cookies** (advanced overrides — all applied only when `DEBUG=False`) | | | |
 | `SESSION_COOKIE_SECURE` | HTTPS-only session cookie | No | `True` |
@@ -2650,19 +2694,22 @@ The table below describes every variable in the [.env template](#env-template) a
 
 ### App Versioning
 
-The app version is defined in **four places** and `make version x.y.z` updates all four together:
+**`pyproject.toml` is the single source of truth.** `make version x.y.z` updates it plus the two places that cannot read it themselves:
 
-1. **`pyproject.toml`** — `version = "x.y.z"` (package metadata)
-2. **`project/project/settings.py`** — `APP_VERSION = os.getenv("APP_VERSION", "x.y.z")` (runtime fallback)
-3. **`README.md`** — the header version badge URL
-4. **`uv.lock`** — regenerated via `uv lock --quiet` so the lockfile's own `[[package]]` entry stays in sync
+1. **`pyproject.toml`** — `version = "x.y.z"` — **the source**
+2. **`README.md`** — the header version badge URL (static markdown; nothing can derive it)
+3. **`uv.lock`** — regenerated via `uv lock --quiet` so the lockfile's own `[[package]]` entry stays in sync
+
+**`settings.py` holds no copy.** `APP_VERSION` reads `pyproject.toml` at import time via `tomllib`, so it cannot lag. (`importlib.metadata` is unusable here: the Docker build runs `uv sync --no-install-project`, so the app is never installed as a distribution — but `COPY . .` does place `pyproject.toml` one level above `BASE_DIR`.) If the file is unreadable the value becomes the literal `"unknown"` rather than a plausible-looking stale number, so a broken deploy is obvious on `/health/`.
+
+This used to be four hand-maintained places, and the copies drifted: v1.20.0 shipped with the `settings.py` bump missing and needed a follow-up commit purely to repair it. [`tests/unit/test_version_consistency.py`](project/tests/unit/test_version_consistency.py) now fails the build if the badge, the lockfile, or the Recent Versions table falls out of step with `pyproject.toml`.
 
 `make version x.y.z` prompts `Version A will become the new version B, are you sure?` before writing. Running `make version` with no argument prints both the pyproject and README badge values side-by-side and warns if they've drifted. `make pc-run` also auto-bumps the patch digit on successful pre-commit (y/N prompt) and stages the regenerated `uv.lock` automatically.
 
 The version appears in:
 - `/health/` endpoint response
 - Support ticket emails
-- Can be overridden at runtime via the `APP_VERSION` environment variable (do **not** leave a legacy value like `0.x.y` in `.env` — remove the line so the default in `settings.py` takes effect)
+- Can be overridden at runtime via the `APP_VERSION` environment variable (do **not** leave a legacy value like `0.x.y` in `.env` — remove the line so the value derived from `pyproject.toml` takes effect)
 
 ---
 
@@ -2792,7 +2839,7 @@ five-a-day/
 │   │   └── management/commands/  send_email, test_all_emails, plus 4 Beat-task wrappers
 │   │                             (v1.14.2 — birthday, reminders, report, Fun Friday drain)
 │   │
-│   ├── tests/                    pytest suite (1,441 tests, 95.18 % coverage) — unit/ + integration/
+│   ├── tests/                    pytest suite (1,447 tests, 95.18 % coverage) — unit/ + integration/
 │   ├── templates/registration/   Password-reset templates (form, done, confirm, complete + email body)
 │   ├── templates/admin/          Django admin overrides (branded theme)
 │   └── conftest.py               Shared fixtures (models + authenticated_client)
@@ -3108,8 +3155,8 @@ Public flow at `/password-reset/...` that lets a teacher recover access without 
 
 | Metric | Value |
 |--------|-------|
-| **Total tests** | 1,441 |
-| **Test files** | 80 (50 unit + 30 integration) |
+| **Total tests** | 1,447 |
+| **Test files** | 81 (51 unit + 30 integration) |
 | **Coverage** | 95% (95.18% — 5,558 statements, 268 uncovered) |
 | **Coverage thresholds** | **≥ 90%** (target, no warning) / **75-89%** (CI warning, pre-commit still blocks below 75) / **< 75%** (CI fails, pre-commit rejects the commit) |
 | **Runtime** | ~50 seconds (parallel workers via `pytest-xdist -n auto`) |
@@ -3156,7 +3203,7 @@ Within each file, related tests are grouped into classes. Where a large file abs
 
 ### Unit Tests
 
-**49 files, 718 tests.** Direct-call tests — no HTTP stack, no URL resolver, no template rendering.
+**51 files, 738 tests.** Direct-call tests — no HTTP stack, no URL resolver, no template rendering.
 
 | File | Count | Coverage |
 | --- | --- | --- |
@@ -3201,6 +3248,7 @@ Within each file, related tests are grouped into classes. Where a large file abs
 | [`unit/test_pdf_service.py`](project/tests/unit/test_pdf_service.py) | 7 | reportlab PDF service (v1.3): payment receipt, quarterly summary, and tax certificate generation — byte output, academy-info population |
 | [`unit/test_payment_helpers.py`](project/tests/unit/test_payment_helpers.py) | 7 | `parse_date_value` (6 formats including invalid) + `payment_detail` AJAX helper called directly via `RequestFactory` |
 | [`unit/test_exports.py`](project/tests/unit/test_exports.py) | 7 | Excel workbook generation via `openpyxl`: Students, Enrollments, Payments sheets + combined workbook; empty-database edge case |
+| [`unit/test_version_consistency.py`](project/tests/unit/test_version_consistency.py) | 6 | The app version must agree everywhere it appears (v1.22.1): `pyproject.toml` is semver, `settings.APP_VERSION` derives from it and is never the `"unknown"` fallback, and the README badge, `uv.lock`'s own `[[package]]` entry and the **Recent Versions** table's lead row all match it. The copies used to drift silently — v1.20.0 shipped with the `settings.py` bump missing |
 | [`unit/test_audit_log.py`](project/tests/unit/test_audit_log.py) | 6 | Immutable audit trail (v1.10): the `post_save`/`post_delete` signal receivers write an `AuditLog` row with the contextvar actor, and the model rejects mutation after creation |
 | [`unit/test_qa_error_middleware.py`](project/tests/unit/test_qa_error_middleware.py) | 5 | `QAErrorEmailMiddleware.process_exception` via `RequestFactory`: pass-through, disabled config, no support email, send success, send failure swallowed |
 | [`unit/test_error_handlers.py`](project/tests/unit/test_error_handlers.py) | 5 | `handler400`/`handler403`/`handler404`/`handler405`/`handler500` render with correct status codes |
@@ -3213,7 +3261,7 @@ Within each file, related tests are grouped into classes. Where a large file abs
 
 ### Integration Tests
 
-**30 files, 704 tests.** Full HTTP stack through Django's test client.
+**30 files, 709 tests.** Full HTTP stack through Django's test client.
 
 | File | Count | Coverage |
 | --- | --- | --- |
@@ -3931,7 +3979,7 @@ make up                        # Start Docker (PostgreSQL + Redis + Django + Cel
 1. Work on `development` (or a short-lived branch off `development`)
 2. Make changes following the conventions below
 3. Run `make pc-run` — Ruff + mypy + bandit all pass, offers to auto-bump the patch version on success, and auto-stages `uv.lock` if regenerated
-4. Run `make test` — all 1,441 tests must pass (PostgreSQL via Docker, parallel, with coverage)
+4. Run `make test` — all 1,447 tests must pass (PostgreSQL via Docker, parallel, with coverage)
 5. `git commit` with a message like `v1.14.7 — Short description` (version first, em dash — matches every other release commit in the project)
 6. `git push origin development`
 7. CI runs automatically on your push (see [CI/CD](#cicd--github-actions))
@@ -3952,7 +4000,7 @@ Pre-commit hooks run **Ruff** (lint + format), **mypy** (type checking), and **b
 | **pytest-randomly** | Randomized test ordering | Built into `make test` (seed printed) |
 | **pytest-cov** | Coverage reporting + badge | `make test`, `make coverage-badge` |
 | **pre-commit** | Git hooks: ruff, ruff-format, mypy, bandit | `make pre-commit-install` (first-time), `make pc-run` (dry-run all hooks + auto bump) |
-| **make version** | Bump the version in all four places — `pyproject.toml`, `settings.py` (`APP_VERSION`), the README badge URL, and `uv.lock` | `make version x.y.z` (positional, with `y/N` confirmation); bare `make version` prints the current values and warns on drift |
+| **make version** | Bump the version at its source (`pyproject.toml`) plus the two places that cannot derive it — the README badge URL and `uv.lock`. `settings.py` reads pyproject at import time, so it needs no update | `make version x.y.z` (positional, with `y/N` confirmation); bare `make version` prints the current values and warns on drift |
 
 All tools are configured in `pyproject.toml` and installed as dev dependencies via `uv sync`.
 

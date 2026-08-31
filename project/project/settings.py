@@ -14,13 +14,39 @@ load_dotenv(_ENV_ROOT / ".env", override=False)
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+
 # ============================================================================
 # APP VERSION
 # ============================================================================
-# NOTA: Usa `make version x.y.z` para actualizar ambos sitios a la vez:
-#   - pyproject.toml (campo version)
-#   - README.md (badge y tabla de versiones — gestionado por la skill update-readme)
-APP_VERSION = os.getenv("APP_VERSION", "1.22.0")
+# pyproject.toml is the SINGLE SOURCE OF TRUTH for the version. This file used to
+# carry a hand-maintained copy that `make version` kept in sync with sed, and the
+# copy silently lagged when a release edited one and not the other (v1.20.0 shipped
+# with the bump missing and needed a follow-up commit). Reading it instead means
+# there is nothing here to forget.
+#
+# `importlib.metadata` is NOT usable: the Docker build runs
+# `uv sync --no-install-project`, so the app is never installed as a distribution
+# and there is no package metadata to read. The Dockerfile's `COPY . .` does put
+# pyproject.toml at /app/pyproject.toml, one level above BASE_DIR (/app/project).
+def _version_from_pyproject() -> str:
+    """Read `[project] version` from pyproject.toml, or "unknown" if unreadable.
+
+    Deliberately fails LOUD rather than falling back to a hard-coded number: a
+    stale literal is indistinguishable from a correct one, whereas "unknown" on
+    /health/ says plainly that the deploy cannot see its own pyproject.toml.
+    """
+    try:
+        import tomllib
+
+        with open(BASE_DIR.parent / "pyproject.toml", "rb") as handle:
+            return str(tomllib.load(handle)["project"]["version"])
+    except (OSError, KeyError, ValueError):
+        return "unknown"
+
+
+# The env var still wins, so Cloud Run can pin or override a version without a
+# rebuild. See CLAUDE.md — a legacy APP_VERSION line in .env silently overrides.
+APP_VERSION = os.getenv("APP_VERSION") or _version_from_pyproject()
 
 # ============================================================================
 # SECURITY SETTINGS
