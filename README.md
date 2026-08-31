@@ -20,7 +20,7 @@ Built to centralize student records, automate billing cycles, and streamline par
 ### Project Status
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v1.21.0-brightgreen?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-v1.21.1-brightgreen?style=flat-square" alt="Version">
   &nbsp;|&nbsp;
   <a href="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml?query=branch%3Amain"><img src="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml/badge.svg?branch=main&style=flat-square" alt="CI main"></a>
   &nbsp;|&nbsp;
@@ -41,9 +41,9 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 | Version | Date | Description |
 |---------|------|-------------|
-| **v1.21.0** | 2026-08-30 | Desarrollos board — Jira-style epics feeding the QA backlog |
+| **v1.21.1** | 2026-08-31 | Hadolint action bumped to v3.5.0 (Hadolint 2.15.1) |
+| v1.21.0 | 2026-08-30 | Desarrollos board — Jira-style epics feeding the QA backlog |
 | v1.20.0 | 2026-08-30 | Spanish dates and labels, editable expenses, special matrícula |
-| v1.17.4 | 2026-08-30 | Password eye drawn as inline SVG, not a webfont glyph |
 
 ---
 
@@ -150,8 +150,23 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 ## Version History & Roadmap
 
-<details id="v1210" open>
-<summary><strong>v1.21.0 — Desarrollos: a Jira-style epic board feeding the QA backlog (current)</strong></summary>
+<details id="v1211" open>
+<summary><strong>v1.21.1 — Hadolint action bumped to v3.5.0 (current)</strong></summary>
+
+**CI tooling**
+
+- Dependabot (PR #46) moved the Lint job's Dockerfile linter from
+  `hadolint/hadolint-action@v3.4.0` to `v3.5.0` in `.github/workflows/ci.yml`. The action release
+  carries the underlying **Hadolint binary up to v2.15.1**; no rule configuration changed.
+- The `Dockerfile`'s existing suppressions are still required and were left alone — the two
+  `# hadolint ignore=DL3008` pragmas on the `apt-get` layers, and the numeric `USER` that keeps
+  DL3066 quiet because a name-based user can't be resolved by the linter.
+- No application code changed in this release.
+
+</details>
+
+<details id="v1210">
+<summary><strong>v1.21.0 — Desarrollos: a Jira-style epic board feeding the QA backlog</strong></summary>
 
 **A backlog of tickets was the only unit of work the QA panel understood**
 
@@ -2719,7 +2734,6 @@ five-a-day/
 │   │   ├── auto-merge.yml             Hourly development → testing merge + PR to main
 │   │   ├── codeql.yml                 Weekly Python security scan
 │   │   ├── notify-production.yml      Email on push to main
-│   │   ├── dependabot-auto-merge.yml  Auto-merge Dependabot minor/patch PRs
 │   │   ├── dependency-review.yml      Block PRs introducing HIGH/CRITICAL CVEs
 │   │   └── scorecard.yml              OSSF Scorecard supply-chain security (weekly)
 │   ├── dependabot.yml            Weekly dependency updates
@@ -3683,14 +3697,13 @@ Feature branches off `development` are welcome for non-trivial work, but the exp
 
 | Workflow | File | Triggers | Purpose |
 |----------|------|----------|---------|
-| **CI** | [`ci.yml`](.github/workflows/ci.yml) | Push to `development`/`testing`/`main`; PRs to `testing`/`main` | Six jobs — **Lint** (Ruff + Bandit + pip-audit + Hadolint), **Type check** (mypy), **Tests** (pytest + PostgreSQL 16 + coverage artifact), **Docker build** (validates Dockerfile), **Trivy** (filesystem CVE scan → Security tab), **Docker publish** (GHCR push + image scan, on `main`/`testing` only) |
+| **CI** | [`ci.yml`](.github/workflows/ci.yml) | Push to `development`/`testing`/`main`; PRs to `development`/`testing`/`main` | Six jobs — **Lint** (Ruff + Bandit + pip-audit + Hadolint), **Type check** (mypy), **Tests** (pytest + PostgreSQL 16 + coverage artifact), **Docker build** (validates Dockerfile), **Trivy** (filesystem CVE scan → Security tab), **Docker publish** (GHCR push + image scan, on `main`/`testing` only) |
 | **Auto-merge** | [`auto-merge.yml`](.github/workflows/auto-merge.yml) | Hourly cron + manual dispatch | Merges `development` → `testing` when conditions pass, creates PR to `main`, emails owners |
 | **CodeQL** | [`codeql.yml`](.github/workflows/codeql.yml) | Push to `main`/`testing`/`development`; PRs to `main`; Monday 04:30 UTC | Python static security analysis (OWASP Top 10, Django-specific queries) |
 | **Notify production** | [`notify-production.yml`](.github/workflows/notify-production.yml) | Push to `main` | Emails `hellofiveaday@gmail.com` with commit info and `gcloud` deploy instructions |
-| **Dependabot auto-merge** | [`dependabot-auto-merge.yml`](.github/workflows/dependabot-auto-merge.yml) | Pull request (Dependabot only) | Enables auto-merge for minor/patch Dependabot PRs once CI passes |
 | **Dependency review** | [`dependency-review.yml`](.github/workflows/dependency-review.yml) | Pull request | Blocks PRs that introduce a HIGH/CRITICAL CVE dependency |
 | **OSSF Scorecard** | [`scorecard.yml`](.github/workflows/scorecard.yml) | Push to `main`; weekly Monday 06:00 UTC; branch protection rule changes | Grades supply-chain security posture; uploads SARIF to GitHub Security tab |
-| **Dependabot** | [`dependabot.yml`](.github/dependabot.yml) | Weekly (Mondays 08:00 Madrid) | Grouped Python and GitHub Actions updates targeting `development` |
+| **Dependabot** | [`dependabot.yml`](.github/dependabot.yml) | Weekly (Mondays 08:00 Madrid) | Grouped Python and GitHub Actions updates targeting `development`. PRs are **never merged automatically** — every one is reviewed and merged by hand |
 
 Concurrent CI runs on the same branch cancel each other automatically — new pushes always produce a fresh run.
 
@@ -3826,7 +3839,7 @@ Dependabot opens **weekly PRs on `development`** (Mondays, 08:00 Europe/Madrid) 
 - **Python packages** — minor and patch updates grouped into a single PR. Django major version bumps are intentionally ignored (require manual upgrade planning).
 - **GitHub Actions** — updates to `actions/*`, `astral-sh/setup-uv`, `dawidd6/action-send-mail`, etc.
 
-PRs are labelled `dependencies` + `python` or `github-actions` for easy filtering. The normal 24 h cycle carries merged updates to `testing` and then to `main`.
+PRs are labelled `dependencies` + `python` or `github-actions` for easy filtering. **Every Dependabot PR is reviewed and merged by hand — nothing merges them automatically.** CI runs on PRs into `development`, so a bump's checks are visible before you merge it. Once merged, the normal 24 h cycle carries the update to `testing` and then to `main`.
 
 ### CodeQL Security Scanning
 
