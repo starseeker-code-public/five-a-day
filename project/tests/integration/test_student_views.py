@@ -360,3 +360,28 @@ class TestSpecialEnrollmentPricing:
         response = self._post(authenticated_client, parent, group, special_enrollment_fee="25.00")
         assert response.status_code == 200  # re-rendered form, not a redirect
         assert not Student.objects.filter(first_name="Especial").exists()
+
+
+class TestStudentListCap:
+    """The list renders every row it is given and filters CLIENT-side, so the
+    cap is what bounds the response at the documented 2,000-student ceiling —
+    the same `_LIST_CAP` + `result_truncated` shape `payments_list` uses."""
+
+    def test_context_reports_totals_and_truncation_state(self, authenticated_client, student, active_enrollment):
+        response = authenticated_client.get(reverse("students_list"))
+
+        assert response.status_code == 200
+        assert response.context["total_count"] >= 1
+        assert response.context["result_truncated"] is False
+        assert response.context["list_cap"] == 500
+
+    def test_the_queryset_is_actually_capped(self):
+        from core.views.students import _STUDENT_LIST_CAP, StudentListView
+
+        assert _STUDENT_LIST_CAP == 500
+        # The cap is applied by slicing in get_queryset; a paginate_by would
+        # break the client-side "search all students" behaviour instead.
+        import inspect
+
+        src = inspect.getsource(StudentListView.get_queryset)
+        assert "_STUDENT_LIST_CAP" in src

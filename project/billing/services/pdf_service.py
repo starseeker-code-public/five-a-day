@@ -300,7 +300,13 @@ def generate_student_payment_history(student, payments, *, title_suffix: str = "
     for p in payments:
         rows.append(
             [
-                _md(p.concept or "—"),
+                # NOT _md(): this is a plain Table cell, which reportlab draws
+                # verbatim with drawString — no mini-HTML parsing. Escaping here
+                # printed the entity itself, so a concept like "Clases & material"
+                # rendered as "Clases &amp; material". Only Paragraph needs _md.
+                # generate_quarterly_summary above and generate_tax_certificate
+                # below already write this same field raw; this was the odd one out.
+                p.concept or "—",
                 p.get_payment_type_display(),
                 p.due_date.strftime("%d/%m/%Y") if p.due_date else "—",
                 p.payment_date.strftime("%d/%m/%Y") if p.payment_date else "—",

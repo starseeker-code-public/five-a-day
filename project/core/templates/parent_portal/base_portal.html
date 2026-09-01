@@ -1,10 +1,11 @@
+{% load static %}
 <!DOCTYPE html>
 <html lang="es">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{% block title %}Portal · Five a Day{% endblock %}</title>
-<script src="https://cdn.tailwindcss.com"></script>
+<script src="{% static 'js/vendor/tailwindcss-play-3.4.17.js' %}"></script>
 <style>
     body { background: #f8fafc; }
     .brand { color: #6d28d9; }

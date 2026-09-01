@@ -33,7 +33,6 @@ Convenience functions for each email type. Each wraps `email_service.send_email(
 
 | Function | Template | Trigger |
 | -------- | -------- | ------- |
-| `send_birthday_email` | `happy_birthday` | Daily cron / manual |
 | `send_welcome_email` | `welcome_student` | On student creation |
 | `send_enrollment_confirmation_email` | `enrollment_child` / `enrollment_adult` | On enrollment |
 | `send_fun_friday_email` | `fun_friday` | Weekly manual |

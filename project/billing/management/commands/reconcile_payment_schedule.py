@@ -75,12 +75,19 @@ class Command(BaseCommand):
             quarterly = enrollment.payment_modality == "quarterly"
             payment_type = "quarterly" if quarterly else "monthly"
 
+            # Cancelled rows are INCLUDED. They are excluded from `stale` and
+            # `settled` below, but they must still occupy their due date: a
+            # payment an admin soft-deleted through `deactivate_payment` is
+            # cancelled, not absent, and dropping it here made its period look
+            # like a gap so the next run re-created the very row they removed.
+            # The generator's own idempotency check counts cancelled payments
+            # too — the two must agree.
             existing = list(
                 Payment.objects.filter(
                     student=student,
                     enrollment=enrollment,
                     payment_type__in=PERIODIC_TYPES,
-                ).exclude(payment_status="cancelled")
+                )
             )
             settled = [p for p in existing if p.payment_status == "completed"]
 

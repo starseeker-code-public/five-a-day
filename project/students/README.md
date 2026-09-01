@@ -44,10 +44,26 @@ Dev environment (`DJANGO_ENV=development`) keeps using the legacy env-var basic-
 
 ## Admin
 
-- `StudentAdmin` with `StudentParentInline` — fieldsets for personal, school, health, status info
-- `ParentAdmin` with `ParentStudentInline` — fieldsets for personal and contact info
+- `TeacherAdmin` (v1.24.0) — **excludes** `two_factor_secret` and `two_factor_backup_codes`.
+  Teacher was registered bare until then, so every field rendered as an editable input,
+  including the plaintext TOTP seed: any admin could read a colleague's, enrol it in their
+  own authenticator and hold that second factor indefinitely. They are excluded rather than
+  made read-only, because a read-only field still prints its value. `two_factor_enabled` is
+  visible but read-only — `manage.py reset_two_factor <email>` is the supported recovery
+  path. `save_model` calls `ensure_user()`, so a Teacher added here can actually log in and
+  be activated via `/password-reset/`; the `login_account` column flags rows that predate
+  this and still have no linked `auth.User`.
+- `StudentAdmin` with `StudentParentInline` — fieldsets for personal, school, contact,
+  health and status info. The contact fieldset (`is_adult`, `email`, `phone`) and the
+  waiting-list contact (`waiting_contact_name`, `waiting_contact_phone`) were added in
+  v1.24.0: an adult student has no `Parent` row, so those fields are their only contact,
+  and a fieldset that omits a field makes it unreachable rather than merely hidden.
+- `ParentAdmin` with `ParentStudentInline` — personal and contact info, including
+  `sms_opt_in` (v1.24.0). That flag gates every SMS in `comms.tasks` and there was no
+  screen anywhere in the app that could grant or revoke it.
 - `StudentParentAdmin` with autocomplete
-- `Teacher` and `Group` — simple registration
+- `GroupAdmin` — annotates the enrolled count in the queryset, so the changelist costs a
+  fixed number of queries instead of three per row (`max_students=0` reads "sin límite")
 
 ## URL Patterns (students/urls.py)
 

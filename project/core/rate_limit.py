@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import ipaddress
 import logging
+import time
 from functools import wraps
 
 from django.conf import settings
@@ -67,8 +68,51 @@ def _client_ip(request) -> str:
         return "unknown"
 
 
-def _cache_key(scope: str, ip: str) -> str:
-    return f"rl:{scope}:{ip}"
+def _slot_key(scope: str, ip: str, window: int, index: int) -> str:
+    return f"rl:{scope}:{ip}:{window}:{index}"
+
+
+def _claim_slot(scope: str, ip: str, limit: int, window_seconds: int) -> bool | None:
+    """Try to claim one of `limit` slots for this client in the current window.
+
+    Returns True when a slot was claimed, False when the window is full, and
+    None when the cache could not answer (the caller then fails OPEN).
+
+    Why slots rather than a counter: the previous version did `cache.add(key, 0)`
+    then `cache.incr(key)` and its comment claimed that closed the check-then-set
+    race. It does — on memcached and Redis. Production runs neither. With
+    `CACHE_DB=True` the backend is `DatabaseCache`, which does NOT override
+    `incr`, so it inherits `BaseCache.incr` — a plain get-then-set. Two
+    concurrent requests both read N and both write N+1, and the attempt is lost.
+    Under a burst the counter lags by roughly the number of parallel workers, so
+    the real ceiling was `limit` plus concurrency rather than `limit`.
+
+    `add()` has no such problem on any backend: it is an INSERT against the
+    cache table's primary key, and exactly one racing caller wins. Claiming a
+    distinct key per attempt turns the counter into `limit` one-shot slots, so
+    the count cannot be lost. Costs one query for the first attempt in a window
+    and at most `limit` for a throttled one.
+    """
+    window = int(time.time()) // window_seconds
+    try:
+        for index in range(limit):
+            # Slots outlive their window so a clock-granularity edge cannot free
+            # one early; the window number is in the key, so a stale slot is
+            # never consulted again.
+            if cache.add(_slot_key(scope, ip, window, index), 1, timeout=window_seconds * 2):
+                return True
+
+        # `add()` returning False is ambiguous on the database backend: it is
+        # what a taken slot looks like AND what a DatabaseError looks like,
+        # because `DatabaseCache._base_set` swallows the exception and returns
+        # False. `get()` does not swallow, so it separates "window is full"
+        # from "cache is unreachable" — without which a dead cache would lock
+        # every user out instead of failing open.
+        if cache.get(_slot_key(scope, ip, window, 0)) is None:
+            return None
+        return False
+    except Exception:
+        return None
 
 
 def rate_limit(
@@ -100,26 +144,13 @@ def rate_limit(
             if not getattr(settings, "RATELIMIT_ENABLE", True):
                 return view_func(request, *args, **kwargs)
 
-            key = _cache_key(scope, _client_ip(request))
-            try:
-                # `add()` is atomic in memcached and Redis: it seeds the counter
-                # to 0 with the correct TTL only when the key is missing. This
-                # closes the TOCTOU race where two concurrent requests both
-                # `get() == 0` and then race on `set()`, resetting the window
-                # and allowing >limit requests through.
-                cache.add(key, 0, timeout=window_seconds)
-                try:
-                    current = cache.incr(key)
-                except ValueError:
-                    # Key expired between `add` and `incr` — reseed and count 1.
-                    cache.set(key, 1, timeout=window_seconds)
-                    current = 1
-            except Exception:
-                # The cache is now a REAL external dependency (Redis, or the
+            ip = _client_ip(request)
+            claimed = _claim_slot(scope, ip, limit, window_seconds)
+
+            if claimed is None:
+                # The cache is a REAL external dependency (Redis, or the
                 # PostgreSQL cache table — see settings.CACHES), so it can be
-                # unreachable, and it sits on the login path. LocMemCache never
-                # failed, so this branch did not exist and an outage would have
-                # turned every login into a 500.
+                # unreachable, and it sits on the login path.
                 #
                 # Fail OPEN, loudly. Locking the academy out of the only admin
                 # interface for their live business is worse than temporarily
@@ -134,13 +165,8 @@ def rate_limit(
                 )
                 return view_func(request, *args, **kwargs)
 
-            if current > limit:
-                logger.info(
-                    "rate limit exceeded: scope=%s ip=%s current=%s",
-                    scope,
-                    _client_ip(request),
-                    current,
-                )
+            if not claimed:
+                logger.info("rate limit exceeded: scope=%s ip=%s limit=%s", scope, ip, limit)
                 return HttpResponse(
                     "⚠️ Demasiados intentos. Prueba de nuevo en un minuto.",
                     status=429,

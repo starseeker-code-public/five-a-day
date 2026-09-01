@@ -72,7 +72,7 @@
     <!-- Theme (light/dark): apply the class before first paint to avoid a flash.
          An explicit user choice (localStorage) always wins; otherwise the
          DEFAULT is time-based — light from 10:00–16:59, dark the rest of the day. -->
-    <script>
+    <script nonce="{{ csp_nonce }}">
     (function () {
         try {
             var stored = localStorage.getItem('theme');
@@ -89,8 +89,8 @@
     </script>
 
     <!-- Tailwind CSS (CDN) -->
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script>
+    <script src="{% static 'js/vendor/tailwindcss-play-3.4.17.js' %}"></script>
+    <script nonce="{{ csp_nonce }}">
     tailwind.config = {
         darkMode: 'class',
         theme: {
@@ -334,7 +334,8 @@
     <button id="view-help-btn" type="button" title="Ayuda de esta sección" aria-label="Ayuda de esta sección">
         <span class="material-symbols-outlined">help</span>
     </button>
-    <div id="view-help-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:55;align-items:center;justify-content:center;padding:1rem;">
+    <div id="view-help-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:55;align-items:center;justify-content:center;padding:1rem;"
+         role="dialog" aria-modal="true" aria-label="Ayuda de esta vista">
         <div class="bg-white rounded-2xl w-full max-w-lg" style="max-height:80vh;overflow-y:auto;box-shadow:0 12px 48px rgba(0,0,0,0.25);">
             <div class="flex items-center justify-between p-5 border-b border-neutral-100">
                 <h2 class="text-lg font-bold text-neutral-800 flex items-center gap-2">
@@ -349,7 +350,8 @@
     </div>
 
     <!-- Support Modal -->
-    <div id="support-modal" class="hidden fixed inset-0 bg-black/50 z-50 items-center justify-center p-4" style="display: none;">
+    <div id="support-modal" class="hidden fixed inset-0 bg-black/50 z-50 items-center justify-center p-4" style="display: none;"
+         role="dialog" aria-modal="true" aria-label="Contactar con soporte">
         <div class="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden">
             <!-- Header -->
             <div class="px-6 py-4 text-white flex justify-between items-center bg-gradient-to-r from-primary-300 to-primary-500">
@@ -454,7 +456,7 @@
     <!-- PWA (v1.12) — register the service worker after the page loads so the
          registration never blocks the first paint. Silently degrades on browsers
          that don't support service workers. -->
-    <script>
+    <script nonce="{{ csp_nonce }}">
     if ("serviceWorker" in navigator) {
         window.addEventListener("load", function () {
             navigator.serviceWorker.register("/sw.js").catch(function (err) {

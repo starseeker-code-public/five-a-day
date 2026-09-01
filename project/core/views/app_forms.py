@@ -25,6 +25,7 @@ from comms.services.email_functions import (
 from comms.services.email_service import email_service
 from core.constants import DIAS_ES, MESES_ES
 from core.models import HistoryLog
+from core.utils import MAX_QUERY_YEAR, MIN_QUERY_YEAR, safe_int
 from students.models import Group, Parent, Student
 
 logger = logging.getLogger(__name__)
@@ -34,13 +35,11 @@ def _safe_year(raw, default: int) -> int:
     """Parse a year from form input, falling back to `default`.
 
     A bare `int(request.POST.get("year"))` here was a 500 on any non-numeric
-    input; the range keeps it inside what a DateField can hold.
+    input; the range keeps it inside what a DateField can hold. Delegates to
+    `core.utils.safe_int` so the app has one implementation of this rather than
+    the three it had grown.
     """
-    try:
-        year = int(raw)
-    except (TypeError, ValueError):
-        return default
-    return year if 1900 <= year <= 2200 else default
+    return safe_int(raw, default=default, low=MIN_QUERY_YEAR, high=MAX_QUERY_YEAR)
 
 
 def apps_view(request):
@@ -384,6 +383,14 @@ def payment_reminder_form(request):
                     else:
                         error_count += 1
                 except Exception:
+                    # Never silent: this is the academy's outbound channel, and an
+                    # operator who sees only a count cannot tell a bad address from
+                    # an SMTP outage. The recipient is NOT logged — the exception
+                    # text can carry it, so `logger.exception` alone is the record.
+                    logger.exception(
+                        "Email send failed in %s",
+                        request.resolver_match.url_name if request.resolver_match else "app_forms",
+                    )
                     error_count += 1
 
             if success_count > 0:
@@ -537,6 +544,14 @@ def vacation_closure_form(request):
                     else:
                         error_count += 1
                 except Exception:
+                    # Never silent: this is the academy's outbound channel, and an
+                    # operator who sees only a count cannot tell a bad address from
+                    # an SMTP outage. The recipient is NOT logged — the exception
+                    # text can carry it, so `logger.exception` alone is the record.
+                    logger.exception(
+                        "Email send failed in %s",
+                        request.resolver_match.url_name if request.resolver_match else "app_forms",
+                    )
                     error_count += 1
 
             if success_count > 0:
@@ -722,6 +737,14 @@ def monthly_report_form(request):
                 else:
                     error_count += 1
             except Exception:
+                # Never silent: this is the academy's outbound channel, and an
+                # operator who sees only a count cannot tell a bad address from
+                # an SMTP outage. The recipient is NOT logged — the exception
+                # text can carry it, so `logger.exception` alone is the record.
+                logger.exception(
+                    "Email send failed in %s",
+                    request.resolver_match.url_name if request.resolver_match else "app_forms",
+                )
                 error_count += 1
 
         if success_count > 0:
@@ -833,6 +856,14 @@ def birthday_form(request):
                 else:
                     error_count += 1
             except Exception:
+                # Never silent: this is the academy's outbound channel, and an
+                # operator who sees only a count cannot tell a bad address from
+                # an SMTP outage. The recipient is NOT logged — the exception
+                # text can carry it, so `logger.exception` alone is the record.
+                logger.exception(
+                    "Email send failed in %s",
+                    request.resolver_match.url_name if request.resolver_match else "app_forms",
+                )
                 error_count += 1
 
         if success_count > 0:
@@ -948,6 +979,14 @@ def receipts_form(request):
                         else:
                             error_count += 1
                     except Exception:
+                        # Never silent: this is the academy's outbound channel, and an
+                        # operator who sees only a count cannot tell a bad address from
+                        # an SMTP outage. The recipient is NOT logged — the exception
+                        # text can carry it, so `logger.exception` alone is the record.
+                        logger.exception(
+                            "Email send failed in %s",
+                            request.resolver_match.url_name if request.resolver_match else "app_forms",
+                        )
                         error_count += 1
         elif receipt_type == "enrollment":
             from billing.models import current_academic_year
@@ -973,6 +1012,14 @@ def receipts_form(request):
                         else:
                             error_count += 1
                     except Exception:
+                        # Never silent: this is the academy's outbound channel, and an
+                        # operator who sees only a count cannot tell a bad address from
+                        # an SMTP outage. The recipient is NOT logged — the exception
+                        # text can carry it, so `logger.exception` alone is the record.
+                        logger.exception(
+                            "Email send failed in %s",
+                            request.resolver_match.url_name if request.resolver_match else "app_forms",
+                        )
                         error_count += 1
         else:
             adult_month = request.POST.get("adult_month", current_month)
@@ -1114,6 +1161,14 @@ def newsletter_form(request):
                 else:
                     error_count += 1
             except Exception:
+                # Never silent: this is the academy's outbound channel, and an
+                # operator who sees only a count cannot tell a bad address from
+                # an SMTP outage. The recipient is NOT logged — the exception
+                # text can carry it, so `logger.exception` alone is the record.
+                logger.exception(
+                    "Email send failed in %s",
+                    request.resolver_match.url_name if request.resolver_match else "app_forms",
+                )
                 error_count += 1
 
         if success_count > 0:

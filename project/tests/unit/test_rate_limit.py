@@ -1,11 +1,13 @@
 """Unit tests for the rate_limit decorator (v1.10)."""
 
+import time
+
 import pytest
 from django.core.cache import cache
 from django.http import HttpRequest, HttpResponse
 from django.test import override_settings
 
-from core.rate_limit import _client_ip, rate_limit
+from core.rate_limit import _claim_slot, _client_ip, _slot_key, rate_limit
 
 
 @pytest.fixture(autouse=True)
@@ -137,3 +139,64 @@ class TestClientIpValidation:
 
     def test_missing_both_becomes_unknown(self):
         assert _client_ip(self._req(remote=None)) == "unknown"
+
+
+class TestSlotClaimIsNotLostUnderConcurrency:
+    """The counter this replaced was `cache.add(key, 0)` + `cache.incr(key)`.
+
+    `DatabaseCache` — the backend production runs, via `CACHE_DB=True` — does
+    not override `incr`, so it inherits `BaseCache.incr`, a plain get-then-set.
+    Two concurrent requests both read N and both write N+1 and one attempt
+    vanishes, so the real ceiling was `limit` plus the worker concurrency.
+    Slots are claimed with `add()`, which is a primary-key INSERT: exactly one
+    racing caller can win a given slot, so no attempt can be lost.
+    """
+
+    def test_exactly_limit_requests_pass_then_the_window_closes(self):
+        assert [_endpoint(_make_request()).status_code for _ in range(5)] == [200, 200, 200, 429, 429]
+
+    def test_a_lost_update_in_incr_can_no_longer_help(self, monkeypatch):
+        """Simulates the backend flaw directly: make `incr` a no-op. The old
+        implementation counted through it and let everything past; the slot
+        claim never calls it."""
+        monkeypatch.setattr(cache, "incr", lambda *a, **kw: 0)
+
+        codes = [_endpoint(_make_request(ip="7.7.7.7")).status_code for _ in range(5)]
+        assert codes.count(200) == 3
+        assert codes[-1] == 429
+
+    def test_each_attempt_takes_a_distinct_slot(self):
+        for _ in range(3):
+            _endpoint(_make_request(ip="8.8.8.8"))
+
+        window = int(time.time()) // 60
+        held = [i for i in range(3) if cache.get(_slot_key("test_scope", "8.8.8.8", window, i)) is not None]
+        assert held == [0, 1, 2], "three attempts must occupy three separate slots"
+
+
+class TestFailsOpenWhenTheCacheIsUnreachable:
+    """Deliberate: locking the academy out of their own admin is worse than
+    briefly losing a defence-in-depth control. `add()` swallows DatabaseError
+    and returns False, which is indistinguishable from a full window — so the
+    probe that separates them is what keeps this behaviour."""
+
+    def test_a_raising_cache_lets_the_request_through(self, monkeypatch):
+        def boom(*args, **kwargs):
+            raise RuntimeError("cache down")
+
+        monkeypatch.setattr(cache, "add", boom)
+        assert _endpoint(_make_request(ip="5.5.5.5")).status_code == 200
+
+    def test_add_failing_silently_is_treated_as_an_outage_not_a_full_window(self, monkeypatch):
+        """The DatabaseCache failure mode: `add` returns False for every slot
+        while nothing was actually stored."""
+        monkeypatch.setattr(cache, "add", lambda *a, **kw: False)
+        assert _claim_slot("test_scope", "6.6.6.6", 3, 60) is None
+        assert _endpoint(_make_request(ip="6.6.6.6")).status_code == 200
+
+    def test_a_genuinely_full_window_still_throttles(self):
+        """The other side of that probe: slots really are taken, so this must
+        be a 429 and not a fail-open."""
+        for _ in range(3):
+            _endpoint(_make_request(ip="4.4.4.4"))
+        assert _claim_slot("test_scope", "4.4.4.4", 3, 60) is False

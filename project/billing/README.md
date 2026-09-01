@@ -17,7 +17,7 @@ The `billing` app owns all financial logic: pricing configuration, enrollment pl
 - **SiteConfiguration** is a singleton — `get_config()` uses `get_or_create()` (race-condition safe), seeded from `billing/constants.py`. Always read pricing through it; `constants.py` values are seeds only. Includes `returning_student_enrollment_discount` (v1.13).
 - **One active enrollment per student** — enforced by UniqueConstraint on `(student)` where `status='active'`
 - **Payment.is_overdue** — True when status is pending and due_date < today
-- **Enrollment.is_paid** / **remaining_amount** — calculated from completed payment totals via shared `_total_paid()` helper (single query path)
+- **Enrollment.payment_totals()** — `(overdue, outstanding, billed)` in a single query, and the source for `is_up_to_date` / `overdue_amount` / `outstanding_amount`. It replaced `is_paid` / `remaining_amount`, which summed **every** completed payment on the enrollment — matrícula and each month's cuota together — and compared the total to `final_amount`, the price of **one period**. Different units on either side of the comparison: a monthly student owing 520 EUR over ten periods reported `is_paid=True` and `remaining_amount=0.00` as soon as a single 54 EUR month was collected, and a 40 EUR matrícula on its own left "remaining 14.00". `is_up_to_date` is driven by **overdue** money (past its due date, still pending) because that is the chase list; merely outstanding money is reported separately, since payments are created on the first day of a period and only fall due on its last, so counting them as owed would flag nearly every family for most of every month. Only `pending` counts, so cancelled / failed / refunded money is excluded
 - **Expense.clean()** validates per cadence — `monthly` needs `recurring_day`; `yearly` needs `recurring_day` + `recurring_month`; `weekly` needs `recurring_weekdays`. Materialisation is idempotent on `generated_from` + the exact `expense_date`.
 
 ### Helper Functions (in models.py)
@@ -48,14 +48,12 @@ The `billing` app owns all financial logic: pricing configuration, enrollment pl
 - `hand_priced_amount(enrollment)` (v1.20.0) — the agreed **period** fee of a `special` matrícula, or `None`. A hand-priced enrollment stores the admin's amount on the enrollment itself (`final_amount`, already carrying whatever sibling / cheque discount was ticked), and its `schedule_type` is only the timetable the student attends, **not** a price band. Both generators used to re-derive the fee from `SiteConfiguration`, so the ficha showed the custom price while every payment of the year charged the standard 1-day / 2-day rate. Any new amount calculation must go through this helper, and any queryset feeding it needs `select_related("enrollment_type")`.
 - `calculate_monthly_amount(enrollment, config, month)` — monthly payment with discounts + June bonus (delegates to `_get_base_monthly_fee`). Short-circuits on `hand_priced_amount()`: sibling / cheque / June discounts are **not** layered on top of a negotiated price, because `EnrollmentService._apply_discounts` already folded them in at creation.
 - `calculate_quarterly_amount(enrollment, config, quarter_due_month)` — 3 months minus the quarterly discount, **then** the sibling percentage, the language cheque (x3, one per covered month) and — for Q3, which covers June — the June discount. Mirrors `EnrollmentService._apply_discounts` so the enrollment row and the generated payments agree. Before v1.15 only the quarterly percentage was applied, so a quarterly student with a sibling discount or a cheque was billed full price. Adult groups keep their flat rate. A `special` matrícula short-circuits all of it via `hand_priced_amount()` — for a quarterly special the admin types the price of the whole quarter.
-- `complete_payment(payment_id)` — marks payment completed with today's date (within `transaction.atomic()`)
 - `schedule_academic_year_payments(enrollment, parent=None, as_of=None)` — creates every periodic payment whose period has **started**, plus the first one always. Payments are created on the first day of their period and fall due on its **last** day, so enrolling issues just the period joined and the 1st-of-the-month cron opens each later one. Back-fills any started period that has no payment, so a missed cron run is repaired instead of going unbilled. Idempotent (matches on payment_type + due-date month/year). Called by `StudentCreateView`, waiting-list assignment and `generate_payments`. Returns the count created.
 - `billing_periods(enrollment)` — the schedule itself: ordered periods from the enrollment month to June, each `{months, starts, due, fraction}`. Monthly = one per teaching month; quarterly = consecutive 3-month blocks **anchored to the enrollment month** (12 Dec → Dec-Feb, Mar-May, one-month June stub), replacing the fixed Oct/Jan/Apr calendar that left a mid-year joiner's first months — and September for everyone — unbilled.
 - `proration_fraction(reference, month, year)` — days left in the joining month, counting the join day (15 Sep on 30 days = 16/30). Applies to the first period only.
-- `calculate_period_amount(enrollment, config, months, fraction=1, quarterly=False)` — the single source of what a period costs. `calculate_monthly_amount` / `calculate_quarterly_amount` are thin wrappers for the standard-price question.
+- `calculate_period_amount(enrollment, config, months, fraction=1, quarterly=False)` — the single source of what a period costs; every generator goes through it. `calculate_monthly_amount` / `calculate_quarterly_amount` are thin wrappers that answer the standard-price question *for an existing enrollment*. The two callers that ask it without one — the payment-reminder email and the pricing preview — cannot use them and re-derive the figures in `PricingService`; `tests/unit/test_pricing_matches_billing.py` asserts the two agree.
+- `pending_periods(enrollment, as_of=None)` — the periods that are due to be created right now, and the single decision point for "should this be billed yet?". Applies the two rules once: the first period is always offered (even when it opens in the future), and a period already carrying a payment of that type due in the same month is skipped — cancelled rows included, so a soft-deleted payment is not re-created. `schedule_academic_year_payments` and `generate_payments --dry-run` both go through it; they used to apply the rules separately and had already drifted on both. Costs one query per enrollment, not one per period.
 - `period_concept(period, quarterly)` — the label, e.g. `Trimestre Diciembre-Febrero 2026 (parcial)`.
-- `should_generate_monthly/quarterly(month)` — academic calendar validation
-- `get_payment_statistics(month, year)` — aggregate pending/completed counts and totals
 
 ### PricingService (`billing/services/pricing_service.py`)
 
@@ -63,7 +61,7 @@ The `billing` app owns all financial logic: pricing configuration, enrollment pl
 - `get_monthly_fee(schedule_type)` — fee by full_time/part_time/adult_group
 - `get_enrollment_fee(is_adult)` — child vs adult enrollment fee
 - `calculate_quarterly_price()` — 3 months * full_time - discount%
-- `calculate_sibling_price(config=None, schedule_type="full_time")` (v1.20.0) — the monthly fee with the sibling discount applied, in the same order of operations as `PaymentService.calculate_monthly_amount`, so the figure advertised in the payment-reminder email matches what the sibling is actually billed
+- `calculate_sibling_price(config=None, schedule_type="full_time")` (v1.20.0) — the monthly fee with the sibling discount applied, in the same order of operations as `PaymentService.calculate_period_amount`, so the figure advertised in the payment-reminder email matches what the sibling is actually billed. A deliberate re-derivation, not a call — the billing helpers need an `Enrollment` and this question has none; `tests/unit/test_pricing_matches_billing.py` keeps the two in step
 - `payment_reminder_fees(config=None)` (v1.20.0) — the display-ready five-row fee table for the `payment_reminder` email (full-time, part-time, adult, quarterly, sibling full-time), formatted the way the Spanish emails print money (comma decimal, no `,00` tail). The quarterly and sibling rows used to read *"consultar en la academia"*; every caller that renders the template now shares one source of truth
 
 ### ExpenseService (`billing/services/expense_service.py`)
@@ -111,9 +109,7 @@ Implemented directly against the Stripe REST API with `httpx` — **no Stripe SD
 - Pricing seed values (used in SiteConfiguration defaults)
 - Choice tuples: ENROLLMENT_TYPE_CHOICES, SCHEDULE_TYPE_CHOICES, PAYMENT_MODALITY_CHOICES, etc.
 - **Choice labels are Spanish** (v1.20.0) — `get_<field>_display()` output goes straight onto the payment detail page, the payments list, the student ficha and the admin, and `PAYMENT_TYPE_CHOICES` / `PAYMENT_STATUS_CHOICES` / `ENROLLMENT_STATUS_CHOICES` shipped English labels in the middle of a Spanish UI. The *keys* stay English, so no data migration is involved — but Django still generates an `AlterField` (`0009`), which must be committed
-- `QUARTER_NAMES_ES[10]` reads "1er Trimestre (Oct-Dic)" — Q1 does not cover September
-- QUARTERS definition (Q1: Oct-Dec, Q2: Jan-Mar, Q3: Apr-Jun)
-- Utility functions: `calculate_discount()`, `get_monthly_fee_by_schedule()`, `get_enrollment_fee()`
+- Utility functions: `calculate_discount()`, `get_enrollment_fee()` — `get_monthly_fee_by_schedule()` was removed in v1.24.0 (referenced only by its own tests; `PricingService.get_monthly_fee` is the live equivalent)
 
 ## Management Commands
 
@@ -169,6 +165,19 @@ Production runs no Beat process (Cloud Run, `CELERY_TASK_ALWAYS_EAGER=True`) —
 triggers Cloud Run Jobs that call the management-command wrappers instead. Never schedule with
 `apply_async(eta=...)` or `countdown`: under eager mode the delay is ignored and the task runs
 immediately.
+
+## Admin (`billing/admin.py`)
+
+`*/admin.py` is excluded from coverage; these are covered by
+`tests/integration/test_admin_hardening.py`.
+
+| ModelAdmin | Behaviour |
+| ---------- | --------- |
+| `PaymentAdmin` | Student/parent links (both `None`-safe — an adult student has no guardian), amount and status columns, CSV export through `csv_safe_row`. **Bulk actions (v1.24.0):** `mark_as_completed` now touches only *pending* rows and queues a receipt for each. It was a bare `queryset.update(payment_date=today)`, which rewrote the date on already-completed payments — moving settled money into the current month in every income report, the regression `quick_complete_payment` short-circuits on — and sent nothing. Reopening a payment clears `payment_date`, because every income figure filters on it |
+| `EnrollmentAdmin` | Four-state `payment_status_display` (v1.24.0): overdue / up-to-date-with-an-open-period / settled / not-yet-billed. It was a paid-unpaid pair driven by `is_paid`, which compared a year of collected money against one period's price. The **Billing plan** fieldset (`academic_year`, `payment_modality`, `is_sibling_discount`, `has_language_cheque`) was added at the same time — none of those fields were on any form, and `academic_year` is what `generate_payments` filters on, so a wrong value meant silently never billed with nowhere to fix it |
+| `EnrollmentTypeAdmin` | Registered bare until v1.24.0. The four rows are resolved **by name** and a missing one raises `ValueError`, which blocks every enrollment of every kind — and a row not yet referenced by an enrollment had no `PROTECT` guarding it, so it was one click from deletion. Delete is refused for the four required names, `name` is read-only once the row exists (`choices` stops you inventing a value, not swapping `special` onto the row resolved as `adults`), and the matrícula amounts are visible in the list |
+| `SiteConfigurationAdmin` | Singleton — add is refused once a row exists, delete always |
+| `ExpenseAdmin` | List/filter/search; `generated_from` read-only |
 
 ## URL Patterns (billing/urls.py)
 

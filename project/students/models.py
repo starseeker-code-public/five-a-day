@@ -49,6 +49,8 @@ class Teacher(models.Model):
 
     class Meta:
         db_table = "teachers"
+        verbose_name = "Profesor"
+        verbose_name_plural = "Profesores"
         indexes = [
             models.Index(fields=["email"]),
             models.Index(fields=["active"]),
@@ -173,6 +175,8 @@ class Group(models.Model):
 
     class Meta:
         db_table = "groups"
+        verbose_name = "Grupo"
+        verbose_name_plural = "Grupos"
         indexes = [
             models.Index(fields=["group_name"]),
             models.Index(fields=["teacher"]),
@@ -221,6 +225,8 @@ class Parent(models.Model):
 
     class Meta:
         db_table = "parents"
+        verbose_name = "Padre/Tutor"
+        verbose_name_plural = "Padres y tutores"
         indexes = [
             models.Index(fields=["dni"]),
             models.Index(fields=["email"]),
@@ -311,6 +317,8 @@ class Student(models.Model):
 
     class Meta:
         db_table = "students"
+        verbose_name = "Alumno"
+        verbose_name_plural = "Alumnos"
         indexes = [
             models.Index(fields=["group"]),
             models.Index(fields=["active"]),
@@ -361,6 +369,8 @@ class StudentParent(models.Model):
 
     class Meta:
         db_table = "student_parents"
+        verbose_name = "Vínculo alumno–familiar"
+        verbose_name_plural = "Vínculos alumno–familiar"
         constraints = [
             models.UniqueConstraint(fields=["student", "parent"], name="unique_student_parent"),
         ]

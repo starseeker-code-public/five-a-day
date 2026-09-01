@@ -7,8 +7,10 @@ fixed Oct/Jan/Apr calendar, and the first period is prorated by join date.
 
 from datetime import date
 from decimal import Decimal
+from io import StringIO
 
 import pytest
+from django.core.management import call_command
 
 from billing.models import Enrollment, Payment
 from billing.services.payment_service import PaymentService
@@ -326,3 +328,94 @@ class TestJuneEnrollmentRollsToNextYear:
         assert september.due_date == date(2026, 9, 30)
         assert september.amount == site_config.full_time_monthly_fee
         assert "parcial" not in september.concept
+
+
+class TestPendingPeriodsIsTheSingleDecisionPoint:
+    """`pending_periods` answers "should this period be billed yet?" once, for
+    both callers.
+
+    `schedule_academic_year_payments` and `generate_payments --dry-run` used to
+    apply the rules separately and had already drifted on both: the preview
+    dropped a first period opening in the future, and keyed idempotency on the
+    exact due date instead of payment type + due month/year, so it could
+    disagree with the run it was previewing.
+    """
+
+    def test_the_preview_matches_what_the_real_run_creates(self, elapsed_year_enrollment, parent):
+        as_of = date(2026, 6, 30)
+        previewed = PaymentService.pending_periods(elapsed_year_enrollment, as_of=as_of)
+        created = PaymentService.schedule_academic_year_payments(elapsed_year_enrollment, parent, as_of=as_of)
+
+        assert created == len(previewed) == 10
+
+    def test_the_first_period_is_offered_even_when_it_opens_in_the_future(self, elapsed_year_enrollment):
+        """Enrolling in August must put the September fee on the ficha that day."""
+        periods = PaymentService.pending_periods(elapsed_year_enrollment, as_of=date(2025, 8, 1))
+
+        assert len(periods) == 1
+        assert periods[0]["due"] == date(2025, 9, 30)
+
+    def test_a_payment_of_another_type_does_not_hide_a_period(self, elapsed_year_enrollment, student):
+        """The matrícula shares its due date with the first monthly period, so
+        matching on the exact date made that period look already billed."""
+        Payment.objects.create(
+            student=student,
+            enrollment=elapsed_year_enrollment,
+            payment_type="enrollment",
+            amount=Decimal("40.00"),
+            payment_status="pending",
+            due_date=date(2025, 9, 30),
+            concept="Matrícula 2025-2026",
+        )
+
+        dues = [p["due"] for p in PaymentService.pending_periods(elapsed_year_enrollment, as_of=date(2025, 9, 30))]
+        assert date(2025, 9, 30) in dues
+
+    def test_a_cancelled_payment_still_occupies_its_period(self, elapsed_year_enrollment, student):
+        """Otherwise the generator re-creates a payment an admin soft-deleted."""
+        Payment.objects.create(
+            student=student,
+            enrollment=elapsed_year_enrollment,
+            payment_type="monthly",
+            amount=Decimal("54.00"),
+            payment_status="cancelled",
+            due_date=date(2025, 9, 30),
+            concept="Mensualidad Septiembre 2025",
+        )
+
+        dues = [p["due"] for p in PaymentService.pending_periods(elapsed_year_enrollment, as_of=date(2025, 9, 30))]
+        assert date(2025, 9, 30) not in dues
+
+    def test_the_command_dry_run_writes_nothing_and_predicts_the_real_total(
+        self, elapsed_year_enrollment, student_with_parent
+    ):
+        out = StringIO()
+        call_command("generate_payments", "--month", "6", "--year", "2026", "--dry-run", stdout=out)
+        assert Payment.objects.filter(enrollment=elapsed_year_enrollment).count() == 0
+
+        # Per-payment lines only — the closing summary carries the same prefix.
+        previewed = [ln for ln in out.getvalue().splitlines() if ln.startswith("  [DRY RUN]")]
+        assert len(previewed) == 10
+
+        call_command("generate_payments", "--month", "6", "--year", "2026", stdout=StringIO())
+        assert Payment.objects.filter(enrollment=elapsed_year_enrollment).count() == len(previewed)
+
+    def test_the_membership_check_costs_one_query_not_one_per_period(
+        self, elapsed_year_enrollment, student, django_assert_max_num_queries
+    ):
+        """It was an `.exists()` per period — ten round trips per enrollment,
+        and the cron walks every active enrollment in the academy."""
+        Payment.objects.create(
+            student=student,
+            enrollment=elapsed_year_enrollment,
+            payment_type="monthly",
+            amount=Decimal("54.00"),
+            payment_status="pending",
+            due_date=date(2025, 10, 31),
+            concept="Mensualidad Octubre 2025",
+        )
+
+        with django_assert_max_num_queries(2):
+            periods = PaymentService.pending_periods(elapsed_year_enrollment, as_of=date(2026, 6, 30))
+
+        assert len(periods) == 9, "the already-billed October is excluded"

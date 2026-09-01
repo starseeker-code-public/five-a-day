@@ -53,20 +53,23 @@ Monthly payments are due every month from **September** to **June**.
 
 ### Quarterly Payments
 
-Quarters:
-- **Q1**: October–December — billed as **three** months, due 1 October. The Spanish label is
-  "1er Trimestre (Oct-Dic)" (corrected in v1.20.0; it read "Sep-Dic" while charging three months).
-  `QUARTERS[0]["includes_sept"]` is `True` but is read by nothing — see the note under
-  *Automatic Payment Generation*.
-- **Q2**: January–March
-- **Q3**: April–June
+Quarters are **anchored to the enrollment month** (v1.22.0), not to a fixed calendar:
+consecutive 3-month blocks starting from the month the student joins, with a short final
+block when the academic year ends first. Joining in September gives Sep–Nov, Dec–Feb,
+Mar–May and a one-month June stub; joining 12 December gives Dec–Feb, Mar–May and June.
+Each block is created on its first day and falls **due on its last** day.
+
+> The fixed Oct/Jan/Apr calendar this replaced had two silent revenue holes — September
+> fell outside every quarter, and a mid-quarter joiner's first months were never billed.
+> The `QUARTERS` constant that encoded it survived, unread, until v1.24.0.
 
 Quarterly amount = 3 months × monthly fee × 0.95 (5% discount), **then the same discounts a
 monthly student would receive**.
 
 - **Sibling discount** applies (percentage, on the discounted quarterly total).
-- **Language cheque** applies **×3** — a quarter covers three months, so it carries three cheques.
-- **June discount** applies to **Q3 only**, since Q3 (due April) covers April–June.
+- **Language cheque** applies per covered month — three cheques on a full quarter, one on a
+  June stub (`calculate_period_amount` scales by the months the block actually covers).
+- **June discount** applies to whichever block **contains June**.
 - **Adult groups** keep the flat rate: quarterly percentage only, no further discounts — matching
   `calculate_monthly_amount`, which returns the adult base fee untouched.
 - Quarterly students are notified at the **start of each quarter**.
@@ -111,11 +114,15 @@ Pending (due, not paid) periodic payments are created two ways, and the two are 
 
 **2. On the 1st of each month (Celery / Cloud Run Job).** The `generate_payments` management command opens every period that has started since the last run — the new month for monthly students, the new block for quarterly ones. It calls exactly the same `schedule_academic_year_payments()` the enrollment form does, so there is one code path and the two can never disagree.
 
+Since v1.24.0 the question *"should this period be billed yet?"* is answered in exactly one place, `PaymentService.pending_periods()`, which both the real run and `generate_payments --dry-run` consume. They used to apply the rules separately and had already drifted on both of them — the preview dropped a first period opening in the future, and matched existing payments on the exact due date rather than payment type + due month/year — so `--dry-run` could disagree with the run it was previewing.
+
 It also **back-fills**: any period that has started and has no payment is created, so a run the scheduler missed is repaired on the next one instead of leaving a month permanently unbilled.
 
 Because both paths match on `(student, payment_type, due-date month/year)` before creating, nothing is ever charged twice.
 
-> **Known gap.** A quarterly student's September is not billed by either path: monthly students are billed Sep–Jun, but Q1 is due 1 October and covers three months (Oct–Dec). `QUARTERS[0]` still carries an `includes_sept: True` flag, but nothing reads it and `calculate_quarterly_amount` charges `base × 3`. Decide whether September belongs in Q1 before relying on this document for a reconciliation.
+Cancelled payments count as existing, so a payment an admin soft-deleted through `deactivate_payment` is **not** re-created — by the cron or by `reconcile_payment_schedule`.
+
+> **Resolved in v1.22.0.** This section previously carried a "known gap" noting that a quarterly student's September went unbilled, because Q1 ran Oct–Dec under the fixed calendar. Anchoring quarters to the enrollment month closed it: the first block starts in the month the student joined, so September is inside it for anyone enrolling in September. The `QUARTERS` list that encoded that calendar (and its never-read `includes_sept` flag) was removed from `billing/constants.py` in v1.24.0.
 
 ### Payment Amount Calculation
 

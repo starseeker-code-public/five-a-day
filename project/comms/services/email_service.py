@@ -20,19 +20,6 @@ from comms.log_safe import safe_log
 logger = logging.getLogger(__name__)
 
 
-def get_email_config():
-    """
-    Obtiene la configuracion de email desde settings/variables de entorno.
-    Esta funcion asegura que siempre usamos los valores correctos del .env.
-    """
-    return {
-        "host_user": settings.EMAIL_HOST_USER,
-        "host_password": settings.EMAIL_HOST_PASSWORD,
-        "from_email": settings.DEFAULT_FROM_EMAIL,
-        "backend": settings.EMAIL_BACKEND,
-    }
-
-
 class EmailService:
     """
     Servicio generico para envio de emails con templates HTML

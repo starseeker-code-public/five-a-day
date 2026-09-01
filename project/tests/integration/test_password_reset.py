@@ -120,20 +120,3 @@ class TestPasswordResetFlow:
         # Our branded template shows 'Enlace inválido' on the invalid-link branch.
         body = response.content.decode("utf-8")
         assert "Enlace inválido" in body or "caducado" in body
-
-
-class TestBuildResetLink:
-    def test_build_reset_link_returns_valid_url(self, rf, teacher_with_user):
-        from core.views.password_reset import build_reset_link
-
-        request = rf.get("/login/")
-        link = str(build_reset_link(request, teacher_with_user.user))
-        assert "/password-reset/confirm/" in link
-        assert link.startswith("http")
-
-    def test_build_reset_link_secure_scheme(self, rf, teacher_with_user):
-        from core.views.password_reset import build_reset_link
-
-        request = rf.get("/login/", **{"wsgi.url_scheme": "https"})
-        link = str(build_reset_link(request, teacher_with_user.user))
-        assert link.startswith("https://")

@@ -1,7 +1,10 @@
+from contextvars import ContextVar
 from datetime import date, timedelta
 from decimal import Decimal
+from typing import NamedTuple
 
 from django.core.exceptions import ValidationError
+from django.core.signals import request_finished, request_started
 from django.core.validators import MinValueValidator
 from django.db import models
 
@@ -18,6 +21,27 @@ ACADEMIC_YEAR_ROLLOVER_MONTH = 5  # May
 # Classes themselves run September→June. That is a different question from the
 # one above and must not be conflated — see academic_year_for_month().
 TEACHING_YEAR_START_MONTH = 9  # September
+
+
+# Request-scoped cache for the SiteConfiguration singleton.
+#
+# `get_config()` is called from 26 places and every call was its own query — the
+# pricing services, the payment generators, the admin and several views all ask
+# for it, often more than once in a single request. A ContextVar rather than
+# Django's cache framework is deliberate: this holds LIVE PRICES, and a stale
+# entry would mis-bill a family. Within one request the config cannot change, so
+# the memo is always correct; `save()` clears it immediately, which also covers
+# the long-lived Celery worker, and `request_started` clears it between requests
+# in case a thread is reused.
+_CONFIG_CACHE: ContextVar = ContextVar("siteconfiguration_cache", default=None)
+
+
+def _clear_config_cache(**_kwargs):
+    _CONFIG_CACHE.set(None)
+
+
+request_started.connect(_clear_config_cache, dispatch_uid="billing.clear_siteconfig_cache.start")
+request_finished.connect(_clear_config_cache, dispatch_uid="billing.clear_siteconfig_cache.end")
 
 
 def _academic_year_from(reference_date, rollover_month):
@@ -251,6 +275,9 @@ class SiteConfiguration(models.Model):
         """Ensure only one instance exists (singleton pattern)"""
         self.pk = 1
         super().save(*args, **kwargs)
+        # Any write invalidates the request-scoped memo immediately, so an
+        # admin editing prices in /management/ cannot be served the old ones.
+        _CONFIG_CACHE.set(None)
 
     def delete(self, *args, **kwargs):
         """Prevent deletion of the singleton.
@@ -262,11 +289,21 @@ class SiteConfiguration(models.Model):
         return (0, {})
 
     @classmethod
-    def get_config(cls):
+    def get_config(cls, refresh: bool = False):
         """
         Obtiene la configuración del sitio (crea una si no existe).
         Usa valores por defecto de constants.py si no hay configuración.
+
+        Memoised for the duration of the request — see `_CONFIG_CACHE`. Pass
+        `refresh=True` to force a re-read (nothing needs to today; it exists so
+        a caller that has just written through a path bypassing `save()` is not
+        stuck with a stale object).
         """
+        if not refresh:
+            cached = _CONFIG_CACHE.get()
+            if cached is not None:
+                return cached
+
         config, _ = cls.objects.get_or_create(
             pk=1,
             defaults={
@@ -287,6 +324,7 @@ class SiteConfiguration(models.Model):
                 "returning_student_enrollment_discount": constants.RETURNING_STUDENT_ENROLLMENT_DISCOUNT,
             },
         )
+        _CONFIG_CACHE.set(config)
         return config
 
 
@@ -398,18 +436,72 @@ class Enrollment(models.Model):
 
         super().save(*args, **kwargs)
 
-    def _total_paid(self):
-        return self.payments.filter(payment_status="completed").aggregate(total=models.Sum("amount"))[
-            "total"
-        ] or Decimal("0.00")
+    def payment_totals(self) -> "EnrollmentPaymentTotals":
+        """Overdue money, outstanding money and how many payments exist. One query.
+
+        This replaced a comparison that could not mean anything: `is_paid` summed
+        EVERY completed payment on the enrollment — the matrícula and each
+        month's cuota together — and compared the total to `final_amount`, which
+        is the price of ONE period. The numerator and denominator were different
+        units, so a monthly student owing 520 EUR across ten periods reported
+        `is_paid=True` and `remaining_amount=0.00` the moment a single 54 EUR
+        month was collected, with nine months still pending. A 40 EUR matrícula
+        on its own left "remaining 14.00" — the enrollment fee counted against a
+        monthly fee.
+
+        The question the admin actually asks this row is "does this family owe me
+        money?", so that is what is computed. `overdue` drives it: money that has
+        passed its due date and is still pending, i.e. the chase list. Merely
+        `outstanding` money is reported separately rather than folded in —
+        payments are created on the first day of their period and only fall due
+        on its last, so counting them as owed would flag nearly every family for
+        most of every month and make the column unreadable.
+
+        Only `pending` counts, so cancelled / failed / refunded money is
+        excluded exactly as `billing.constants.LIVE_PAYMENT_STATUSES` intends.
+        """
+        today = date.today()
+        overdue = Decimal("0.00")
+        outstanding = Decimal("0.00")
+        billed = 0
+        for amount, due_date, status in self.payments.values_list("amount", "due_date", "payment_status"):
+            billed += 1
+            if status != "pending":
+                continue
+            outstanding += amount
+            if due_date is not None and due_date < today:
+                overdue += amount
+        return EnrollmentPaymentTotals(overdue=overdue, outstanding=outstanding, billed=billed)
 
     @property
-    def is_paid(self):
-        return self._total_paid() >= self.final_amount
+    def overdue_amount(self):
+        """Invoiced, past its due date, still unpaid."""
+        return self.payment_totals().overdue
 
     @property
-    def remaining_amount(self):
-        return max(self.final_amount - self._total_paid(), Decimal("0.00"))
+    def outstanding_amount(self):
+        """Invoiced and not yet collected, whether or not it has fallen due."""
+        return self.payment_totals().outstanding
+
+    @property
+    def is_up_to_date(self):
+        """True when nothing on this enrollment is past due.
+
+        Deliberately not called `is_paid`: an active enrollment is never "paid"
+        in full until its last period is collected, and a name that claims
+        otherwise is what let the old figure go unquestioned.
+        """
+        return self.payment_totals().overdue == Decimal("0.00")
+
+
+class EnrollmentPaymentTotals(NamedTuple):
+    """What one enrollment owes, resolved in a single query."""
+
+    overdue: Decimal
+    outstanding: Decimal
+    # NOT `count`: a NamedTuple field of that name shadows
+    # `tuple.count`, which mypy rejects outright.
+    billed: int
 
 
 class Payment(models.Model):

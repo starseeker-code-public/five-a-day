@@ -536,39 +536,37 @@ gcloud compute ssh $VM_NAME --zone=$VM_ZONE --project=$PROJECT \
   --command='sudo grep APP_VERSION /home/Proye/five-a-day/.env.testing'
 ```
 
-### Repairing a single env var — and the known `ACADEMY_IBAN_HOLDER` corruption
+### Repairing a single env var — and the retired `ACADEMY_IBAN_HOLDER` corruption
 
 Production reads its env from Cloud Run, never from `.env.production`, and the `ACADEMY_*`
 values were set by hand. Nothing in the repo provisions them, so nothing re-asserts them
 either — a bad value stays bad across every future deploy.
 
-One is currently wrong. `ACADEMY_IBAN_HOLDER` on the production service is:
+**RESOLVED (2026-09-01): `ACADEMY_IBAN_HOLDER` is now deliberately ASCII —
+`Silvia Yubitza Moreno Carlin`, plain `i` — everywhere: the Cloud Run service AND all four
+local `.env*` files. Do NOT "repair" it back to `Carlín`.** The accented value was corrupted
+to `Carl?n` twice by console-codepage transcoding (any `--update-env-vars` from a
+non-UTF-8 Windows shell re-serialises the whole env set and re-corrupts it, and a paste
+into a legacy console can mangle the `í` before gcloud even runs). Accepting the plain `i`
+removes the last non-ASCII byte from the env set, so no future update from any shell can
+corrupt anything. The GDPR legal footer in `base_email.html` keeps the accented legal name —
+it is file-based UTF-8 rendered by Django and cannot transcode.
 
-```text
-Silvia Yubitza Moreno Carlín     # should be: Silvia Yubitza Moreno Carlín
-```
-
-The `í` was lost to a console-codepage transcode when the var was first set from a cmd or
-PowerShell prompt; gcloud stored a literal `?`. It is the only non-ASCII value among the 35
-env vars, so it is the only one exposed to this. Every payment-reminder email production
-sends names the account holder with the `?` — see the matching gotcha in `CLAUDE.md`.
-
-To fix it, or any single env var, use **`--update-env-vars`**, which merges:
+To change any single env var, use **`--update-env-vars`**, which merges:
 
 ```bash
 gcloud run services update $SERVICE --project=$PROJECT --region=$REGION \
-  --update-env-vars="^@^ACADEMY_IBAN_HOLDER=Silvia Yubitza Moreno Carlín"
+  --update-env-vars="^@^SOME_VAR=some value, with commas"
 ```
 
 Three things matter here:
 
 - **`--update-env-vars` merges; `--set-env-vars` replaces.** Never reach for `--set-env-vars`
-  to change one value — it drops the ~30 vars and 6 Secret Manager refs you did not repeat.
-- **Run it from a UTF-8 shell.** The Bash tool passes `í` through correctly (verified: gcloud
-  received `U+00ED`). A Windows console with a legacy codepage is what created the bug in the
-  first place — if you are unsure, probe first with a command that echoes the argument back,
-  e.g. `gcloud run services describe "Carlín-probe" --region=$REGION --project=$PROJECT`, and
-  check that the error names `Carl\xedn` and not `Carlín`.
+  to change one value — it drops the ~30 vars and Secret Manager refs you did not repeat.
+- **A non-ASCII value needs a UTF-8 shell** (the Bash tool qualifies; a legacy-codepage
+  cmd/PowerShell console does not) — and read the bytes back afterwards, because gcloud
+  says "deployed" either way. Today every env value is ASCII; keep it that way, or accept
+  owning this failure mode for the value you add.
 - **The `^@^` prefix sets `@` as the delimiter** so spaces and commas in the value are safe.
 
 Snapshot before and diff after — the whole risk of an env change is the vars you did not
@@ -580,7 +578,8 @@ gcloud run services describe $SERVICE --project=$PROJECT --region=$REGION --form
 print(len(e)); [print(x['name'], '=', repr(x.get('value')) if 'value' in x else '<secretKeyRef>') for x in sorted(e, key=lambda k: k['name'])]"
 ```
 
-Expect 35 vars and 6 `<secretKeyRef>` entries both before and after. Verifying the value
+The entry count must be identical before and after (37 total as of 2026-09-01, including 7
+`<secretKeyRef>` entries — recount rather than trust this snapshot). Verifying the value
 reached the container needs a request path that prints it — the payment-reminder form at
 `/apps/payment-reminder/` renders `{{ iban_holder }}` in its preview.
 

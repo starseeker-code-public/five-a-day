@@ -147,3 +147,48 @@ class TestApplyWebhookEvent:
 class TestGetStripeService:
     def test_returns_instance(self):
         assert isinstance(get_stripe_service(), StripeService)
+
+
+# A body that is valid bytes but not valid UTF-8 — what the old verifier
+# crashed on before it ever reached the signature comparison.
+NOT_UTF8 = bytes([0xFF, 0xFE]) + b" not utf-8"
+
+
+class TestSignatureIsComputedOverRawBytes:
+    """The verifier decoded the body to str and re-encoded it — a no-op for the
+    UTF-8 Stripe actually sends, but `UnicodeDecodeError` on anything else.
+    That was an unhandled 500 on a public, `csrf_exempt` endpoint any
+    unauthenticated caller can POST to. Stripe signs the raw bytes, so signing
+    them here is also the more faithful implementation.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _secret(self, settings):
+        """Without the secret the verifier short-circuits to False and every
+        assertion below would pass for the wrong reason."""
+        settings.STRIPE_WEBHOOK_SECRET = "whsec_test"
+
+    def _sign(self, payload: bytes, timestamp: int) -> str:
+        digest = hmac.new(b"whsec_test", str(timestamp).encode() + b"." + payload, hashlib.sha256).hexdigest()
+        return f"t={timestamp},v1={digest}"
+
+    def test_a_non_utf8_body_is_rejected_rather_than_raising(self):
+        header = self._sign(b"{}", int(time.time()))
+
+        assert StripeService().verify_webhook_signature(NOT_UTF8, header) is False
+
+    def test_a_correctly_signed_non_utf8_body_verifies(self):
+        payload = NOT_UTF8
+
+        assert StripeService().verify_webhook_signature(payload, self._sign(payload, int(time.time()))) is True
+
+    def test_the_endpoint_answers_400_instead_of_500(self, client):
+        from django.urls import reverse
+
+        response = client.post(
+            reverse("stripe_webhook"),
+            data=NOT_UTF8,
+            content_type="application/json",
+            HTTP_STRIPE_SIGNATURE=self._sign(b"{}", int(time.time())),
+        )
+        assert response.status_code == 400

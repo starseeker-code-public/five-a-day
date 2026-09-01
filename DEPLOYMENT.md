@@ -352,6 +352,73 @@ curl -s -H "X-Probe-Token: $TOKEN" \
   "https://fiveaday-332600671945.europe-southwest1.run.app/health/?deep=1"
 ```
 
+**Cloud Run startup + liveness probes on `/health/`.** Without these the service runs on the
+implicit default probe only — a TCP check on port 8000 and **no liveness probe at all** — so a
+container that binds the port but can no longer serve HTTP is never restarted, and startup is
+"ready" the moment Gunicorn binds rather than when Django actually answers. Both probes target
+the **shallow** `/health/` (never `?deep=1`): it deliberately skips the database, so a transient
+DB blip cannot make Cloud Run kill healthy containers. The startup budget must stay at the
+240 s maximum because a cold start runs `migrate` + `collectstatic --clear` before Gunicorn
+binds (`10 + 23×10 = 240`).
+
+Three traps, all hit on the first attempt (2026-09-01, revision `fiveaday-00016-5f5`):
+
+- **Probe requests arrive with `Host: 127.0.0.1`** — Cloud Run probes hit the container
+  directly, bypassing the ingress that normally sets the real host, so Django's strict
+  `ALLOWED_HOSTS` answers 400 (`DisallowedHost`) and the revision never becomes ready.
+  `DJANGO_ALLOWED_HOSTS` must include `127.0.0.1` (harmless: a poisoned link pointing at
+  loopback gives an attacker nothing, and the production guard only forbids `*`).
+- **The probe "success" is a 301, not a 200** — probe traffic also lacks
+  `X-Forwarded-Proto: https`, so `SECURE_SSL_REDIRECT` answers with a redirect. Cloud Run
+  counts any status in 200–399 as success, so this works, but know that the probe proves
+  "Gunicorn + Django middleware answering", not "view layer executed".
+- **PowerShell eats the unquoted commas** — the flag value collapses into one garbled path
+  (`GET /health/ httpGet.port=8000 …`). Quote each flag value, or run the block in Git Bash.
+
+```powershell
+# Belt-and-braces: the env set has been 100 % ASCII since 2026-09-01 (see "Repairing a
+# single env var"), but ANY `gcloud run services update` re-serialises the whole set
+# client-side, so keep the UTF-8 vars set in case a non-ASCII value ever returns:
+$env:PYTHONUTF8 = "1"; $env:PYTHONIOENCODING = "utf-8"
+
+# One revision for env var + both probes. ^@^ makes @ the delimiter so the commas in
+# the host list survive; --update-env-vars merges (never --set-env-vars, which replaces).
+gcloud run services update fiveaday `
+  --region=europe-southwest1 --project=five-a-day-evolution `
+  --update-env-vars '^@^DJANGO_ALLOWED_HOSTS=fiveaday-332600671945.europe-southwest1.run.app,fiveaday-rsw37gr6lq-no.a.run.app,127.0.0.1' `
+  --startup-probe 'httpGet.path=/health/,httpGet.port=8000,initialDelaySeconds=10,periodSeconds=10,timeoutSeconds=5,failureThreshold=23' `
+  --liveness-probe 'httpGet.path=/health/,httpGet.port=8000,periodSeconds=30,timeoutSeconds=5,failureThreshold=3'
+
+# Verify the probes took…
+gcloud run services describe fiveaday --region=europe-southwest1 --project=five-a-day-evolution `
+  --format="yaml(spec.template.spec.containers[0].startupProbe, spec.template.spec.containers[0].livenessProbe)"
+
+# …and that ACADEMY_IBAN_HOLDER survived — since 2026-09-01 the correct value is the
+# deliberately ASCII "Silvia Yubitza Moreno Carlin" (plain i): any `?` means corruption
+gcloud run services describe fiveaday --region=europe-southwest1 --project=five-a-day-evolution `
+  --format="value(spec.template.spec.containers[0].env)" `
+  | python -c "import sys; s=sys.stdin.read(); print('IBAN holder OK' if 'Silvia Yubitza Moreno Carlin' in s and 'Carl?n' not in s else 'CORRUPTED')"
+```
+
+This creates a new revision and shifts traffic to it, so treat it like a small deploy. A
+failed probe config is safe for traffic — Cloud Run keeps serving the previous revision —
+but **the service template still records the failed attempt**, including any env-var
+corruption it carried: the 2026-09-01 probe rollout ran once without the UTF-8 exports,
+failed on `DisallowedHost`, and left `ACADEMY_IBAN_HOLDER` as `Carl?n` in the template,
+which the corrected retry then faithfully preserved — and a further repair attempt showed
+the corruption can also happen **before gcloud runs at all**, when the console/clipboard
+mangles the `í` on paste, which no `PYTHONUTF8` export can undo. After ANY update —
+successful or not — run the check above and repair per ".claude/skills/deploy/SKILL.md →
+Repairing a single env var" if it reports corruption.
+
+**Resolution (2026-09-01): `ACADEMY_IBAN_HOLDER` is now deliberately ASCII —
+`Silvia Yubitza Moreno Carlin`, plain `i`.** This is an accepted spelling tradeoff on the
+payment-reminder emails in exchange for making the value un-corruptible: with no non-ASCII
+byte in the env set, any future `--update-env-vars` from any shell is safe. Do NOT "repair"
+it back to `Carlín` — that reintroduces the trap. If a future env var genuinely needs
+non-ASCII, set it from Cloud Shell or Git Bash (never a PowerShell/cmd console) and run the
+byte check afterwards.
+
 ### Build & Deploy
 
 ```bash
@@ -442,13 +509,19 @@ update:
 
 ### Repairing a single env var
 
-> **Export `PYTHONUTF8=1` before ANY `gcloud run services update` on this service.**
-> `--update-env-vars` is a client-side merge: gcloud reads the entire current env set,
+> **RESOLVED 2026-09-01: the env set is now 100 % ASCII — `ACADEMY_IBAN_HOLDER` is
+> deliberately `Silvia Yubitza Moreno Carlin` (plain `i`) on the service and in all four
+> local `.env*` files. Do NOT "repair" it back to `Carlín`.** The history below explains
+> why, and still applies to any non-ASCII value you might add in the future:
+> `--update-env-vars` is a client-side merge — gcloud reads the entire current env set,
 > splices in your change and PUTs all of it back. So an update to *any* variable
-> re-serialises `ACADEMY_IBAN_HOLDER`, and on a Windows shell with a non-UTF-8 codepage it
-> silently re-corrupts `í` back to `?`. This was verified the hard way in v1.23.0: the value
-> was repaired, then an unrelated `--update-env-vars=CACHE_DB=True` put the `?` straight back.
-> Always read the bytes back afterwards — the hex must contain `c3 ad`, never `3f`:
+> re-serialises every other one, and on a Windows shell with a non-UTF-8 codepage a
+> non-ASCII value silently corrupts (`í` → `?`). Verified the hard way twice: repaired in
+> v1.23.0, re-corrupted by an unrelated `--update-env-vars=CACHE_DB=True`; repaired again
+> 2026-09-01, re-corrupted by a console-paste mangle that happened *before gcloud ran*,
+> which no `PYTHONUTF8` export can prevent — hence the ASCII decision. If you ever add a
+> non-ASCII value, read the bytes back after every update (for `í` the hex must contain
+> `c3 ad`, never `3f`):
 >
 > ```bash
 > gcloud run services describe fiveaday --project=$PROJECT --region=$REGION --format=json >   | python -c "import json,sys; e={x['name']:x.get('value') for x in json.load(sys.stdin)['spec']['template']['spec']['containers'][0]['env']}; print(e['ACADEMY_IBAN_HOLDER'].encode('utf-8').hex(' '))"
@@ -463,15 +536,16 @@ silently drop the ~30 vars and 6 Secret Manager refs you did not repeat on the l
 
 ```bash
 gcloud run services update fiveaday --project=$PROJECT_ID --region=$REGION \
-  --update-env-vars="^@^ACADEMY_IBAN_HOLDER=Silvia Yubitza Moreno Carlín"
+  --update-env-vars="^@^SOME_VAR=some value, with commas"
 ```
 
-The `^@^` prefix makes `@` the delimiter, so spaces and commas in the value are safe. Run it from a
-**UTF-8 shell**: passing `í` from a legacy-codepage cmd/PowerShell prompt transcodes it through the
-console codepage and gcloud stores a literal `?`. That is how production ended up holding
-`Silvia Yubitza Moreno Carlín`, which every payment-reminder email it sends still prints. It is the
-only non-ASCII value among the 35 env vars, so it is the only one exposed to this — check any new
-one you add.
+The `^@^` prefix makes `@` the delimiter, so spaces and commas in the value are safe. A non-ASCII
+value additionally needs a **UTF-8 shell**: passing `í` from a legacy-codepage cmd/PowerShell
+prompt transcodes it through the console codepage and gcloud stores a literal `?` — that is how
+`ACADEMY_IBAN_HOLDER` was corrupted twice before the 2026-09-01 decision to keep it ASCII. Today
+no env value carries a non-ASCII byte; check any new one you add. (The GDPR legal footer in
+`base_email.html` keeps the accented legal name `Carlín` — it is file-based UTF-8 rendered by
+Django and cannot transcode.)
 
 Snapshot the env before and after (the count must not move — expect 35 vars and 6 `secretKeyRef`
 entries) and verify through a request path that prints the value; `/apps/payment-reminder/` renders
@@ -528,8 +602,9 @@ run inline):
 | `cleanup_done_backlog_tasks` | `cleanup_backlog_tasks` | QA/testing env only — skip in production | — |
 | `prune_audit_log` | `prune_audit_log` | weekly, Sunday 03:00 | `0 3 * * 0` |
 | `purge_expired_sessions` | `purge_sessions` | daily, 03:30 | `30 3 * * *` |
+| — (ops only, no Beat task) | `backup_retention --apply` | daily, 05:30 | `30 5 * * *` |
 
-> **Provisioning status (verified 2026-08-31).** 10 Cloud Run Jobs, 9 Cloud Scheduler
+> **Provisioning status (verified 2026-09-01).** 11 Cloud Run Jobs, 9 Cloud Scheduler
 > entries. `fiveaday-migrate` has no schedule by design (deploy-time only). Note the
 > **schedulers live in `europe-west1`**, not the service's `europe-southwest1` — Cloud
 > Scheduler is not available in that region, so `gcloud scheduler jobs list --location`
@@ -547,6 +622,26 @@ run inline):
 > ```bash
 > gcloud scheduler jobs resume sched-fiveaday-purge-sessions >   --project=five-a-day-evolution --location=europe-west1
 > ```
+>
+> `fiveaday-backup-retention` (v1.24.0) is the **scheduled** port of
+> `scripts/backup_retention.sh` — `manage.py backup_retention --apply`, daily 05:30. The
+> Cloud Run Job exists (cloned from `fiveaday-prune-audit-log`, SQL annotation intact) and
+> needs two one-off steps by a human with IAM rights:
+>
+> ```bash
+> # 1. grant the custom role (created 2026-09-01: backupRuns.create/delete/get/list +
+> #    instances.get — deliberately NOT instances.update) to the runtime SA:
+> gcloud projects add-iam-policy-binding five-a-day-evolution >   --member="serviceAccount:fiveaday-run@five-a-day-evolution.iam.gserviceaccount.com" >   --role="projects/five-a-day-evolution/roles/backupRetention" --condition=None
+>
+> # 2. create the schedule PAUSED (the deployed image predates the command):
+> gcloud scheduler jobs create http sched-fiveaday-backup-retention >   --location=europe-west1 --schedule="30 5 * * *" --time-zone="Europe/Madrid" >   --uri="https://europe-southwest1-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/five-a-day-evolution/jobs/fiveaday-backup-retention:run" >   --http-method=POST >   --oauth-service-account-email="fiveaday-scheduler@five-a-day-evolution.iam.gserviceaccount.com" >   --oauth-token-scope="https://www.googleapis.com/auth/cloud-platform"
+> gcloud scheduler jobs pause sched-fiveaday-backup-retention --location=europe-west1
+> ```
+>
+> **Resume it right after the v1.24.0 production deploy** (and run once with
+> `--bootstrap` via `gcloud run jobs execute fiveaday-backup-retention --args` if the
+> tiers have never been seeded): like `purge_sessions` above, an enabled schedule against
+> the current image would just fail nightly.
 >
 > **Cloning a job? Use `gcloud run jobs replace` with a YAML file, not a pile of flags.**
 > Export an existing job with `--format=export`, change `metadata.name` and the container
@@ -829,16 +924,22 @@ backup it owns**. That is the single fastest route to total data loss, and it is
 Cloud SQL's retention is a flat count of **automated** backups — there is no
 grandfather-father-son option — so on its own the recovery horizon is one week. **On-demand**
 backups are exempt from that count and persist until explicitly deleted, so the longer tiers
-are built from on-demand backups tagged through `--description` and pruned by
-`scripts/backup_retention.sh`.
+are built from on-demand backups tagged through `--description` and pruned daily.
+
+Since v1.24.0 the policy is **scheduled**: the `fiveaday-backup-retention` Cloud Run Job runs
+`manage.py backup_retention --apply` daily at 05:30 (see the Cloud Scheduler table above —
+for months this section said "run daily" while nothing did, so the biweekly and monthly
+points did not exist). `scripts/backup_retention.sh` remains the by-hand equivalent for a
+workstation with gcloud:
 
 ```bash
-./scripts/backup_retention.sh --dry-run     # show the plan, change nothing
-./scripts/backup_retention.sh               # apply, with a confirmation prompt
-./scripts/backup_retention.sh --bootstrap   # seed both tiers today (first run)
+python project/manage.py backup_retention               # dry run — show the plan
+python project/manage.py backup_retention --apply       # what the scheduler runs
+python project/manage.py backup_retention --apply --bootstrap   # seed both tiers today
+./scripts/backup_retention.sh --dry-run                 # same policy, bash + gcloud
 ```
 
-Run daily for the calendar rules to fire. Two honest limitations:
+The calendar rules fire only on their day. Two honest limitations:
 
 - Tiers **cannot be created retroactively** — an automated backup cannot be promoted to
   on-demand, so a monthly point only exists if the script ran on that day.
@@ -1155,19 +1256,33 @@ These are not needed at launch. They are the natural next steps as the system or
 
 ### Cloud Monitoring + uptime alerts
 
-Set up uptime checks so you are notified before teachers notice the app is down. No code changes
-needed.
+**Configured** as of 2026-09-01: an uptime check on `/health/`
+(`five-a-day-uptime-8gdbTvEAAAI`, every 5 min, 10 s timeout), an email notification
+channel (`SUPPORT_EMAIL`, channel `3290002934615318076`) and an alert policy
+("Five a Day production down (/health/)", `18131874056285299811`) that fires when the
+check fails for 5 minutes. To reproduce or adjust (the old
+`uptime-check-configs create http` command form is retired):
 
 ```bash
-# Create an uptime check on the health endpoint
-gcloud monitoring uptime-check-configs create http \
-  --display-name="Five a Day uptime" \
-  --http-check-path="/_health/" \
-  --hostname=app.yourdomain.com
+# Create an uptime check on the health endpoint (shallow /health/, never the DB —
+# a transient database blip must not page anyone; see the /health/ gotcha)
+gcloud monitoring uptime create "Five a Day uptime" \
+  --project=five-a-day-evolution \
+  --resource-type=uptime-url \
+  --resource-labels=host=fiveaday-332600671945.europe-southwest1.run.app,project_id=five-a-day-evolution \
+  --protocol=https --path=/health/ --port=443 \
+  --period=5 --timeout=10
+
+# Inspect what exists
+gcloud monitoring uptime list-configs --project=five-a-day-evolution
 ```
 
-Cost: free for basic checks. Email alert notifications are free. Recommended as soon as the app
-goes to production.
+The notification channel and alert policy predate `gcloud monitoring` GA coverage — they
+were created through the Monitoring REST API (`POST /v3/projects/$PROJECT/notificationChannels`
+and `/v3/projects/$PROJECT/alertPolicies` with a bearer token from
+`gcloud auth print-access-token`); the console (Monitoring → Alerting) edits them fine.
+
+Cost: free for basic checks. Email alert notifications are free.
 
 ### Cloud Storage (GCS) — media files and bulk exports
 

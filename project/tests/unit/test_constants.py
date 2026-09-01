@@ -6,13 +6,9 @@ import pytest
 
 from billing.constants import (
     ADULT_ENROLLMENT_FEE,
-    ADULT_GROUP_MONTHLY_FEE,
     CHILDREN_ENROLLMENT_FEE,
-    FULL_TIME_MONTHLY_FEE,
-    PART_TIME_MONTHLY_FEE,
     calculate_discount,
     get_enrollment_fee,
-    get_monthly_fee_by_schedule,
 )
 
 
@@ -38,20 +34,6 @@ class TestCalculateDiscount:
     def test_invalid_discount_type_raises(self):
         with pytest.raises(ValueError, match="no válido"):
             calculate_discount(Decimal("100"), (Decimal("10"), "invalid"))
-
-
-class TestGetMonthlyFeeBySchedule:
-    def test_full_time(self):
-        assert get_monthly_fee_by_schedule("full_time") == FULL_TIME_MONTHLY_FEE
-
-    def test_part_time(self):
-        assert get_monthly_fee_by_schedule("part_time") == PART_TIME_MONTHLY_FEE
-
-    def test_adult_group(self):
-        assert get_monthly_fee_by_schedule("adult_group") == ADULT_GROUP_MONTHLY_FEE
-
-    def test_unknown_defaults_to_full_time(self):
-        assert get_monthly_fee_by_schedule("nonexistent") == FULL_TIME_MONTHLY_FEE
 
 
 class TestGetEnrollmentFee:

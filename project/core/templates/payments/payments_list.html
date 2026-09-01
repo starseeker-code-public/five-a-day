@@ -93,7 +93,7 @@
                 {% if search_query %}<input type="hidden" name="search" value="{{ search_query }}">{% endif %}
                 <select name="month" id="paymentMonthSelect"
                         class="px-3 py-2 border border-neutral-300 rounded-md text-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
-                        onchange="document.getElementById('paymentMonthForm').submit();">
+                        data-autosubmit>
                     <option value="">Todos los meses</option>
                     {% for m_num, m_name in month_choices %}
                     <option value="{{ m_num }}" {% if selected_month == m_num %}selected{% endif %}>{{ m_name|capfirst }}</option>
@@ -101,7 +101,7 @@
                 </select>
                 <select name="year" id="paymentYearSelect"
                         class="px-3 py-2 border border-neutral-300 rounded-md text-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
-                        onchange="document.getElementById('paymentMonthForm').submit();">
+                        data-autosubmit>
                     {% for y in year_choices %}
                     <option value="{{ y }}" {% if selected_year == y %}selected{% endif %}>{{ y }}</option>
                     {% endfor %}

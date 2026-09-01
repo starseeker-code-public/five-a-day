@@ -23,7 +23,7 @@ The monolithic `views.py` was split into **23** focused modules:
 | Module | Views | Description |
 | ------ | ----- | ----------- |
 | `auth.py` | `login_view`, `logout_view`, `google_oauth_redirect`, `google_oauth_callback` | Dispatches between dev env-var basic-auth and Teacher (auth.User) login; Google OAuth backs into the same Django ModelBackend so logged-in OAuth users also get `/admin/` access |
-| `password_reset.py` | `BrandedPasswordResetView`, `BrandedPasswordResetDoneView`, `BrandedPasswordResetConfirmView`, `BrandedPasswordResetCompleteView`, `build_reset_link()` | Branded subclasses of Django's built-in password-reset views; HTML email rendered via `emails/password_reset.html`; URLs exempt from the auth middleware so teachers locked out of their account can still reach them |
+| `password_reset.py` | `BrandedPasswordResetView`, `BrandedPasswordResetDoneView`, `BrandedPasswordResetConfirmView`, `BrandedPasswordResetCompleteView` | Branded subclasses of Django's built-in password-reset views; HTML email rendered via `emails/password_reset.html`; URLs exempt from the auth middleware so teachers locked out of their account can still reach them |
 | `dashboard.py` | `home`, `all_info` | Dashboard with stats (single `Case/When` aggregate query), todos, birthdays, inspirational quote from zenquotes.io (48 h cookie); database view |
 | `schedule.py` | `schedule_view`, `save_schedule_slot`, `fun_friday_view` | Weekly schedule grid + Fun Friday list (single attendance query for both weeks, filters from loaded students) |
 | `fun_friday_attendance.py` | `toggle_fun_friday_this_week`, `add/remove_fun_friday_attendance` | AJAX attendance toggles |
@@ -69,6 +69,35 @@ Student, payment, management, and email app routes live in `students/urls.py`, `
 - **`AuditActorMiddleware`** (`audit_signals.py`) — stashes the current user in a contextvar so the `AuditLog` signal receivers can attribute a change without threading the request through the ORM.
 - **`qa_access_required`** (`decorators.py`) — reusable gate for `/testing/` views and endpoints. Returns 404 (not 403) unless `IS_TESTING_ENV` **and** the request comes from a logged-in Teacher with `admin=True` (resolved via `_request_teacher`). Non-admin teachers must not reach the dev tools (DB seed/reset, error-email toggle, git internals), so they get a 404 and `show_testing_tools` hides the sidebar icon from them. Because the QA routes are admin-only, they are deliberately **absent** from `NON_ADMIN_ALLOWED_URL_NAMES` — admins bypass that whitelist anyway.
 
+## Input & Output Guards (`utils.py`, `rate_limit.py`)
+
+- **`csv_safe(value)` / `csv_safe_row(values)`** (`utils.py`) — neutralise CSV formula
+  injection (CWE-1236). A cell beginning `=`, `+`, `-` or `@` is evaluated on open, and
+  student and parent names are free text a **non-admin** teacher can set, so the payload
+  executes on a more privileged user's workstation. Only `str` values are touched, so a
+  negative `Decimal` keeps its leading `-`.
+- **`xlsx_safe_append(ws, values)`** (`utils.py`, v1.24.0) — the same threat in `.xlsx`,
+  where the apostrophe trick does **not** work. openpyxl inspects every string and marks
+  one starting with `=` as `data_type="f"`, so the workbook contains a *real* formula
+  rather than text a spreadsheet might evaluate; a leading `'` would just be stored
+  verbatim and rename the student. The guard writes the row and forces the cell back to a
+  string. `billing/exports.py` is the only openpyxl consumer and routes every row through it.
+- **`safe_int(raw, *, default, low=None, high=None)`** (`utils.py`, v1.24.0) — parse an int
+  from request input, falling back to `default`. The **range** matters as much as the parse:
+  Django builds a real `date(year, 1, 1)` for a `__year` lookup, so `?year=-5` raises
+  `ValueError` and `?year=99999999999` raises `OverflowError`, both past an
+  `except (TypeError, ValueError)` that only wraps the `int()` call. This had been written
+  three times in three modules while two further views were still missing it.
+- **`rate_limit(scope, ...)`** (`rate_limit.py`) — throttles login, 2FA, password reset and
+  the parent-portal magic link per client IP. **v1.24.0:** counts with `limit` one-shot
+  slots claimed via `cache.add()` instead of `add()` + `incr()`. `DatabaseCache` — the
+  backend production runs — does not override `incr`, so it inherited `BaseCache.incr`, a
+  plain get-then-set, and concurrent attempts were lost; `add()` is a primary-key INSERT
+  exactly one racing caller can win. It also swallows `DatabaseError` and returns False,
+  which is indistinguishable from a taken slot, so `_claim_slot` probes with `cache.get()`
+  (which does not swallow) to tell a full window from an unreachable cache — that probe is
+  what preserves the deliberate **fail-open** behaviour.
+
 ## Logging Helpers
 
 - **`safe_log(value, max_len=200)`** (`log_safe.py`, v1.14.4) — single-line, length-capped rendering of anything user-controlled that is about to be formatted into a log record. Strips `CR`/`LF`/`VT`/`FF`/`ESC` so an attacker-supplied field can't forge extra log lines (CodeQL `py/log-injection`) or smuggle terminal escapes into a tailed log, and truncates at 200 chars so one field can't flood the log. Stdlib-only leaf module — no Django, no models — so any app can import it without a cycle. **Use it for every log call whose value comes from a request** (headers, query string, form body, URL captures). `comms/services/email_service.py` carries a module-private twin (`_safe_log`) instead of importing this, because `comms` must not depend on `core`. **Note (v1.14.5):** this does not silence CodeQL's `py/log-injection` — the query treats `str.replace` as taint-preserving. For ids, coerce with `int()` and `%d`; for free-form values, prefer not logging them or validating them into a known shape (see `_client_ip`).
@@ -81,6 +110,7 @@ Student, payment, management, and email app routes live in `students/urls.py`, `
 
 - **`prune_audit_log`** (v1.15) — deletes `AuditLog` rows older than `--days` (default two years). Wraps `core.tasks.prune_audit_log` so Cloud Scheduler can run it as a Cloud Run Job; production has no Celery Beat. The audit trail has no row cap and writes ~16 rows per student per academic year.
 - **`purge_sessions`** (v1.23.0) — wraps `core.tasks.purge_expired_sessions` (Beat daily 03:30) so Cloud Scheduler can run it as a Cloud Run Job. Nothing purged `django_session` or `parent_session_tokens` before: session payloads are base64, signed but **not encrypted**, so anything a view puts in a session is readable by anyone who can read the table, and rows outlived their cookies forever. Add it to the production Cloud Scheduler set like the other wrappers.
+- **`backup_retention`** (v1.24.0) — tiered Cloud SQL backup retention, the scheduled port of `scripts/backup_retention.sh`: creates the `tier:biweekly` (1st + 16th) and `tier:monthly` (month end) on-demand points and prunes each class to its keep-count. Dry run by default; the `fiveaday-backup-retention` Cloud Run Job passes `--apply` (Cloud Scheduler, daily 05:30). Talks to the SQL Admin REST API with google-auth + httpx; `Command.client_class` is the test seam. Warns on automated-retention drift but never patches it — that needs `cloudsql.instances.update`, which the job's role deliberately lacks.
 - **`seed_testdata`** — populates the QA database with 3 teachers, 5 groups, 6 parents, 12 child students, 3 adult students, 1 inactive student, active enrollments, payments in various states, schedule slots, todo items, and history log entries. Flags: `--reset` (wipe first), `--small` (6 children only). Also callable from the `/testing/` dashboard via AJAX.
 - **`seed_teachers`** — idempotently creates Teacher rows + linked `auth.User` accounts from `TEACHER_SEED_<N>_*` env vars (N starts at 1, iteration stops at the first missing `FIRST_NAME`). Each block sets `FIRST_NAME`, `LAST_NAME`, `EMAIL` (used as the login username), and optionally `PHONE`, `ADMIN` (defaults to false), and `PASSWORD`. If `PASSWORD` is omitted the linked user gets `unusable_password` and must activate via `/password-reset/` — which works because `ActivationFriendlyPasswordResetForm` overrides Django's default of skipping unusable-password users (before v1.15 that flow silently emailed nobody). Re-running the command updates name/phone/admin flags and syncs the linked user but never overwrites a password an admin later changed. Runs automatically on container start when `DJANGO_ENV` is `testing` or `production` (see `entrypoint.sh`); no-op in development.
 - **`cleanup_backlog_tasks`** — wraps `core.tasks.cleanup_done_backlog_tasks`: deletes QA backlog tasks marked done for more than `--days` days (default 30). For external schedulers; QA/testing environment only.
@@ -101,6 +131,23 @@ All templates live in `core/templates/`:
 - `400.html` through `500.html` — error pages
 
 The standalone password-reset flow uses its own template set under `project/templates/registration/` (form, done, confirm, complete, plus `reset_base.html` for shared styling and `password_reset_email.txt` / `password_reset_subject.txt` for the email body fallback). These live outside `core/templates/` because Django's built-in `PasswordResetView` looks them up by the `registration/` prefix.
+
+## Admin (`core/admin.py`)
+
+`*/admin.py` is excluded from coverage, so these are covered by
+`tests/integration/test_admin_hardening.py` instead.
+
+| ModelAdmin | Behaviour |
+| ---------- | --------- |
+| `AuditLogAdmin` | Read-only trail. Add, change **and delete** are all refused (v1.24.0 — delete was never overridden, so the account an entry incriminates could erase it, per row or via `delete_selected`). Ageing rows out is `prune_audit_log`, not a person |
+| `HistoryLogAdmin` | Read-only feed. Add is refused (v1.24.0): every field was already read-only but Add was still offered, so the form rendered with no inputs and saving it created `action=""`, `message=""` — and the feed is capped at 1,000 rows, so each blank row evicted a real one |
+| `ScheduleSlotAdmin` | Validates (row, day, col) through the same `is_valid_slot()` the API uses (v1.24.0). Friday runs only rows 0 and 1, and the admin could previously save row 2 or row 99. The changelist flags pre-existing bad rows as "fuera del cuadrante" |
+| `TodoItemAdmin`, `FunFridayAttendanceAdmin`, `FunFridayScheduledSendAdmin`, `BacklogTaskAdmin`, `FeatureAdmin` | Straightforward list/filter/search registrations |
+
+All core models now carry Spanish `verbose_name` / `verbose_name_plural` (v1.24.0). The
+admin index override reads `model.name`, and models missing from its hardcoded `{% if %}`
+chain fell through to Django's auto-pluralised English — so the cards read "audit logs",
+"history logs", "fun friday scheduled sends" in an otherwise Spanish UI.
 
 ## Admin Template Overrides
 

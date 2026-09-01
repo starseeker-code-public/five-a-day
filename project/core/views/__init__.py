@@ -107,7 +107,6 @@ from core.views.payments import (
     export_payments,
     get_payment_details,
     parse_date_value,
-    payment_detail,
     payment_detail_view,
     payment_receipt_pdf,
     payment_statistics,
@@ -144,10 +143,7 @@ from core.views.students import (
     get_ff_student_ids,
     get_last_friday,
     get_next_friday,
-    handle_student_form,
     search_students,
-    student_detail,
-    update_student,
 )
 
 # Support

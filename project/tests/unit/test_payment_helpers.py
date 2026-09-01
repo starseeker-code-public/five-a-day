@@ -1,16 +1,13 @@
 """Unit tests for core.views.payments helper functions.
 
-Pure-function tests for `parse_date_value` + direct-invocation test for the
-unreferenced `payment_detail` AJAX helper (not URL-routed). HTTP-based
-payment view tests live in integration/test_payment_views.py.
+Pure-function tests for `parse_date_value`. HTTP-based payment view tests live
+in integration/test_payment_views.py.
 """
 
-import json
 from datetime import date
 
 import pytest
 from django.core.exceptions import ValidationError
-from django.test import RequestFactory
 
 pytestmark = pytest.mark.django_db
 
@@ -53,22 +50,3 @@ class TestParseDateValue:
 
         with pytest.raises(ValidationError, match="Formato de fecha"):
             parse_date_value("not-a-date")
-
-
-# ============================================================================
-# payment_detail (AJAX JSON) — unreferenced helper, called directly
-# ============================================================================
-
-
-class TestPaymentDetailAjax:
-    def test_returns_full_payment_data(self, completed_payment):
-        """Legacy AJAX JSON endpoint isn't URL-routed — call view function directly."""
-        from core.views.payments import payment_detail
-
-        rf = RequestFactory()
-        req = rf.get("/")
-        response = payment_detail(req, completed_payment.id)
-        assert response.status_code == 200
-        data = json.loads(response.content)
-        assert data["id"] == completed_payment.id
-        assert data["amount"] == str(completed_payment.amount)

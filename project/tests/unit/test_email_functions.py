@@ -17,29 +17,6 @@ def mock_email_service():
         yield mock_svc
 
 
-class TestBirthdayEmail:
-    def test_send_birthday_email(self, mock_email_service):
-        from comms.services.email_functions import send_birthday_email
-
-        result = send_birthday_email("parent@test.com", "Sofia")
-        assert result is True
-        mock_email_service.send_email.assert_called_once()
-        call_kwargs = mock_email_service.send_email.call_args
-        assert (
-            call_kwargs.kwargs["template_name"] == "happy_birthday"
-            or call_kwargs[1]["template_name"] == "happy_birthday"
-        )
-
-
-class TestPaymentReminder:
-    def test_send_payment_reminder(self, mock_email_service):
-        from comms.services.email_functions import send_payment_reminder
-
-        result = send_payment_reminder("parent@test.com", "Pablo", "54.00", "2026-05-01")
-        assert result is True
-        mock_email_service.send_email.assert_called_once()
-
-
 class TestMonthlyReport:
     def test_send_monthly_report(self, mock_email_service):
         from comms.services.email_functions import send_monthly_report

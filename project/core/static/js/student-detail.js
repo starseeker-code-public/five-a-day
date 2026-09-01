@@ -72,3 +72,10 @@ document.querySelectorAll('.modality-toggle-btn').forEach(btn => {
         });
     });
 });
+
+// Fun Friday buttons carry data attributes instead of inline onclick (CSP).
+document.addEventListener('click', function (e) {
+    const rm = e.target.closest ? e.target.closest('[data-ff-remove]') : null;
+    if (rm) { removeFunFriday(rm.getAttribute('data-ff-remove')); return; }
+    if (e.target.closest && e.target.closest('[data-ff-add]')) addFunFriday();
+});

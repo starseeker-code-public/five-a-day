@@ -57,11 +57,37 @@ class TestSendDueFunFridayEmailsTask:
             "comms.tasks._send_fun_friday_batch", return_value={"status": "success", "sent": 1, "total": 1}
         ) as mock_batch:
             result = send_due_fun_friday_emails_task.apply().get()
-        assert result == {"status": "success", "processed": 1, "sent": 1}
+        assert result == {"status": "success", "processed": 1, "sent": 1, "failed": 0}
         mock_batch.assert_called_once()
         assert mock_batch.call_args.kwargs["recipients"] == ["parent@example.com"]
         due.refresh_from_db()
         assert due.sent_at is not None
+
+    def test_one_failing_row_does_not_abort_the_drain(self):
+        """A row is CLAIMED before sending, so an exception used to abort the
+        loop and leave every later due row claimed but unsent."""
+        first = _make_scheduled(timezone.now() - timedelta(minutes=10))
+        second = _make_scheduled(timezone.now() - timedelta(minutes=5))
+
+        calls = []
+
+        def flaky(**kwargs):
+            calls.append(kwargs["recipients"])
+            if len(calls) == 1:
+                raise RuntimeError("smtp down")
+            return {"status": "success", "sent": 1, "total": 1}
+
+        with patch("comms.tasks._send_fun_friday_batch", side_effect=flaky):
+            result = send_due_fun_friday_emails_task.apply().get()
+
+        assert len(calls) == 2, "the drain must continue past the failing row"
+        assert result["failed"] == 1
+        assert result["processed"] == 1
+        # Both stay claimed: the batch mails parents one at a time and may have
+        # delivered some already, so releasing the claim would re-mail them.
+        for row in (first, second):
+            row.refresh_from_db()
+            assert row.sent_at is not None
 
     def test_skips_future_rows(self):
         future = _make_scheduled(timezone.now() + timedelta(days=2))

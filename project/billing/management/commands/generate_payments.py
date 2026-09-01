@@ -23,7 +23,6 @@ from django.core.management.base import BaseCommand
 
 from billing.models import (
     Enrollment,
-    Payment,
     SiteConfiguration,
     academic_year_for_month,
 )
@@ -94,20 +93,21 @@ class Command(BaseCommand):
                     continue
 
             if dry_run:
-                existing = set(
-                    Payment.objects.filter(student=student, enrollment=enrollment).values_list("due_date", flat=True)
-                )
-                for period in PaymentService.billing_periods(enrollment):
-                    if period["starts"] > as_of or period["due"] in existing:
-                        continue
+                # Same selection the real run uses — PaymentService.pending_periods
+                # is the single decision point. Re-deriving it here is how the
+                # preview drifted from the run it was previewing: it dropped the
+                # "first period is always issued" rule and matched existing
+                # payments on the exact due date instead of the due month/year.
+                quarterly = enrollment.payment_modality == "quarterly"
+                for period in PaymentService.pending_periods(enrollment, as_of=as_of):
                     amount = PaymentService.calculate_period_amount(
                         enrollment,
                         config,
                         [m for m, _ in period["months"]],
                         period["fraction"],
-                        enrollment.payment_modality == "quarterly",
+                        quarterly,
                     )
-                    concept = PaymentService.period_concept(period, enrollment.payment_modality == "quarterly")
+                    concept = PaymentService.period_concept(period, quarterly)
                     self.stdout.write(f"  [DRY RUN] {student.full_name}: {concept} - EUR{amount:.2f}")
                     created_count += 1
                 continue

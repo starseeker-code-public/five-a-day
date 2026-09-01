@@ -111,7 +111,7 @@ def create_teacher(request):
         # Teachers created here are ALWAYS non-admin. Only the seeded teachers
         # (TEACHER_SEED_*) and the superuser/admin profile are admins; an
         # existing admin can promote a teacher afterwards via /admin/.
-        teacher = Teacher.objects.create(
+        teacher = Teacher(
             first_name=data["first_name"],
             last_name=data["last_name"],
             email=data["email"],
@@ -119,6 +119,12 @@ def create_teacher(request):
             active=True,
             admin=False,
         )
+        # `objects.create()` runs no validators, so "notanemail" persisted
+        # happily into an EmailField — and the account it produces is
+        # unreachable: `ensure_user()` mirrors the address onto the auth.User,
+        # and activation happens over `/password-reset/`, which emails it.
+        teacher.full_clean()
+        teacher.save()
 
         # Create the linked auth.User with an unusable password. Without this a
         # teacher created here had no login identity at all: they could not sign
@@ -139,6 +145,13 @@ def create_teacher(request):
                     "email": teacher.email,
                 },
             }
+        )
+    except ValidationError as e:
+        # Django's own field messages — written to be shown to a user, unlike
+        # the exception text the catch-all below deliberately swallows.
+        return JsonResponse(
+            {"success": False, "message": " ".join(m for msgs in e.message_dict.values() for m in msgs)},
+            status=400,
         )
     except Exception:
         logger.exception("Error creating teacher")

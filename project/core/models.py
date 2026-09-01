@@ -21,6 +21,8 @@ class ScheduleSlot(models.Model):
 
     class Meta:
         db_table = "schedule_slots"
+        verbose_name = "Franja horaria"
+        verbose_name_plural = "Franjas horarias"
         constraints = [
             models.UniqueConstraint(fields=["row", "day", "col"], name="unique_schedule_slot"),
         ]
@@ -39,6 +41,8 @@ class FunFridayAttendance(models.Model):
 
     class Meta:
         db_table = "fun_friday_attendance"
+        verbose_name = "Asistencia Fun Friday"
+        verbose_name_plural = "Asistencias Fun Friday"
         constraints = [
             models.UniqueConstraint(fields=["student", "date"], name="unique_fun_friday_attendance"),
         ]
@@ -76,6 +80,8 @@ class FunFridayScheduledSend(models.Model):
 
     class Meta:
         db_table = "fun_friday_scheduled_sends"
+        verbose_name = "Envío Fun Friday programado"
+        verbose_name_plural = "Envíos Fun Friday programados"
         ordering = ["scheduled_for"]
 
     def __str__(self):
@@ -94,6 +100,8 @@ class TodoItem(models.Model):
 
     class Meta:
         db_table = "todo_items"
+        verbose_name = "Tarea pendiente"
+        verbose_name_plural = "Tareas pendientes"
         ordering = ["due_date", "created_at"]
 
     def __str__(self):
@@ -144,6 +152,8 @@ class HistoryLog(models.Model):
 
     class Meta:
         db_table = "history_logs"
+        verbose_name = "Entrada de historial"
+        verbose_name_plural = "Historial de actividad"
         ordering = ["-created_at"]
         indexes = [
             models.Index(fields=["-created_at"]),
@@ -154,11 +164,19 @@ class HistoryLog(models.Model):
 
     MAX_ENTRIES = 1000
 
+    #: Only check the cap every Nth insert. A `COUNT(*)` on every logged action
+    #: is 1 extra query on most write paths in the app for a trim that can only
+    #: matter once in a thousand inserts. Keying off the new row's own primary
+    #: key needs no extra read: ids are monotonic, so this fires regularly
+    #: without a counter to store. The table can drift up to CAP_CHECK_EVERY
+    #: rows over the cap between trims, which is the point of a soft cap.
+    CAP_CHECK_EVERY = 50
+
     @classmethod
     def log(cls, action, message, icon="history"):
-        """Create a history entry, enforcing the 1000-record cap."""
+        """Create a history entry, trimming to the 1000-record cap periodically."""
         entry = cls.objects.create(action=action, message=message, icon=icon)
-        if cls.objects.count() > cls.MAX_ENTRIES:
+        if entry.pk % cls.CAP_CHECK_EVERY == 0 and cls.objects.count() > cls.MAX_ENTRIES:
             keep_ids = cls.objects.order_by("-created_at").values_list("id", flat=True)[: cls.MAX_ENTRIES]
             cls.objects.exclude(id__in=keep_ids).delete()
         return entry
@@ -287,6 +305,8 @@ class BacklogTask(models.Model):
 
     class Meta:
         db_table = "backlog_tasks"
+        verbose_name = "Tarea de QA"
+        verbose_name_plural = "Tareas de QA"
         ordering = ["-created_at"]
 
     def __str__(self):

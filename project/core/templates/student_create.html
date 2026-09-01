@@ -292,7 +292,7 @@
 
 {% block extra_js %}
 {% load static %}
-<script>
+<script nonce="{{ csp_nonce }}">
 window.STUDENT_CREATE_CONFIG = {
     studentsListUrl: '{% url "students_list" %}',
     priceConfig: {
