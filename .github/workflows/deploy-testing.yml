@@ -180,7 +180,11 @@ jobs:
     runs-on: ubuntu-latest
     environment:
       name: testing
-      url: ${{ secrets.TESTING_URL || 'http://34.26.130.187:8000' }}
+      # Hard-coded literal: the `secrets` context is not allowed in
+      # `environment.url` — GitHub rejects the whole workflow file as invalid
+      # over it (see the same note in deploy-production.yml). The URL is the
+      # public fallback literal used elsewhere in this file.
+      url: http://34.26.130.187:8000
 
     env:
       VM_HOST: ${{ secrets.TESTING_VM_HOST || '34.26.130.187' }}
