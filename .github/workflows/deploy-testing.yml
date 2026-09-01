@@ -1,0 +1,468 @@
+name: Deploy testing
+
+# Nightly auto-deploy of the `testing` branch to the Compute Engine VM.
+#
+# Contract: the version deployed on the VM must always equal `pyproject.toml`
+# on origin/testing. The job reads both and deploys only when they differ — so
+# a night with no release is a no-op that costs one curl.
+#
+# Scheduled workflows only ever run from the DEFAULT branch (main), so this
+# file has no effect until it has travelled development → testing → main.
+# It still reads the *testing* branch for the target version (see `ref:` below).
+
+on:
+  # GitHub cron is UTC and has no DST. Two ticks plus a local-hour gate give an
+  # exact 02:00 Europe/Madrid all year: 00:00 UTC is 02:00 CEST (summer) and
+  # 01:00 UTC is 02:00 CET (winter). The gate discards whichever tick is not
+  # 02:00 locally, so exactly one deploy check runs per night.
+  schedule:
+    - cron: '0 0 * * *'
+    - cron: '0 1 * * *'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 'Redeploy even when the versions already match'
+        type: boolean
+        default: false
+
+# Never let two VM deploys overlap — the e2-micro cannot build twice at once.
+# cancel-in-progress is false on purpose: killing a run mid-`docker compose up`
+# leaves the stack half-recreated.
+concurrency:
+  group: deploy-testing
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  TEST_URL: ${{ secrets.TESTING_URL || 'http://34.26.130.187:8000' }}
+
+jobs:
+  # ============================================================
+  # JOB 1: Is a deploy needed? (uses no credentials)
+  # ============================================================
+  check:
+    name: Check testing version
+    runs-on: ubuntu-latest
+    outputs:
+      should_deploy: ${{ steps.compare.outputs.should_deploy }}
+      target_version: ${{ steps.target.outputs.version }}
+      live_version: ${{ steps.live.outputs.version }}
+      reason: ${{ steps.compare.outputs.reason }}
+
+    steps:
+      - name: Gate on 02:00 Europe/Madrid
+        id: gate
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          if [ "$EVENT_NAME" != "schedule" ]; then
+            echo "Manual run — hour gate skipped."
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          HOUR=$(TZ=Europe/Madrid date +%H)
+          echo "Local time in Madrid: $(TZ=Europe/Madrid date '+%Y-%m-%d %H:%M %Z')"
+          if [ "$HOUR" = "02" ]; then
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Not 02:00 in Madrid (hour=$HOUR) — this is the off-DST cron tick. Nothing to do."
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Check out the TESTING branch: its pyproject.toml is the target version.
+      # The workflow file itself still comes from main, which is what runs.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+        if: steps.gate.outputs.proceed == 'true'
+        with:
+          ref: testing
+
+      - name: Target version (pyproject.toml on testing)
+        id: target
+        if: steps.gate.outputs.proceed == 'true'
+        run: |
+          VERSION=$(grep -E '^[[:space:]]*version[[:space:]]*=' pyproject.toml \
+            | head -1 | sed -E 's/.*version[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/')
+          if [ -z "$VERSION" ]; then
+            echo "::error::Could not read version from pyproject.toml on the testing branch"
+            exit 1
+          fi
+          echo "target version: $VERSION"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Live version (GET /health/ on the VM)
+        id: live
+        if: steps.gate.outputs.proceed == 'true'
+        run: |
+          # Do NOT fail this step when the VM is unreachable: an unreachable VM is
+          # itself a reason to redeploy, and the compare step handles it.
+          BODY=$(curl -fsS --max-time 20 --retry 3 --retry-delay 5 "$TEST_URL/health/" || echo '')
+          echo "raw response: ${BODY:-<unreachable>}"
+
+          VERSION=''
+          ENVIRONMENT=''
+          if [ -n "$BODY" ]; then
+            VERSION=$(printf '%s' "$BODY" | jq -r '.version // empty')
+            ENVIRONMENT=$(printf '%s' "$BODY" | jq -r '.environment // empty')
+          fi
+
+          # A wrong `environment` means we are looking at the wrong host entirely.
+          # Fatal rather than "redeploy" — deploying would not fix it.
+          if [ -n "$ENVIRONMENT" ] && [ "$ENVIRONMENT" != "testing" ]; then
+            echo "::error::$TEST_URL/health/ reports environment='$ENVIRONMENT', expected 'testing'. Refusing to deploy."
+            exit 1
+          fi
+
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Compare
+        id: compare
+        # No `if:` — the implicit success() is exactly right. On the off-DST tick
+        # the gate succeeds and the steps in between are *skipped*, so this still
+        # runs and reports "nothing to do". But if the health probe FAILED (a
+        # non-testing `environment`, say), success() is false, this is skipped,
+        # should_deploy stays empty and the deploy job cannot fire. `always()`
+        # here would have turned that abort into a deploy.
+        #
+        # Values arrive via `env:`, never interpolated into the script body.
+        # `TARGET='${{ ... }}'` would be a shell-injection sink: the version is
+        # read from pyproject.toml on a branch, the regex only excludes double
+        # quotes, so a version containing a single quote breaks out of the
+        # literal and runs arbitrary commands in a job holding credentials.
+        env:
+          PROCEED: ${{ steps.gate.outputs.proceed }}
+          TARGET: ${{ steps.target.outputs.version }}
+          LIVE: ${{ steps.live.outputs.version }}
+          FORCE: ${{ inputs.force }}
+        run: |
+          if [ "$PROCEED" != "true" ]; then
+            echo "should_deploy=false" >> "$GITHUB_OUTPUT"
+            echo "reason=off-schedule cron tick" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          {
+            echo "## Testing deploy check"
+            echo ""
+            echo "| Source | Version |"
+            echo "|---|---|"
+            echo "| pyproject.toml on \`testing\` | \`$TARGET\` |"
+            echo "| Live on the VM (/health/) | \`${LIVE:-unreachable}\` |"
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$FORCE" = "true" ]; then
+            echo "should_deploy=true" >> "$GITHUB_OUTPUT"
+            echo "reason=forced by manual dispatch" >> "$GITHUB_OUTPUT"
+            echo "**Deploying** — forced by manual dispatch." >> "$GITHUB_STEP_SUMMARY"
+          elif [ -z "$LIVE" ]; then
+            echo "should_deploy=true" >> "$GITHUB_OUTPUT"
+            echo "reason=VM did not answer /health/" >> "$GITHUB_OUTPUT"
+            echo "**Deploying** — the VM did not answer /health/; rebuilding the stack." >> "$GITHUB_STEP_SUMMARY"
+          elif [ "$LIVE" = "$TARGET" ]; then
+            echo "should_deploy=false" >> "$GITHUB_OUTPUT"
+            echo "reason=versions already match" >> "$GITHUB_OUTPUT"
+            echo "Nothing to do — the VM already serves \`$TARGET\`." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "should_deploy=true" >> "$GITHUB_OUTPUT"
+            echo "reason=$LIVE -> $TARGET" >> "$GITHUB_OUTPUT"
+            echo "**Deploying** — \`$LIVE\` → \`$TARGET\`." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  # ============================================================
+  # JOB 2: Deploy to the VM
+  # ============================================================
+  deploy:
+    name: Deploy to testing VM
+    needs: check
+    if: needs.check.outputs.should_deploy == 'true'
+    runs-on: ubuntu-latest
+    environment:
+      name: testing
+      url: ${{ secrets.TESTING_URL || 'http://34.26.130.187:8000' }}
+
+    env:
+      VM_HOST: ${{ secrets.TESTING_VM_HOST || '34.26.130.187' }}
+      VM_USER: ${{ secrets.TESTING_VM_USER || 'fiveaday-ci' }}
+      TARGET_VERSION: ${{ needs.check.outputs.target_version }}
+      LIVE_VERSION: ${{ needs.check.outputs.live_version }}
+
+    steps:
+      - name: Configure SSH
+        env:
+          SSH_KEY: ${{ secrets.TESTING_VM_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.TESTING_VM_KNOWN_HOSTS }}
+        run: |
+          if [ -z "$SSH_KEY" ]; then
+            echo "::error::TESTING_VM_SSH_KEY is not set. Run scripts/setup_cicd.sh to provision it."
+            exit 1
+          fi
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+
+          # Pin the host key when we have it; fall back to accept-new otherwise so
+          # a missing secret degrades to first-use trust rather than a hard stop.
+          if [ -n "$KNOWN_HOSTS" ]; then
+            printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+            chmod 600 ~/.ssh/known_hosts
+            echo "SSH_OPTS=-o StrictHostKeyChecking=yes -o BatchMode=yes -o ConnectTimeout=30" >> "$GITHUB_ENV"
+          else
+            echo "::warning::TESTING_VM_KNOWN_HOSTS is not set — using StrictHostKeyChecking=accept-new"
+            echo "SSH_OPTS=-o StrictHostKeyChecking=accept-new -o BatchMode=yes -o ConnectTimeout=30" >> "$GITHUB_ENV"
+          fi
+
+      - name: Pre-deploy row counts
+        # Non-fatal: one of the reasons we deploy is that the VM is not
+        # answering, and in that state there is no container to query. A missing
+        # baseline degrades the post-deploy diff to a warning, not a failure.
+        continue-on-error: true
+        run: |
+          # Recorded so the post-deploy counts have something to be compared
+          # against. /health/ cannot detect a stack that came up on the wrong
+          # database volume — only the data can.
+          ssh $SSH_OPTS "$VM_USER@$VM_HOST" 'bash -s' > before.txt <<'REMOTE'
+          set -euo pipefail
+          U=$(sudo docker exec fiveaday_postgres printenv POSTGRES_USER)
+          D=$(sudo docker exec fiveaday_postgres printenv POSTGRES_DB)
+          sudo docker exec fiveaday_postgres psql -U "$U" -d "$D" -At -F'|' -c \
+            "select relname, n_live_tup from pg_stat_user_tables where n_live_tup > 0 order by relname;"
+          REMOTE
+          cat before.txt
+
+      - name: Pull, rebuild, and gate the stack
+        run: |
+          # Every gate below EXITS NON-ZERO rather than merely printing. `git
+          # status --porcelain` exits 0 on a dirty tree, so a bare call stops
+          # nothing under `set -e` and the pull clobbers local changes.
+          ssh $SSH_OPTS "$VM_USER@$VM_HOST" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          D=/home/Proye/five-a-day
+          GIT="sudo git -c safe.directory=* -C $D"
+
+          # --- GATE: a dirty tree aborts BEFORE the pull ---
+          if [ -n "$($GIT status --porcelain)" ]; then
+            echo "ABORT: VM working tree is dirty:"
+            $GIT status --porcelain
+            exit 1
+          fi
+
+          $GIT pull --ff-only origin testing
+          $GIT log --oneline -1
+
+          # Not optional: the e2-micro has ~380 MB free RAM and the build OOMs
+          # without reclaimed space (disk sits near 58% of 30 GB).
+          sudo docker system prune -f
+
+          # BOTH -f files, every time. The overlay is what mounts
+          # testing_postgres_data instead of the base file's dev volume, and what
+          # swaps runserver for Gunicorn. A one-file bring-up starts a
+          # different, valid, WRONG stack and exits 0.
+          sudo docker compose \
+            -f $D/docker-compose.yml \
+            -f $D/docker-compose.testing.yml \
+            up -d --build
+
+          # --- GATE: prove the overlay took effect ---
+          VOL=$(sudo docker inspect fiveaday_postgres \
+            --format "{{range .Mounts}}{{if .Name}}{{.Name}} {{end}}{{end}}")
+          case "$VOL" in
+            *testing_postgres_data*) echo "GATE OK: db mounted $VOL" ;;
+            *) echo "ABORT: wrong DB volume mounted: [$VOL] — expected *testing_postgres_data."
+               echo "The real data is intact in an orphaned volume; do NOT prune volumes."
+               exit 1 ;;
+          esac
+
+          # --- GATE: a dangling testing volume means we came up BESIDE the data ---
+          if sudo docker volume ls -f dangling=true --format "{{.Name}}" \
+              | grep -q testing_postgres_data; then
+            echo "ABORT: five-a-day_testing_postgres_data is dangling — the wrong stack is live."
+            exit 1
+          fi
+          REMOTE
+
+      - name: Wait for the new version to answer
+        run: |
+          # `up -d --build` recreates every service, so expect a minute or two of
+          # migrations and collectstatic during which /health/ returns nothing.
+          LIVE=''
+          for i in $(seq 1 40); do
+            LIVE=$(curl -fsS --max-time 10 "$TEST_URL/health/" 2>/dev/null | jq -r '.version // empty' || true)
+            if [ "$LIVE" = "$TARGET_VERSION" ]; then
+              echo "Version $LIVE is live after $((i * 15))s."
+              exit 0
+            fi
+            echo "attempt $i: live='${LIVE:-<no reply>}' want='$TARGET_VERSION'"
+            sleep 15
+          done
+          echo "::error::Timed out after 10 min. /health/ never reported $TARGET_VERSION."
+          exit 1
+
+      - name: Assert the right database survived
+        run: |
+          # The version check passes even when the stack mounted the dev volume,
+          # so this assertion — not /health/ — is what proves the deploy is sound.
+          ssh $SSH_OPTS "$VM_USER@$VM_HOST" 'bash -s' > after.txt <<'REMOTE'
+          set -euo pipefail
+          echo "--- volume the db mounted (want: *_testing_postgres_data) ---"
+          sudo docker inspect fiveaday_postgres --format "{{range .Mounts}}{{.Name}}{{println}}{{end}}"
+          echo "--- dangling volumes (want: none) ---"
+          sudo docker volume ls -f dangling=true --format "{{.Name}}" | grep postgres || echo "none (good)"
+          echo "--- row counts ---"
+          U=$(sudo docker exec fiveaday_postgres printenv POSTGRES_USER)
+          D=$(sudo docker exec fiveaday_postgres printenv POSTGRES_DB)
+          sudo docker exec fiveaday_postgres psql -U "$U" -d "$D" -At -F'|' -c \
+            "select relname, n_live_tup from pg_stat_user_tables where n_live_tup > 0 order by relname;"
+          REMOTE
+          cat after.txt
+
+          echo "--- row-count diff (before vs after) ---"
+          sed -n '/^--- row counts ---$/,$p' after.txt | tail -n +2 > after_rows.txt
+          if [ ! -s before.txt ]; then
+            echo "::warning::No pre-deploy baseline was captured (the VM was not answering), so the row counts above could not be compared. Eyeball them against what you expect."
+          elif diff before.txt after_rows.txt; then
+            echo "Row counts identical before and after the deploy."
+          else
+            echo "::warning::Row counts changed across the deploy. A migration can legitimately do this — but a large drop means the stack came up on the wrong volume."
+          fi
+
+      - name: Summary
+        if: always()
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REASON: ${{ needs.check.outputs.reason }}
+        run: |
+          {
+            echo "## Testing deploy — ${{ job.status }}"
+            echo ""
+            echo "| Field | Value |"
+            echo "|---|---|"
+            echo "| Version | \`${LIVE_VERSION:-unknown}\` → \`$TARGET_VERSION\` |"
+            echo "| Trigger | $EVENT_NAME ($REASON) |"
+            echo "| Host | $TEST_URL |"
+            echo ""
+            echo "<details><summary>Post-deploy volume and row counts</summary>"
+            echo ""
+            echo '```'
+            cat after.txt 2>/dev/null || echo "(not collected)"
+            echo '```'
+            echo "</details>"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Notify success
+        if: success()
+        uses: dawidd6/action-send-mail@94de994a9f6fffee200243214e17002e2920bb59  # v18
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          secure: true
+          username: ${{ secrets.EMAIL_HOST_USER }}
+          password: ${{ secrets.EMAIL_SECRET }}
+          from: "Five a Day CI <${{ secrets.EMAIL_HOST_USER }}>"
+          to: ${{ secrets.TESTING_NOTIFY_EMAILS || secrets.OWNER_EMAILS }}
+          subject: "[Five a Day] v${{ needs.check.outputs.target_version }} desplegada en pruebas"
+          html_body: |
+            <div style="font-family: sans-serif; color:#1f2937; max-width:640px;">
+              <h2 style="color:#6d28d9;">🚀 Despliegue automático en pruebas</h2>
+              <p style="font-size:15px; line-height:1.6;">
+                El despliegue nocturno ha publicado la versión
+                <strong>v${{ needs.check.outputs.target_version }}</strong>
+                (antes <strong>v${{ needs.check.outputs.live_version || 'desconocida' }}</strong>)
+                en el <strong>entorno de pruebas</strong>. Ya podéis probarla.
+              </p>
+              <p style="text-align:center; margin:24px 0;">
+                <a href="${{ secrets.TESTING_URL || 'http://34.26.130.187:8000' }}"
+                   style="padding:12px 28px; background:#6d28d9; color:#fff; text-decoration:none; border-radius:8px; font-weight:600; font-size:15px;">
+                  Abrir el entorno de pruebas →
+                </a>
+              </p>
+              <hr style="border:none; border-top:1px solid #e5e7eb; margin:24px 0;">
+              <p style="font-size:13px; color:#4b5563; line-height:1.6;">
+                Comprobado tras el despliegue: la versión que responde <code>/health/</code> coincide
+                con <code>pyproject.toml</code> en <code>testing</code>, el contenedor de base de datos
+                ha montado el volumen <code>testing_postgres_data</code> y no hay volúmenes huérfanos.
+              </p>
+              <p style="margin-top:16px;">
+                <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+                   style="padding:8px 16px; background:#6b46c1; color:#fff; text-decoration:none; border-radius:4px; font-size:13px;">Ver el despliegue →</a>
+              </p>
+              <p style="color:#9ca3af; font-size:12px;">Enviado automáticamente por el workflow de despliegue nocturno a pruebas.</p>
+            </div>
+
+      - name: Notify failure
+        if: failure()
+        uses: dawidd6/action-send-mail@94de994a9f6fffee200243214e17002e2920bb59  # v18
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          secure: true
+          username: ${{ secrets.EMAIL_HOST_USER }}
+          password: ${{ secrets.EMAIL_SECRET }}
+          from: "Five a Day CI <${{ secrets.EMAIL_HOST_USER }}>"
+          to: ${{ secrets.TESTING_NOTIFY_EMAILS || secrets.OWNER_EMAILS }}
+          subject: "[Five a Day] ⚠️ El despliegue nocturno a pruebas ha fallado"
+          html_body: |
+            <div style="font-family: sans-serif; color:#1f2937; max-width:640px;">
+              <h2 style="color:#b91c1c;">⚠️ Fallo en el despliegue nocturno a pruebas</h2>
+              <p style="font-size:15px; line-height:1.6;">
+                El despliegue de <strong>v${{ needs.check.outputs.target_version }}</strong>
+                en el entorno de pruebas no ha terminado correctamente. El entorno puede
+                haber quedado en la versión anterior
+                (<strong>v${{ needs.check.outputs.live_version || 'desconocida' }}</strong>).
+              </p>
+              <p style="font-size:14px; color:#4b5563; line-height:1.6;">
+                Causas habituales: el árbol de trabajo de la VM está sucio (el <em>gate</em> aborta
+                antes del <code>pull</code>), la compilación se ha quedado sin memoria en la e2-micro,
+                o el contenedor no ha llegado a responder <code>/health/</code> en 10 minutos.
+                <strong>No ejecutes nunca <code>docker volume prune</code> en esa VM.</strong>
+              </p>
+              <p style="margin-top:16px;">
+                <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+                   style="padding:8px 16px; background:#b91c1c; color:#fff; text-decoration:none; border-radius:4px; font-size:13px;">Ver el run fallido →</a>
+              </p>
+            </div>
+
+  # ============================================================
+  # JOB 3: The check job failing must not be silent
+  #
+  # The deploy job carries its own failure email, but it never starts when
+  # `check` fails (a wrong `environment` in the health response, an unreadable
+  # pyproject.toml). Without this the only trace is a red run nobody is looking
+  # at, and the VM quietly stays on the old version night after night.
+  # ============================================================
+  notify-check-failure:
+    name: Notify check failure
+    needs: check
+    if: failure()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: dawidd6/action-send-mail@94de994a9f6fffee200243214e17002e2920bb59  # v18
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          secure: true
+          username: ${{ secrets.EMAIL_HOST_USER }}
+          password: ${{ secrets.EMAIL_SECRET }}
+          from: "Five a Day CI <${{ secrets.EMAIL_HOST_USER }}>"
+          to: ${{ secrets.TESTING_NOTIFY_EMAILS || secrets.OWNER_EMAILS }}
+          subject: "[Five a Day] ⚠️ No se pudo comprobar la versión del entorno de pruebas"
+          html_body: |
+            <div style="font-family: sans-serif; color:#1f2937; max-width:640px;">
+              <h2 style="color:#b91c1c;">⚠️ El chequeo nocturno de pruebas ha fallado</h2>
+              <p style="font-size:15px; line-height:1.6;">
+                El despliegue nocturno no ha llegado a ejecutarse: falló la comprobación previa
+                que compara la versión desplegada con <code>pyproject.toml</code> en
+                <code>testing</code>. <strong>El entorno de pruebas sigue con la versión
+                anterior</strong> y seguirá así hasta que se resuelva.
+              </p>
+              <p style="font-size:14px; color:#4b5563; line-height:1.6;">
+                Causas habituales: <code>/health/</code> responde un <code>environment</code>
+                distinto de <code>testing</code> (la URL apunta a otro sitio), o no se pudo leer
+                la versión de <code>pyproject.toml</code> en la rama.
+              </p>
+              <p style="margin-top:16px;">
+                <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+                   style="padding:8px 16px; background:#b91c1c; color:#fff; text-decoration:none; border-radius:4px; font-size:13px;">Ver el run fallido →</a>
+              </p>
+            </div>

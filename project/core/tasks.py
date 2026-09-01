@@ -4,6 +4,7 @@ from datetime import timedelta
 
 from celery import shared_task
 from celery.utils.log import get_task_logger
+from django.db import models
 from django.utils import timezone
 
 logger = get_task_logger(__name__)
@@ -44,3 +45,37 @@ def prune_audit_log(days: int = AUDIT_LOG_RETENTION_DAYS):
     deleted, _ = AuditLog.objects.filter(created_at__lt=cutoff).delete()
     logger.info("Deleted %d audit log row(s) older than %d days", deleted, days)
     return {"status": "success", "deleted": deleted}
+
+
+@shared_task(name="core.tasks.purge_expired_sessions")
+def purge_expired_sessions():
+    """Delete expired `django_session` rows and spent parent magic-link tokens.
+
+    Nothing purged either table before v1.23.0. That matters more than ordinary
+    table growth because both hold authentication material:
+
+    - `django_session` is the DEFAULT database session backend, and session
+      payloads are base64-encoded JSON — signed, not encrypted. Anything a view
+      puts in the session is therefore readable by anyone who can read the
+      table, and rows outlived their cookies indefinitely.
+    - `parent_session_tokens` keeps every magic link ever issued, spent or not.
+
+    Django ships `clearsessions` for the first half; this task wraps it so the
+    work is scheduled the same way as every other periodic job, and adds the
+    parent tokens, which Django knows nothing about.
+    """
+    from django.core.management import call_command
+
+    from students.models import ParentSessionToken
+
+    call_command("clearsessions")
+
+    # Consumed or expired: either way the token can never authenticate again,
+    # so the row is pure residue. `used_at` is set atomically on consumption
+    # (see ParentSessionToken.consume_by_token).
+    now = timezone.now()
+    deleted, _ = ParentSessionToken.objects.filter(
+        models.Q(used_at__isnull=False) | models.Q(expires_at__lt=now)
+    ).delete()
+    logger.info("Purged expired sessions; deleted %d spent parent token(s)", deleted)
+    return {"status": "success", "parent_tokens_deleted": deleted}

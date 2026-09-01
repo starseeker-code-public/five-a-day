@@ -5,6 +5,7 @@ error-reporting toggle.
 
 import json
 import logging
+import os
 import subprocess
 import sys
 from datetime import datetime
@@ -15,10 +16,12 @@ from django.core.mail import send_mail
 from django.db.models import Q
 from django.http import HttpResponse, JsonResponse
 from django.shortcuts import render
+from django.utils.text import get_valid_filename
 from django.views.decorators.http import require_http_methods
 
 from core.decorators import qa_access_required
 from core.models import BacklogTask, QAConfiguration
+from core.utils import csv_safe
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +37,38 @@ def _backlog_tasks_qs():
     boolean, and False sorts before True, so done tasks fall to the bottom.
     """
     return BacklogTask.objects.annotate(is_done=Q(status="done")).order_by("is_done", "-created_at")
+
+
+# Leading bytes of the formats a screenshot can plausibly be. Checked in
+# addition to the client-declared content type, which is not evidence.
+_IMAGE_MAGIC = (
+    b"\x89PNG\r\n\x1a\n",  # PNG
+    b"\xff\xd8\xff",  # JPEG
+    b"GIF87a",  # GIF
+    b"GIF89a",
+    b"BM",  # BMP
+)
+
+
+def _looks_like_image(upload) -> bool:
+    """True if `upload` starts with the magic bytes of a known image format.
+
+    Reads the first 32 bytes and rewinds, so the caller can still attach the
+    file afterwards. WEBP and AVIF are RIFF/ISO-BMFF containers, hence the
+    substring checks rather than a prefix.
+    """
+    try:
+        upload.seek(0)
+        head = upload.read(32)
+        upload.seek(0)
+    except Exception:
+        return False
+
+    if head.startswith(_IMAGE_MAGIC):
+        return True
+    if head[:4] == b"RIFF" and head[8:12] == b"WEBP":
+        return True
+    return head[4:8] == b"ftyp" and b"avif" in head[8:24]
 
 
 def _git_info():
@@ -163,7 +198,11 @@ def email_backlog_task_created(task, screenshot=None, context_line=""):
             to=[support_email],
         )
         if screenshot is not None:
-            email.attach(screenshot.name, screenshot.read(), screenshot.content_type)
+            # `get_valid_filename` on the basename: the client controls
+            # `screenshot.name`, and it reaches a MIME header here.
+            safe_name = get_valid_filename(os.path.basename(screenshot.name or "captura.png")) or "captura.png"
+            screenshot.seek(0)
+            email.attach(safe_name, screenshot.read(), screenshot.content_type)
         email.send(fail_silently=True)
     except Exception:  # noqa: BLE001 — never block task creation on email failure
         logger.exception("Error sending the backlog-task notification")
@@ -199,8 +238,17 @@ def api_create_backlog_task(request):
         if screenshot is not None:
             if screenshot.size > 5 * 1024 * 1024:
                 return JsonResponse({"success": False, "message": "La imagen supera los 5 MB."}, status=400)
+            # `content_type` is whatever the CLIENT declared — a browser sends it
+            # from the file extension and a scripted POST can claim anything. So
+            # check the declared type AND the actual leading bytes, otherwise
+            # this endpoint forwards an arbitrary file to the support inbox
+            # under an image's name.
             if not (screenshot.content_type or "").startswith("image/"):
                 return JsonResponse({"success": False, "message": "El adjunto debe ser una imagen."}, status=400)
+            if not _looks_like_image(screenshot):
+                return JsonResponse(
+                    {"success": False, "message": "El adjunto no parece una imagen valida."}, status=400
+                )
 
         username = request.session.get("username", "anonymous")
         task = BacklogTask.objects.create(
@@ -279,7 +327,9 @@ def export_backlog_tasks(request):
         fieldnames = list(rows[0].keys()) if rows else ["id", "title", "description", "priority", "status"]
         writer = csv.DictWriter(buffer, fieldnames=fieldnames)
         writer.writeheader()
-        writer.writerows(rows)
+        # Titles and descriptions are free text; a leading =/+/-/@ would be
+        # evaluated as a formula by whoever opens the export.
+        writer.writerows([{k: csv_safe(v) for k, v in row.items()} for row in rows])
         # BOM so Excel opens the accented Spanish text correctly.
         response = HttpResponse("﻿" + buffer.getvalue(), content_type="text/csv; charset=utf-8")
         response["Content-Disposition"] = f'attachment; filename="{filename}.csv"'

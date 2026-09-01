@@ -53,7 +53,7 @@ class TestQAErrorEmailMiddleware:
         result = mw.process_exception(self._make_request(), ValueError("boom"))
         assert result is None
 
-    @override_settings(SUPPORT_EMAIL="support@test.local")
+    @override_settings(SUPPORT_EMAIL="support@test.local", IS_TESTING_ENV=True)
     def test_process_exception_sends_email(self):
         from core.middleware import QAErrorEmailMiddleware
         from core.models import QAConfiguration
@@ -67,7 +67,7 @@ class TestQAErrorEmailMiddleware:
             mw.process_exception(self._make_request(), ValueError("boom"))
         mock_mail.assert_called_once()
 
-    @override_settings(SUPPORT_EMAIL="support@test.local")
+    @override_settings(SUPPORT_EMAIL="support@test.local", IS_TESTING_ENV=True)
     def test_process_exception_send_failure_swallowed(self):
         from core.middleware import QAErrorEmailMiddleware
         from core.models import QAConfiguration

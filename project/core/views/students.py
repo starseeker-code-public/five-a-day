@@ -1,5 +1,6 @@
 import logging
 from datetime import date
+from decimal import Decimal
 
 from django.contrib import messages
 from django.core.exceptions import ValidationError
@@ -105,6 +106,26 @@ class StudentCreateView(CreateView):
         context["enrollment_fee_adult"] = str(config.adult_enrollment_fee)
         context["language_cheque_discount"] = str(config.language_cheque_discount)
         context["sibling_discount"] = str(config.sibling_discount)
+
+        # First-period proration. A student joining part-way through a month pays
+        # only the remaining days OF THAT MONTH, so the first fee differs from the
+        # recurring one and the form has to say so before the admin saves.
+        from billing.models import current_academic_year
+        from billing.services.payment_service import MONTH_NAMES_ES, PaymentService
+
+        today = date.today()
+        sequence = PaymentService.teaching_months(current_academic_year(today))
+        first = next(((m, y) for m, y in sequence if PaymentService._last_day(m, y) >= today), None)
+        if first is not None:
+            first_month, first_year = first
+            fraction = PaymentService.proration_fraction(today, first_month, first_year)
+            context["first_period_fraction"] = str(fraction)
+            context["first_period_label"] = f"{MONTH_NAMES_ES.get(first_month, '')} {first_year}"
+            context["first_period_is_partial"] = fraction != Decimal("1")
+        else:
+            context["first_period_fraction"] = "1"
+            context["first_period_label"] = ""
+            context["first_period_is_partial"] = False
 
         # Students for sibling search (active, current year)
         context["all_students_for_sibling"] = (
@@ -214,9 +235,9 @@ class StudentCreateView(CreateView):
                     concept=concept,
                 )
 
-                # Schedule the recurring fees for the rest of the academic year
-                # (monthly Sep–Jun or quarterly Oct/Jan/Apr), each pending and
-                # due at period end. Idempotent vs. the generate_payments cron.
+                # Issue the period the student joined, prorated for the days
+                # already gone. Later periods are opened by the generate_payments
+                # cron on the 1st; this call is idempotent against it.
                 from billing.services.payment_service import PaymentService
 
                 PaymentService.schedule_academic_year_payments(enrollment, parent)
@@ -682,8 +703,16 @@ def handle_student_form(request):
             messages.error(request, f"Error de validación: {e.message}")
         return redirect("students_list")
 
-    except Exception as e:
-        messages.error(request, f"Error al procesar el formulario: {str(e)}")
+    except Exception:
+        # Never return `str(e)` to the client: on an IntegrityError it names the
+        # table and column, on a DataError the column type and length. The
+        # ValidationError branch above is the exception to that rule, because
+        # ValidationError.messages is text written for humans.
+        #
+        # And log it — this used to show the operator the only copy of the error
+        # and keep nothing, so a recurring failure left no trace at all.
+        logger.exception("Unhandled error while processing the student form")
+        messages.error(request, "Error al procesar el formulario. Inténtalo de nuevo.")
         return redirect("students_list")
 
 

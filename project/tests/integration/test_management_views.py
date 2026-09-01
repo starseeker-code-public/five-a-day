@@ -9,6 +9,8 @@ from decimal import Decimal
 import pytest
 from django.urls import reverse
 
+from conftest import current_course_year
+
 pytestmark = pytest.mark.django_db
 
 
@@ -243,20 +245,24 @@ class TestLanguageChequeStudents:
     def test_returns_list(self, authenticated_client, student_with_parent, enrollment_type_new_student, site_config):
         from billing.models import Enrollment
 
+        # The endpoint filters on relevant_academic_years(), so this enrollment
+        # has to be in the *current* course — see conftest.current_course_year().
+        academic_year, start_year = current_course_year()
+
         Enrollment.objects.filter(student=student_with_parent).delete()
         Enrollment.objects.create(
             student=student_with_parent,
             enrollment_type=enrollment_type_new_student,
-            enrollment_period_start=date(2025, 9, 15),
-            enrollment_period_end=date(2026, 6, 27),
-            academic_year="2025-2026",
+            enrollment_period_start=date(start_year, 9, 15),
+            enrollment_period_end=date(start_year + 1, 6, 27),
+            academic_year=academic_year,
             schedule_type="full_time",
             payment_modality="monthly",
             enrollment_amount=Decimal("54.00"),
             final_amount=Decimal("54.00"),
             status="active",
             has_language_cheque=True,
-            enrollment_date=date(2025, 9, 1),
+            enrollment_date=date(start_year, 9, 1),
         )
         response = authenticated_client.get(reverse("language_cheque_students"))
         assert response.status_code == 200

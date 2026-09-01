@@ -80,6 +80,14 @@ app.conf.beat_schedule = {
         "schedule": crontab(hour=3, minute=0, day_of_week=0),
         "options": {"queue": "celery"},
     },
+    # Expired sessions + spent parent magic-link tokens, daily 03:30. Both
+    # tables hold authentication material and nothing purged either of them
+    # before v1.23.0 (see core.tasks.purge_expired_sessions).
+    "purge-expired-sessions": {
+        "task": "core.tasks.purge_expired_sessions",
+        "schedule": crontab(hour=3, minute=30),
+        "options": {"queue": "celery"},
+    },
 }
 
 app.conf.timezone = "Europe/Madrid"

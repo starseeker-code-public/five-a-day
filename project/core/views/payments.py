@@ -15,6 +15,7 @@ from billing import constants
 from billing.models import Payment
 from core.constants import MESES_ES
 from core.models import HistoryLog
+from core.utils import csv_safe_row
 from students.models import Parent, Student
 
 logger = logging.getLogger(__name__)
@@ -784,20 +785,24 @@ def export_payments(request):
     payments = Payment.objects.all().select_related("student", "parent").order_by("-created_at")
 
     for payment in payments:
+        # csv_safe_row: names and concepts are free text set by any teacher, and
+        # a leading =/+/-/@ makes the cell a formula in the admin's spreadsheet.
         writer.writerow(
-            [
-                payment.id,
-                payment.student.full_name,
-                # Adult students have no parent — Payment.parent is nullable.
-                payment.parent.full_name if payment.parent else "",
-                payment.concept,
-                payment.amount,
-                payment.get_payment_method_display(),
-                payment.get_payment_status_display(),
-                payment.due_date.strftime("%d/%m/%Y") if payment.due_date else "",
-                (payment.payment_date.strftime("%d/%m/%Y") if payment.payment_date else ""),
-                payment.created_at.strftime("%d/%m/%Y %H:%M"),
-            ]
+            csv_safe_row(
+                [
+                    payment.id,
+                    payment.student.full_name,
+                    # Adult students have no parent — Payment.parent is nullable.
+                    payment.parent.full_name if payment.parent else "",
+                    payment.concept,
+                    payment.amount,
+                    payment.get_payment_method_display(),
+                    payment.get_payment_status_display(),
+                    payment.due_date.strftime("%d/%m/%Y") if payment.due_date else "",
+                    (payment.payment_date.strftime("%d/%m/%Y") if payment.payment_date else ""),
+                    payment.created_at.strftime("%d/%m/%Y %H:%M"),
+                ]
+            )
         )
 
     return response

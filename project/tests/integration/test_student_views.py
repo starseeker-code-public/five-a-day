@@ -87,6 +87,40 @@ class TestStudentCreateView:
         assert Decimal(price_config["quarterly"]) == gross * (1 - site_config.quarterly_enrollment_discount / 100)
 
 
+class TestFirstPeriodProrationContext:
+    """The form must show the prorated first fee before the admin saves.
+
+    Only the first month is ever reduced, so the row is driven by a fraction the
+    view computes from today's date — the same PaymentService.proration_fraction
+    the generator bills with, so the preview cannot drift from the invoice.
+    """
+
+    def test_context_exposes_the_proration(self, authenticated_client, group, site_config, enrollment_type_new_student):
+        from datetime import date
+
+        from billing.models import current_academic_year
+        from billing.services.payment_service import PaymentService
+
+        response = authenticated_client.get(reverse("student_create"))
+        assert response.status_code == 200
+
+        today = date.today()
+        sequence = PaymentService.teaching_months(current_academic_year(today))
+        first = next(((m, y) for m, y in sequence if PaymentService._last_day(m, y) >= today), None)
+        expected = PaymentService.proration_fraction(today, *first) if first else Decimal("1")
+
+        assert Decimal(response.context["first_period_fraction"]) == expected
+        assert response.context["first_period_is_partial"] is (expected != Decimal("1"))
+
+    def test_fraction_is_always_a_usable_number(
+        self, authenticated_client, group, site_config, enrollment_type_new_student
+    ):
+        """It is interpolated raw into a JS object literal — never blank."""
+        response = authenticated_client.get(reverse("student_create"))
+        value = Decimal(response.context["first_period_fraction"])
+        assert Decimal("0") < value <= Decimal("1")
+
+
 class TestStudentCreateViewPost:
     def test_creates_student_with_enrollment(
         self, authenticated_client, parent, group, site_config, enrollment_type_new_student
@@ -299,8 +333,10 @@ class TestSpecialEnrollmentPricing:
         assert "matrícula especial" in matricula.concept
         assert matricula.amount != site_config.children_enrollment_fee
 
+        # Periods are issued as they open, so enrolling creates only the first
+        # fee — Celery adds the rest on the 1st of each month.
         monthly = Payment.objects.filter(student=student, payment_type="monthly")
-        assert monthly.count() == 10
+        assert monthly.count() == 1
         assert set(monthly.values_list("amount", flat=True)) == {Decimal("35.00")}
 
     def test_matricula_falls_back_to_the_standard_fee_when_left_blank(

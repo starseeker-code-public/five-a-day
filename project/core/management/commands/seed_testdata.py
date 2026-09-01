@@ -499,7 +499,7 @@ class Command(BaseCommand):
             concept=concept,
         )
 
-        # Recurring fees (monthly Sep–Jun or quarterly Oct/Jan/Apr). All pending;
+        # Recurring fees for every period that has already started. All pending;
         # statuses are spread coherently in _assign_payment_statuses.
         PaymentService.schedule_academic_year_payments(enrollment, parent)
 

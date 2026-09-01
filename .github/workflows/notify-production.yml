@@ -16,7 +16,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
         with:
           fetch-depth: 2  # Need HEAD and HEAD~1 for diff summary
           token: ${{ secrets.GH_PAT || github.token }}
@@ -37,6 +37,15 @@ jobs:
           }
           NEW_VERSION=$(extract_version HEAD)
           OLD_VERSION=$(extract_version HEAD~1)
+
+          # HTML-escape the subject: it is author-controlled and this output is
+          # used ONLY inside the email body below, so escaping in place is safe
+          # (unlike auto-merge.yml, where the same text is also a PR title).
+          html_escape() {
+            printf '%s' "$1"               | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'                     -e 's/"/\&quot;/g' -e "s/'/\&#39;/g"
+          }
+          MESSAGE=$(html_escape "$MESSAGE")
+          AUTHOR=$(html_escape "$AUTHOR")
 
           {
             echo "short_sha=$SHORT_SHA"
@@ -84,7 +93,7 @@ jobs:
           echo "tag=$TAG"     >> "$GITHUB_OUTPUT"
 
       - name: Send email
-        uses: dawidd6/action-send-mail@v18
+        uses: dawidd6/action-send-mail@94de994a9f6fffee200243214e17002e2920bb59  # v18
         with:
           server_address: smtp.gmail.com
           server_port: 465

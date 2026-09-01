@@ -49,7 +49,11 @@ The `billing` app owns all financial logic: pricing configuration, enrollment pl
 - `calculate_monthly_amount(enrollment, config, month)` — monthly payment with discounts + June bonus (delegates to `_get_base_monthly_fee`). Short-circuits on `hand_priced_amount()`: sibling / cheque / June discounts are **not** layered on top of a negotiated price, because `EnrollmentService._apply_discounts` already folded them in at creation.
 - `calculate_quarterly_amount(enrollment, config, quarter_due_month)` — 3 months minus the quarterly discount, **then** the sibling percentage, the language cheque (x3, one per covered month) and — for Q3, which covers June — the June discount. Mirrors `EnrollmentService._apply_discounts` so the enrollment row and the generated payments agree. Before v1.15 only the quarterly percentage was applied, so a quarterly student with a sibling discount or a cheque was billed full price. Adult groups keep their flat rate. A `special` matrícula short-circuits all of it via `hand_priced_amount()` — for a quarterly special the admin types the price of the whole quarter.
 - `complete_payment(payment_id)` — marks payment completed with today's date (within `transaction.atomic()`)
-- `schedule_academic_year_payments(enrollment, parent=None)` — on enrollment, creates all pending periodic payments for the academic year: monthly (Sep–Jun) or quarterly (Oct/Jan/Apr), each due at period end, starting at the enrollment month. Idempotent (matches on payment_type + due-date month/year) so the periodic `generate_payments` command never double-creates. Called by `StudentCreateView` and waiting-list assignment. Returns the count created.
+- `schedule_academic_year_payments(enrollment, parent=None, as_of=None)` — creates every periodic payment whose period has **started**, plus the first one always. Payments are created on the first day of their period and fall due on its **last** day, so enrolling issues just the period joined and the 1st-of-the-month cron opens each later one. Back-fills any started period that has no payment, so a missed cron run is repaired instead of going unbilled. Idempotent (matches on payment_type + due-date month/year). Called by `StudentCreateView`, waiting-list assignment and `generate_payments`. Returns the count created.
+- `billing_periods(enrollment)` — the schedule itself: ordered periods from the enrollment month to June, each `{months, starts, due, fraction}`. Monthly = one per teaching month; quarterly = consecutive 3-month blocks **anchored to the enrollment month** (12 Dec → Dec-Feb, Mar-May, one-month June stub), replacing the fixed Oct/Jan/Apr calendar that left a mid-year joiner's first months — and September for everyone — unbilled.
+- `proration_fraction(reference, month, year)` — days left in the joining month, counting the join day (15 Sep on 30 days = 16/30). Applies to the first period only.
+- `calculate_period_amount(enrollment, config, months, fraction=1, quarterly=False)` — the single source of what a period costs. `calculate_monthly_amount` / `calculate_quarterly_amount` are thin wrappers for the standard-price question.
+- `period_concept(period, quarterly)` — the label, e.g. `Trimestre Diciembre-Febrero 2026 (parcial)`.
 - `should_generate_monthly/quarterly(month)` — academic calendar validation
 - `get_payment_statistics(month, year)` — aggregate pending/completed counts and totals
 
@@ -129,7 +133,18 @@ python manage.py generate_payments --month 10 --year 2025
 python manage.py generate_payments --dry-run    # Preview only
 ```
 
-Generates pending payments for all active enrollments. Monthly students get one per month (Sep-Jun). Quarterly students get one per quarter (Oct, Jan, Apr). Skips if payment already exists for that period.
+Opens every billing period that has started for each active enrollment — the new month for monthly students, the new block for quarterly ones. Runs on the 1st of the month. It calls the same `PaymentService.schedule_academic_year_payments()` the enrollment form does, so there is a single code path, and it **back-fills**: a period that started without a payment is created, so a missed run is repaired on the next one rather than going permanently unbilled. Skips anything already billed for that period.
+
+### `reconcile_payment_schedule`
+
+```bash
+python manage.py reconcile_payment_schedule                          # DRY RUN — report only
+python manage.py reconcile_payment_schedule --apply                  # fill gaps
+python manage.py reconcile_payment_schedule --apply --cancel-stale   # + retire superseded rows
+python manage.py reconcile_payment_schedule --academic-year 2025-2026
+```
+
+One-off migration aid for v1.22.0, which anchored quarters to the enrollment month. Payments written under the old fixed Oct/Jan/Apr calendar do **not** repair themselves — the idempotency check matches on due month/year and the new due dates differ, so a plain `generate_payments` re-run would create a second, overlapping set. This command reconciles instead: it creates periods the new schedule wants but that have no payment, cancels (never deletes) **pending** rows matching no period, and refuses to touch any enrollment with a **completed** payment, reporting it as `REVIEW` for a human instead — rewriting a settled schedule corrupts the books. Dry run unless `--apply`; idempotent, so re-running reports `0 payment(s) to create`. See DEPLOYMENT.md for the testing and production runbooks.
 
 ### `materialize_recurring_expenses`
 

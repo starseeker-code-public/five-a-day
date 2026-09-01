@@ -103,17 +103,17 @@ monthly student would receive**.
 
 Pending (due, not paid) periodic payments are created two ways, and the two are kept consistent (idempotent — never duplicated):
 
-**1. At enrollment (whole academic year, up front).** When a student is enrolled (via the create-student flow or waiting-list assignment), in addition to the one-off enrollment fee, `PaymentService.schedule_academic_year_payments()` immediately creates the full academic year of pending periodic payments — monthly (Sep–Jun) or quarterly (Oct/Jan/Apr) — each **due at the end of its period**, starting from the enrollment month (a student joining mid-year is not billed for months before they joined).
+**1. At enrollment (the period they joined).** When a student is enrolled (via the create-student flow or waiting-list assignment), in addition to the one-off enrollment fee, `PaymentService.schedule_academic_year_payments()` creates the periodic payment for the period they joined — **prorated** for the days of that month already gone. The first period is always issued even if it opens later, so a student enrolled in August still has their September fee on the ficha that day.
 
-**2. Periodically (safety net / late enrollments).** The `generate_payments` management command (run on a schedule) also creates the period's payment for every active enrollment:
+**Periods are created on their FIRST day and fall due on their LAST.** Monthly students get one period per teaching month (Sep–Jun). Quarterly students get consecutive 3-month blocks **anchored to the month they enrolled** — joining 12 December gives Dec-Feb (due 28 Feb), Mar-May (due 31 May) and a one-month June stub (due 30 Jun). This replaced a fixed Oct/Jan/Apr calendar that had two silent revenue holes: a 12-December joiner was never billed for December at all, and September fell outside every quarter so quarterly students never paid for it.
 
-- **Monthly students**: A payment is created at the start of each month (September through June).
-- **Quarterly students**: A payment is created at the start of each quarter:
-  - October 1 (Q1, covers October–December)
-  - January 1 (Q2, covers January–March)
-  - April 1 (Q3, covers April–June)
+**Only the first period is prorated.** `proration_fraction()` bills the days remaining in the joining month, counting the join day — 15 September on a 30-day month is 16/30, 12 December on 31 days is 20/31. Every later month, and every later period, is billed in full. Within a quarter only the first month is reduced, so the block is worth `(2 + fraction)/3`. The payment's concept is marked `(parcial)` and the creation form previews the amount from the same helper.
 
-Because both paths match on `(student, payment_type, due-date month/year)` before creating, a student enrolled after the up-front scheduling already ran is never charged twice.
+**2. On the 1st of each month (Celery / Cloud Run Job).** The `generate_payments` management command opens every period that has started since the last run — the new month for monthly students, the new block for quarterly ones. It calls exactly the same `schedule_academic_year_payments()` the enrollment form does, so there is one code path and the two can never disagree.
+
+It also **back-fills**: any period that has started and has no payment is created, so a run the scheduler missed is repaired on the next one instead of leaving a month permanently unbilled.
+
+Because both paths match on `(student, payment_type, due-date month/year)` before creating, nothing is ever charged twice.
 
 > **Known gap.** A quarterly student's September is not billed by either path: monthly students are billed Sep–Jun, but Q1 is due 1 October and covers three months (Oct–Dec). `QUARTERS[0]` still carries an `includes_sept: True` flag, but nothing reads it and `calculate_quarterly_amount` charges `base × 3`. Decide whether September belongs in Q1 before relying on this document for a reconciliation.
 

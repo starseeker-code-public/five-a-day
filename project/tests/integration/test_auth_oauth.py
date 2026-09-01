@@ -163,12 +163,62 @@ class TestGoogleOauthCallback:
             patch("core.views.auth._build_flow", return_value=mock_flow),
             patch(
                 "google.oauth2.id_token.verify_oauth2_token",
-                return_value={"email": "intruder@evil.com", "given_name": "I"},
+                return_value={"email": "intruder@evil.com", "email_verified": True, "given_name": "I"},
             ),
         ):
             response = client.get(reverse("google_oauth_callback") + "?state=abc&code=x")
         assert response.status_code == 302
         assert response.url == reverse("login")
+
+    def _mock_flow(self):
+        mock_flow = MagicMock()
+        mock_flow.fetch_token.return_value = None
+        creds = MagicMock()
+        creds.id_token = "fake_token"
+        mock_flow.credentials = creds
+        return mock_flow
+
+    def test_unverified_email_is_rejected(self, client, monkeypatch):
+        """An unverified claim is an address the holder has not proven they own."""
+        monkeypatch.setenv("GOOGLE_CLIENT_ID", "abc")
+        monkeypatch.setenv("GOOGLE_CLIENT_SECRET", "xyz")
+        monkeypatch.setenv("GOOGLE_ALLOWED_EMAIL", "allowed@example.com")
+        self._setup_session_state(client, state="abc")
+
+        with (
+            patch("core.views.auth._build_flow", return_value=self._mock_flow()),
+            patch(
+                "google.oauth2.id_token.verify_oauth2_token",
+                return_value={"email": "allowed@example.com", "email_verified": False, "given_name": "T"},
+            ),
+        ):
+            response = client.get(reverse("google_oauth_callback") + "?state=abc&code=x")
+
+        assert response.status_code == 302
+        assert response.url == reverse("login")
+        assert client.session.get("is_authenticated") is not True
+
+    def test_empty_allow_list_fails_closed(self, client, monkeypatch):
+        """`"" == ""` used to grant a SUPERUSER to a token carrying no email."""
+        monkeypatch.setenv("GOOGLE_CLIENT_ID", "abc")
+        monkeypatch.setenv("GOOGLE_CLIENT_SECRET", "xyz")
+        monkeypatch.delenv("GOOGLE_ALLOWED_EMAIL", raising=False)
+        monkeypatch.delenv("EMAIL_HOST_USER", raising=False)
+        monkeypatch.delenv("DJANGO_SUPERUSER_EMAIL", raising=False)
+        self._setup_session_state(client, state="abc")
+
+        with (
+            patch("core.views.auth._build_flow", return_value=self._mock_flow()),
+            patch(
+                "google.oauth2.id_token.verify_oauth2_token",
+                return_value={"email": "", "email_verified": True, "given_name": ""},
+            ),
+        ):
+            response = client.get(reverse("google_oauth_callback") + "?state=abc&code=x")
+
+        assert response.status_code == 302
+        assert response.url == reverse("login")
+        assert client.session.get("is_authenticated") is not True
 
     def test_success_establishes_session_and_redirects_home(self, client, monkeypatch):
         monkeypatch.setenv("GOOGLE_CLIENT_ID", "abc")
@@ -192,7 +242,7 @@ class TestGoogleOauthCallback:
             patch("core.views.auth._build_flow", return_value=mock_flow),
             patch(
                 "google.oauth2.id_token.verify_oauth2_token",
-                return_value={"email": "allowed@example.com", "given_name": "Test"},
+                return_value={"email": "allowed@example.com", "email_verified": True, "given_name": "Test"},
             ),
         ):
             response = client.get(reverse("google_oauth_callback") + "?state=abc&code=x")
