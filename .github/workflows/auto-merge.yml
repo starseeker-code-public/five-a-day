@@ -122,10 +122,13 @@ jobs:
           LAST_SHA: ${{ steps.conditions.outputs.last_sha }}
         with:
           script: |
-            // Read from env, never interpolated into the script body. `${{ }}` is
-            // substituted BEFORE the JS is parsed, so any value containing a
-            // quote breaks out of the literal and runs as code — in a step that
-            // holds an authenticated octokit.
+            // Read from env, never interpolated into the script body. GitHub's
+            // expression syntax is substituted BEFORE the JS is parsed, so any
+            // value containing a quote breaks out of the literal and runs as
+            // code — in a step that holds an authenticated octokit. (The
+            // expression token itself must not be written in this comment:
+            // unlike YAML `#` comments, this string IS template-evaluated, and
+            // an empty expression invalidates the whole workflow file.)
             const sha = process.env.LAST_SHA;
 
             const { data } = await github.rest.checks.listForRef({
