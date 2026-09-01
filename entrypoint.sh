@@ -39,6 +39,16 @@ case "$FIRST_ARG" in
         echo "📦 Applying database migrations..."
         python project/manage.py migrate --noinput
 
+        # Cache table for CACHE_DB=1 (the DatabaseCache backend). Idempotent —
+        # it prints "already exists" and exits 0 on every boot after the first,
+        # which is why it lives here rather than in a migration. The rate
+        # limiter is cache-backed, so without a SHARED cache the login throttle
+        # is per-Gunicorn-worker and per-instance; see settings.py CACHES.
+        if [ "${CACHE_DB:-False}" = "True" ] || [ "${CACHE_DB:-false}" = "true" ] || [ "${CACHE_DB:-0}" = "1" ]; then
+            echo "🗃️  Ensuring the database cache table exists..."
+            python project/manage.py createcachetable || echo "⚠️  createcachetable reported an issue (non-fatal)"
+        fi
+
         if [ "$DJANGO_ENV" = "testing" ] || [ "$DJANGO_ENV" = "production" ]; then
             echo "📁 Collecting static files..."
             python project/manage.py collectstatic --noinput --clear

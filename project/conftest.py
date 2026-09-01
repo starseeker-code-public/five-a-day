@@ -3,7 +3,13 @@ from decimal import Decimal
 
 import pytest
 
-from billing.models import Enrollment, EnrollmentType, Payment, SiteConfiguration
+from billing.models import (
+    Enrollment,
+    EnrollmentType,
+    Payment,
+    SiteConfiguration,
+    academic_year_for_month,
+)
 from students.models import Group, Parent, Student, StudentParent, Teacher
 
 
@@ -149,21 +155,42 @@ def enrollment_type_special(db):
     return et
 
 
+def current_course_year():
+    """
+    The academic year today's teaching month belongs to, as (label, start_year).
+
+    Fixtures that stand for a *current* enrollment must be anchored here rather
+    than to a hard-coded year. The student list, the dashboards and the
+    language-cheque endpoints all filter on `relevant_academic_years()`, so a
+    fixed "2025-2026" drops out of every one of those querysets the moment the
+    calendar rolls into the next course — which it did on 2026-09-01, turning
+    four passing tests red without a line of application code changing.
+
+    `academic_year_for_month` is the right anchor of the two helpers:
+    `current_academic_year` rolls over in May, when enrolment for the *next*
+    course opens, which would put the fixture's teaching period in the future
+    for four months of every year.
+    """
+    label = academic_year_for_month()
+    return label, int(label.split("-")[0])
+
+
 @pytest.fixture
 def active_enrollment(db, student, enrollment_type_new_student, site_config):
+    academic_year, start_year = current_course_year()
     return Enrollment.objects.create(
         student=student,
         enrollment_type=enrollment_type_new_student,
-        enrollment_period_start=date(2025, 9, 15),
-        enrollment_period_end=date(2026, 6, 27),
-        academic_year="2025-2026",
+        enrollment_period_start=date(start_year, 9, 15),
+        enrollment_period_end=date(start_year + 1, 6, 27),
+        academic_year=academic_year,
         schedule_type="full_time",
         payment_modality="monthly",
         enrollment_amount=Decimal("54.00"),
         discount_percentage=Decimal("0.00"),
         final_amount=Decimal("54.00"),
         status="active",
-        enrollment_date=date(2025, 9, 1),
+        enrollment_date=date(start_year, 9, 1),
     )
 
 

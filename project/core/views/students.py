@@ -703,8 +703,16 @@ def handle_student_form(request):
             messages.error(request, f"Error de validación: {e.message}")
         return redirect("students_list")
 
-    except Exception as e:
-        messages.error(request, f"Error al procesar el formulario: {str(e)}")
+    except Exception:
+        # Never return `str(e)` to the client: on an IntegrityError it names the
+        # table and column, on a DataError the column type and length. The
+        # ValidationError branch above is the exception to that rule, because
+        # ValidationError.messages is text written for humans.
+        #
+        # And log it — this used to show the operator the only copy of the error
+        # and keep nothing, so a recurring failure left no trace at all.
+        logger.exception("Unhandled error while processing the student form")
+        messages.error(request, "Error al procesar el formulario. Inténtalo de nuevo.")
         return redirect("students_list")
 
 

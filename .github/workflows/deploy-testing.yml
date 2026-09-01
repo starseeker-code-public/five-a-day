@@ -73,7 +73,7 @@ jobs:
 
       # Check out the TESTING branch: its pyproject.toml is the target version.
       # The workflow file itself still comes from main, which is what runs.
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
         if: steps.gate.outputs.proceed == 'true'
         with:
           ref: testing
@@ -352,7 +352,7 @@ jobs:
 
       - name: Notify success
         if: success()
-        uses: dawidd6/action-send-mail@v18
+        uses: dawidd6/action-send-mail@94de994a9f6fffee200243214e17002e2920bb59  # v18
         with:
           server_address: smtp.gmail.com
           server_port: 465
@@ -392,7 +392,7 @@ jobs:
 
       - name: Notify failure
         if: failure()
-        uses: dawidd6/action-send-mail@v18
+        uses: dawidd6/action-send-mail@94de994a9f6fffee200243214e17002e2920bb59  # v18
         with:
           server_address: smtp.gmail.com
           server_port: 465
@@ -437,7 +437,7 @@ jobs:
     if: failure()
     runs-on: ubuntu-latest
     steps:
-      - uses: dawidd6/action-send-mail@v18
+      - uses: dawidd6/action-send-mail@94de994a9f6fffee200243214e17002e2920bb59  # v18
         with:
           server_address: smtp.gmail.com
           server_port: 465

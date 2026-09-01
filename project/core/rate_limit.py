@@ -1,10 +1,15 @@
 """
 Simple session + cache rate limiter (v1.10).
 
-Used to throttle login attempts (5/min per IP) and the parent-portal magic
-link request. Django's local-memory cache is the default, so this works on a
-single-instance deployment out of the box; swap to Redis via CACHES for Cloud
-Run's multi-instance setup without any code change.
+Used to throttle login attempts (5/min per IP), the password-reset request, the
+2FA verify step and the parent-portal magic link.
+
+The CACHE BACKEND decides whether any of this is real. Django's default
+LocMemCache is per-process, so on Cloud Run (4 Gunicorn workers x maxScale 2)
+"5 per minute" was up to 40 across eight independent counters. See
+settings.CACHES: production sets CACHE_DB=True to use the shared PostgreSQL
+cache table. Do not revert to a per-process cache and do not point CACHE_URL at
+an unreachable host.
 """
 
 from __future__ import annotations
@@ -96,18 +101,38 @@ def rate_limit(
                 return view_func(request, *args, **kwargs)
 
             key = _cache_key(scope, _client_ip(request))
-            # `add()` is atomic in memcached and Redis: it seeds the counter to
-            # 0 with the correct TTL only when the key is missing. This closes
-            # the TOCTOU race where two concurrent requests both `get() == 0`
-            # and then race on `set()`, resetting the window and allowing
-            # >limit requests through.
-            cache.add(key, 0, timeout=window_seconds)
             try:
-                current = cache.incr(key)
-            except ValueError:
-                # Key expired between `add` and `incr` — reseed and count 1.
-                cache.set(key, 1, timeout=window_seconds)
-                current = 1
+                # `add()` is atomic in memcached and Redis: it seeds the counter
+                # to 0 with the correct TTL only when the key is missing. This
+                # closes the TOCTOU race where two concurrent requests both
+                # `get() == 0` and then race on `set()`, resetting the window
+                # and allowing >limit requests through.
+                cache.add(key, 0, timeout=window_seconds)
+                try:
+                    current = cache.incr(key)
+                except ValueError:
+                    # Key expired between `add` and `incr` — reseed and count 1.
+                    cache.set(key, 1, timeout=window_seconds)
+                    current = 1
+            except Exception:
+                # The cache is now a REAL external dependency (Redis, or the
+                # PostgreSQL cache table — see settings.CACHES), so it can be
+                # unreachable, and it sits on the login path. LocMemCache never
+                # failed, so this branch did not exist and an outage would have
+                # turned every login into a 500.
+                #
+                # Fail OPEN, loudly. Locking the academy out of the only admin
+                # interface for their live business is worse than temporarily
+                # losing a defence-in-depth control, and this is not the primary
+                # authentication check — the password and 2FA are. The ERROR log
+                # is the point: a silently disabled throttle is how the
+                # per-process LocMemCache problem went unnoticed for so long.
+                logger.error(
+                    "Rate limiter cache unavailable — scope=%s is UNTHROTTLED for this request",
+                    scope,
+                    exc_info=True,
+                )
+                return view_func(request, *args, **kwargs)
 
             if current > limit:
                 logger.info(

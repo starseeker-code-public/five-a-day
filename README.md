@@ -10,7 +10,7 @@
 
 <p align="center">
   <a href="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml"><img src="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
-  <img src="https://img.shields.io/badge/coverage-95.18%25-brightgreen" alt="Coverage">
+  <img src="https://img.shields.io/badge/coverage-95.22%25-brightgreen" alt="Coverage">
 </p>
 
 ---
@@ -20,11 +20,11 @@ Built to centralize student records, automate billing cycles, and streamline par
 ### Project Status
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v1.22.1-brightgreen?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-v1.23.0-brightgreen?style=flat-square" alt="Version">
   &nbsp;|&nbsp;
   <a href="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml?query=branch%3Amain"><img src="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml/badge.svg?branch=main&style=flat-square" alt="CI main"></a>
   &nbsp;|&nbsp;
-  <img src="https://img.shields.io/badge/coverage-95.18%25-brightgreen?style=flat-square" alt="Coverage">
+  <img src="https://img.shields.io/badge/coverage-95.22%25-brightgreen?style=flat-square" alt="Coverage">
   &nbsp;|&nbsp;
   <a href="https://github.com/starseeker-code-public/five-a-day/actions/workflows/scorecard.yml"><img src="https://img.shields.io/badge/OpenSSF%20Scorecard-monitored-blueviolet?style=flat-square" alt="OSSF Scorecard"></a>
   &nbsp;|&nbsp;
@@ -41,9 +41,9 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 | Version | Date | Description |
 |---------|------|-------------|
-| **v1.22.1** | 2026-08-31 | Version derived from `pyproject.toml`, drift now fails the build |
+| **v1.23.0** | 2026-09-01 | Security review: CI/CD deploys plus 20 hardening fixes |
+| v1.22.1 | 2026-08-31 | Version derived from `pyproject.toml`, drift now fails the build |
 | v1.22.0 | 2026-08-31 | Quarters anchored to enrollment month, first period prorated |
-| v1.21.1 | 2026-08-31 | Hadolint action bumped to v3.5.0 (Hadolint 2.15.1) |
 
 ---
 
@@ -150,8 +150,105 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 ## Version History & Roadmap
 
-<details id="v1221" open>
-<summary><strong>v1.22.1 — One version, one source of truth (current)</strong></summary>
+<details id="v1230" open>
+<summary><strong>v1.23.0 — Automated deploys, and a security review acted on (current)</strong></summary>
+
+**CI/CD — deploys stop being a by-hand `/deploy` run**
+
+- `deploy-testing.yml` runs nightly at 02:00 Europe/Madrid. It compares `/health/` on the
+  VM against `pyproject.toml` on `origin/testing` and deploys only when they differ, so a
+  night with no release costs one `curl`. Two cron entries plus a Madrid-hour gate give an
+  exact local 02:00 year-round; GitHub cron is UTC and has no DST.
+- `deploy-production.yml` arms itself on every push to `main`, waits for CI to go green on
+  that exact commit, lists the release's migrations, and then **blocks on the `production`
+  environment's required reviewer**. Production is never deployed by a timer.
+- The credentials are asymmetric on purpose. The nightly job holds an SSH deploy key and
+  **no** Google Cloud credential at all, so the one unattended pipeline cannot reach
+  production. The production job uses Workload Identity Federation whose binding is scoped
+  to `attribute.environment/production`, so a job that omits `environment: production`
+  cannot mint a token — which is why the preflight job is deliberately credential-free.
+- `scripts/setup_cicd.sh` provisions both (idempotent, `--dry-run`, `--rotate-testing-key`).
+
+**Security review — high severity**
+
+- **GitHub Actions command injection.** `auto-merge.yml` interpolated the last commit
+  *subject* into a shell assignment and into two `github-script` bodies. The engine
+  substitutes before bash or JS parses, so a crafted commit title ran arbitrary code in a
+  job that checks out with `GH_PAT` — a repo-write token sitting in `.git/config`. All five
+  sinks now pass through `env:`.
+- **Google OAuth kept credentials it never used.** The login flow requested `gmail.send`
+  and `spreadsheets` with offline access and stored the access token, the refresh token and
+  the **OAuth client secret** in the session — i.e. in a `django_session` row, base64 and
+  unencrypted, captured by every backup. No view ever read them. Scopes and storage removed.
+- **`/password-reset/` was public and unthrottled**, so anyone could loop a known teacher's
+  address and exhaust the Gmail account's shared daily send quota, silently stopping payment
+  reminders, receipts and every other transactional email. Now 3 requests / 15 min / IP.
+
+**Security review — medium severity**
+
+- Rate limiting was per-process: `LocMemCache` across 4 Gunicorn workers and 2 Cloud Run
+  instances made "5 logins/minute" up to 40. `CACHES` now resolves `CACHE_URL` → `CACHE_DB`
+  (the PostgreSQL cache table) → LocMemCache; production uses `CACHE_DB`.
+- CSV formula injection in all four export paths. A student name is free text and
+  `student_create` is available to non-admin teachers, so `=HYPERLINK(...)` stored by one
+  user executed in an admin's spreadsheet. Everything now goes through `core.utils.csv_safe`.
+- `QAErrorEmailMiddleware` emailed the first 500 bytes of the raw request body — a login
+  POST's cleartext password among them. It is now gated on `IS_TESTING_ENV` and redacts
+  credential fields from both urlencoded and multipart bodies.
+- A production posture guard refuses to start when the cookie, HSTS or SSL settings have
+  been weakened, closing the class of silent drift that env-var-overridable security allows.
+- 2FA backup codes were 32 bits behind one unsalted sha256 — exhaustible offline from a
+  database read. Now 64 bits through `make_password`, with the legacy format still accepted
+  so existing admins keep a recovery path.
+
+**Security review — lower severity**
+
+- Content-Security-Policy and Permissions-Policy added (report-only until `CSP_ENFORCE`).
+  `settings.py` assigns `CSP_ENFORCE` from the environment: the middleware reads it with
+  `getattr(settings, ...)`, so while nothing assigned it the documented env var was a
+  no-op and CSP could never be enforced. The original test could not catch that —
+  `override_settings` sets the attribute directly and bypasses the wiring — so a second
+  test now asserts the setting is actually read from the environment.
+- All 18 GitHub Actions pinned to commit SHAs rather than mutable tags.
+- TOTP codes can no longer be replayed inside their ~90 s validity window.
+- `str(e)` no longer reaches the student form; parent names no longer reach the logs.
+- The screenshot upload validates magic bytes, not just the client-declared content type.
+- Password minimum raised to 12 characters.
+- `rest_framework`, `corsheaders` and `django_filters` dropped from `INSTALLED_APPS` —
+  none was used, and DRF with no settings defaults every view to `AllowAny`.
+- New `purge_expired_sessions` task (Beat 03:30 + `manage.py purge_sessions`): nothing
+  purged `django_session` or `parent_session_tokens` before, and both hold auth material.
+
+**Configuration applied to production**
+
+- `HEALTH_PROBE_TOKEN` provisioned via Secret Manager with a per-secret binding, so a deploy
+  can now prove a release landed on the right database.
+- `ACADEMY_IBAN_HOLDER` repaired — it had been storing `Carlín` since the value was first
+  set from a non-UTF-8 console, and every payment-reminder email carried it.
+
+**Testing**
+
+- Suite at **1,501 tests, 95.22 % coverage**. `tests/unit/test_security_hardening.py` adds
+  52 regression tests — one per finding, each asserting behaviour that failed before the fix.
+- **Four tests were date bombs and went off on 2026-09-01.** The `active_enrollment` fixture
+  hard-coded `academic_year="2025-2026"`, but the student list, the language-cheque endpoints
+  and the dashboards all filter on `relevant_academic_years()` — which stopped returning that
+  year the moment the calendar rolled into the next course. The fixture had been valid the
+  previous day and no application code changed. It now derives its year from
+  `academic_year_for_month()` via `conftest.current_course_year()`, so it always sits in the
+  running course. `academic_year_for_month` is the correct anchor of the two helpers:
+  `current_academic_year` rolls over in **May**, when enrolment for the *next* course opens,
+  which would put the fixture's teaching period in the future for four months of every year.
+- Making that fixture current exposed a second, opposite assumption. `test_monthly_generates_full_year`
+  and `test_idempotent` assert all ten Sep–Jun payments, but the generator only issues periods
+  that have already **started** — "the full year" is only observable once the year has elapsed.
+  They now use their own `elapsed_year_enrollment` fixture pinned to a finished year, matching
+  the pattern the neighbouring quarterly test already used, so both directions are deterministic.
+
+</details>
+
+<details id="v1221">
+<summary><strong>v1.22.1 — One version, one source of truth</strong></summary>
 
 **`pyproject.toml` is now the only place the version is written**
 
@@ -2375,6 +2472,9 @@ DJANGO_DEBUG=True                 # True in dev, False everywhere else
 # Generate with: python -c 'from django.core.management.utils import get_random_secret_key; print(get_random_secret_key())'
 DJANGO_SECRET_KEY=
 DJANGO_ALLOWED_HOSTS=localhost,127.0.0.1
+# Do NOT set APP_VERSION here. settings.py derives the version from
+# pyproject.toml at import time, and an APP_VERSION line silently overrides
+# it — a stale value then shows up on /health/ and in deploy verification.
 
 # ============================================================================
 # LOGGING  (all environments — optional)
@@ -2394,15 +2494,30 @@ SESSION_COOKIE_SAMESITE=Lax       # Lax everywhere — Strict breaks Google OAut
 CSRF_COOKIE_HTTPONLY=True
 CSRF_COOKIE_SAMESITE=Lax          # Strict in production
 CSRF_TRUSTED_ORIGINS=             # Comma-separated http(s):// origins for non-localhost hosts
+
+# Session lifetime + hardening. Defaults are correct; listed so they are
+# discoverable. SESSION_COOKIE_AGE is a 6 h idle window (refreshed per request).
+# SESSION_COOKIE_AGE=21600
+# SESSION_SAVE_EVERY_REQUEST=True
+# SESSION_COOKIE_HTTPONLY=True
+
+# Applied only when DJANGO_DEBUG=False. The production start-up guard REFUSES to
+# boot if the HSTS/SSL/cookie values are weakened, so these exist mainly to let
+# the testing VM run over plain HTTP.
+# SECURE_HSTS_SECONDS=31536000
+# SECURE_HSTS_INCLUDE_SUBDOMAINS=True
+# SECURE_HSTS_PRELOAD=True
+# SECURE_CONTENT_TYPE_NOSNIFF=True
+# SECURE_BROWSER_XSS_FILTER=True
+# X_FRAME_OPTIONS=DENY
 # Reverse proxies in front of the app. The rate limiter reads the client IP this
 # many hops from the RIGHT of X-Forwarded-For (a proxy APPENDS what it saw, so
 # everything further left is client-supplied). Cloud Run and a single nginx are
 # both 1; use 0 when the app is reached directly.
 TRUSTED_PROXY_COUNT=1
-# Optional. The rate limiter is cache-backed and the default LocMemCache is
-# per-process, so N Gunicorn workers multiply the effective limit by N. Point
-# this at the Redis that Celery already uses to make the limit real.
-CACHE_URL=                        # e.g. redis://redis:6379/1
+# The rate limiter is cache-backed and the default LocMemCache is per-process,
+# so N Gunicorn workers multiply the effective limit by N. CACHE_URL and
+# CACHE_DB are defined together in the Cache backend section near the bottom.
 
 # ============================================================================
 # DATABASE  (all environments)
@@ -2413,7 +2528,23 @@ CACHE_URL=                        # e.g. redis://redis:6379/1
 POSTGRES_DB=fiveaday_db
 POSTGRES_USER=fiveaday_user
 POSTGRES_PASSWORD=                # openssl rand -base64 32
+# POSTGRES_HOST=localhost         # docker-compose injects `db`; set only outside Docker
+# POSTGRES_PORT=5432
 # DATABASE_URL=
+
+# Test database (project/settings_test.py). Defaults are what `make test` uses.
+# TEST_DB_HOST=localhost          # `make test` passes TEST_DB_HOST=db
+# TEST_DB_ENGINE=postgresql       # NEVER set this to sqlite for a real test run
+
+# ============================================================================
+# CELERY / REDIS  (optional — docker-compose injects these locally)
+# ============================================================================
+# Leave BOTH unset and CELERY_TASK_ALWAYS_EAGER turns on automatically, so tasks
+# run synchronously in-process. That is exactly how production works: Cloud Run
+# has no worker and no broker. Do NOT schedule with apply_async(eta=)/countdown
+# under eager mode — the delay is ignored and the task fires immediately.
+# CELERY_BROKER_URL=redis://redis:6379/0
+# CELERY_RESULT_BACKEND=redis://redis:6379/0
 
 # ============================================================================
 # AUTHENTICATION  (development only — testing/production use Teacher login)
@@ -2424,6 +2555,8 @@ POSTGRES_PASSWORD=                # openssl rand -base64 32
 # auth.User (email + password) seeded by TEACHER_SEED_* below.
 LOGIN_USERNAME=
 LOGIN_PASSWORD=
+# Email stamped on the auto-created dev superuser (defaults to <user>@local.dev).
+# DJANGO_SUPERUSER_EMAIL=
 
 # ============================================================================
 # EMAIL  (all environments — Gmail SMTP + App Password)
@@ -2440,6 +2573,10 @@ EMAIL_TEST_2=                     # dev/QA test recipient 2
 GOOGLE_CLIENT_ID=
 GOOGLE_CLIENT_SECRET=
 GOOGLE_REDIRECT_URI=              # http(s)://YOUR_HOST/auth/google/callback/
+# Comma-separated allow-list of addresses permitted to sign in with Google.
+# Falls back to EMAIL_HOST_USER, then DJANGO_SUPERUSER_EMAIL. The callback fails
+# CLOSED when the resolved list is empty.
+# GOOGLE_ALLOWED_EMAIL=
 
 # ============================================================================
 # TEACHER SEEDING  (testing + production only — read by `manage.py seed_teachers`)
@@ -2504,6 +2641,29 @@ STRIPE_WEBHOOK_SECRET=
 # connectivity and migration state — just not the counts. Deploy tooling uses
 # the counts to prove a release did not land on the wrong database.
 HEALTH_PROBE_TOKEN=
+
+# --- Cache backend (v1.23.0) -------------------------------------------------
+# The rate limiter is cache-backed, so the backend decides whether the login,
+# 2FA and magic-link throttles are REAL. Django's default LocMemCache is
+# per-process: with Gunicorn's 4 workers and Cloud Run's maxScale of 2 that is
+# up to 8 independent counters, so "5 per minute" was really up to 40.
+#   CACHE_URL  Redis, if one is reachable. Never point this at a host the app
+#              cannot reach — core.rate_limit calls cache.add() with no
+#              fallback, so an unreachable cache turns every login into a 500.
+#   CACHE_DB   Use the PostgreSQL cache table instead. Shared across every
+#              worker and instance, and adds no infrastructure (sessions are
+#              already database-backed). entrypoint.sh runs createcachetable.
+# Production uses CACHE_DB=True.
+CACHE_URL=
+CACHE_DB=False
+# CACHE_DB_TABLE=django_cache     # only used when CACHE_DB is on
+
+# --- Content-Security-Policy (v1.23.0) ---------------------------------------
+# core.middleware.SecurityHeadersMiddleware sends the policy REPORT-ONLY by
+# default. The app uses a Tailwind CDN and inline <script> config blocks, so the
+# policy needs 'unsafe-inline'; watch the browser console for violations, then
+# set this to True to enforce.
+CSP_ENFORCE=False
 ```
 
 A few keys are intentionally absent from the template:
@@ -2575,6 +2735,8 @@ Run `make` or `make help` for the full list. Key commands:
 | `manage.py send_monthly_report` | Admin monthly report (Beat: 28th, 20:00) |
 | `manage.py send_due_fun_friday_emails` | Drain due `FunFridayScheduledSend` rows (Beat: daily 14:30) |
 | `manage.py cleanup_backlog_tasks` | Delete QA backlog tasks done > 30 days ago (Beat: daily 07:00) |
+| `manage.py purge_sessions` | Delete expired sessions + spent parent magic-link tokens (Beat: daily 03:30) |
+| `manage.py prune_audit_log` | Delete `AuditLog` rows older than 2 years (Beat: Sunday 03:00) |
 | **Developer Tooling** | |
 | `make sync` | Install all deps (including dev) via uv |
 | `make lint` / `make lint FIX=1` | Run Ruff linter (optionally auto-fix) |
@@ -2682,6 +2844,9 @@ The table below describes every variable in the [.env template](#env-template) a
 | `CSRF_TRUSTED_ORIGINS` | Comma-separated origins allowed to POST (needed behind a proxy or a custom domain) | No | — |
 | `TRUSTED_PROXY_COUNT` | Reverse proxies in front of the app. The rate limiter reads the client IP this many hops from the **right** of `X-Forwarded-For`, because a proxy appends what it saw — anything further left is client-supplied. `0` ignores the header entirely | No | `1` |
 | `CACHE_URL` | Redis URL for the cache backing the rate limiter. Without it Django uses `LocMemCache`, which is **per-process**, so N Gunicorn workers multiply the effective limit by N | No | — (LocMem) |
+| `CACHE_DB` | Use the PostgreSQL cache table instead of LocMemCache when no `CACHE_URL` is set. **Production runs `True`** — the rate limiter is cache-backed, and a per-process cache makes every throttle per-worker. The table is created idempotently by `entrypoint.sh` | No | `False` |
+| `CACHE_DB_TABLE` | Table name used when `CACHE_DB` is on | No | `django_cache` |
+| `CSP_ENFORCE` | Switch `SecurityHeadersMiddleware` from `Content-Security-Policy-Report-Only` to enforcing. Turn it on only once the browser console is clean — the app uses a Tailwind CDN and inline config blocks, so an enforced policy that is too tight blanks the page | No | `False` |
 | `SECURE_HSTS_SECONDS` | HSTS max-age | No | `31536000` (1 y) |
 | `SECURE_HSTS_INCLUDE_SUBDOMAINS` / `SECURE_HSTS_PRELOAD` | HSTS scope | No | `True` |
 | `SECURE_CONTENT_TYPE_NOSNIFF` | `X-Content-Type-Options: nosniff` | No | `True` |
@@ -2783,7 +2948,8 @@ five-a-day/
 │   │   │                         google_sheets_service (v1.2), two_factor_service (v1.13)
 │   │   ├── constants.py          DIAS_ES, MESES_ES, SCHEDULED_APPS
 │   │   ├── middleware.py         SimpleAuthMiddleware + QAErrorEmailMiddleware
-│   │   │                         + NoHtmlCacheMiddleware
+│   │   │                         + NoHtmlCacheMiddleware + SecurityHeadersMiddleware
+│   │   │                         (CSP + Permissions-Policy, v1.23.0)
 │   │   ├── decorators.py         qa_access_required (testing env gate)
 │   │   ├── context_processors.py Notifications + is_admin_user / is_non_admin_teacher flags
 │   │   ├── transactions.py       Optimised queryset builders with stable ordering
@@ -2795,7 +2961,7 @@ five-a-day/
 │   │   │                         + JS (17 modules) + images
 │   │   └── management/commands/  seed_teachers, seed_testdata, export_to_sheets (v1.2),
 │   │                             reset_two_factor (v1.13), cleanup_backlog_tasks (v1.14.2),
-│   │                             prune_audit_log (v1.15)
+│   │                             prune_audit_log (v1.15), purge_sessions (v1.23.0)
 │   │
 │   ├── students/                 People Management
 │   │   ├── models.py             Student, Parent, StudentParent, Teacher, Group.
@@ -2839,7 +3005,7 @@ five-a-day/
 │   │   └── management/commands/  send_email, test_all_emails, plus 4 Beat-task wrappers
 │   │                             (v1.14.2 — birthday, reminders, report, Fun Friday drain)
 │   │
-│   ├── tests/                    pytest suite (1,447 tests, 95.18 % coverage) — unit/ + integration/
+│   ├── tests/                    pytest suite (1,501 tests, 95.22 % coverage) — unit/ + integration/
 │   ├── templates/registration/   Password-reset templates (form, done, confirm, complete + email body)
 │   ├── templates/admin/          Django admin overrides (branded theme)
 │   └── conftest.py               Shared fixtures (models + authenticated_client)
@@ -3158,11 +3324,11 @@ Public flow at `/password-reset/...` that lets a teacher recover access without 
 
 | Metric | Value |
 |--------|-------|
-| **Total tests** | 1,447 |
-| **Test files** | 81 (51 unit + 30 integration) |
-| **Coverage** | 95% (95.18% — 5,558 statements, 268 uncovered) |
+| **Total tests** | 1,501 |
+| **Test files** | 82 (52 unit + 30 integration) |
+| **Coverage** | 95% (95.22% — 5,689 statements, 272 uncovered) |
 | **Coverage thresholds** | **≥ 90%** (target, no warning) / **75-89%** (CI warning, pre-commit still blocks below 75) / **< 75%** (CI fails, pre-commit rejects the commit) |
-| **Runtime** | ~50 seconds (parallel workers via `pytest-xdist -n auto`) |
+| **Runtime** | ~65 seconds (parallel workers via `pytest-xdist -n auto`) |
 | **Database** | PostgreSQL (same as production) — **always use `make test`** |
 | **Framework** | pytest 9 + pytest-django + pytest-cov + pytest-xdist + pytest-randomly |
 | **Type checking** | mypy + django-stubs (pre-commit hook) |
@@ -3211,6 +3377,7 @@ Within each file, related tests are grouped into classes. Where a large file abs
 | File | Count | Coverage |
 | --- | --- | --- |
 | [`unit/test_schedule_utils.py`](project/tests/unit/test_schedule_utils.py) | 63 | `core.schedule_utils` — the single source of truth for how a group's timetable is rendered into the welcome email. Mon–Thu row bands, the Friday per-cell `FRIDAY_TIMES` map (four overlapping sessions), `is_valid_slot` grid validation, out-of-range rows returning a placeholder instead of raising, and `get_group_schedule_lines` (ordering, day grouping, empty group, column collapsing) |
+| [`unit/test_security_hardening.py`](project/tests/unit/test_security_hardening.py) | 52 | One regression test per finding of the v1.23.0 security review, each asserting behaviour that failed before the fix: the OAuth callback storing no token/refresh-token/client-secret in the session and failing closed on an empty allow-list or absent `email_verified`; `csv_safe` neutralising `=`/`+`/`-`/`@` in all four export paths while leaving a negative `Decimal` intact; `QAErrorEmailMiddleware` gated on `IS_TESTING_ENV` and redacting credentials from **both** urlencoded and multipart bodies; the rate limiter reading `X-Forwarded-For` from the right and throttling `/password-reset/`; 64-bit backup codes through `make_password` with the legacy sha256 digests still accepted; TOTP replay refused at or below `two_factor_last_counter`; the production start-up posture guard; CSP + Permissions-Policy headers; magic-byte screenshot validation; and the 12-character password minimum |
 | [`unit/test_models.py`](project/tests/unit/test_models.py) | 53 | Every model across `students`, `billing`, `core` — properties (`full_name`, `age`, `is_overdue`, `remaining_amount`, `is_paid`), `__str__`, unique constraints, FK behavior, academic-year helpers (`current_academic_year`, `academic_year_start_date`, `academic_year_end_date`), SiteConfiguration singleton, HistoryLog cap + debounce |
 | [`unit/test_expenses.py`](project/tests/unit/test_expenses.py) | 33 | `Expense` model + `ExpenseService` (v1.5): per-frequency `clean()` validation, monthly totals aggregation, `materialize_recurring` (monthly, 1st-of-month) and `materialize_recurring_for_date` (weekly `recurring_weekdays` CSV + yearly), idempotency on `generated_from` + exact `expense_date`, and `recurring_day` accepting the whole 1–31 range (29–31 clamp to the month's last day) |
 | [`unit/test_bugfix_regressions.py`](project/tests/unit/test_bugfix_regressions.py) | 31 | Regression guards for the v1.15.0 fix pass, each pinning a defect verified broken against the running app: adult-student payments crashing search + CSV export, quarterly discounts (sibling, language cheque, June), completed payments with no `payment_date` vanishing from income, non-idempotent quick-complete rewriting financial history, payments attaching to a finished enrollment, unvalidated choice fields, `str(e)` leaking to the browser, cancelled payments inflating "esperado", query strings that used to 500, negative prices, singleton deletion, and the `enrollment_amount` fallback |
@@ -3315,28 +3482,28 @@ Within each file, related tests are grouped into classes. Where a large file abs
 | `core/audit_models.py` | 25 | 1 | 96% | 66 |
 | `core/audit_signals.py` | 92 | 6 | 93% | 109, 115, 131, 142-143, 148 |
 | `core/context_processors.py` | 31 | 1 | 97% | 22 |
-| `core/middleware.py` | 81 | 5 | 94% | 52-57, 173, 218-219 |
+| `core/middleware.py` | 124 | 6 | 95% | 121, 132-137, 253, 298-299 |
 | `core/models.py` | 163 | 5 | 97% | 48, 100, 293, 301, 326 |
 | `core/services/google_sheets_service.py` | 99 | 9 | 91% | 74-76, 112-118 |
-| `core/tasks.py` | 20 | 5 | 75% | 41-46 |
-| `core/transactions.py` | 19 | 1 | 95% | 28 |
-| `core/views/app_forms.py` | 612 | 44 | 93% | 65, 151-153, 167-170, 187-188, 281-282, 305-306, 354-356, 385, 538-540, 546, 682, 704, 723, 797, 801, 823, 834, 910, 936, 949, 962, 974, 997-1000, 1115, 1161, 1189-1193, 1221-1224 |
-| `core/views/auth.py` | 167 | 18 | 89% | 45-48, 179, 183-199, 250, 285, 346-355 |
-| `core/views/dashboard.py` | 131 | 7 | 95% | 129-136, 177, 182, 193 |
+| `core/tasks.py` | 30 | 5 | 83% | 42-47 |
+| `core/transactions.py` | 19 | 1 | 95% | 30 |
+| `core/views/app_forms.py` | 612 | 44 | 93% | 65, 151-153, 167-170, 187-188, 281-282, 305-306, 354-356, 385, 538-540, 546, 682, 704, 723, 797, 801, 823, 834, 910, 936, 949, 962, 974, 997-1000, 1115, 1163, 1189-1193, 1221-1224 |
+| `core/views/auth.py` | 174 | 17 | 90% | 45-48, 185, 189-205, 256, 294, 373-374 |
+| `core/views/dashboard.py` | 131 | 5 | 96% | 129-136, 177 |
 | `core/views/expenses.py` | 123 | 12 | 90% | 72, 75-76, 121, 141-142, 174-176, 208-210 |
-| `core/views/features.py` | 172 | 20 | 88% | 136, 160-161, 211-215, 273-279, 336-340 |
+| `core/views/features.py` | 173 | 20 | 88% | 137, 161-162, 212-216, 274-280, 337-341 |
 | `core/views/parent_portal.py` | 101 | 3 | 97% | 157, 184, 204 |
 | `core/views/parents.py` | 51 | 1 | 98% | 47 |
-| `core/views/payments.py` | 322 | 16 | 95% | 57-58, 81, 252-257, 307, 313-314, 453, 500-501, 523-524, 538-539 |
-| `core/views/students.py` | 384 | 20 | 95% | 126-128, 223, 277-278, 423, 446, 454, 472-478, 483-485, 703, 706-708 |
-| `core/views/testing_tools.py` | 194 | 29 | 85% | 141, 201, 203, 231-233, 336-340, 353, 371-372, 399-447 |
-| `core/views/two_factor.py` | 90 | 9 | 90% | 38, 49-50, 170-172, 177-178, 193 |
+| `core/views/payments.py` | 323 | 16 | 95% | 58-59, 82, 253-258, 308, 314-315, 454, 501-502, 524-525, 539-540 |
+| `core/views/students.py` | 385 | 21 | 95% | 126-128, 223, 277-278, 423, 446, 454, 472-478, 483-485, 703, 706-716 |
+| `core/views/testing_tools.py` | 214 | 35 | 84% | 64-65, 69-71, 176, 240, 247, 249, 279-281, 386-390, 403, 421-422, 449-497 |
+| `core/views/two_factor.py` | 87 | 8 | 91% | 38, 49-50, 170-172, 177-178 |
 | `core/views/waiting_list.py` | 105 | 1 | 99% | 284 |
 | `students/forms.py` | 69 | 2 | 97% | 188-189 |
-| `students/models.py` | 214 | 3 | 99% | 361, 378-379 |
+| `students/models.py` | 215 | 3 | 99% | 369, 386-387 |
 | `students/parent_portal_models.py` | 41 | 1 | 98% | 44 |
 
-**55 files** have 100% coverage (skipped above). Total coverage: **95.18%** across 5,558 statements. Coverage is **very good**. Coverage is enforced at three levels: pre-commit hook (≥ 75%), CI hard floor (≥ 75%), and CI warning (< 90%).
+**55 files** have 100% coverage (skipped above). Total coverage: **95.22%** across 5,689 statements. Coverage is **very good**. Coverage is enforced at three levels: pre-commit hook (≥ 75%), CI hard floor (≥ 75%), and CI warning (< 90%).
 
 > **Reading the number consistently (fixed in v1.14.7).** The CI test step runs with
 > `working-directory: project`, but `[tool.coverage.run]` — including the `omit` list for
@@ -3992,7 +4159,7 @@ make up                        # Start Docker (PostgreSQL + Redis + Django + Cel
 1. Work on `development` (or a short-lived branch off `development`)
 2. Make changes following the conventions below
 3. Run `make pc-run` — Ruff + mypy + bandit all pass, offers to auto-bump the patch version on success, and auto-stages `uv.lock` if regenerated
-4. Run `make test` — all 1,447 tests must pass (PostgreSQL via Docker, parallel, with coverage)
+4. Run `make test` — all 1,501 tests must pass (PostgreSQL via Docker, parallel, with coverage)
 5. `git commit` with a message like `v1.14.7 — Short description` (version first, em dash — matches every other release commit in the project)
 6. `git push origin development`
 7. CI runs automatically on your push (see [CI/CD](#cicd--github-actions))

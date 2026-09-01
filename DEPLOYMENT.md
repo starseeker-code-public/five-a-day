@@ -442,6 +442,19 @@ update:
 
 ### Repairing a single env var
 
+> **Export `PYTHONUTF8=1` before ANY `gcloud run services update` on this service.**
+> `--update-env-vars` is a client-side merge: gcloud reads the entire current env set,
+> splices in your change and PUTs all of it back. So an update to *any* variable
+> re-serialises `ACADEMY_IBAN_HOLDER`, and on a Windows shell with a non-UTF-8 codepage it
+> silently re-corrupts `í` back to `?`. This was verified the hard way in v1.23.0: the value
+> was repaired, then an unrelated `--update-env-vars=CACHE_DB=True` put the `?` straight back.
+> Always read the bytes back afterwards — the hex must contain `c3 ad`, never `3f`:
+>
+> ```bash
+> gcloud run services describe fiveaday --project=$PROJECT --region=$REGION --format=json >   | python -c "import json,sys; e={x['name']:x.get('value') for x in json.load(sys.stdin)['spec']['template']['spec']['containers'][0]['env']}; print(e['ACADEMY_IBAN_HOLDER'].encode('utf-8').hex(' '))"
+> ```
+
+
 Nothing in the repo provisions the `ACADEMY_*` values — they were set by hand, so nothing
 re-asserts them either and a bad value survives every future deploy.
 
@@ -456,7 +469,7 @@ gcloud run services update fiveaday --project=$PROJECT_ID --region=$REGION \
 The `^@^` prefix makes `@` the delimiter, so spaces and commas in the value are safe. Run it from a
 **UTF-8 shell**: passing `í` from a legacy-codepage cmd/PowerShell prompt transcodes it through the
 console codepage and gcloud stores a literal `?`. That is how production ended up holding
-`Silvia Yubitza Moreno Carl?n`, which every payment-reminder email it sends still prints. It is the
+`Silvia Yubitza Moreno Carlín`, which every payment-reminder email it sends still prints. It is the
 only non-ASCII value among the 35 env vars, so it is the only one exposed to this — check any new
 one you add.
 
@@ -514,6 +527,39 @@ run inline):
 | `send_monthly_report_task` | `send_monthly_report` | 28th of month, 20:00 | `0 20 28 * *` |
 | `cleanup_done_backlog_tasks` | `cleanup_backlog_tasks` | QA/testing env only — skip in production | — |
 | `prune_audit_log` | `prune_audit_log` | weekly, Sunday 03:00 | `0 3 * * 0` |
+| `purge_expired_sessions` | `purge_sessions` | daily, 03:30 | `30 3 * * *` |
+
+> **Provisioning status (verified 2026-08-31).** 10 Cloud Run Jobs, 9 Cloud Scheduler
+> entries. `fiveaday-migrate` has no schedule by design (deploy-time only). Note the
+> **schedulers live in `europe-west1`**, not the service's `europe-southwest1` — Cloud
+> Scheduler is not available in that region, so `gcloud scheduler jobs list --location`
+> must say `europe-west1` or it silently returns nothing.
+>
+> `fiveaday-prune-audit-log` was **missing entirely** until v1.23.0: this table listed it
+> from v1.15 but no job and no schedule were ever created, so the audit trail was never
+> actually pruned in production. Created and smoke-tested.
+>
+> `sched-fiveaday-purge-sessions` is **PAUSED** until v1.23.0 is deployed — the
+> `purge_sessions` command does not exist in the currently-deployed image, so an enabled
+> schedule would just fail nightly. **Resume it immediately after the v1.23.0 production
+> deploy:**
+>
+> ```bash
+> gcloud scheduler jobs resume sched-fiveaday-purge-sessions >   --project=five-a-day-evolution --location=europe-west1
+> ```
+>
+> **Cloning a job? Use `gcloud run jobs replace` with a YAML file, not a pile of flags.**
+> Export an existing job with `--format=export`, change `metadata.name` and the container
+> `args`, drop the creator/timestamp annotations, and replace. It reproduces all ~30 env
+> vars and 4 secret refs exactly, and because the value travels in a UTF-8 file it cannot
+> be mangled by the console codepage the way `--update-env-vars` can.
+>
+> **`purge_sessions` is security housekeeping, not cosmetics (v1.23.0).** `django_session`
+> is the default database session backend and its payloads are base64 — signed, not
+> encrypted — so anything a view puts in a session is readable by anyone who can read the
+> table, and rows outlived their cookies indefinitely. `parent_session_tokens` likewise kept
+> every magic link ever issued. Neither was purged before this release. Schedule it in
+> production like the others; skipping it is not a no-op.
 
 > **Fun Friday announcements** are NOT sent with `apply_async(eta=...)` (the ETA is silently
 > ignored in eager mode, which would send immediately). The form persists a

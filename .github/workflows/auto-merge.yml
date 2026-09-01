@@ -22,7 +22,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
         with:
           fetch-depth: 0
           # Use a PAT so that the push and PR creation trigger downstream CI.
@@ -107,6 +107,7 @@ jobs:
           # Delimiter form: a plain `k=v` line lets a value containing a newline
           # forge additional outputs. `%s` is a subject line so it cannot contain
           # one, but this is the shape that is safe by construction.
+
           {
             echo "last_msg<<__FAD_MSG_EOF__"
             echo "$LAST_MSG"
@@ -116,7 +117,7 @@ jobs:
       - name: Check CI status on development
         id: ci
         if: steps.conditions.outputs.should_merge == 'true'
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b  # v7
         env:
           LAST_SHA: ${{ steps.conditions.outputs.last_sha }}
         with:
@@ -201,10 +202,19 @@ jobs:
           git merge origin/development --no-ff -m "$MERGE_MSG"
           git push origin testing
 
+          # Two variants on purpose: the raw one is the PR title and the commit
+          # message (escaping there would literally write "&amp;" into git
+          # history), the _html one is for the email body only.
+          html_escape() {
+            printf '%s' "$1"               | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'                     -e 's/"/\&quot;/g' -e "s/'/\&#39;/g"
+          }
           {
             echo "merge_msg<<__FAD_MSG_EOF__"
             echo "$MERGE_MSG"
             echo "__FAD_MSG_EOF__"
+            echo "merge_msg_html<<__FAD_HTML_EOF__"
+            html_escape "$MERGE_MSG"; echo
+            echo "__FAD_HTML_EOF__"
           } >> "$GITHUB_OUTPUT"
           echo "Merged with message: $MERGE_MSG"
 
@@ -214,7 +224,7 @@ jobs:
           steps.conditions.outputs.should_merge == 'true' &&
           steps.ci.outputs.passed == 'true' &&
           steps.merge.conclusion == 'failure'
-        uses: dawidd6/action-send-mail@v18
+        uses: dawidd6/action-send-mail@94de994a9f6fffee200243214e17002e2920bb59  # v18
         with:
           server_address: smtp.gmail.com
           server_port: 465
@@ -275,7 +285,7 @@ jobs:
       - name: Create PR testing → main
         id: pr
         if: steps.merge.conclusion == 'success'
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b  # v7
         env:
           # Every value via env. Interpolating `${{ }}` into this body was a JS
           # injection sink twice over: `'${{ ... }}'` breaks out on a single
@@ -343,7 +353,7 @@ jobs:
 
       - name: Notify by email
         if: steps.merge.conclusion == 'success'
-        uses: dawidd6/action-send-mail@v18
+        uses: dawidd6/action-send-mail@94de994a9f6fffee200243214e17002e2920bb59  # v18
         with:
           server_address: smtp.gmail.com
           server_port: 465
@@ -362,7 +372,7 @@ jobs:
                 Acabamos de publicar la versión <strong>v${{ steps.conditions.outputs.new_version }}</strong>
                 (antes <strong>v${{ steps.conditions.outputs.old_version }}</strong>) en el
                 <strong>entorno de pruebas</strong>. Estos son los últimos cambios que ya podéis probar:
-                <em>${{ steps.merge.outputs.merge_msg }}</em>.
+                <em>${{ steps.merge.outputs.merge_msg_html }}</em>.
               </p>
               <p style="text-align:center; margin:24px 0;">
                 <a href="${{ secrets.TESTING_URL || 'http://34.26.130.187:8000' }}"
@@ -380,7 +390,7 @@ jobs:
               <table cellpadding="6" style="border-collapse:collapse; font-family:sans-serif; font-size:13px;">
                 <tr><td><strong>Entorno</strong></td><td>Pruebas (testing)</td></tr>
                 <tr><td><strong>Versión</strong></td><td><code>${{ steps.conditions.outputs.old_version }}</code> → <code>${{ steps.conditions.outputs.new_version }}</code></td></tr>
-                <tr><td><strong>Commit de fusión</strong></td><td><code>${{ steps.merge.outputs.merge_msg }}</code></td></tr>
+                <tr><td><strong>Commit de fusión</strong></td><td><code>${{ steps.merge.outputs.merge_msg_html }}</code></td></tr>
                 <tr><td><strong>Etiqueta de staging</strong></td><td><code>${{ steps.tag.outputs.tag }}</code></td></tr>
                 <tr><td><strong>Etiqueta de release (pendiente)</strong></td><td><code>v${{ steps.conditions.outputs.new_version }}</code> — se creará en <code>main</code> al fusionar la PR</td></tr>
                 <tr><td><strong>Repositorio</strong></td><td>${{ github.repository }}</td></tr>

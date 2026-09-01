@@ -88,6 +88,14 @@ if not DEBUG:
     if csrf_origins:
         CSRF_TRUSTED_ORIGINS = [origin.strip() for origin in csrf_origins.split(",")]
 
+# Content-Security-Policy: report-only until this is turned on.
+# Defined OUTSIDE the `not DEBUG` block above because SecurityHeadersMiddleware
+# runs in every environment — the whole point of report-only mode is to collect
+# violations in development before enforcing anywhere. The middleware reads it
+# with getattr(settings, "CSP_ENFORCE", False), so leaving it unassigned here
+# silently pinned CSP to report-only and made the documented env var a no-op.
+CSP_ENFORCE = os.getenv("CSP_ENFORCE", "False").lower() in ("true", "1", "t")
+
 # ============================================================================
 # ENVIRONMENT
 # ============================================================================
@@ -139,18 +147,81 @@ SUPPORT_EMAIL = os.getenv("SUPPORT_EMAIL", None)
 # reached directly, so X-Forwarded-For is ignored entirely.
 TRUSTED_PROXY_COUNT = int(os.getenv("TRUSTED_PROXY_COUNT", "1"))
 
-# The rate limiter is backed by the cache. LocMemCache (the default) is
-# PER-PROCESS, so with Gunicorn's 4 workers the effective limit is 4x what is
-# configured, and on Cloud Run it multiplies again per instance. Point
-# CACHE_URL at the Redis that Celery already uses to make the limit real.
+# The rate limiter is backed by the cache, so the cache backend decides whether
+# the limit is real. Django's default LocMemCache is PER-PROCESS: with Gunicorn's
+# 4 workers the login throttle was 4x what is configured, and on Cloud Run it
+# multiplied again per instance (maxScale 2 → up to 8 independent counters, so
+# "5 per minute" was really up to 40).
+#
+# Precedence:
+#   1. CACHE_URL   — Redis. Preferred when one is reachable.
+#   2. CACHE_DB=1  — the PostgreSQL cache table. Shared across every worker and
+#                    every instance, and adds no new infrastructure: sessions are
+#                    already database-backed, so the DB is on the request path
+#                    regardless. This is what production uses — Memorystore plus
+#                    the VPC connector it requires costs more per month than the
+#                    entire rest of the stack, for 3-10 users.
+#   3. neither     — LocMemCache. Fine for development and the test suite.
+#
+# `createcachetable` is idempotent and runs from entrypoint.sh, so option 2 needs
+# no migration. Do NOT point CACHE_URL at an unreachable host: `core.rate_limit`
+# calls `cache.add()` without a fallback, so an unreachable cache turns every
+# login into a 500.
 if cache_url := os.getenv("CACHE_URL", "").strip():
     CACHES = {"default": {"BACKEND": "django.core.cache.backends.redis.RedisCache", "LOCATION": cache_url}}
+elif os.getenv("CACHE_DB", "False").lower() in ("true", "1", "t"):
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.db.DatabaseCache",
+            "LOCATION": os.getenv("CACHE_DB_TABLE", "django_cache"),
+        }
+    }
 
 # ============================================================================
 # CSRF CONFIGURATION
 # ============================================================================
 CSRF_COOKIE_HTTPONLY = os.getenv("CSRF_COOKIE_HTTPONLY", "True" if not DEBUG else "False").lower() == "true"
 CSRF_COOKIE_SAMESITE = os.getenv("CSRF_COOKIE_SAMESITE", "Strict" if not DEBUG else "Lax")
+
+# ============================================================================
+# PRODUCTION POSTURE GUARD
+# ============================================================================
+# Every security setting above is `os.getenv(..., "True")` — overridable, which
+# is what lets .env.testing legitimately run the QA VM over plain HTTP. The cost
+# is that a typo, a stale .env line, or a value copied across from
+# .env.testing silently disables HSTS or ships non-Secure session cookies in
+# PRODUCTION, and nothing in code, tests, CI or the deploy pipeline notices.
+#
+# So assert the non-negotiables when DJANGO_ENV=production, the same way
+# DJANGO_SECRET_KEY is already asserted. This is deliberately a hard failure:
+# Cloud Run keeps serving the previous revision when a new one cannot start, so
+# a misconfigured deploy stalls loudly instead of quietly downgrading the
+# security posture of a live system holding minors' personal data.
+#
+# `testing` and `development` are exempt by design — do not "simplify" this by
+# keying it on `not DEBUG`, which would break the testing VM.
+if ENVIRONMENT == "production":
+    _posture_errors = []
+
+    if DEBUG:
+        _posture_errors.append("DJANGO_DEBUG must be False in production")
+    if "*" in ALLOWED_HOSTS:
+        _posture_errors.append("DJANGO_ALLOWED_HOSTS must not contain '*' in production")
+    for _name in ("SESSION_COOKIE_SECURE", "CSRF_COOKIE_SECURE", "SECURE_SSL_REDIRECT"):
+        # These live inside the `if not DEBUG` block above, so a production run
+        # with DEBUG=True leaves them undefined — hence the getattr default.
+        if not globals().get(_name, False):
+            _posture_errors.append(f"{_name} must be True in production")
+    if not SESSION_COOKIE_HTTPONLY:
+        _posture_errors.append("SESSION_COOKIE_HTTPONLY must be True in production")
+    if globals().get("SECURE_HSTS_SECONDS", 0) < 31536000:
+        _posture_errors.append("SECURE_HSTS_SECONDS must be at least 31536000 (1 year) in production")
+
+    if _posture_errors:
+        raise ValueError(
+            "⚠️  Insecure production configuration — refusing to start:\n  - " + "\n  - ".join(_posture_errors)
+        )
+    del _posture_errors
 
 # Installed packages: httpx celery gspread pytest pandas markdown dotenv
 INSTALLED_APPS = [  # https://www.djangoproject.com/
@@ -160,9 +231,14 @@ INSTALLED_APPS = [  # https://www.djangoproject.com/
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
-    "rest_framework",  # https://www.django-rest-framework.org/
-    "corsheaders",  # https://github.com/adamchainz/django-cors-headers
-    "django_filters",  # https://django-filter.readthedocs.io/en/main/
+    # `rest_framework`, `corsheaders` and `django_filters` were REMOVED (v1.23.0).
+    # None of them was used: there is not a single APIView, serializer or
+    # ViewSet in the tree, CorsMiddleware was never added to MIDDLEWARE, and no
+    # filter backend is configured. Each was a latent misconfiguration rather
+    # than a feature — DRF with no REST_FRAMEWORK settings defaults every view
+    # to AllowAny, and adding CorsMiddleware without CORS settings is one line
+    # away from relaxing same-origin. Re-adding `rest_framework` REQUIRES
+    # setting DEFAULT_PERMISSION_CLASSES to IsAuthenticated in the same commit.
     "django_extensions",  # https://django-extensions.readthedocs.io/en/latest/
     # https://django-storages.readthedocs.io/en/latest/
     # https://github.com/jazzband/django-redis
@@ -190,6 +266,7 @@ MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
     "whitenoise.middleware.WhiteNoiseMiddleware",  # Debe ir después de SecurityMiddleware
     "core.middleware.NoHtmlCacheMiddleware",  # no-cache on dynamic HTML (fresh asset hashes)
+    "core.middleware.SecurityHeadersMiddleware",  # CSP + Permissions-Policy
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
@@ -269,7 +346,11 @@ AUTH_PASSWORD_VALIDATORS = [
         "NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator",
     },
     {
+        # Django's default is 8. These accounts are effectively superusers over a
+        # database of minors' personal data, and the login throttle is per-IP
+        # with no lockout, so the password is the whole wall.
         "NAME": "django.contrib.auth.password_validation.MinimumLengthValidator",
+        "OPTIONS": {"min_length": 12},
     },
     {
         "NAME": "django.contrib.auth.password_validation.CommonPasswordValidator",

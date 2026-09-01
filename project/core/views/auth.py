@@ -160,12 +160,18 @@ def logout_view(request):
 
 # ── Google OAuth helpers ─────────────────────────────────────────────
 
+# Identity only. `gmail.send` and `spreadsheets` were requested here until
+# v1.23.0 and nothing ever used them: email goes out over SMTP with an app
+# password (EMAIL_BACKEND is the SMTP backend), and the Sheets export
+# authenticates as a SERVICE ACCOUNT via core.services.google_sheets_service.
+# Asking for them meant every sign-in minted a token that could send mail as the
+# academy and read/write its spreadsheets — see the credential-storage note in
+# google_oauth_callback. Do not add scopes here for a feature that does not read
+# `credentials` in this module.
 _GOOGLE_SCOPES = [
     "openid",
     "https://www.googleapis.com/auth/userinfo.email",
     "https://www.googleapis.com/auth/userinfo.profile",
-    "https://www.googleapis.com/auth/gmail.send",
-    "https://www.googleapis.com/auth/spreadsheets",
 ]
 
 _oauth_log = _logging.getLogger(__name__)
@@ -252,8 +258,11 @@ def google_oauth_redirect(request):
     callback_uri = _google_callback_uri(request)
     _oauth_log.info("OAuth redirect → callback_uri=%s", callback_uri)
     flow = _build_flow(client_id, client_secret, callback_uri)
+    # No `access_type="offline"`: this flow authenticates a human at the keyboard
+    # and never acts on their behalf later, so there is nothing for a refresh
+    # token to be used for — and a refresh token is the one OAuth artefact worth
+    # stealing, because it does not expire.
     authorization_url, state = flow.authorization_url(
-        access_type="offline",
         include_granted_scopes="true",
         prompt="select_account",
     )
@@ -326,13 +335,31 @@ def google_oauth_callback(request):
             client_id,
         )
         user_email = id_info.get("email", "")
+        email_verified = bool(id_info.get("email_verified"))
         user_name = id_info.get("given_name", user_email.split("@")[0])
     except Exception:
         _oauth_log.exception("OAuth id_token verification failed")
         messages.error(request, "Error al verificar la identidad de Google.")
         return redirect("login")
 
-    # Backend-only check — email never exposed to frontend
+    # Backend-only check — email never exposed to frontend.
+    #
+    # Fail CLOSED on empty values. `allowed_email` falls back through three env
+    # vars to "", and `id_info.get("email", "")` is "" when the token carries no
+    # email claim — so a bare `!=` comparison let "" == "" through and handed a
+    # SUPERUSER account to a token with no identity in it. Both sides must be
+    # non-empty, and Google must say the address is verified: an unverified
+    # claim is an address the holder has not proven they control.
+    if not allowed_email:
+        _oauth_log.error("OAuth allow-list is empty — set GOOGLE_ALLOWED_EMAIL. Refusing sign-in.")
+        messages.error(request, "❌ El acceso con Google no está configurado.")
+        return redirect("login")
+
+    if not user_email or not email_verified:
+        _oauth_log.warning("OAuth rejected: email_present=%s verified=%s", bool(user_email), email_verified)
+        messages.error(request, "❌ Esta cuenta de Google no tiene acceso.")
+        return redirect("login")
+
     if user_email.lower() != allowed_email.lower():
         _oauth_log.warning("OAuth email mismatch: got=%s expected=%s", safe_log(user_email), allowed_email)
         messages.error(request, "❌ Esta cuenta de Google no tiene acceso.")
@@ -344,25 +371,16 @@ def google_oauth_callback(request):
     # the second factor — the OAuth-confirmed email is only one factor.
     if _needs_two_factor(user):
         _stage_pending_2fa(request, user)
-        # Preserve the Google creds so the verify step can hand them back
-        # after the OTP succeeds.
-        request.session["_2fa_pending_google_creds"] = {
-            "token": credentials.token,
-            "refresh_token": credentials.refresh_token,
-            "token_uri": credentials.token_uri,
-            "client_id": credentials.client_id,
-        }
         return redirect("two_factor_verify")
 
     _finalize_session_login(request, user, user_name, google=True)
 
-    # Store credentials so other views can reuse them for Gmail / Sheets
-    request.session["google_credentials"] = {
-        "token": credentials.token,
-        "refresh_token": credentials.refresh_token,
-        "token_uri": credentials.token_uri,
-        "client_id": credentials.client_id,
-        "client_secret": credentials.client_secret,
-        "scopes": list(credentials.scopes) if credentials.scopes else [],
-    }
+    # Nothing is kept from `credentials`. Until v1.23.0 this stored the access
+    # token, the REFRESH token and the OAuth CLIENT SECRET in the session — and
+    # SESSION_ENGINE is the database backend, so each of those landed in a
+    # `django_session` row as base64 (signed, not encrypted), captured by every
+    # Cloud SQL backup and by scripts/export_prod_db.sh. No view ever read them:
+    # the only consumer was the 2FA hand-off, which just wrote them back. If a
+    # feature ever genuinely needs Google API access, give it a service account
+    # like google_sheets_service has — do not re-add this.
     return redirect("home")

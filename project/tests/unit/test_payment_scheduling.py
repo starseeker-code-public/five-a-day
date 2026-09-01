@@ -16,12 +16,39 @@ from billing.services.payment_service import PaymentService
 pytestmark = pytest.mark.django_db
 
 
+@pytest.fixture
+def elapsed_year_enrollment(student, enrollment_type_new_student, site_config):
+    """A monthly enrollment whose academic year is entirely in the past.
+
+    The generator only issues periods that have already STARTED, so "the whole
+    Sep–Jun schedule is created" is only observable once the year has elapsed.
+    The shared `active_enrollment` fixture deliberately tracks the *current*
+    course (the student list filters on `relevant_academic_years()`), where at
+    most a couple of periods have started — so these two tests pin their own
+    finished year and assert the same thing on any day of any year.
+    """
+    return Enrollment.objects.create(
+        student=student,
+        enrollment_type=enrollment_type_new_student,
+        enrollment_period_start=date(2025, 9, 15),
+        enrollment_period_end=date(2026, 6, 27),
+        academic_year="2025-2026",
+        schedule_type="full_time",
+        payment_modality="monthly",
+        enrollment_amount=Decimal("54.00"),
+        discount_percentage=Decimal("0.00"),
+        final_amount=Decimal("54.00"),
+        status="active",
+        enrollment_date=date(2025, 9, 1),
+    )
+
+
 class TestScheduleAcademicYearPayments:
-    def test_monthly_generates_full_year(self, active_enrollment, parent):
-        created = PaymentService.schedule_academic_year_payments(active_enrollment, parent)
+    def test_monthly_generates_full_year(self, elapsed_year_enrollment, parent):
+        created = PaymentService.schedule_academic_year_payments(elapsed_year_enrollment, parent)
         assert created == 10  # Sep–Jun inclusive
 
-        monthly = Payment.objects.filter(enrollment=active_enrollment, payment_type="monthly")
+        monthly = Payment.objects.filter(enrollment=elapsed_year_enrollment, payment_type="monthly")
         assert monthly.count() == 10
         assert all(p.payment_status == "pending" for p in monthly)
 
@@ -29,11 +56,11 @@ class TestScheduleAcademicYearPayments:
         assert due[0] == date(2025, 9, 30)  # due at month end
         assert due[-1] == date(2026, 6, 30)
 
-    def test_idempotent(self, active_enrollment, parent):
-        PaymentService.schedule_academic_year_payments(active_enrollment, parent)
-        second = PaymentService.schedule_academic_year_payments(active_enrollment, parent)
+    def test_idempotent(self, elapsed_year_enrollment, parent):
+        PaymentService.schedule_academic_year_payments(elapsed_year_enrollment, parent)
+        second = PaymentService.schedule_academic_year_payments(elapsed_year_enrollment, parent)
         assert second == 0
-        assert Payment.objects.filter(enrollment=active_enrollment, payment_type="monthly").count() == 10
+        assert Payment.objects.filter(enrollment=elapsed_year_enrollment, payment_type="monthly").count() == 10
 
     def test_quarterly_anchors_to_the_enrollment_month(
         self, student, enrollment_type_returning_student, site_config, parent

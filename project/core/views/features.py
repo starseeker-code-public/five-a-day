@@ -22,6 +22,7 @@ from django.views.decorators.http import require_http_methods
 
 from core.decorators import qa_access_required
 from core.models import BacklogTask, Feature
+from core.utils import csv_safe
 from core.views.testing_tools import VALID_PRIORITIES, email_backlog_task_created
 
 logger = logging.getLogger(__name__)
@@ -387,7 +388,9 @@ def export_features(request):
         fieldnames = list(rows[0].keys()) if rows else ["id", "title", "description", "status", "deadline"]
         writer = csv.DictWriter(buffer, fieldnames=fieldnames)
         writer.writeheader()
-        writer.writerows(rows)
+        # Titles and descriptions are free text; a leading =/+/-/@ would be
+        # evaluated as a formula by whoever opens the export.
+        writer.writerows([{k: csv_safe(v) for k, v in row.items()} for row in rows])
         # BOM so Excel opens the accented Spanish text correctly.
         response = HttpResponse("﻿" + buffer.getvalue(), content_type="text/csv; charset=utf-8")
         response["Content-Disposition"] = f'attachment; filename="{filename}.csv"'

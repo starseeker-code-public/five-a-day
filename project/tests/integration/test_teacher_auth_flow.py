@@ -206,7 +206,7 @@ class TestOAuthCreatesSuperuser:
             patch("core.views.auth._build_flow", return_value=mock_flow),
             patch(
                 "google.oauth2.id_token.verify_oauth2_token",
-                return_value={"email": "allowed@example.com", "given_name": "Al"},
+                return_value={"email": "allowed@example.com", "email_verified": True, "given_name": "Al"},
             ),
         ):
             response = client.get(reverse("google_oauth_callback") + "?state=abc&code=x")
@@ -252,7 +252,7 @@ class TestOAuthCreatesSuperuser:
             patch("core.views.auth._build_flow", return_value=mock_flow),
             patch(
                 "google.oauth2.id_token.verify_oauth2_token",
-                return_value={"email": "promoted@example.com", "given_name": "P"},
+                return_value={"email": "promoted@example.com", "email_verified": True, "given_name": "P"},
             ),
         ):
             response = client.get(reverse("google_oauth_callback") + "?state=abc&code=x")
@@ -295,7 +295,7 @@ class TestOAuthCreatesSuperuser:
             patch("core.views.auth._build_flow", return_value=mock_flow),
             patch(
                 "google.oauth2.id_token.verify_oauth2_token",
-                return_value={"email": "linked@example.com", "given_name": "Linked"},
+                return_value={"email": "linked@example.com", "email_verified": True, "given_name": "Linked"},
             ),
         ):
             client.get(reverse("google_oauth_callback") + "?state=abc&code=x")

@@ -34,7 +34,15 @@ class Teacher(models.Model):
     two_factor_backup_codes = models.JSONField(
         default=list,
         blank=True,
-        help_text="Hashed one-time backup codes (list of sha256 hex strings). Consumed on use.",
+        help_text="Hashed one-time backup codes. Consumed on use.",
+    )
+    two_factor_last_counter = models.BigIntegerField(
+        null=True,
+        blank=True,
+        help_text=(
+            "Highest TOTP time-step already accepted. Rejects replay of a code "
+            "that is still inside its validity window (RFC 6238 §5.2)."
+        ),
     )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

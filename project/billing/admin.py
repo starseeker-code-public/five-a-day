@@ -13,6 +13,7 @@ from billing.models import (
     Payment,
     SiteConfiguration,
 )
+from core.utils import csv_safe_row
 
 admin.site.register(EnrollmentType)
 
@@ -206,21 +207,25 @@ class PaymentAdmin(admin.ModelAdmin):
         )
 
         for payment in queryset:
+            # csv_safe_row: see core.utils — names/concepts are free text and a
+            # leading =/+/-/@ turns the cell into a spreadsheet formula.
             writer.writerow(
-                [
-                    payment.id,
-                    payment.student.full_name if payment.student else "",
-                    payment.parent.full_name if payment.parent else "",
-                    payment.concept,
-                    payment.amount,
-                    payment.currency,
-                    payment.get_payment_method_display(),
-                    payment.get_payment_status_display(),
-                    payment.due_date.strftime("%Y-%m-%d") if payment.due_date else "",
-                    payment.payment_date.strftime("%Y-%m-%d") if payment.payment_date else "",
-                    payment.reference_number,
-                    payment.created_at.strftime("%Y-%m-%d %H:%M"),
-                ]
+                csv_safe_row(
+                    [
+                        payment.id,
+                        payment.student.full_name if payment.student else "",
+                        payment.parent.full_name if payment.parent else "",
+                        payment.concept,
+                        payment.amount,
+                        payment.currency,
+                        payment.get_payment_method_display(),
+                        payment.get_payment_status_display(),
+                        payment.due_date.strftime("%Y-%m-%d") if payment.due_date else "",
+                        payment.payment_date.strftime("%Y-%m-%d") if payment.payment_date else "",
+                        payment.reference_number,
+                        payment.created_at.strftime("%Y-%m-%d %H:%M"),
+                    ]
+                )
             )
 
         return response

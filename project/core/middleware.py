@@ -28,9 +28,89 @@ class QAErrorEmailMiddleware:
         response = self.get_response(request)
         return response
 
+    # Form fields whose values must never reach an inbox. Matched
+    # case-insensitively against the `key` of each `key=value` pair in the body
+    # preview below.
+    REDACT_KEYS = frozenset(
+        {
+            "password",
+            "password1",
+            "password2",
+            "new_password1",
+            "new_password2",
+            "old_password",
+            "code",
+            "token",
+            "csrfmiddlewaretoken",
+            "secret",
+            "dni",
+            "iban",
+        }
+    )
+
+    @classmethod
+    def _redact_body(cls, raw: str) -> str:
+        """Blank the values of credential-bearing fields in a request body.
+
+        The preview is genuinely useful for debugging a QA failure, but an
+        exception raised on the login POST would otherwise email a working
+        password in cleartext, and the same applies to the password-reset
+        confirm form and the 2FA code. Redact rather than drop the preview.
+
+        Handles BOTH encodings a form can arrive in. Only doing urlencoded
+        would cover the login form but silently miss every multipart POST —
+        which is what the backlog-screenshot endpoint sends, and what Django's
+        own RequestFactory produces by default.
+        """
+        if "Content-Disposition:" in raw and "name=" in raw:
+            return cls._redact_multipart(raw)
+        if "=" not in raw:
+            return raw
+        out = []
+        for pair in raw.split("&"):
+            key, sep, _value = pair.partition("=")
+            if sep and key.strip().lower() in cls.REDACT_KEYS:
+                out.append(f"{key}=[REDACTED]")
+            else:
+                out.append(pair)
+        return "&".join(out)
+
+    @classmethod
+    def _redact_multipart(cls, raw: str) -> str:
+        """Blank the payload of any multipart part whose name is sensitive.
+
+        Deliberately regex-based on the already-truncated 500-char preview
+        rather than a real MIME parse: the preview is usually a fragment with no
+        closing boundary, so a parser would simply fail and leave the value in
+        place. Matches `name="x"` and everything up to the next boundary.
+        """
+        import re
+
+        def _replace(match: "re.Match[str]") -> str:
+            name = match.group("name")
+            if name.strip().lower() not in cls.REDACT_KEYS:
+                return match.group(0)
+            return f"{match.group('head')}[REDACTED]{match.group('tail')}"
+
+        pattern = re.compile(
+            r'(?P<head>name="(?P<name>[^"]+)"[^\r\n]*\r?\n(?:[^\r\n]+\r?\n)*\r?\n)'
+            r"(?P<value>.*?)"
+            r"(?P<tail>(?=\r?\n--)|\Z)",
+            re.DOTALL,
+        )
+        return pattern.sub(_replace, raw)
+
     def process_exception(self, request, exception):
         try:
             from core.models import QAConfiguration
+
+            # QA instrumentation, so it must never run outside the QA
+            # environment. The flag lives in the database, and the middleware
+            # used to honour it wherever it was set — including production,
+            # where the dashboard that toggles it is unreachable but the row is
+            # still writable from a shell.
+            if not getattr(settings, "IS_TESTING_ENV", False):
+                return None
 
             config = QAConfiguration.get_config()
             if not config.error_email_enabled:
@@ -48,7 +128,7 @@ class QAErrorEmailMiddleware:
             path = request.get_full_path()
             body_preview = ""
             try:
-                body_preview = request.body[:500].decode("utf-8", errors="replace")
+                body_preview = self._redact_body(request.body[:500].decode("utf-8", errors="replace"))
             except Exception:
                 # Best-effort only. `request.body` raises if the stream was
                 # already consumed (file uploads, streaming parsers); the error
@@ -253,4 +333,66 @@ class NoHtmlCacheMiddleware:
         content_type = response.get("Content-Type", "")
         if content_type.startswith("text/html") and not response.has_header("Cache-Control"):
             response["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        return response
+
+
+class SecurityHeadersMiddleware:
+    """Adds Content-Security-Policy and Permissions-Policy to HTML responses.
+
+    Django's SecurityMiddleware covers HSTS, nosniff, referrer-policy and
+    X-Frame-Options, but has never emitted a CSP. This app had three stored-XSS
+    holes in v1.15 (history messages reachable by a non-admin teacher, the
+    payment autocomplete, and inlined JSON), so a policy that neutralises the
+    *consequences* of the next one is worth having even though the escaping
+    discipline currently holds.
+
+    Report-only by default. The app loads Tailwind from a CDN and carries inline
+    `<script>` config blocks and inline `style=` attributes, so an enforcing
+    policy needs `'unsafe-inline'` for both — which weakens it considerably
+    against injected markup. Run report-only first, watch the console, then set
+    `CSP_ENFORCE=True` once the reports are clean.
+
+    `frame-ancestors`, `base-uri` and `object-src` are the parts that carry real
+    weight here and cost nothing: they cannot be bypassed by inline script and
+    they close clickjacking, `<base>` hijacking and legacy plugin vectors.
+    """
+
+    #: Kept as a tuple of (directive, value) so the order is stable in tests.
+    DIRECTIVES = (
+        ("default-src", "'self'"),
+        # 'unsafe-inline' is required by the inline config blocks in base.html
+        # and the pre-paint theme script. Tailwind is served from its CDN.
+        ("script-src", "'self' 'unsafe-inline' https://cdn.tailwindcss.com"),
+        ("style-src", "'self' 'unsafe-inline' https://fonts.googleapis.com"),
+        ("font-src", "'self' https://fonts.gstatic.com data:"),
+        ("img-src", "'self' data: blob:"),
+        ("connect-src", "'self'"),
+        # No plugins, no <base> rewriting, no framing. Not weakened by
+        # 'unsafe-inline' above, which is what makes these the useful part.
+        ("object-src", "'none'"),
+        ("base-uri", "'none'"),
+        ("frame-ancestors", "'none'"),
+        ("form-action", "'self'"),
+    )
+
+    PERMISSIONS_POLICY = "geolocation=(), microphone=(), camera=(), payment=(), usb=(), interest-cohort=()"
+
+    def __init__(self, get_response):
+        self.get_response = get_response
+        self.policy = "; ".join(f"{name} {value}" for name, value in self.DIRECTIVES)
+
+    def __call__(self, request):
+        response = self.get_response(request)
+
+        # HTML only. Adding a CSP to a PDF or a CSV download achieves nothing
+        # and shows up as noise in report collectors.
+        if not response.get("Content-Type", "").startswith("text/html"):
+            return response
+
+        enforce = getattr(settings, "CSP_ENFORCE", False)
+        header = "Content-Security-Policy" if enforce else "Content-Security-Policy-Report-Only"
+        if not response.has_header(header):
+            response[header] = self.policy
+        if not response.has_header("Permissions-Policy"):
+            response["Permissions-Policy"] = self.PERMISSIONS_POLICY
         return response
