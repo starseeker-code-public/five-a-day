@@ -261,7 +261,13 @@ jobs:
     runs-on: ubuntu-latest
     environment:
       name: production
-      url: ${{ secrets.PRODUCTION_URL || 'https://fiveaday-332600671945.europe-southwest1.run.app' }}
+      # Hard-coded literal: the `secrets` context is not allowed in
+      # `environment.url`, and GitHub rejects the ENTIRE workflow file as
+      # invalid over it (a zero-job failed run named after the file path) —
+      # which is how v1.23.0 landed on main with no working production deploy.
+      # The URL is public anyway: it is the fallback literal used in every
+      # email step of this file.
+      url: https://fiveaday-332600671945.europe-southwest1.run.app
 
     permissions:
       contents: read

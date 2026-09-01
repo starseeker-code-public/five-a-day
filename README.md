@@ -20,7 +20,7 @@ Built to centralize student records, automate billing cycles, and streamline par
 ### Project Status
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v1.23.0-brightgreen?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-v1.23.1-brightgreen?style=flat-square" alt="Version">
   &nbsp;|&nbsp;
   <a href="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml?query=branch%3Amain"><img src="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml/badge.svg?branch=main&style=flat-square" alt="CI main"></a>
   &nbsp;|&nbsp;
@@ -41,9 +41,9 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 | Version | Date | Description |
 |---------|------|-------------|
-| **v1.23.0** | 2026-09-01 | Security review: CI/CD deploys plus 20 hardening fixes |
+| **v1.23.1** | 2026-09-01 | Fix invalid workflow files that blocked every CI/CD deploy |
+| v1.23.0 | 2026-09-01 | Security review: CI/CD deploys plus 20 hardening fixes |
 | v1.22.1 | 2026-08-31 | Version derived from `pyproject.toml`, drift now fails the build |
-| v1.22.0 | 2026-08-31 | Quarters anchored to enrollment month, first period prorated |
 
 ---
 
@@ -150,8 +150,29 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 ## Version History & Roadmap
 
-<details id="v1230" open>
-<summary><strong>v1.23.0 — Automated deploys, and a security review acted on (current)</strong></summary>
+<details id="v1231" open>
+<summary><strong>v1.23.1 — Fix the invalid workflow files that blocked every CI/CD deploy (current)</strong></summary>
+
+**CI/CD — the v1.23.0 pipelines never actually parsed**
+
+- All three v1.23.0 workflow rewrites (`deploy-production.yml`, `deploy-testing.yml`,
+  `auto-merge.yml`) were rejected by GitHub's workflow validator the moment they reached
+  `main`: every push produced instant zero-job failed runs named after the file path, no
+  production deploy was ever armed for v1.23.0, and — `main` being the default branch —
+  the hourly auto-merge and the nightly testing deploy schedules were dead too.
+- Two causes, three fixes. The `secrets` context is not allowed in `environment.url`
+  (`Unrecognized named-value: 'secrets'`), so both deploy workflows now hard-code the
+  public URL literal there instead of `secrets.*_URL ||` fallbacks. And a JS comment
+  *inside* `auto-merge.yml`'s `github-script` body documented the injection fix with a
+  literal empty-expression token — unlike YAML `#` comments, text inside `run:`/`script:`
+  scalars **is** template-evaluated, and an empty expression invalidates the whole file
+  (`An expression was expected`). The comment is reworded; the token appears nowhere.
+- All workflow files now lint clean under `actionlint` (style-level shellcheck nits aside).
+
+</details>
+
+<details id="v1230">
+<summary><strong>v1.23.0 — Automated deploys, and a security review acted on</strong></summary>
 
 **CI/CD — deploys stop being a by-hand `/deploy` run**
 
