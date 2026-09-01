@@ -122,9 +122,25 @@ jobs:
             // Exclude this workflow itself from the check
             const relevant = data.check_runs.filter(r => r.name !== 'Check and merge');
 
+            // Fail CLOSED. Zero check runs does not mean "healthy", it means "unknown":
+            // a commit pushed with GITHUB_TOKEN never triggers workflows, Actions may be
+            // disabled, a run may have been deleted, or the workflow file may be invalid.
+            // In every one of those cases we have no evidence the code is good.
             if (relevant.length === 0) {
-              console.log('No CI runs found on this commit — proceeding.');
-              core.setOutput('passed', 'true');
+              console.log('No CI runs found on this commit — refusing to merge.');
+              core.setOutput('passed', 'false');
+              return;
+            }
+
+            // Requiring the CI jobs BY NAME closes the second hole: CodeQL also runs on
+            // development, so "some check succeeded" is not the same as "CI ran". These
+            // three must be present, or CI effectively did not run on this commit.
+            const REQUIRED = ['Lint', 'Type check', 'Tests'];
+            const present = new Set(relevant.map(r => r.name));
+            const missing = REQUIRED.filter(n => !present.has(n));
+            if (missing.length > 0) {
+              console.log('Required checks never ran:', missing.join(', '));
+              core.setOutput('passed', 'false');
               return;
             }
 

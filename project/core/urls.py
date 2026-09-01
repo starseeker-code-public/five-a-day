@@ -7,18 +7,25 @@ from core.views import (
     BrandedPasswordResetView,
     all_info,
     api_create_backlog_task,
+    # Desarrollos (QA)
+    api_create_feature,
+    api_create_feature_task,
     api_mark_ready,
     api_seed_database,
     api_toggle_error_email,
     api_update_backlog_task,
+    api_update_feature,
     complete_todo,
     # Stripe (v1.11)
     create_checkout_link,
     # Todos
     create_todo,
     export_backlog_tasks,
+    export_features,
     # Google Sheets export (v1.2)
     export_to_sheets,
+    feature_detail_view,
+    features_view,
     fun_friday_view,
     google_oauth_callback,
     google_oauth_redirect,
@@ -130,6 +137,17 @@ urlpatterns = [
     path("api/testing/backlog/create/", api_create_backlog_task, name="api_create_backlog_task"),
     path("api/testing/backlog/<int:task_id>/update/", api_update_backlog_task, name="api_update_backlog_task"),
     path("api/testing/backlog/export/", export_backlog_tasks, name="export_backlog_tasks"),
+    # Desarrollos (QA epics) — backlog tasks are broken out of these
+    path("testing/features/", features_view, name="features"),
+    path("testing/features/<int:feature_id>/", feature_detail_view, name="feature_detail"),
+    path("api/testing/features/create/", api_create_feature, name="api_create_feature"),
+    path("api/testing/features/<int:feature_id>/update/", api_update_feature, name="api_update_feature"),
+    path(
+        "api/testing/features/<int:feature_id>/tasks/create/",
+        api_create_feature_task,
+        name="api_create_feature_task",
+    ),
+    path("api/testing/features/export/", export_features, name="export_features"),
     path("api/testing/error-email/toggle/", api_toggle_error_email, name="api_toggle_error_email"),
     path("api/testing/ready/", api_mark_ready, name="api_mark_ready"),
     # Error test pages

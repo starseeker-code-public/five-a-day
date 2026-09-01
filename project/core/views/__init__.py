@@ -50,6 +50,16 @@ from core.views.expenses import (
     update_expense,
 )
 
+# Desarrollos / features board (QA)
+from core.views.features import (
+    api_create_feature,
+    api_create_feature_task,
+    api_update_feature,
+    export_features,
+    feature_detail_view,
+    features_view,
+)
+
 # Fun Friday attendance
 from core.views.fun_friday_attendance import (
     add_fun_friday_attendance,

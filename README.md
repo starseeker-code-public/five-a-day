@@ -10,7 +10,7 @@
 
 <p align="center">
   <a href="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml"><img src="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
-  <a href="https://codecov.io/gh/starseeker-code-public/five-a-day"><img src="https://codecov.io/gh/starseeker-code-public/five-a-day/branch/main/graph/badge.svg" alt="Coverage"></a>
+  <img src="https://img.shields.io/badge/coverage-95.16%25-brightgreen" alt="Coverage">
 </p>
 
 ---
@@ -20,11 +20,11 @@ Built to centralize student records, automate billing cycles, and streamline par
 ### Project Status
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v1.20.0-brightgreen?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-v1.21.1-brightgreen?style=flat-square" alt="Version">
   &nbsp;|&nbsp;
   <a href="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml?query=branch%3Amain"><img src="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml/badge.svg?branch=main&style=flat-square" alt="CI main"></a>
   &nbsp;|&nbsp;
-  <a href="https://codecov.io/gh/starseeker-code-public/five-a-day"><img src="https://codecov.io/gh/starseeker-code-public/five-a-day/branch/main/graph/badge.svg" alt="Coverage"></a>
+  <img src="https://img.shields.io/badge/coverage-95.16%25-brightgreen?style=flat-square" alt="Coverage">
   &nbsp;|&nbsp;
   <a href="https://github.com/starseeker-code-public/five-a-day/actions/workflows/scorecard.yml"><img src="https://img.shields.io/badge/OpenSSF%20Scorecard-monitored-blueviolet?style=flat-square" alt="OSSF Scorecard"></a>
   &nbsp;|&nbsp;
@@ -41,9 +41,9 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 | Version | Date | Description |
 |---------|------|-------------|
-| **v1.20.0** | 2026-08-30 | Spanish dates and labels, editable expenses, special matrícula |
-| v1.17.4 | 2026-08-30 | Password eye drawn as inline SVG, not a webfont glyph |
-| v1.17.3 | 2026-08-30 | Enrollment types are matrícula categories, not cadences |
+| **v1.21.1** | 2026-08-31 | Hadolint action bumped to v3.5.0 (Hadolint 2.15.1) |
+| v1.21.0 | 2026-08-30 | Desarrollos board — Jira-style epics feeding the QA backlog |
+| v1.20.0 | 2026-08-30 | Spanish dates and labels, editable expenses, special matrícula |
 
 ---
 
@@ -150,8 +150,92 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 ## Version History & Roadmap
 
-<details id="v1200" open>
-<summary><strong>v1.20.0 — Spanish dates and labels, editable expenses, a special matrícula (current)</strong></summary>
+<details id="v1211" open>
+<summary><strong>v1.21.1 — Hadolint action bumped to v3.5.0 (current)</strong></summary>
+
+**CI tooling**
+
+- Dependabot (PR #46) moved the Lint job's Dockerfile linter from
+  `hadolint/hadolint-action@v3.4.0` to `v3.5.0` in `.github/workflows/ci.yml`. The action release
+  carries the underlying **Hadolint binary up to v2.15.1**; no rule configuration changed.
+- The `Dockerfile`'s existing suppressions are still required and were left alone — the two
+  `# hadolint ignore=DL3008` pragmas on the `apt-get` layers, and the numeric `USER` that keeps
+  DL3066 quiet because a name-based user can't be resolved by the linter.
+- No application code changed in this release.
+
+</details>
+
+<details id="v1210">
+<summary><strong>v1.21.0 — Desarrollos: a Jira-style epic board feeding the QA backlog</strong></summary>
+
+**A backlog of tickets was the only unit of work the QA panel understood**
+
+- `/testing/` could record a defect, but nothing described the *thing being built* that a
+  handful of those tickets add up to. New **`Feature`** model (`core`, table `features`,
+  Spanish `verbose_name` "Desarrollo") is that missing unit — an epic in Jira's sense.
+- New board at **`/testing/features/`** and a detail page at `/testing/features/<id>/`, both
+  behind `@qa_access_required` like the rest of the QA panel (admin Teacher + `IS_TESTING_ENV`;
+  everyone else gets a 404). Reached from the new **Desarrollos** card on `/testing/`.
+
+**A development is deliberately not a backlog task**
+
+- **No priority.** An epic is scheduled by its **deadline**, not ranked against its siblings —
+  priority stays on the individual tasks, where it means something.
+- **No screenshot.** A development describes work to build, not a defect somebody saw on
+  screen, so `api_create_feature` is JSON-only and has no multipart branch.
+- **`deadline` is nullable and `None` by default.** A development is recorded long before
+  anyone commits to a date, and an invented date is worse than no date. Overdue (deadline
+  passed, status not `done`) turns the pill red; `is_overdue` never fires on a done epic.
+- **The description ships with a Jira-style template** — Resumen / Contexto / Objetivo /
+  Alcance / Fuera de alcance / Criterios de aceptación / Notas técnicas — rendered from the
+  server-side `FEATURE_DESCRIPTION_TEMPLATE` so the board and the detail page cannot drift.
+
+**Tasks are broken out of a development and land in the backlog**
+
+- `api_create_feature_task` creates an ordinary `BacklogTask` with `feature` set, so it shows
+  up on `/testing/` alongside everything else, carries its own priority, and never has an
+  image. The backlog row links back to its epic.
+- `BacklogTask.feature` is `SET_NULL`: deleting an epic must never take the work items with it.
+- The creation email is now one shared helper, `testing_tools.email_backlog_task_created()`,
+  used by both entry points — a task spawned from an epic is announced exactly like one typed
+  into `/testing/`, with an extra line naming the development it came from.
+
+**Emails, at the same two moments the backlog uses**
+
+- Creating a development emails `SUPPORT_EMAIL`; marking one **Hecho** emails the admin
+  teachers, once — re-saving a done epic sends nothing.
+
+**Testing panel layout**
+
+- GitHub, **Desarrollos** and Correo temporal are now three equal cells (GitHub was smaller
+  than a cell and Correo temporal spanned two). Desarrollos sits in the middle, under a book
+  icon.
+- The QA styling shared by the three pages moved to `core/templates/qa/_qa_styles.html`, so
+  `/testing/`, the board and the detail page cannot style the same component differently.
+  Dark variants for the new components live in `theme.css` as usual.
+
+**Coverage**
+
+- `tests/integration/test_features.py` — **47 tests** over the model (deadline defaults,
+  overdue rules, `SET_NULL`, progress counters), both pages, all four endpoints, the two
+  notification paths and the JSON/CSV export.
+
+**Housekeeping folded into this release**
+
+- Codecov dropped from CI: the upload step, the `CODECOV_TOKEN` secret row and every README
+  mention are gone; the coverage badge is now a static shields.io badge kept in step by hand.
+- `DEPLOYMENT.md`'s `HEALTH_PROBE_TOKEN` recipe gained the **required** per-secret
+  `secretAccessor` binding — the runtime service account has no project-wide grant, so a new
+  secret without its own binding leaves the revision unable to start.
+- Pre-commit now checks what CI checks: Ruff, mypy and bandit run over the **whole tree**
+  (`pass_filenames: false` + `always_run: true`) instead of only the staged Python files. A
+  violation in an edited-but-unstaged file, or a commit touching only the Dockerfile / a
+  workflow / a template, used to pass locally and fail CI.
+
+</details>
+
+<details id="v1200">
+<summary><strong>v1.20.0 — Spanish dates and labels, editable expenses, a special matrícula</strong></summary>
 
 **Dates were rendered two different ways on the same page**
 
@@ -2067,11 +2151,22 @@ erDiagram
 
     BacklogTask {
         int id PK
+        int feature_id FK
         string title
         text description
         string priority
         string status
         bool verified
+        string created_by
+        datetime updated_at
+    }
+
+    Feature {
+        int id PK
+        string title
+        text description
+        string status
+        date deadline
         string created_by
         datetime updated_at
     }
@@ -2095,11 +2190,13 @@ erDiagram
     Student ||--o{ FunFridayAttendance : "attends"
     Parent ||--o{ ParentSessionToken : "portal magic link"
     Expense ||--o{ Expense : "generated from recurring"
+    Feature ||--o{ BacklogTask : "broken out into"
 ```
 
 **Not shown:** `Teacher.user_id` points at Django's built-in `auth.User`, and
 `AuditLog.actor_id` at the same table — both are outside this diagram.
-`BacklogTask` and `QAConfiguration` are QA-only and stand alone with no foreign keys.
+`Feature`, `BacklogTask` and `QAConfiguration` are QA-only. `BacklogTask.feature_id` is the
+only FK among them and is `SET_NULL` — deleting an epic must never take its work items with it.
 
 ### Key Constraints
 
@@ -2554,18 +2651,20 @@ five-a-day/
 │   │
 │   ├── core/                     Dashboard, Auth, Schedule, Utilities, Cross-cutting
 │   │   ├── models.py             TodoItem, HistoryLog, FunFridayAttendance, ScheduleSlot,
-│   │   │                         BacklogTask (+ `verified` QA tick, v1.20.0), QAConfiguration,
+│   │   │                         BacklogTask (+ `verified` QA tick, v1.20.0; + `feature` FK,
+│   │   │                         v1.21.0), Feature (v1.21.0 — QA epics), QAConfiguration,
 │   │   │                         FunFridayScheduledSend (v1.14.2)
 │   │   ├── audit_models.py       AuditLog (v1.10 — immutable per-model change trail)
 │   │   ├── audit_signals.py      Signal receivers + AuditActorMiddleware (contextvar-based actor)
 │   │   ├── rate_limit.py         Cache-backed IP rate limiter (v1.10)
 │   │   ├── log_safe.py           safe_log() — CR/LF-stripping log sanitizer (v1.14.4)
-│   │   ├── views/                22 view modules — auth, password_reset, dashboard,
+│   │   ├── views/                23 view modules — auth, password_reset, dashboard,
 │   │   │                         students, parents, payments, management, app_forms,
 │   │   │                         schedule, fun_friday_attendance, todos, support,
 │   │   │                         errors, testing_tools, waiting_list (v1.1), sheets (v1.2),
 │   │   │                         expenses (v1.5), reports (v1.7), parent_portal (v1.9),
-│   │   │                         stripe_views (v1.11), pwa (v1.12), two_factor (v1.13)
+│   │   │                         stripe_views (v1.11), pwa (v1.12), two_factor (v1.13),
+│   │   │                         features (v1.21.0)
 │   │   ├── services/             3 modules — analytics_service (v1.7),
 │   │   │                         google_sheets_service (v1.2), two_factor_service (v1.13)
 │   │   ├── constants.py          DIAS_ES, MESES_ES, SCHEDULED_APPS
@@ -2576,7 +2675,8 @@ five-a-day/
 │   │   ├── transactions.py       Optimised queryset builders with stable ordering
 │   │   ├── templates/            All HTML templates — base, pages, emails/, parent_portal/,
 │   │   │                         two_factor/ (v1.13), plus expenses/reports/waiting_list
-│   │   │                         and waiting_list_create (v1.15)
+│   │   │                         and waiting_list_create (v1.15), features/feature_detail
+│   │   │                         and qa/_qa_styles (v1.21.0)
 │   │   ├── static/               CSS (app.css, theme.css, email.css, admin_custom.css)
 │   │   │                         + JS (17 modules) + images
 │   │   └── management/commands/  seed_teachers, seed_testdata, export_to_sheets (v1.2),
@@ -2623,7 +2723,7 @@ five-a-day/
 │   │   └── management/commands/  send_email, test_all_emails, plus 4 Beat-task wrappers
 │   │                             (v1.14.2 — birthday, reminders, report, Fun Friday drain)
 │   │
-│   ├── tests/                    pytest suite (1,375 tests, 95.36 % coverage) — unit/ + integration/
+│   ├── tests/                    pytest suite (1,425 tests, 95.16 % coverage) — unit/ + integration/
 │   ├── templates/registration/   Password-reset templates (form, done, confirm, complete + email body)
 │   ├── templates/admin/          Django admin overrides (branded theme)
 │   └── conftest.py               Shared fixtures (models + authenticated_client)
@@ -2634,7 +2734,6 @@ five-a-day/
 │   │   ├── auto-merge.yml             Hourly development → testing merge + PR to main
 │   │   ├── codeql.yml                 Weekly Python security scan
 │   │   ├── notify-production.yml      Email on push to main
-│   │   ├── dependabot-auto-merge.yml  Auto-merge Dependabot minor/patch PRs
 │   │   ├── dependency-review.yml      Block PRs introducing HIGH/CRITICAL CVEs
 │   │   └── scorecard.yml              OSSF Scorecard supply-chain security (weekly)
 │   ├── dependabot.yml            Weekly dependency updates
@@ -2671,14 +2770,14 @@ Dashboard, authentication, scheduling, and shared utilities. Owns all views and 
 
 | Component | Details |
 |-----------|---------|
-| **Models** | 8 — TodoItem, HistoryLog (1000-entry cap), FunFridayAttendance, FunFridayScheduledSend, ScheduleSlot, BacklogTask (QA; `verified` is the tester's tick, separate from `status="done"`, v1.20.0), QAConfiguration (QA), plus AuditLog in `audit_models.py` |
-| **Views** | 22 modules: auth, password_reset, dashboard, students, parents, payments, management, app_forms, schedule, fun_friday_attendance, todos, support, errors, testing_tools, waiting_list, sheets, expenses, reports, parent_portal, stripe_views, pwa, two_factor |
+| **Models** | 9 — TodoItem, HistoryLog (1000-entry cap), FunFridayAttendance, FunFridayScheduledSend, ScheduleSlot, BacklogTask (QA; `verified` is the tester's tick, separate from `status="done"`, v1.20.0; `feature` FK, v1.21.0), Feature (QA epics — no priority, nullable `deadline`, v1.21.0), QAConfiguration (QA), plus AuditLog in `audit_models.py` |
+| **Views** | 23 modules: auth, password_reset, dashboard, students, parents, payments, management, app_forms, schedule, fun_friday_attendance, todos, support, errors, testing_tools, features, waiting_list, sheets, expenses, reports, parent_portal, stripe_views, pwa, two_factor |
 | **Services** | 3 — analytics_service, google_sheets_service, two_factor_service |
 | **Middleware** | 4 — NoHtmlCacheMiddleware (no-cache on dynamic HTML), QAErrorEmailMiddleware, SimpleAuthMiddleware (session auth public allow-list incl. `/password-reset/` + non-admin teacher URL-name whitelist), AuditActorMiddleware |
-| **Templates** | base.html (layout), 23 page templates, 18 email templates + `base_email.html` (common violet style + dark-mode support), error pages, plus `templates/registration/` for the password-reset flow |
+| **Templates** | base.html (layout), 25 page templates (v1.21.0: `features.html`, `feature_detail.html`) + the shared `qa/_qa_styles.html` partial, 18 email templates + `base_email.html` (common violet style + dark-mode support), error pages, plus `templates/registration/` for the password-reset flow |
 | **Static** | 4 CSS files (app.css, theme.css, email.css, admin_custom.css), 17 JS modules, images |
 | **Commands** | seed_teachers (Teacher + auth.User from env vars), seed_testdata, export_to_sheets, reset_two_factor, cleanup_backlog_tasks, prune_audit_log (v1.15) |
-| **URLs** | 46 patterns: dashboard, auth, password reset, schedule, todos, support, QA (incl. backlog export), PWA, 2FA, parent portal |
+| **URLs** | 52 patterns: dashboard, auth, password reset, schedule, todos, support, QA (backlog + export, Desarrollos board/detail/API/export), PWA, 2FA, parent portal |
 
 See [core/README.md](project/core/README.md) for details.
 
@@ -2940,9 +3039,9 @@ Public flow at `/password-reset/...` that lets a teacher recover access without 
 
 | Metric | Value |
 |--------|-------|
-| **Total tests** | 1,375 |
-| **Test files** | 78 (49 unit + 29 integration) |
-| **Coverage** | 95% (95.36% — 5,306 statements, 246 uncovered) |
+| **Total tests** | 1,425 |
+| **Test files** | 79 (49 unit + 30 integration) |
+| **Coverage** | 95% (95.16% — 5,520 statements, 267 uncovered) |
 | **Coverage thresholds** | **≥ 90%** (target, no warning) / **75-89%** (CI warning, pre-commit still blocks below 75) / **< 75%** (CI fails, pre-commit rejects the commit) |
 | **Runtime** | ~50 seconds (parallel workers via `pytest-xdist -n auto`) |
 | **Database** | PostgreSQL (same as production) — **always use `make test`** |
@@ -3044,7 +3143,7 @@ Within each file, related tests are grouped into classes. Where a large file abs
 
 ### Integration Tests
 
-**29 files, 657 tests.** Full HTTP stack through Django's test client.
+**30 files, 704 tests.** Full HTTP stack through Django's test client.
 
 | File | Count | Coverage |
 | --- | --- | --- |
@@ -3054,6 +3153,7 @@ Within each file, related tests are grouped into classes. Where a large file abs
 | [`integration/test_bugfix_security_and_features.py`](project/tests/integration/test_bugfix_security_and_features.py) | 57 | Security regressions + the v1.15.0 feature additions. Security: the three stored-XSS sinks (history feed, student autocomplete, schedule JSON block), rate-limit bypass via a spoofed `X-Forwarded-For`, parent-portal session fixation, the service worker caching `/login/`, schedule-slot validation, and teachers created in the UI being able to activate their account. Features: the short waiting-list form, the waiting-list round trip, the payment-history PDF, month and group filters, backlog export, Fun Friday double-send, newsletter fallback, adult receipts, payment receipt emails, enrollment churn, and Spanish enrollment labels |
 | [`integration/test_payment_views.py`](project/tests/integration/test_payment_views.py) | 38 | All HTTP payment endpoints: list (search, stats), create (+ invalid parent + unexpected exception), detail-view (+ 404), update (JSON + FormData + all error branches), delete (success + exception 500), deactivate (success + exception 400), quick-complete (success + invalid method + broken JSON), get-details (success + exception), search payments/parents (short query + hits), validate student-parent (all branches), export DB to Excel |
 | [`integration/test_v1175_fixes.py`](project/tests/integration/test_v1175_fixes.py) | 32 | Regression locks for the v1.20.0 fix round, one class per reported problem: Spanish choice labels (`get_<field>_display()` for every payment type/status and enrollment status), every email template defining its own `{% block title %}`, unfiltered dates rendering `dd/mm/yyyy` via `FORMAT_MODULE_PATH`, `search_students` carrying the parent (and reporting no parent for an adult), `update_expense` (amount raise, cadence change, already-generated rows untouched, weekly-without-weekdays rejected, unknown category coerced, zero amount rejected), the create-expense date default, the surname-free waiting-list form, `waiting_priority` ordering, and `StudentForm` still requiring a surname |
+| [`integration/test_features.py`](project/tests/integration/test_features.py) | 47 | Desarrollos, the QA epic board (v1.21.0). Model: `deadline` null by default, `is_overdue` only when the date passed **and** the epic is not done, `days_left`, the progress counters, Spanish status labels, and `SET_NULL` keeping the tasks when the epic is deleted. Views: both pages render, done epics sort last, the Jira template reaches the board, non-QA users get 404. Endpoints: create (with / without / invalid deadline), update (status, deadline, clearing it with `null`, title + description, and a status-only payload not clobbering the deadline), break-out-a-task (lands in the backlog linked to its epic, priority default, shows up on `/testing/`), and the JSON/CSV export in both scopes. Emails: creation reaches `SUPPORT_EMAIL`, done notifies the admin teachers exactly once, and a task email names its development |
 | [`integration/test_testing_tools.py`](project/tests/integration/test_testing_tools.py) | 28 | QA dashboard `/testing/` gated by `@qa_access_required` (via `override_settings`): dashboard renders + git failure handled, `api_seed_database` (success + reset + command error 500 + non-QA 404), `api_create_backlog_task` (all branches + screenshot attached to the email but never stored + send/swallow), `api_update_backlog_task` (success + invalid status + 404), the v1.20.0 `verified` QA tick (defaults off, toggles on/off, never touches `status` nor fires the done email, `done` still works alongside it) and the unfinished-first ordering shared by the dashboard and the export, `api_toggle_error_email` (on + off + bad JSON) |
 | [`integration/test_waiting_list_views.py`](project/tests/integration/test_waiting_list_views.py) | 27 | Waiting List & Group Capacity views (v1.1): waiting-list page, `assign_from_waiting_list` (capacity checks, and since v1.17.2 a redirect into the normal parent-then-student flow rather than an in-place promotion), `add_to_waiting_list`, student list excludes waiting students, dashboard waiting widget. v1.20.0 adds the short create form (no surname asked for, entry created without one, `waiting_priority` off by default, saved when ticked, flagged in the history line), the priority ordering (`-waiting_priority` first, FIFO within each band) and `StudentForm` still demanding a surname |
 | [`integration/test_student_views.py`](project/tests/integration/test_student_views.py) | 27 | `StudentListView` (search, exclude inactive, context), `StudentDetailView` (parents visible, 404), `StudentCreateView` (form + adult mode + success + full POST + error paths including invalid parent, existing-parent mode, create_sibling flag, email-task swallow), `search_students` JSON endpoint (results + short-query empty), and the v1.20.0 pricing surface: `price_config` exposing `quarterly_gross`, both hand-set prices reaching the payments, the matrícula falling back to the standard fee when left blank, and a special matrícula fee rejected without "Precio especial" ticked |
@@ -3080,7 +3180,7 @@ Within each file, related tests are grouped into classes. Where a large file abs
 
 ### Coverage Report
 
-Live snapshot from the last full run (`make test`) — the 31 source files below 100% coverage:
+Live snapshot from the last full run (`make test`) — the 32 source files below 100% coverage:
 
 | File | Stmts | Miss | Cover | Missing lines |
 | --- | --- | --- | --- | --- |
@@ -3097,7 +3197,7 @@ Live snapshot from the last full run (`make test`) — the 31 source files below
 | `core/audit_signals.py` | 92 | 6 | 93% | 109, 115, 131, 142-143, 148 |
 | `core/context_processors.py` | 31 | 1 | 97% | 22 |
 | `core/middleware.py` | 81 | 5 | 94% | 52-57, 173, 218-219 |
-| `core/models.py` | 124 | 5 | 96% | 48, 100, 212, 220, 245 |
+| `core/models.py` | 163 | 5 | 97% | 48, 100, 293, 301, 326 |
 | `core/services/google_sheets_service.py` | 99 | 9 | 91% | 74-76, 112-118 |
 | `core/tasks.py` | 20 | 5 | 75% | 41-46 |
 | `core/transactions.py` | 19 | 1 | 95% | 28 |
@@ -3105,25 +3205,26 @@ Live snapshot from the last full run (`make test`) — the 31 source files below
 | `core/views/auth.py` | 167 | 18 | 89% | 45-48, 179, 183-199, 250, 285, 346-355 |
 | `core/views/dashboard.py` | 131 | 7 | 95% | 129-136, 177, 182, 193 |
 | `core/views/expenses.py` | 123 | 12 | 90% | 72, 75-76, 121, 141-142, 174-176, 208-210 |
+| `core/views/features.py` | 172 | 20 | 88% | 136, 160-161, 211-215, 273-279, 336-340 |
 | `core/views/parent_portal.py` | 101 | 3 | 97% | 157, 184, 204 |
 | `core/views/parents.py` | 51 | 1 | 98% | 47 |
 | `core/views/payments.py` | 322 | 16 | 95% | 57-58, 81, 252-257, 307, 313-314, 453, 500-501, 523-524, 538-539 |
 | `core/views/students.py` | 369 | 17 | 95% | 202, 256-257, 402, 425, 433, 451-457, 462-464, 682, 685-687 |
-| `core/views/testing_tools.py` | 192 | 28 | 85% | 157, 159, 215-217, 320-324, 337, 355-356, 383-431 |
+| `core/views/testing_tools.py` | 194 | 29 | 85% | 141, 201, 203, 231-233, 336-340, 353, 371-372, 399-447 |
 | `core/views/two_factor.py` | 90 | 9 | 90% | 38, 49-50, 170-172, 177-178, 193 |
 | `core/views/waiting_list.py` | 105 | 1 | 99% | 284 |
 | `students/forms.py` | 69 | 2 | 97% | 188-189 |
 | `students/models.py` | 214 | 3 | 99% | 361, 378-379 |
 | `students/parent_portal_models.py` | 41 | 1 | 98% | 44 |
 
-**55 files** have 100% coverage (skipped above). Total coverage: **95%** (95.36%) across 5,306 statements, 246 uncovered. Coverage is **very good**. Coverage is enforced at three levels: pre-commit hook (>= 75%), CI hard floor (>= 75%), and CI warning (< 90%).
+**55 files** have 100% coverage (skipped above). Total coverage: **95%** (95.16%) across 5,520 statements, 267 uncovered. Coverage is **very good**. Coverage is enforced at three levels: pre-commit hook (>= 75%), CI hard floor (>= 75%), and CI warning (< 90%).
 
 > **Reading the number consistently (fixed in v1.14.7).** The CI test step runs with
 > `working-directory: project`, but `[tool.coverage.run]` — including the `omit` list for
 > migrations, management commands and `admin.py` — lives in the repo-root `pyproject.toml`.
 > Coverage only looks for config in the *current* directory, so CI was silently ignoring the
 > omit list: 42 extra files, ~993 extra statements, and a reported **86.44%** instead of
-> **95.49%**. That fired the `< 90%` warning on every run and sent the wrong figure to Codecov.
+> **95.49%**. That fired the `< 90%` warning on every run.
 > `ci.yml` now passes `--cov-config=../pyproject.toml`, so CI, `make test` and
 > `make test-cov-gate` all report the same number.
 
@@ -3162,6 +3263,7 @@ All migrations were regenerated from scratch during the v1.0.0 multi-app split.
 | `core` | `0006_alter_qaconfiguration_options` | `QAConfiguration` `Meta` options | `core.0005` |
 | `core` | `0007_alter_historylog_action` | Expanded `HistoryLog.action` choices | `core.0006` |
 | `core` | `0008_backlogtask_verified` | `BacklogTask.verified` — QA's tick, independent of `status="done"` (v1.20.0) | `core.0007` |
+| `core` | `0009_feature_backlogtask_feature` | New `Feature` model (QA epics — no priority, nullable `deadline`) + `BacklogTask.feature` FK (`SET_NULL`) (v1.21.0) | `core.0008` |
 | `comms` | — | (no models) | — |
 
 ```bash
@@ -3318,7 +3420,7 @@ changes an explicit, one-at-a-time operation.
 |------|---------------|
 | No hardcoded credentials | Dev auth refuses login when `LOGIN_USERNAME`/`LOGIN_PASSWORD` are missing; testing/prod auth refuses any password not matching a hashed `auth.User` record |
 | No secrets in YAML | Production credentials live in GCP Secret Manager, injected into Cloud Run at startup — never in the repo |
-| No secrets in GitHub Actions for deploy | CI uses only non-production Gmail SMTP + Codecov upload token. Production deploy runs manually with the operator's `gcloud` credentials |
+| No secrets in GitHub Actions for deploy | CI uses only non-production Gmail SMTP. Production deploy runs manually with the operator's `gcloud` credentials |
 | No secrets in Docker image | `.dockerignore` excludes all `.env*` files |
 | `.gitignore` coverage | `.env*` pattern excludes all env file variants |
 | Production startup validation | `settings.py` raises `ValueError` if `SECRET_KEY` is the dev default and `DEBUG=False` |
@@ -3423,6 +3525,12 @@ Here is a quick checklist of things to try. If anything does not work, take note
     push real tickets off the page). The shaded check beside each priority badge is the **tester's** own tick: click it once
     you have confirmed a fix on testing. It is deliberately independent of the developer's **done** status — verifying a
     ticket never changes its status nor sends the done notification
+  - **Desarrollos** (the book card, v1.21.0) — the epic board at `/testing/features/`. A *desarrollo*
+    describes a whole thing to build; the Backlog holds the individual tickets. It has **no priority**
+    (it is scheduled by an optional **fecha límite**, empty by default and shown in red once it passes)
+    and **no screenshot**. The description arrives pre-filled with a Jira-style template. Open one to
+    read it, edit it, change its status — and to **create tasks** from it: each goes straight into the
+    Backlog with its own priority, and is emailed to the development team like any other ticket
 
 ### How to report a problem
 
@@ -3475,13 +3583,15 @@ The testing environment mirrors production:
 
 #### Access control for `/testing/`
 
-The testing dashboard and all its API endpoints are protected by three conditions that must **all** be true:
+The testing dashboard, the **Desarrollos** board (v1.21.0) and all their API endpoints are
+protected by four conditions that must **all** be true:
 
 | Condition | Setting | Where it's checked |
 |---|---|---|
 | Environment is `testing` | `DJANGO_ENV=testing` | `settings.IS_TESTING_ENV` |
 | Debug is off | `DJANGO_DEBUG=False` | `settings.IS_TESTING_ENV` |
 | Request is a logged-in Teacher | linked `Teacher` on the session user | `core/decorators.py` (`_request_teacher`) |
+| That Teacher is an **admin** | `Teacher.admin=True` | `core/decorators.py` (`qa_access_required`) |
 
 If any condition fails, the page returns **404 Not Found** (not 403) so the URL appears not to exist. The sidebar icon is also hidden — controlled by the `show_testing_tools` context variable injected by `core/context_processors.py`.
 
@@ -3489,9 +3599,10 @@ This means:
 - In **development** (`DEBUG=True`): the page doesn't exist, no sidebar icon.
 - In **production** (`DJANGO_ENV=production`): the page doesn't exist, no sidebar icon.
 - In **testing** with a **non-Teacher session**: the page doesn't exist, no sidebar icon.
-- In **testing** logged in as **any Teacher** (admin or not): full access, sidebar icon visible.
+- In **testing** logged in as a **non-admin Teacher**: the page doesn't exist, no sidebar icon — they must not reach the dev tools (DB seed/reset, error-email toggle, git internals).
+- In **testing** logged in as an **admin Teacher**: full access, sidebar icon visible.
 
-Access is granted to every seeded Teacher account (`TEACHER_SEED_*`) — no dedicated QA user is needed. Non-admin teachers reach it because `testing_tools` and the QA API endpoints are on the non-admin whitelist in `core/middleware.py`.
+Access is granted to the seeded **admin** Teacher accounts (`TEACHER_SEED_<N>_ADMIN=True`) — no dedicated QA user is needed. Because the QA URLs are admin-only they are deliberately **not** in `NON_ADMIN_ALLOWED_URL_NAMES` (`core/middleware.py`); admins bypass that whitelist anyway.
 
 **Running locally (for developers):**
 
@@ -3586,14 +3697,13 @@ Feature branches off `development` are welcome for non-trivial work, but the exp
 
 | Workflow | File | Triggers | Purpose |
 |----------|------|----------|---------|
-| **CI** | [`ci.yml`](.github/workflows/ci.yml) | Push to `development`/`testing`/`main`; PRs to `testing`/`main` | Six jobs — **Lint** (Ruff + Bandit + pip-audit + Hadolint), **Type check** (mypy), **Tests** (pytest + PostgreSQL 16 + Codecov), **Docker build** (validates Dockerfile), **Trivy** (filesystem CVE scan → Security tab), **Docker publish** (GHCR push + image scan, on `main`/`testing` only) |
+| **CI** | [`ci.yml`](.github/workflows/ci.yml) | Push to `development`/`testing`/`main`; PRs to `development`/`testing`/`main` | Six jobs — **Lint** (Ruff + Bandit + pip-audit + Hadolint), **Type check** (mypy), **Tests** (pytest + PostgreSQL 16 + coverage artifact), **Docker build** (validates Dockerfile), **Trivy** (filesystem CVE scan → Security tab), **Docker publish** (GHCR push + image scan, on `main`/`testing` only) |
 | **Auto-merge** | [`auto-merge.yml`](.github/workflows/auto-merge.yml) | Hourly cron + manual dispatch | Merges `development` → `testing` when conditions pass, creates PR to `main`, emails owners |
 | **CodeQL** | [`codeql.yml`](.github/workflows/codeql.yml) | Push to `main`/`testing`/`development`; PRs to `main`; Monday 04:30 UTC | Python static security analysis (OWASP Top 10, Django-specific queries) |
 | **Notify production** | [`notify-production.yml`](.github/workflows/notify-production.yml) | Push to `main` | Emails `hellofiveaday@gmail.com` with commit info and `gcloud` deploy instructions |
-| **Dependabot auto-merge** | [`dependabot-auto-merge.yml`](.github/workflows/dependabot-auto-merge.yml) | Pull request (Dependabot only) | Enables auto-merge for minor/patch Dependabot PRs once CI passes |
 | **Dependency review** | [`dependency-review.yml`](.github/workflows/dependency-review.yml) | Pull request | Blocks PRs that introduce a HIGH/CRITICAL CVE dependency |
 | **OSSF Scorecard** | [`scorecard.yml`](.github/workflows/scorecard.yml) | Push to `main`; weekly Monday 06:00 UTC; branch protection rule changes | Grades supply-chain security posture; uploads SARIF to GitHub Security tab |
-| **Dependabot** | [`dependabot.yml`](.github/dependabot.yml) | Weekly (Mondays 08:00 Madrid) | Grouped Python and GitHub Actions updates targeting `development` |
+| **Dependabot** | [`dependabot.yml`](.github/dependabot.yml) | Weekly (Mondays 08:00 Madrid) | Grouped Python and GitHub Actions updates targeting `development`. PRs are **never merged automatically** — every one is reviewed and merged by hand |
 
 Concurrent CI runs on the same branch cancel each other automatically — new pushes always produce a fresh run.
 
@@ -3710,7 +3820,6 @@ Configure at **Settings → Secrets and variables → Actions**:
 | `TESTING_URL` | auto-merge.yml | Base URL of the testing environment, used for the "Open testing environment" button (falls back to the testing VM IP) |
 | `SUPPORT_EMAIL` | notify-production.yml | Support address added (alongside `hellofiveaday@gmail.com`) to the production deploy email |
 | `PRODUCTION_URL` | notify-production.yml | Base URL of production — adds the "Abrir producción" button to the production email. **Set** (v1.14.7) to `https://fiveaday-332600671945.europe-southwest1.run.app` |
-| `CODECOV_TOKEN` | ci.yml | Optional — only needed for private repos. Public repos push coverage anonymously |
 
 **Rotate `GH_PAT` annually.** Without it, the auto-merge falls back to the default `GITHUB_TOKEN`, which cannot trigger CI on PRs it creates — breaking the pipeline silently.
 
@@ -3730,7 +3839,7 @@ Dependabot opens **weekly PRs on `development`** (Mondays, 08:00 Europe/Madrid) 
 - **Python packages** — minor and patch updates grouped into a single PR. Django major version bumps are intentionally ignored (require manual upgrade planning).
 - **GitHub Actions** — updates to `actions/*`, `astral-sh/setup-uv`, `dawidd6/action-send-mail`, etc.
 
-PRs are labelled `dependencies` + `python` or `github-actions` for easy filtering. The normal 24 h cycle carries merged updates to `testing` and then to `main`.
+PRs are labelled `dependencies` + `python` or `github-actions` for easy filtering. **Every Dependabot PR is reviewed and merged by hand — nothing merges them automatically.** CI runs on PRs into `development`, so a bump's checks are visible before you merge it. Once merged, the normal 24 h cycle carries the update to `testing` and then to `main`.
 
 ### CodeQL Security Scanning
 
@@ -3754,13 +3863,13 @@ make up                        # Start Docker (PostgreSQL + Redis + Django + Cel
 1. Work on `development` (or a short-lived branch off `development`)
 2. Make changes following the conventions below
 3. Run `make pc-run` — Ruff + mypy + bandit all pass, offers to auto-bump the patch version on success, and auto-stages `uv.lock` if regenerated
-4. Run `make test` — all 1,375 tests must pass (PostgreSQL via Docker, parallel, with coverage)
+4. Run `make test` — all 1,425 tests must pass (PostgreSQL via Docker, parallel, with coverage)
 5. `git commit` with a message like `v1.14.7 — Short description` (version first, em dash — matches every other release commit in the project)
 6. `git push origin development`
 7. CI runs automatically on your push (see [CI/CD](#cicd--github-actions))
 8. ~24 h later, the auto-merge pipeline promotes your commit to `testing` and opens a PR to `main` for your review
 
-Pre-commit hooks run **Ruff** (lint + format), **mypy** (type checking), and **bandit** (security) automatically on every `git commit`. If a hook modifies files (e.g. mypy regenerates `uv.lock`), the commit aborts — running `make pc-run` once resolves this by staging the regenerated lock file.
+Pre-commit hooks run **Ruff** (lint + format), **mypy** (type checking), and **bandit** (security) automatically on every `git commit`. Since v1.21.0 all three scan the **whole tree** rather than only the staged Python files, so a green hook means the same thing CI does — a violation in a file you edited but did not stage, or a commit touching only the Dockerfile or a template, no longer slips through to fail in CI. If a hook modifies files (e.g. mypy regenerates `uv.lock`), the commit aborts — running `make pc-run` once resolves this by staging the regenerated lock file.
 
 ### Make Commands (Developer Tooling)
 

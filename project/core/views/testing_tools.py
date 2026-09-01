@@ -125,6 +125,50 @@ def api_seed_database(request):
         )
 
 
+def email_backlog_task_created(task, screenshot=None, context_line=""):
+    """Email SUPPORT_EMAIL about a newly created backlog task.
+
+    Shared with the Desarrollos board, which breaks tasks out of an epic and
+    must announce them exactly like a task typed straight into ``/testing/`` —
+    hence ``context_line``, an extra header line naming the development the task
+    came from.
+
+    ``screenshot`` is an in-memory upload attached to the message and NEVER
+    persisted; tasks spawned from a development never carry one. Never raises.
+    """
+    support_email = getattr(settings, "SUPPORT_EMAIL", None)
+    if not support_email:
+        return
+
+    from django.core.mail import EmailMessage
+
+    body = (
+        f"Nueva tarea en el backlog de QA\n"
+        f"{'=' * 50}\n\n"
+        f"Titulo:      {task.title}\n"
+        f"Prioridad:   {task.priority}\n"
+        f"Creado por:  {task.created_by}\n"
+        f"Fecha:       {task.created_at:%Y-%m-%d %H:%M}\n"
+        f"{context_line}\n\n"
+        f"Descripcion:\n{task.description or '(ninguna)'}\n\n"
+        f"{'Se adjunta una captura de pantalla.' if screenshot else ''}\n"
+        f"{'=' * 50}\n"
+        f"Five a Day — Entorno QA\n"
+    )
+    try:
+        email = EmailMessage(
+            subject=f"[BACKLOG][{task.priority.upper()}] {task.title}",
+            body=body,
+            from_email=settings.DEFAULT_FROM_EMAIL,
+            to=[support_email],
+        )
+        if screenshot is not None:
+            email.attach(screenshot.name, screenshot.read(), screenshot.content_type)
+        email.send(fail_silently=True)
+    except Exception:  # noqa: BLE001 — never block task creation on email failure
+        logger.exception("Error sending the backlog-task notification")
+
+
 @qa_access_required
 @require_http_methods(["POST"])
 def api_create_backlog_task(request):
@@ -166,36 +210,8 @@ def api_create_backlog_task(request):
             created_by=username,
         )
 
-        # Email support — attach the screenshot in-memory (never persisted).
-        support_email = getattr(settings, "SUPPORT_EMAIL", None)
-        if support_email:
-            from django.core.mail import EmailMessage
-
-            subject = f"[BACKLOG][{priority.upper()}] {title}"
-            body = (
-                f"Nueva tarea en el backlog de QA\n"
-                f"{'=' * 50}\n\n"
-                f"Titulo:      {title}\n"
-                f"Prioridad:   {priority}\n"
-                f"Creado por:  {username}\n"
-                f"Fecha:       {task.created_at:%Y-%m-%d %H:%M}\n\n"
-                f"Descripcion:\n{description or '(ninguna)'}\n\n"
-                f"{'Se adjunta una captura de pantalla.' if screenshot else ''}\n"
-                f"{'=' * 50}\n"
-                f"Five a Day — Entorno QA\n"
-            )
-            try:
-                email = EmailMessage(
-                    subject=subject,
-                    body=body,
-                    from_email=settings.DEFAULT_FROM_EMAIL,
-                    to=[support_email],
-                )
-                if screenshot is not None:
-                    email.attach(screenshot.name, screenshot.read(), screenshot.content_type)
-                email.send(fail_silently=True)
-            except Exception:  # noqa: BLE001 — never block task creation on email failure
-                pass
+        # Email support — the screenshot is attached in-memory (never persisted).
+        email_backlog_task_created(task, screenshot=screenshot)
 
         return JsonResponse(
             {
