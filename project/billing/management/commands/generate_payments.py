@@ -1,9 +1,14 @@
 """
 Management command to generate automatic periodic payments.
 
-For monthly students: creates a pending payment at the start of each month (Sep-Jun).
-For quarterly students: creates a pending payment at the start of each quarter
-  (Oct for Q1 covering Sep-Dec, Jan for Q2, Apr for Q3).
+Payments are created on the FIRST day of their period and fall due on its LAST day.
+Monthly students get one per teaching month (Sep-Jun); quarterly students get
+consecutive 3-month blocks anchored to the month they enrolled, so a mid-year
+joiner is billed from the day they start instead of falling into a gap between
+fixed calendar quarters.
+
+The command back-fills: any period that has started without a payment is created,
+so a run the scheduler missed is repaired on the next one.
 
 Usage:
     python manage.py generate_payments              # Generate for current month
@@ -11,6 +16,7 @@ Usage:
     python manage.py generate_payments --dry-run    # Preview without creating
 """
 
+import calendar
 from datetime import date
 
 from django.core.management.base import BaseCommand
@@ -23,7 +29,6 @@ from billing.models import (
 )
 from billing.services.payment_service import (
     MONTH_NAMES_ES,
-    QUARTER_NAMES_ES,
     PaymentService,
 )
 
@@ -69,6 +74,12 @@ class Command(BaseCommand):
         created_count = 0
         skipped_count = 0
 
+        # Every enrollment goes through PaymentService.schedule_academic_year_payments,
+        # the same call the enrollment form makes. It creates any period that has
+        # already started and has no payment yet, so this command both opens the new
+        # month/quarter and back-fills anything a missed run left behind.
+        as_of = date(year, month, calendar.monthrange(year, month)[1])
+
         for enrollment in enrollments:
             student = enrollment.student
             if not student.active:
@@ -82,71 +93,28 @@ class Command(BaseCommand):
                     skipped_count += 1
                     continue
 
-            modality = enrollment.payment_modality
-            due_date = date(year, month, 1)
-
-            if modality == "monthly" and PaymentService.should_generate_monthly(month):
-                exists = Payment.objects.filter(
-                    student=student,
-                    payment_type="monthly",
-                    due_date__month=month,
-                    due_date__year=year,
-                ).exists()
-
-                if exists:
-                    skipped_count += 1
-                    continue
-
-                amount = PaymentService.calculate_monthly_amount(enrollment, config, month)
-                concept = f"Mensualidad {MONTH_NAMES_ES.get(month, '')} {year}"
-
-                if dry_run:
-                    self.stdout.write(f"  [DRY RUN] {student.full_name}: {concept} - €{amount}")
-                else:
-                    Payment.objects.create(
-                        student=student,
-                        parent=parent,
-                        enrollment=enrollment,
-                        payment_type="monthly",
-                        payment_method="transfer",
-                        amount=amount,
-                        payment_status="pending",
-                        due_date=due_date,
-                        concept=concept,
+            if dry_run:
+                existing = set(
+                    Payment.objects.filter(student=student, enrollment=enrollment).values_list("due_date", flat=True)
+                )
+                for period in PaymentService.billing_periods(enrollment):
+                    if period["starts"] > as_of or period["due"] in existing:
+                        continue
+                    amount = PaymentService.calculate_period_amount(
+                        enrollment,
+                        config,
+                        [m for m, _ in period["months"]],
+                        period["fraction"],
+                        enrollment.payment_modality == "quarterly",
                     )
-                created_count += 1
+                    concept = PaymentService.period_concept(period, enrollment.payment_modality == "quarterly")
+                    self.stdout.write(f"  [DRY RUN] {student.full_name}: {concept} - EUR{amount:.2f}")
+                    created_count += 1
+                continue
 
-            elif modality == "quarterly" and PaymentService.should_generate_quarterly(month):
-                exists = Payment.objects.filter(
-                    student=student,
-                    payment_type="quarterly",
-                    due_date__month=month,
-                    due_date__year=year,
-                ).exists()
-
-                if exists:
-                    skipped_count += 1
-                    continue
-
-                amount = PaymentService.calculate_quarterly_amount(enrollment, config, month)
-                concept = f"Trimestre {QUARTER_NAMES_ES.get(month, '')} {year}"
-
-                if dry_run:
-                    self.stdout.write(f"  [DRY RUN] {student.full_name}: {concept} - €{amount}")
-                else:
-                    Payment.objects.create(
-                        student=student,
-                        parent=parent,
-                        enrollment=enrollment,
-                        payment_type="quarterly",
-                        payment_method="transfer",
-                        amount=amount,
-                        payment_status="pending",
-                        due_date=due_date,
-                        concept=concept,
-                    )
-                created_count += 1
-            else:
+            made = PaymentService.schedule_academic_year_payments(enrollment, parent, as_of=as_of)
+            created_count += made
+            if made == 0:
                 skipped_count += 1
 
         prefix = "[DRY RUN] " if dry_run else ""

@@ -184,13 +184,12 @@ def two_factor_verify(request):
             from core.views.auth import _finalize_session_login
 
             display = getattr(user, "first_name", "") or user.get_username()
-            # Was this login started via Google OAuth? If so, hand the creds
-            # back to the session after the second factor succeeds.
-            pending_google = request.session.pop("_2fa_pending_google_creds", None)
-            _finalize_session_login(request, user, display, google=bool(pending_google))
+            # The Google credential hand-off that used to live here is gone
+            # (v1.23.0): the OAuth flow no longer requests offline access or
+            # keeps any token, so there is nothing to carry across the second
+            # factor. `google=` only tags the session for display purposes.
+            _finalize_session_login(request, user, display)
             request.session.pop(_PENDING_USER_SESSION_KEY, None)
-            if pending_google:
-                request.session["google_credentials"] = pending_google
             return redirect("home")
         messages.error(request, "❌ Código incorrecto.")
 

@@ -1,0 +1,246 @@
+{% extends 'base.html' %}
+
+{% block title %}Five a Day - Desarrollos{% endblock %}
+{% block page_title %}Desarrollos{% endblock %}
+{% block page_subtitle %}Épicas del proyecto y las tareas que las componen{% endblock %}
+
+{% block extra_css %}
+{% include "qa/_qa_styles.html" %}
+{% endblock %}
+
+{% block help_content %}
+<p>El tablero de <strong>Desarrollos</strong> recoge las <em>épicas</em> del proyecto: cada una describe algo que hay que construir, y las tareas concretas que lo llevan a cabo viven en el <strong>Backlog</strong> del panel de Testing. Es el mismo reparto que en Jira entre una épica y sus tickets.</p>
+
+<h4 style="font-weight:700;margin-top:1rem;">Crear un desarrollo</h4>
+<p>Escribe un <strong>título</strong>, ajusta la <strong>descripción</strong> —viene con una plantilla ya rellenada: resumen, contexto, objetivo, alcance, criterios de aceptación y notas técnicas— y, si la hay, una <strong>fecha límite</strong>. Al guardarlo se <strong>envía un email al soporte</strong>, igual que con las tareas del backlog.</p>
+<ul style="list-style:disc;margin:0.4rem 0 0 1.25rem;line-height:1.7;">
+    <li>Un desarrollo <strong>no tiene prioridad</strong>: lo que lo ordena es su fecha límite. La prioridad vive en cada tarea.</li>
+    <li>La <strong>fecha límite es opcional</strong> y está <strong>vacía por defecto</strong> — una fecha inventada es peor que ninguna. Si se pasa y el desarrollo sigue abierto, la etiqueta se pone en rojo.</li>
+    <li>Tampoco admite <strong>captura de pantalla</strong>: describe trabajo por hacer, no un fallo que alguien ha visto en pantalla.</li>
+</ul>
+
+<h4 style="font-weight:700;margin-top:1rem;">Detalle y tareas</h4>
+<p>Pulsa cualquier fila para abrir el <strong>detalle</strong>. Desde ahí puedes editar la descripción, cambiar el estado, poner o quitar la fecha límite y, sobre todo, <strong>crear tareas</strong>: cada una entra en el Backlog como una tarea normal (con su prioridad, sin imagen) y queda enlazada a este desarrollo. El contador de la fila muestra cuántas están hechas.</p>
+
+<h4 style="font-weight:700;margin-top:1rem;">Estados</h4>
+<p><strong>Abierto</strong> → <strong>En progreso</strong> → <strong>Hecho</strong>. Al marcarlo como hecho se avisa por email a los profesores administradores, y el desarrollo baja al final de la lista para no estorbar al trabajo vivo.</p>
+{% endblock %}
+
+{% block content %}
+{% csrf_token %}
+<div class="px-4 py-6" id="features-page"
+     data-create-url="{% url 'api_create_feature' %}"
+     data-detail-url-base="/testing/features/">
+
+    <div class="mb-8">
+        <div class="flex items-center gap-3 mb-2">
+            <span class="material-symbols-outlined text-violet-600 text-5xl">menu_book</span>
+            <h1 class="text-3xl font-bold tracking-tight text-neutral-800">Desarrollos</h1>
+        </div>
+        <p class="text-neutral-600">
+            Épicas del proyecto. Las tareas que las componen van al
+            <a href="{% url 'testing_tools' %}" class="text-primary-600 font-semibold">Backlog</a>.
+        </p>
+    </div>
+
+    <div class="qa-card">
+        <div class="qa-card-header">
+            <div class="qa-card-icon bg-violet-100">
+                <span class="material-symbols-outlined text-violet-600">menu_book</span>
+            </div>
+            <div class="flex-1">
+                <h2 class="text-lg font-bold text-neutral-800">Nuevo desarrollo</h2>
+                <p class="text-xs text-neutral-500">Sin prioridad y sin imagen: un desarrollo se ordena por su fecha límite, que es opcional. Se envía por email al equipo.</p>
+            </div>
+            <div class="flex items-center gap-2 shrink-0">
+                <a href="{% url 'export_features' %}?format=json&scope=active"
+                   class="inline-flex items-center gap-1 px-3 py-2 text-xs font-semibold rounded-lg border border-neutral-300 text-neutral-600 hover:bg-primary-50 hover:text-primary-700 hover:border-primary-300 transition-colors"
+                   style="text-decoration:none;" title="Descargar desarrollos abiertos en JSON">
+                    <span class="material-symbols-outlined text-sm">download</span> JSON
+                </a>
+                <a href="{% url 'export_features' %}?format=csv&scope=active"
+                   class="inline-flex items-center gap-1 px-3 py-2 text-xs font-semibold rounded-lg border border-neutral-300 text-neutral-600 hover:bg-primary-50 hover:text-primary-700 hover:border-primary-300 transition-colors"
+                   style="text-decoration:none;" title="Descargar desarrollos abiertos en CSV (Excel)">
+                    <span class="material-symbols-outlined text-sm">download</span> CSV
+                </a>
+                <a href="{% url 'export_features' %}?format=json&scope=all"
+                   class="inline-flex items-center gap-1 px-3 py-2 text-xs font-semibold rounded-lg border border-neutral-200 text-neutral-500 hover:bg-neutral-100 transition-colors"
+                   style="text-decoration:none;" title="Descargar TODOS los desarrollos, incluidos los hechos">
+                    <span class="material-symbols-outlined text-sm">inventory_2</span> Todos
+                </a>
+            </div>
+        </div>
+
+        <!-- Formulario nuevo desarrollo -->
+        <div class="bg-gray-50 rounded-xl p-4 mb-6">
+            <div class="grid grid-cols-1 md:grid-cols-12 gap-3 items-center mb-3">
+                <input type="text" id="feature-title" placeholder="Título del desarrollo..." maxlength="300"
+                       class="md:col-span-8 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-primary-300 focus:border-primary-400 outline-none">
+                {# Vacía por defecto: la fecha límite es opcional y no se inventa. #}
+                <input type="date" id="feature-deadline" title="Fecha límite (opcional)"
+                       class="md:col-span-3 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-primary-300 focus:border-primary-400 outline-none">
+                <button id="feature-add-btn" title="Crear desarrollo"
+                        class="md:col-span-1 justify-self-end w-9 h-9 bg-primary-500 text-white rounded-lg hover:bg-primary-600 transition-colors inline-flex items-center justify-center">
+                    <span class="material-symbols-outlined text-[18px]">add</span>
+                </button>
+            </div>
+            {# The Jira-style skeleton is rendered from the server-side constant so
+               this page and the detail page always agree on it. #}
+            <textarea id="feature-desc" rows="12" spellcheck="false"
+                      class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm font-mono focus:ring-2 focus:ring-primary-300 focus:border-primary-400 outline-none"
+                      >{{ description_template }}</textarea>
+            <div class="mt-2 flex items-center gap-3">
+                <button type="button" id="feature-reset-desc"
+                        class="text-xs text-neutral-500 hover:text-primary-600 inline-flex items-center gap-1">
+                    <span class="material-symbols-outlined text-[16px]">restart_alt</span>
+                    Restaurar plantilla
+                </button>
+                <span class="text-[11px] text-neutral-400">Sin captura de pantalla — eso es cosa del Backlog.</span>
+            </div>
+            <p id="feature-error" class="text-red-600 text-xs mt-2 hidden"></p>
+        </div>
+
+        <!-- Lista de desarrollos -->
+        <div id="feature-list" class="space-y-2">
+            {% for feature in features %}
+            <a class="feature-item" href="{% url 'feature_detail' feature.id %}" data-feature-id="{{ feature.id }}">
+                <span class="material-symbols-outlined text-violet-500 shrink-0">menu_book</span>
+                <div class="flex-1 min-w-0">
+                    <p class="text-sm font-semibold text-neutral-800 truncate">{{ feature.title }}</p>
+                    <p class="text-xs text-neutral-400">{{ feature.created_by }} &middot; {{ feature.created_at|date:"d/m/Y" }}</p>
+                </div>
+                <span class="task-counter" title="Tareas hechas / totales">{{ feature.n_done_tasks }}/{{ feature.n_tasks }} tareas</span>
+                {% if feature.deadline %}
+                <span class="deadline-pill{% if feature.is_overdue %} is-overdue{% endif %}"
+                      title="{% if feature.is_overdue %}Fecha límite superada{% else %}Fecha límite{% endif %}">
+                    <span class="material-symbols-outlined text-[14px]">event</span>{{ feature.deadline|date:"d/m/Y" }}
+                </span>
+                {% else %}
+                <span class="deadline-pill is-none" title="Sin fecha límite">
+                    <span class="material-symbols-outlined text-[14px]">event_busy</span>Sin fecha
+                </span>
+                {% endif %}
+                <span class="status-badge status-{{ feature.status }}">{{ feature.get_status_display }}</span>
+                <span class="material-symbols-outlined text-neutral-400 shrink-0">chevron_right</span>
+            </a>
+            {% empty %}
+            <p class="text-sm text-neutral-400 text-center py-6" id="feature-empty">No hay desarrollos. Crea uno arriba.</p>
+            {% endfor %}
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+(function() {
+    const page = document.getElementById('features-page');
+    if (!page) return;
+
+    // The pristine template, captured before the user types into the box, so
+    // "Restaurar plantilla" can put it back without another round trip.
+    const descInput = document.getElementById('feature-desc');
+    const PRISTINE_TEMPLATE = descInput ? descInput.value : '';
+
+    // CSRF comes from the hidden input first: CSRF_COOKIE_HTTPONLY is True
+    // whenever DEBUG=False, so the cookie is unreadable in testing/production.
+    function getCsrfToken() {
+        const el = document.querySelector('[name=csrfmiddlewaretoken]');
+        if (el && el.value) return el.value;
+        const cookie = document.cookie.split(';').find(c => c.trim().startsWith('csrftoken='));
+        return cookie ? cookie.split('=')[1] : '';
+    }
+
+    function post(url, body) {
+        return fetch(url, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json', 'X-CSRFToken': getCsrfToken()},
+            body: JSON.stringify(body),
+        }).then(r => r.json());
+    }
+
+    const list = document.getElementById('feature-list');
+    const errorEl = document.getElementById('feature-error');
+
+    function showError(msg) {
+        errorEl.textContent = msg;
+        errorEl.classList.remove('hidden');
+    }
+
+    document.getElementById('feature-reset-desc')?.addEventListener('click', function() {
+        descInput.value = PRISTINE_TEMPLATE;
+    });
+
+    document.getElementById('feature-add-btn')?.addEventListener('click', function() {
+        const titleInput = document.getElementById('feature-title');
+        const deadlineInput = document.getElementById('feature-deadline');
+        const title = titleInput.value.trim();
+
+        if (!title) {
+            showError('El titulo es obligatorio.');
+            return;
+        }
+        errorEl.classList.add('hidden');
+        this.disabled = true;
+
+        post(page.dataset.createUrl, {
+            title: title,
+            description: descInput.value,
+            // An empty box means "no deadline" — the field's own default.
+            deadline: deadlineInput.value || null,
+        })
+            .then(data => {
+                if (!data.success) { showError(data.message); return; }
+                const f = data.feature;
+                document.getElementById('feature-empty')?.remove();
+
+                // Built with DOM nodes + textContent — never innerHTML with
+                // user-supplied text.
+                const row = document.createElement('a');
+                row.className = 'feature-item';
+                row.href = page.dataset.detailUrlBase + f.id + '/';
+                row.dataset.featureId = f.id;
+
+                const icon = document.createElement('span');
+                icon.className = 'material-symbols-outlined text-violet-500 shrink-0';
+                icon.textContent = 'menu_book';
+
+                const main = document.createElement('div');
+                main.className = 'flex-1 min-w-0';
+                const t = document.createElement('p');
+                t.className = 'text-sm font-semibold text-neutral-800 truncate';
+                t.textContent = f.title;
+                const meta = document.createElement('p');
+                meta.className = 'text-xs text-neutral-400';
+                meta.textContent = f.created_by + ' · ' + f.created_at;
+                main.append(t, meta);
+
+                const counter = document.createElement('span');
+                counter.className = 'task-counter';
+                counter.textContent = f.done_task_count + '/' + f.task_count + ' tareas';
+
+                const pill = document.createElement('span');
+                pill.className = 'deadline-pill' + (f.deadline_display ? '' : ' is-none');
+                pill.textContent = f.deadline_display || 'Sin fecha';
+
+                const badge = document.createElement('span');
+                badge.className = 'status-badge status-' + f.status;
+                badge.textContent = f.status_display;
+
+                const chev = document.createElement('span');
+                chev.className = 'material-symbols-outlined text-neutral-400 shrink-0';
+                chev.textContent = 'chevron_right';
+
+                row.append(icon, main, counter, pill, badge, chev);
+                list.insertBefore(row, list.firstChild);
+
+                titleInput.value = '';
+                deadlineInput.value = '';
+                descInput.value = PRISTINE_TEMPLATE;
+            })
+            .catch(() => showError('Error en la peticion.'))
+            .finally(() => { this.disabled = false; });
+    });
+})();
+</script>
+{% endblock %}

@@ -318,11 +318,14 @@ clean-all:
 # ============================================================================
 # VERSIONING
 # ============================================================================
-# App version is defined in four places and `make version x.y.z` updates them all:
-#   1. pyproject.toml  -> version = "x.y.z"
-#   2. settings.py     -> APP_VERSION fallback = "x.y.z"
-#   3. README.md       -> badge URL
-#   4. uv.lock         -> regenerated via `uv lock --quiet`
+# pyproject.toml is the SINGLE SOURCE OF TRUTH for the app version.
+# `make version x.y.z` updates the three places that cannot read it themselves:
+#   1. pyproject.toml  -> version = "x.y.z"   (the source)
+#   2. README.md       -> badge URL
+#   3. uv.lock         -> regenerated via `uv lock --quiet`
+# settings.py holds NO copy: APP_VERSION reads pyproject.toml at import time, so
+# it cannot lag. project/tests/unit/test_version_consistency.py fails the build
+# if any of the three ever drifts from the source.
 # Usage: make version x.y.z
 
 ifeq ($(firstword $(MAKECMDGOALS)),version)
@@ -351,14 +354,13 @@ version:
 	read -p "Version $$CURRENT will become the new version $$NEW, are you sure? [y/N] " confirm; \
 	if [ "$$confirm" = "y" ] || [ "$$confirm" = "yes" ]; then \
 		sed -i 's/^version = ".*"/version = "'"$$NEW"'"/' pyproject.toml; \
-		sed -i 's/APP_VERSION = os.getenv("APP_VERSION", ".*")/APP_VERSION = os.getenv("APP_VERSION", "'"$$NEW"'")/' project/project/settings.py; \
 		sed -i -E 's|version-v[0-9]+(\.[0-9]+)*-brightgreen|version-v'"$$NEW"'-brightgreen|' README.md; \
 		uv lock --quiet; \
 		echo "Version updated to $$NEW in:"; \
 		echo "  - pyproject.toml"; \
-		echo "  - project/project/settings.py"; \
 		echo "  - README.md (badge URL)"; \
 		echo "  - uv.lock (regenerated via 'uv lock')"; \
+		echo "  (settings.py derives APP_VERSION from pyproject - nothing to update)"; \
 		echo ""; \
 		echo "NOTE: the Recent Versions table, Version History details block, and per-app"; \
 		echo "      READMEs were NOT changed automatically - run the 'update-readme' skill"; \
@@ -423,10 +425,9 @@ pc-run:
 			PATCH=$$(echo $$CURRENT | cut -d. -f3); \
 			NEW="$$MAJOR.$$MINOR.$$((PATCH + 1))"; \
 			sed -i 's/^version = ".*"/version = "'"$$NEW"'"/' pyproject.toml; \
-			sed -i 's/APP_VERSION = os.getenv("APP_VERSION", ".*")/APP_VERSION = os.getenv("APP_VERSION", "'"$$NEW"'")/' project/project/settings.py; \
 			sed -i -E 's|version-v[0-9]+(\.[0-9]+)*-brightgreen|version-v'"$$NEW"'-brightgreen|' README.md; \
 			uv lock --quiet; \
-			echo "Updated version $$CURRENT with new version $$NEW (pyproject.toml, settings.py, README badge, uv.lock)"; \
+			echo "Updated version $$CURRENT with new version $$NEW (pyproject.toml, README badge, uv.lock; settings.py derives)"; \
 			echo "Reminder: Recent Versions + Version History in README were NOT touched - run '/update-readme' skill to refresh them."; \
 		fi; \
 	fi

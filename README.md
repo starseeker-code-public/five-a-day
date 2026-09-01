@@ -10,7 +10,7 @@
 
 <p align="center">
   <a href="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml"><img src="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
-  <a href="https://codecov.io/gh/starseeker-code-public/five-a-day"><img src="https://codecov.io/gh/starseeker-code-public/five-a-day/branch/main/graph/badge.svg" alt="Coverage"></a>
+  <img src="https://img.shields.io/badge/coverage-95.22%25-brightgreen" alt="Coverage">
 </p>
 
 ---
@@ -20,11 +20,11 @@ Built to centralize student records, automate billing cycles, and streamline par
 ### Project Status
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v1.20.0-brightgreen?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-v1.23.0-brightgreen?style=flat-square" alt="Version">
   &nbsp;|&nbsp;
   <a href="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml?query=branch%3Amain"><img src="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml/badge.svg?branch=main&style=flat-square" alt="CI main"></a>
   &nbsp;|&nbsp;
-  <a href="https://codecov.io/gh/starseeker-code-public/five-a-day"><img src="https://codecov.io/gh/starseeker-code-public/five-a-day/branch/main/graph/badge.svg" alt="Coverage"></a>
+  <img src="https://img.shields.io/badge/coverage-95.22%25-brightgreen?style=flat-square" alt="Coverage">
   &nbsp;|&nbsp;
   <a href="https://github.com/starseeker-code-public/five-a-day/actions/workflows/scorecard.yml"><img src="https://img.shields.io/badge/OpenSSF%20Scorecard-monitored-blueviolet?style=flat-square" alt="OSSF Scorecard"></a>
   &nbsp;|&nbsp;
@@ -41,9 +41,9 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 | Version | Date | Description |
 |---------|------|-------------|
-| **v1.20.0** | 2026-08-30 | Spanish dates and labels, editable expenses, special matrícula |
-| v1.17.4 | 2026-08-30 | Password eye drawn as inline SVG, not a webfont glyph |
-| v1.17.3 | 2026-08-30 | Enrollment types are matrícula categories, not cadences |
+| **v1.23.0** | 2026-09-01 | Security review: CI/CD deploys plus 20 hardening fixes |
+| v1.22.1 | 2026-08-31 | Version derived from `pyproject.toml`, drift now fails the build |
+| v1.22.0 | 2026-08-31 | Quarters anchored to enrollment month, first period prorated |
 
 ---
 
@@ -150,8 +150,300 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 ## Version History & Roadmap
 
-<details id="v1200" open>
-<summary><strong>v1.20.0 — Spanish dates and labels, editable expenses, a special matrícula (current)</strong></summary>
+<details id="v1230" open>
+<summary><strong>v1.23.0 — Automated deploys, and a security review acted on (current)</strong></summary>
+
+**CI/CD — deploys stop being a by-hand `/deploy` run**
+
+- `deploy-testing.yml` runs nightly at 02:00 Europe/Madrid. It compares `/health/` on the
+  VM against `pyproject.toml` on `origin/testing` and deploys only when they differ, so a
+  night with no release costs one `curl`. Two cron entries plus a Madrid-hour gate give an
+  exact local 02:00 year-round; GitHub cron is UTC and has no DST.
+- `deploy-production.yml` arms itself on every push to `main`, waits for CI to go green on
+  that exact commit, lists the release's migrations, and then **blocks on the `production`
+  environment's required reviewer**. Production is never deployed by a timer.
+- The credentials are asymmetric on purpose. The nightly job holds an SSH deploy key and
+  **no** Google Cloud credential at all, so the one unattended pipeline cannot reach
+  production. The production job uses Workload Identity Federation whose binding is scoped
+  to `attribute.environment/production`, so a job that omits `environment: production`
+  cannot mint a token — which is why the preflight job is deliberately credential-free.
+- `scripts/setup_cicd.sh` provisions both (idempotent, `--dry-run`, `--rotate-testing-key`).
+
+**Security review — high severity**
+
+- **GitHub Actions command injection.** `auto-merge.yml` interpolated the last commit
+  *subject* into a shell assignment and into two `github-script` bodies. The engine
+  substitutes before bash or JS parses, so a crafted commit title ran arbitrary code in a
+  job that checks out with `GH_PAT` — a repo-write token sitting in `.git/config`. All five
+  sinks now pass through `env:`.
+- **Google OAuth kept credentials it never used.** The login flow requested `gmail.send`
+  and `spreadsheets` with offline access and stored the access token, the refresh token and
+  the **OAuth client secret** in the session — i.e. in a `django_session` row, base64 and
+  unencrypted, captured by every backup. No view ever read them. Scopes and storage removed.
+- **`/password-reset/` was public and unthrottled**, so anyone could loop a known teacher's
+  address and exhaust the Gmail account's shared daily send quota, silently stopping payment
+  reminders, receipts and every other transactional email. Now 3 requests / 15 min / IP.
+
+**Security review — medium severity**
+
+- Rate limiting was per-process: `LocMemCache` across 4 Gunicorn workers and 2 Cloud Run
+  instances made "5 logins/minute" up to 40. `CACHES` now resolves `CACHE_URL` → `CACHE_DB`
+  (the PostgreSQL cache table) → LocMemCache; production uses `CACHE_DB`.
+- CSV formula injection in all four export paths. A student name is free text and
+  `student_create` is available to non-admin teachers, so `=HYPERLINK(...)` stored by one
+  user executed in an admin's spreadsheet. Everything now goes through `core.utils.csv_safe`.
+- `QAErrorEmailMiddleware` emailed the first 500 bytes of the raw request body — a login
+  POST's cleartext password among them. It is now gated on `IS_TESTING_ENV` and redacts
+  credential fields from both urlencoded and multipart bodies.
+- A production posture guard refuses to start when the cookie, HSTS or SSL settings have
+  been weakened, closing the class of silent drift that env-var-overridable security allows.
+- 2FA backup codes were 32 bits behind one unsalted sha256 — exhaustible offline from a
+  database read. Now 64 bits through `make_password`, with the legacy format still accepted
+  so existing admins keep a recovery path.
+
+**Security review — lower severity**
+
+- Content-Security-Policy and Permissions-Policy added (report-only until `CSP_ENFORCE`).
+  `settings.py` assigns `CSP_ENFORCE` from the environment: the middleware reads it with
+  `getattr(settings, ...)`, so while nothing assigned it the documented env var was a
+  no-op and CSP could never be enforced. The original test could not catch that —
+  `override_settings` sets the attribute directly and bypasses the wiring — so a second
+  test now asserts the setting is actually read from the environment.
+- All 18 GitHub Actions pinned to commit SHAs rather than mutable tags.
+- TOTP codes can no longer be replayed inside their ~90 s validity window.
+- `str(e)` no longer reaches the student form; parent names no longer reach the logs.
+- The screenshot upload validates magic bytes, not just the client-declared content type.
+- Password minimum raised to 12 characters.
+- `rest_framework`, `corsheaders` and `django_filters` dropped from `INSTALLED_APPS` —
+  none was used, and DRF with no settings defaults every view to `AllowAny`.
+- New `purge_expired_sessions` task (Beat 03:30 + `manage.py purge_sessions`): nothing
+  purged `django_session` or `parent_session_tokens` before, and both hold auth material.
+
+**Configuration applied to production**
+
+- `HEALTH_PROBE_TOKEN` provisioned via Secret Manager with a per-secret binding, so a deploy
+  can now prove a release landed on the right database.
+- `ACADEMY_IBAN_HOLDER` repaired — it had been storing `Carlín` since the value was first
+  set from a non-UTF-8 console, and every payment-reminder email carried it.
+
+**Testing**
+
+- Suite at **1,501 tests, 95.22 % coverage**. `tests/unit/test_security_hardening.py` adds
+  52 regression tests — one per finding, each asserting behaviour that failed before the fix.
+- **Four tests were date bombs and went off on 2026-09-01.** The `active_enrollment` fixture
+  hard-coded `academic_year="2025-2026"`, but the student list, the language-cheque endpoints
+  and the dashboards all filter on `relevant_academic_years()` — which stopped returning that
+  year the moment the calendar rolled into the next course. The fixture had been valid the
+  previous day and no application code changed. It now derives its year from
+  `academic_year_for_month()` via `conftest.current_course_year()`, so it always sits in the
+  running course. `academic_year_for_month` is the correct anchor of the two helpers:
+  `current_academic_year` rolls over in **May**, when enrolment for the *next* course opens,
+  which would put the fixture's teaching period in the future for four months of every year.
+- Making that fixture current exposed a second, opposite assumption. `test_monthly_generates_full_year`
+  and `test_idempotent` assert all ten Sep–Jun payments, but the generator only issues periods
+  that have already **started** — "the full year" is only observable once the year has elapsed.
+  They now use their own `elapsed_year_enrollment` fixture pinned to a finished year, matching
+  the pattern the neighbouring quarterly test already used, so both directions are deterministic.
+
+</details>
+
+<details id="v1221">
+<summary><strong>v1.22.1 — One version, one source of truth</strong></summary>
+
+**`pyproject.toml` is now the only place the version is written**
+
+- `APP_VERSION` in `project/project/settings.py` was a hand-maintained literal that
+  `make version` kept in step with a `sed`. It reads `pyproject.toml` at import time
+  instead, via `tomllib`, so there is nothing left in that file to forget.
+- The copies genuinely drifted: **v1.20.0 shipped with the `settings.py` bump missing**
+  and needed a follow-up commit that did nothing but repair the number. `/health/`
+  reported the wrong version in the meantime, and nothing about it looked wrong.
+- `make version x.y.z` and the `make pc-run` auto patch-bump both lost their
+  `settings.py` `sed`. They now touch three things: `pyproject.toml` (the source),
+  the README badge URL, and `uv.lock`.
+
+**Why not `importlib.metadata`**
+
+- The Docker build runs `uv sync --no-install-project`, so the app is never installed
+  as a distribution and there is no package metadata to read. `COPY . .` does place
+  `pyproject.toml` at `/app/pyproject.toml`, one level above `BASE_DIR` — which is the
+  only reason the file is reachable at all.
+- If it cannot be read the value becomes the literal `"unknown"`, deliberately. A
+  hard-coded fallback would be indistinguishable from a correct answer; `"unknown"` on
+  `/health/` says plainly that the deploy cannot see its own `pyproject.toml`.
+- The `APP_VERSION` environment variable still wins, so Cloud Run can pin or override a
+  version without a rebuild.
+
+**Drift now fails the build**
+
+- New `tests/unit/test_version_consistency.py` (6 tests): pyproject is semver,
+  `settings.APP_VERSION` equals it and is never `"unknown"`, and the README badge,
+  `uv.lock`'s own `[[package]]` entry and the **Recent Versions** table's lead row all
+  agree with it.
+- That last assertion is the one with teeth. The Recent Versions table is prose, so
+  nothing updates it automatically — a bare `make pc-run` auto-bump leaves the suite red
+  until the `update-readme` skill adds the changelog row.
+
+**Testing**
+
+- Suite at **1,447 tests, 95.18 % coverage** (5,558 statements, 268 uncovered, 55 files
+  at 100 %). Coverage is unchanged: the new file is a test, not covered source.
+
+</details>
+
+<details id="v1220">
+<summary><strong>v1.22.0 — Quarters follow the student, and the first period is prorated</strong></summary>
+
+**Two silent revenue holes in the quarterly schedule**
+
+- Quarterly blocks were pinned to a fixed **Oct/Jan/Apr** calendar. A student enrolling on
+  12 December was **never billed for December**: Q1 fell due on 31 October, before they
+  existed, so it was skipped — and the cron could not backfill it, because its idempotency
+  check matches on due month/year and October was long past.
+- Worse, **September fell outside every quarter**. Q1 covered Oct-Dec, Q2 Jan-Mar, Q3
+  Apr-Jun — nine months. Every quarterly student got September free, every year, since the
+  feature shipped. Monthly students were billed for all ten.
+- `PaymentService.billing_periods()` now anchors blocks to the month the student enrolled:
+  12 December gives Dec-Feb, Mar-May and a one-month June stub. Enrolling in September
+  gives four blocks covering all ten teaching months.
+
+**Periods are created on their first day and fall due on their last**
+
+- `schedule_academic_year_payments()` no longer schedules the whole year up front. It issues
+  the periods that have **started** — plus the first one always, so a student enrolled in
+  August still shows their September fee immediately — and the 1st-of-the-month Celery job
+  opens each later one.
+- `generate_payments` now **back-fills**: any started period without a payment is created, so
+  a scheduler run that never fired is repaired on the next one instead of leaving a month
+  permanently unbilled. Both entry points share one code path, so they cannot drift.
+- Quarterly due dates moved from the end of the quarter's *first* month to the end of its
+  *last*, matching how the academy actually bills a trimestre.
+
+**The first period is prorated by join date — and only the first**
+
+- `proration_fraction()` bills the days remaining in the joining month, counting the join day:
+  15 September on a 30-day month is 16/30, 12 December on 31 days is 20/31. Every later month,
+  and every later period, is full. Inside a quarter only the first month is reduced, so the
+  block is worth `(2 + fraction)/3`.
+- `calculate_period_amount()` is now the single place a period is priced;
+  `calculate_monthly_amount` / `calculate_quarterly_amount` are thin wrappers kept for the
+  standard-price question the reminder email and the pricing preview ask.
+- A hand-priced `special` matrícula is scaled for short or partial periods — a one-month June
+  stub on a €120 quarter bills €40 — because `final_amount` is the price of a *whole* period.
+- The payment concept is marked `(parcial)`, and the student-creation form gained an amber
+  **"Primer pago (parcial)"** row driven by the same helper the generator bills with, so the
+  preview and the invoice cannot disagree.
+
+**Migrating existing data**
+
+- New `reconcile_payment_schedule` management command. There is **no schema migration** — only
+  the logic changed — so rows already in the database keep the old shape, and a plain
+  `generate_payments` re-run would **double-bill** them (new due dates do not match old ones,
+  so the idempotency check never fires).
+- It is a dry run unless `--apply`: it fills gaps, cancels (never deletes) superseded pending
+  rows, and **refuses to touch any enrollment with a completed payment**, reporting it as
+  `REVIEW` for a human — rewriting a settled schedule corrupts the books. Idempotent.
+- `DEPLOYMENT.md` carries the testing and production runbooks. Production has no students yet,
+  so its dry run should report all zeros, which doubles as a check that the deploy is pointed
+  at the right database.
+
+**Testing**
+
+- Suite at **1,441 tests, 95.18 % coverage**. New `test_reconcile_payment_schedule.py` (8 tests)
+  proves legacy rows are replaced rather than duplicated and that collected money survives
+  `--apply --cancel-stale` untouched.
+- `test_payment_scheduling.py` grew to 17: mid-year joins for both modalities, the September
+  half-month, a missed cron run being back-filled, and a June signup rolling into the next
+  academic year.
+
+</details>
+
+<details id="v1211">
+<summary><strong>v1.21.1 — Hadolint action bumped to v3.5.0</strong></summary>
+
+**CI tooling**
+
+- Dependabot (PR #46) moved the Lint job's Dockerfile linter from
+  `hadolint/hadolint-action@v3.4.0` to `v3.5.0` in `.github/workflows/ci.yml`. The action release
+  carries the underlying **Hadolint binary up to v2.15.1**; no rule configuration changed.
+- The `Dockerfile`'s existing suppressions are still required and were left alone — the two
+  `# hadolint ignore=DL3008` pragmas on the `apt-get` layers, and the numeric `USER` that keeps
+  DL3066 quiet because a name-based user can't be resolved by the linter.
+- No application code changed in this release.
+
+</details>
+
+<details id="v1210">
+<summary><strong>v1.21.0 — Desarrollos: a Jira-style epic board feeding the QA backlog</strong></summary>
+
+**A backlog of tickets was the only unit of work the QA panel understood**
+
+- `/testing/` could record a defect, but nothing described the *thing being built* that a
+  handful of those tickets add up to. New **`Feature`** model (`core`, table `features`,
+  Spanish `verbose_name` "Desarrollo") is that missing unit — an epic in Jira's sense.
+- New board at **`/testing/features/`** and a detail page at `/testing/features/<id>/`, both
+  behind `@qa_access_required` like the rest of the QA panel (admin Teacher + `IS_TESTING_ENV`;
+  everyone else gets a 404). Reached from the new **Desarrollos** card on `/testing/`.
+
+**A development is deliberately not a backlog task**
+
+- **No priority.** An epic is scheduled by its **deadline**, not ranked against its siblings —
+  priority stays on the individual tasks, where it means something.
+- **No screenshot.** A development describes work to build, not a defect somebody saw on
+  screen, so `api_create_feature` is JSON-only and has no multipart branch.
+- **`deadline` is nullable and `None` by default.** A development is recorded long before
+  anyone commits to a date, and an invented date is worse than no date. Overdue (deadline
+  passed, status not `done`) turns the pill red; `is_overdue` never fires on a done epic.
+- **The description ships with a Jira-style template** — Resumen / Contexto / Objetivo /
+  Alcance / Fuera de alcance / Criterios de aceptación / Notas técnicas — rendered from the
+  server-side `FEATURE_DESCRIPTION_TEMPLATE` so the board and the detail page cannot drift.
+
+**Tasks are broken out of a development and land in the backlog**
+
+- `api_create_feature_task` creates an ordinary `BacklogTask` with `feature` set, so it shows
+  up on `/testing/` alongside everything else, carries its own priority, and never has an
+  image. The backlog row links back to its epic.
+- `BacklogTask.feature` is `SET_NULL`: deleting an epic must never take the work items with it.
+- The creation email is now one shared helper, `testing_tools.email_backlog_task_created()`,
+  used by both entry points — a task spawned from an epic is announced exactly like one typed
+  into `/testing/`, with an extra line naming the development it came from.
+
+**Emails, at the same two moments the backlog uses**
+
+- Creating a development emails `SUPPORT_EMAIL`; marking one **Hecho** emails the admin
+  teachers, once — re-saving a done epic sends nothing.
+
+**Testing panel layout**
+
+- GitHub, **Desarrollos** and Correo temporal are now three equal cells (GitHub was smaller
+  than a cell and Correo temporal spanned two). Desarrollos sits in the middle, under a book
+  icon.
+- The QA styling shared by the three pages moved to `core/templates/qa/_qa_styles.html`, so
+  `/testing/`, the board and the detail page cannot style the same component differently.
+  Dark variants for the new components live in `theme.css` as usual.
+
+**Coverage**
+
+- `tests/integration/test_features.py` — **47 tests** over the model (deadline defaults,
+  overdue rules, `SET_NULL`, progress counters), both pages, all four endpoints, the two
+  notification paths and the JSON/CSV export.
+
+**Housekeeping folded into this release**
+
+- Codecov dropped from CI: the upload step, the `CODECOV_TOKEN` secret row and every README
+  mention are gone; the coverage badge is now a static shields.io badge kept in step by hand.
+- `DEPLOYMENT.md`'s `HEALTH_PROBE_TOKEN` recipe gained the **required** per-secret
+  `secretAccessor` binding — the runtime service account has no project-wide grant, so a new
+  secret without its own binding leaves the revision unable to start.
+- Pre-commit now checks what CI checks: Ruff, mypy and bandit run over the **whole tree**
+  (`pass_filenames: false` + `always_run: true`) instead of only the staged Python files. A
+  violation in an edited-but-unstaged file, or a commit touching only the Dockerfile / a
+  workflow / a template, used to pass locally and fail CI.
+
+</details>
+
+<details id="v1200">
+<summary><strong>v1.20.0 — Spanish dates and labels, editable expenses, a special matrícula</strong></summary>
 
 **Dates were rendered two different ways on the same page**
 
@@ -2067,11 +2359,22 @@ erDiagram
 
     BacklogTask {
         int id PK
+        int feature_id FK
         string title
         text description
         string priority
         string status
         bool verified
+        string created_by
+        datetime updated_at
+    }
+
+    Feature {
+        int id PK
+        string title
+        text description
+        string status
+        date deadline
         string created_by
         datetime updated_at
     }
@@ -2095,11 +2398,13 @@ erDiagram
     Student ||--o{ FunFridayAttendance : "attends"
     Parent ||--o{ ParentSessionToken : "portal magic link"
     Expense ||--o{ Expense : "generated from recurring"
+    Feature ||--o{ BacklogTask : "broken out into"
 ```
 
 **Not shown:** `Teacher.user_id` points at Django's built-in `auth.User`, and
 `AuditLog.actor_id` at the same table — both are outside this diagram.
-`BacklogTask` and `QAConfiguration` are QA-only and stand alone with no foreign keys.
+`Feature`, `BacklogTask` and `QAConfiguration` are QA-only. `BacklogTask.feature_id` is the
+only FK among them and is `SET_NULL` — deleting an epic must never take its work items with it.
 
 ### Key Constraints
 
@@ -2167,6 +2472,9 @@ DJANGO_DEBUG=True                 # True in dev, False everywhere else
 # Generate with: python -c 'from django.core.management.utils import get_random_secret_key; print(get_random_secret_key())'
 DJANGO_SECRET_KEY=
 DJANGO_ALLOWED_HOSTS=localhost,127.0.0.1
+# Do NOT set APP_VERSION here. settings.py derives the version from
+# pyproject.toml at import time, and an APP_VERSION line silently overrides
+# it — a stale value then shows up on /health/ and in deploy verification.
 
 # ============================================================================
 # LOGGING  (all environments — optional)
@@ -2186,15 +2494,30 @@ SESSION_COOKIE_SAMESITE=Lax       # Lax everywhere — Strict breaks Google OAut
 CSRF_COOKIE_HTTPONLY=True
 CSRF_COOKIE_SAMESITE=Lax          # Strict in production
 CSRF_TRUSTED_ORIGINS=             # Comma-separated http(s):// origins for non-localhost hosts
+
+# Session lifetime + hardening. Defaults are correct; listed so they are
+# discoverable. SESSION_COOKIE_AGE is a 6 h idle window (refreshed per request).
+# SESSION_COOKIE_AGE=21600
+# SESSION_SAVE_EVERY_REQUEST=True
+# SESSION_COOKIE_HTTPONLY=True
+
+# Applied only when DJANGO_DEBUG=False. The production start-up guard REFUSES to
+# boot if the HSTS/SSL/cookie values are weakened, so these exist mainly to let
+# the testing VM run over plain HTTP.
+# SECURE_HSTS_SECONDS=31536000
+# SECURE_HSTS_INCLUDE_SUBDOMAINS=True
+# SECURE_HSTS_PRELOAD=True
+# SECURE_CONTENT_TYPE_NOSNIFF=True
+# SECURE_BROWSER_XSS_FILTER=True
+# X_FRAME_OPTIONS=DENY
 # Reverse proxies in front of the app. The rate limiter reads the client IP this
 # many hops from the RIGHT of X-Forwarded-For (a proxy APPENDS what it saw, so
 # everything further left is client-supplied). Cloud Run and a single nginx are
 # both 1; use 0 when the app is reached directly.
 TRUSTED_PROXY_COUNT=1
-# Optional. The rate limiter is cache-backed and the default LocMemCache is
-# per-process, so N Gunicorn workers multiply the effective limit by N. Point
-# this at the Redis that Celery already uses to make the limit real.
-CACHE_URL=                        # e.g. redis://redis:6379/1
+# The rate limiter is cache-backed and the default LocMemCache is per-process,
+# so N Gunicorn workers multiply the effective limit by N. CACHE_URL and
+# CACHE_DB are defined together in the Cache backend section near the bottom.
 
 # ============================================================================
 # DATABASE  (all environments)
@@ -2205,7 +2528,23 @@ CACHE_URL=                        # e.g. redis://redis:6379/1
 POSTGRES_DB=fiveaday_db
 POSTGRES_USER=fiveaday_user
 POSTGRES_PASSWORD=                # openssl rand -base64 32
+# POSTGRES_HOST=localhost         # docker-compose injects `db`; set only outside Docker
+# POSTGRES_PORT=5432
 # DATABASE_URL=
+
+# Test database (project/settings_test.py). Defaults are what `make test` uses.
+# TEST_DB_HOST=localhost          # `make test` passes TEST_DB_HOST=db
+# TEST_DB_ENGINE=postgresql       # NEVER set this to sqlite for a real test run
+
+# ============================================================================
+# CELERY / REDIS  (optional — docker-compose injects these locally)
+# ============================================================================
+# Leave BOTH unset and CELERY_TASK_ALWAYS_EAGER turns on automatically, so tasks
+# run synchronously in-process. That is exactly how production works: Cloud Run
+# has no worker and no broker. Do NOT schedule with apply_async(eta=)/countdown
+# under eager mode — the delay is ignored and the task fires immediately.
+# CELERY_BROKER_URL=redis://redis:6379/0
+# CELERY_RESULT_BACKEND=redis://redis:6379/0
 
 # ============================================================================
 # AUTHENTICATION  (development only — testing/production use Teacher login)
@@ -2216,6 +2555,8 @@ POSTGRES_PASSWORD=                # openssl rand -base64 32
 # auth.User (email + password) seeded by TEACHER_SEED_* below.
 LOGIN_USERNAME=
 LOGIN_PASSWORD=
+# Email stamped on the auto-created dev superuser (defaults to <user>@local.dev).
+# DJANGO_SUPERUSER_EMAIL=
 
 # ============================================================================
 # EMAIL  (all environments — Gmail SMTP + App Password)
@@ -2232,6 +2573,10 @@ EMAIL_TEST_2=                     # dev/QA test recipient 2
 GOOGLE_CLIENT_ID=
 GOOGLE_CLIENT_SECRET=
 GOOGLE_REDIRECT_URI=              # http(s)://YOUR_HOST/auth/google/callback/
+# Comma-separated allow-list of addresses permitted to sign in with Google.
+# Falls back to EMAIL_HOST_USER, then DJANGO_SUPERUSER_EMAIL. The callback fails
+# CLOSED when the resolved list is empty.
+# GOOGLE_ALLOWED_EMAIL=
 
 # ============================================================================
 # TEACHER SEEDING  (testing + production only — read by `manage.py seed_teachers`)
@@ -2296,6 +2641,29 @@ STRIPE_WEBHOOK_SECRET=
 # connectivity and migration state — just not the counts. Deploy tooling uses
 # the counts to prove a release did not land on the wrong database.
 HEALTH_PROBE_TOKEN=
+
+# --- Cache backend (v1.23.0) -------------------------------------------------
+# The rate limiter is cache-backed, so the backend decides whether the login,
+# 2FA and magic-link throttles are REAL. Django's default LocMemCache is
+# per-process: with Gunicorn's 4 workers and Cloud Run's maxScale of 2 that is
+# up to 8 independent counters, so "5 per minute" was really up to 40.
+#   CACHE_URL  Redis, if one is reachable. Never point this at a host the app
+#              cannot reach — core.rate_limit calls cache.add() with no
+#              fallback, so an unreachable cache turns every login into a 500.
+#   CACHE_DB   Use the PostgreSQL cache table instead. Shared across every
+#              worker and instance, and adds no infrastructure (sessions are
+#              already database-backed). entrypoint.sh runs createcachetable.
+# Production uses CACHE_DB=True.
+CACHE_URL=
+CACHE_DB=False
+# CACHE_DB_TABLE=django_cache     # only used when CACHE_DB is on
+
+# --- Content-Security-Policy (v1.23.0) ---------------------------------------
+# core.middleware.SecurityHeadersMiddleware sends the policy REPORT-ONLY by
+# default. The app uses a Tailwind CDN and inline <script> config blocks, so the
+# policy needs 'unsafe-inline'; watch the browser console for violations, then
+# set this to True to enforce.
+CSP_ENFORCE=False
 ```
 
 A few keys are intentionally absent from the template:
@@ -2367,6 +2735,8 @@ Run `make` or `make help` for the full list. Key commands:
 | `manage.py send_monthly_report` | Admin monthly report (Beat: 28th, 20:00) |
 | `manage.py send_due_fun_friday_emails` | Drain due `FunFridayScheduledSend` rows (Beat: daily 14:30) |
 | `manage.py cleanup_backlog_tasks` | Delete QA backlog tasks done > 30 days ago (Beat: daily 07:00) |
+| `manage.py purge_sessions` | Delete expired sessions + spent parent magic-link tokens (Beat: daily 03:30) |
+| `manage.py prune_audit_log` | Delete `AuditLog` rows older than 2 years (Beat: Sunday 03:00) |
 | **Developer Tooling** | |
 | `make sync` | Install all deps (including dev) via uv |
 | `make lint` / `make lint FIX=1` | Run Ruff linter (optionally auto-fix) |
@@ -2461,7 +2831,7 @@ The table below describes every variable in the [.env template](#env-template) a
 | **Logging / misc** | | | |
 | `LOG_LEVEL` | App log level | No | `DEBUG` in dev, `INFO` in prod |
 | `DJANGO_LOG_LEVEL` | Django framework log level | No | inherits `LOG_LEVEL` |
-| `APP_VERSION` | Version string override | No | from `settings.py` default |
+| `APP_VERSION` | Version string override | No | read from `pyproject.toml` |
 | `DJANGO_SUPERUSER_EMAIL` | Email given to the auto-created dev superuser, and last fallback for the Google-login allow-list | No | `<LOGIN_USERNAME>@local.dev` |
 | **Security headers & cookies** (advanced overrides — all applied only when `DEBUG=False`) | | | |
 | `SESSION_COOKIE_SECURE` | HTTPS-only session cookie | No | `True` |
@@ -2474,6 +2844,9 @@ The table below describes every variable in the [.env template](#env-template) a
 | `CSRF_TRUSTED_ORIGINS` | Comma-separated origins allowed to POST (needed behind a proxy or a custom domain) | No | — |
 | `TRUSTED_PROXY_COUNT` | Reverse proxies in front of the app. The rate limiter reads the client IP this many hops from the **right** of `X-Forwarded-For`, because a proxy appends what it saw — anything further left is client-supplied. `0` ignores the header entirely | No | `1` |
 | `CACHE_URL` | Redis URL for the cache backing the rate limiter. Without it Django uses `LocMemCache`, which is **per-process**, so N Gunicorn workers multiply the effective limit by N | No | — (LocMem) |
+| `CACHE_DB` | Use the PostgreSQL cache table instead of LocMemCache when no `CACHE_URL` is set. **Production runs `True`** — the rate limiter is cache-backed, and a per-process cache makes every throttle per-worker. The table is created idempotently by `entrypoint.sh` | No | `False` |
+| `CACHE_DB_TABLE` | Table name used when `CACHE_DB` is on | No | `django_cache` |
+| `CSP_ENFORCE` | Switch `SecurityHeadersMiddleware` from `Content-Security-Policy-Report-Only` to enforcing. Turn it on only once the browser console is clean — the app uses a Tailwind CDN and inline config blocks, so an enforced policy that is too tight blanks the page | No | `False` |
 | `SECURE_HSTS_SECONDS` | HSTS max-age | No | `31536000` (1 y) |
 | `SECURE_HSTS_INCLUDE_SUBDOMAINS` / `SECURE_HSTS_PRELOAD` | HSTS scope | No | `True` |
 | `SECURE_CONTENT_TYPE_NOSNIFF` | `X-Content-Type-Options: nosniff` | No | `True` |
@@ -2486,19 +2859,22 @@ The table below describes every variable in the [.env template](#env-template) a
 
 ### App Versioning
 
-The app version is defined in **four places** and `make version x.y.z` updates all four together:
+**`pyproject.toml` is the single source of truth.** `make version x.y.z` updates it plus the two places that cannot read it themselves:
 
-1. **`pyproject.toml`** — `version = "x.y.z"` (package metadata)
-2. **`project/project/settings.py`** — `APP_VERSION = os.getenv("APP_VERSION", "x.y.z")` (runtime fallback)
-3. **`README.md`** — the header version badge URL
-4. **`uv.lock`** — regenerated via `uv lock --quiet` so the lockfile's own `[[package]]` entry stays in sync
+1. **`pyproject.toml`** — `version = "x.y.z"` — **the source**
+2. **`README.md`** — the header version badge URL (static markdown; nothing can derive it)
+3. **`uv.lock`** — regenerated via `uv lock --quiet` so the lockfile's own `[[package]]` entry stays in sync
+
+**`settings.py` holds no copy.** `APP_VERSION` reads `pyproject.toml` at import time via `tomllib`, so it cannot lag. (`importlib.metadata` is unusable here: the Docker build runs `uv sync --no-install-project`, so the app is never installed as a distribution — but `COPY . .` does place `pyproject.toml` one level above `BASE_DIR`.) If the file is unreadable the value becomes the literal `"unknown"` rather than a plausible-looking stale number, so a broken deploy is obvious on `/health/`.
+
+This used to be four hand-maintained places, and the copies drifted: v1.20.0 shipped with the `settings.py` bump missing and needed a follow-up commit purely to repair it. [`tests/unit/test_version_consistency.py`](project/tests/unit/test_version_consistency.py) now fails the build if the badge, the lockfile, or the Recent Versions table falls out of step with `pyproject.toml`.
 
 `make version x.y.z` prompts `Version A will become the new version B, are you sure?` before writing. Running `make version` with no argument prints both the pyproject and README badge values side-by-side and warns if they've drifted. `make pc-run` also auto-bumps the patch digit on successful pre-commit (y/N prompt) and stages the regenerated `uv.lock` automatically.
 
 The version appears in:
 - `/health/` endpoint response
 - Support ticket emails
-- Can be overridden at runtime via the `APP_VERSION` environment variable (do **not** leave a legacy value like `0.x.y` in `.env` — remove the line so the default in `settings.py` takes effect)
+- Can be overridden at runtime via the `APP_VERSION` environment variable (do **not** leave a legacy value like `0.x.y` in `.env` — remove the line so the value derived from `pyproject.toml` takes effect)
 
 ---
 
@@ -2554,34 +2930,38 @@ five-a-day/
 │   │
 │   ├── core/                     Dashboard, Auth, Schedule, Utilities, Cross-cutting
 │   │   ├── models.py             TodoItem, HistoryLog, FunFridayAttendance, ScheduleSlot,
-│   │   │                         BacklogTask (+ `verified` QA tick, v1.20.0), QAConfiguration,
+│   │   │                         BacklogTask (+ `verified` QA tick, v1.20.0; + `feature` FK,
+│   │   │                         v1.21.0), Feature (v1.21.0 — QA epics), QAConfiguration,
 │   │   │                         FunFridayScheduledSend (v1.14.2)
 │   │   ├── audit_models.py       AuditLog (v1.10 — immutable per-model change trail)
 │   │   ├── audit_signals.py      Signal receivers + AuditActorMiddleware (contextvar-based actor)
 │   │   ├── rate_limit.py         Cache-backed IP rate limiter (v1.10)
 │   │   ├── log_safe.py           safe_log() — CR/LF-stripping log sanitizer (v1.14.4)
-│   │   ├── views/                22 view modules — auth, password_reset, dashboard,
+│   │   ├── views/                23 view modules — auth, password_reset, dashboard,
 │   │   │                         students, parents, payments, management, app_forms,
 │   │   │                         schedule, fun_friday_attendance, todos, support,
 │   │   │                         errors, testing_tools, waiting_list (v1.1), sheets (v1.2),
 │   │   │                         expenses (v1.5), reports (v1.7), parent_portal (v1.9),
-│   │   │                         stripe_views (v1.11), pwa (v1.12), two_factor (v1.13)
+│   │   │                         stripe_views (v1.11), pwa (v1.12), two_factor (v1.13),
+│   │   │                         features (v1.21.0)
 │   │   ├── services/             3 modules — analytics_service (v1.7),
 │   │   │                         google_sheets_service (v1.2), two_factor_service (v1.13)
 │   │   ├── constants.py          DIAS_ES, MESES_ES, SCHEDULED_APPS
 │   │   ├── middleware.py         SimpleAuthMiddleware + QAErrorEmailMiddleware
-│   │   │                         + NoHtmlCacheMiddleware
+│   │   │                         + NoHtmlCacheMiddleware + SecurityHeadersMiddleware
+│   │   │                         (CSP + Permissions-Policy, v1.23.0)
 │   │   ├── decorators.py         qa_access_required (testing env gate)
 │   │   ├── context_processors.py Notifications + is_admin_user / is_non_admin_teacher flags
 │   │   ├── transactions.py       Optimised queryset builders with stable ordering
 │   │   ├── templates/            All HTML templates — base, pages, emails/, parent_portal/,
 │   │   │                         two_factor/ (v1.13), plus expenses/reports/waiting_list
-│   │   │                         and waiting_list_create (v1.15)
+│   │   │                         and waiting_list_create (v1.15), features/feature_detail
+│   │   │                         and qa/_qa_styles (v1.21.0)
 │   │   ├── static/               CSS (app.css, theme.css, email.css, admin_custom.css)
 │   │   │                         + JS (17 modules) + images
 │   │   └── management/commands/  seed_teachers, seed_testdata, export_to_sheets (v1.2),
 │   │                             reset_two_factor (v1.13), cleanup_backlog_tasks (v1.14.2),
-│   │                             prune_audit_log (v1.15)
+│   │                             prune_audit_log (v1.15), purge_sessions (v1.23.0)
 │   │
 │   ├── students/                 People Management
 │   │   ├── models.py             Student, Parent, StudentParent, Teacher, Group.
@@ -2609,7 +2989,9 @@ five-a-day/
 │   │   ├── exports.py            Excel/CSV builders
 │   │   ├── admin.py              Payment + Enrollment + Expense admin
 │   │   ├── urls.py               24 URL patterns (v1.15: student_payments_pdf)
-│   │   └── management/commands/  generate_payments, materialize_recurring_expenses (v1.14.2)
+│   │   └── management/commands/  generate_payments, materialize_recurring_expenses (v1.14.2),
+│   │                             seed_enrollment_types (v1.17.1),
+│   │                             reconcile_payment_schedule (v1.22.0 — one-off migration aid)
 │   │
 │   ├── comms/                    Communications
 │   │   ├── services/             email_service (EmailService singleton),
@@ -2623,7 +3005,7 @@ five-a-day/
 │   │   └── management/commands/  send_email, test_all_emails, plus 4 Beat-task wrappers
 │   │                             (v1.14.2 — birthday, reminders, report, Fun Friday drain)
 │   │
-│   ├── tests/                    pytest suite (1,375 tests, 95.36 % coverage) — unit/ + integration/
+│   ├── tests/                    pytest suite (1,501 tests, 95.22 % coverage) — unit/ + integration/
 │   ├── templates/registration/   Password-reset templates (form, done, confirm, complete + email body)
 │   ├── templates/admin/          Django admin overrides (branded theme)
 │   └── conftest.py               Shared fixtures (models + authenticated_client)
@@ -2632,9 +3014,10 @@ five-a-day/
 │   ├── workflows/
 │   │   ├── ci.yml                     Lint + typecheck + tests + Docker build + CVE scan on every push/PR
 │   │   ├── auto-merge.yml             Hourly development → testing merge + PR to main
+│   │   ├── deploy-testing.yml         Nightly 02:00 Madrid — deploys testing when versions differ
+│   │   ├── deploy-production.yml      Arms on push to main, deploys only after reviewer approval
 │   │   ├── codeql.yml                 Weekly Python security scan
 │   │   ├── notify-production.yml      Email on push to main
-│   │   ├── dependabot-auto-merge.yml  Auto-merge Dependabot minor/patch PRs
 │   │   ├── dependency-review.yml      Block PRs introducing HIGH/CRITICAL CVEs
 │   │   └── scorecard.yml              OSSF Scorecard supply-chain security (weekly)
 │   ├── dependabot.yml            Weekly dependency updates
@@ -2647,7 +3030,8 @@ five-a-day/
 │   ├── CELERY.md                 Celery worker/beat reference
 │   └── TODO.md                   Open tasks
 │
-├── scripts/                      Dev helpers + backup_retention.sh (Cloud SQL tiers)
+├── scripts/                      Dev helpers, backup_retention.sh (Cloud SQL tiers),
+│                                 setup_cicd.sh (deploy credentials — see DEPLOYMENT.md §4)
 ├── backups/                      DB dumps from `make backup` (gitignored)
 │
 ├── Dockerfile                    Multi-stage build (builder + runtime)
@@ -2671,14 +3055,14 @@ Dashboard, authentication, scheduling, and shared utilities. Owns all views and 
 
 | Component | Details |
 |-----------|---------|
-| **Models** | 8 — TodoItem, HistoryLog (1000-entry cap), FunFridayAttendance, FunFridayScheduledSend, ScheduleSlot, BacklogTask (QA; `verified` is the tester's tick, separate from `status="done"`, v1.20.0), QAConfiguration (QA), plus AuditLog in `audit_models.py` |
-| **Views** | 22 modules: auth, password_reset, dashboard, students, parents, payments, management, app_forms, schedule, fun_friday_attendance, todos, support, errors, testing_tools, waiting_list, sheets, expenses, reports, parent_portal, stripe_views, pwa, two_factor |
+| **Models** | 9 — TodoItem, HistoryLog (1000-entry cap), FunFridayAttendance, FunFridayScheduledSend, ScheduleSlot, BacklogTask (QA; `verified` is the tester's tick, separate from `status="done"`, v1.20.0; `feature` FK, v1.21.0), Feature (QA epics — no priority, nullable `deadline`, v1.21.0), QAConfiguration (QA), plus AuditLog in `audit_models.py` |
+| **Views** | 23 modules: auth, password_reset, dashboard, students, parents, payments, management, app_forms, schedule, fun_friday_attendance, todos, support, errors, testing_tools, features, waiting_list, sheets, expenses, reports, parent_portal, stripe_views, pwa, two_factor |
 | **Services** | 3 — analytics_service, google_sheets_service, two_factor_service |
 | **Middleware** | 4 — NoHtmlCacheMiddleware (no-cache on dynamic HTML), QAErrorEmailMiddleware, SimpleAuthMiddleware (session auth public allow-list incl. `/password-reset/` + non-admin teacher URL-name whitelist), AuditActorMiddleware |
-| **Templates** | base.html (layout), 23 page templates, 18 email templates + `base_email.html` (common violet style + dark-mode support), error pages, plus `templates/registration/` for the password-reset flow |
+| **Templates** | base.html (layout), 25 page templates (v1.21.0: `features.html`, `feature_detail.html`) + the shared `qa/_qa_styles.html` partial, 18 email templates + `base_email.html` (common violet style + dark-mode support), error pages, plus `templates/registration/` for the password-reset flow |
 | **Static** | 4 CSS files (app.css, theme.css, email.css, admin_custom.css), 17 JS modules, images |
 | **Commands** | seed_teachers (Teacher + auth.User from env vars), seed_testdata, export_to_sheets, reset_two_factor, cleanup_backlog_tasks, prune_audit_log (v1.15) |
-| **URLs** | 46 patterns: dashboard, auth, password reset, schedule, todos, support, QA (incl. backlog export), PWA, 2FA, parent portal |
+| **URLs** | 52 patterns: dashboard, auth, password reset, schedule, todos, support, QA (backlog + export, Desarrollos board/detail/API/export), PWA, 2FA, parent portal |
 
 See [core/README.md](project/core/README.md) for details.
 
@@ -2703,7 +3087,7 @@ Financial management with a dedicated service layer.
 | Component | Details |
 |-----------|---------|
 | **Models** | 5 — SiteConfiguration (singleton pricing), EnrollmentType (plan types), Enrollment (discount flags), Payment (overdue detection, Stripe ids), Expense (three recurring cadences) |
-| **Services** | 6 — EnrollmentService (creation + discounts + returning-student detection), PaymentService (generation + calculations; v1.15 quarterly amounts now carry sibling / language-cheque / June discounts; v1.20.0 `hand_priced_amount()` bills a `special` matrícula at its agreed price instead of re-deriving it from config), PricingService (centralized config access; v1.20.0 `payment_reminder_fees()` computes the five figures the reminder email prints), ExpenseService, PdfService (reportlab; v1.15 per-student payment history), StripeService (httpx, no SDK dependency) |
+| **Services** | 6 — EnrollmentService (creation + discounts + returning-student detection), PaymentService (generation + calculations; v1.15 quarterly amounts now carry sibling / language-cheque / June discounts; v1.20.0 `hand_priced_amount()` bills a `special` matrícula at its agreed price instead of re-deriving it from config; v1.22.0 `billing_periods()` anchors quarters to the enrollment month, `proration_fraction()` prorates the first period only, and `calculate_period_amount()` becomes the single place a period is priced), PricingService (centralized config access; v1.20.0 `payment_reminder_fees()` computes the five figures the reminder email prints), ExpenseService, PdfService (reportlab; v1.15 per-student payment history), StripeService (httpx, no SDK dependency) |
 | **Constants** | Pricing seeds, ENROLLMENT_TYPE_CHOICES, SCHEDULE_TYPE_CHOICES, PAYMENT_METHOD_CHOICES, etc. Every choice **label** is Spanish (v1.20.0) — `get_<field>_display()` output is user-facing; the keys stay English |
 | **Exports** | build_database_workbook() → multi-sheet .xlsx |
 | **Celery tasks** | 3 — generate_monthly_payments_task, materialize_recurring_expenses_task, materialize_recurring_expenses_daily_task |
@@ -2940,11 +3324,11 @@ Public flow at `/password-reset/...` that lets a teacher recover access without 
 
 | Metric | Value |
 |--------|-------|
-| **Total tests** | 1,375 |
-| **Test files** | 78 (49 unit + 29 integration) |
-| **Coverage** | 95% (95.36% — 5,306 statements, 246 uncovered) |
+| **Total tests** | 1,501 |
+| **Test files** | 82 (52 unit + 30 integration) |
+| **Coverage** | 95% (95.22% — 5,689 statements, 272 uncovered) |
 | **Coverage thresholds** | **≥ 90%** (target, no warning) / **75-89%** (CI warning, pre-commit still blocks below 75) / **< 75%** (CI fails, pre-commit rejects the commit) |
-| **Runtime** | ~50 seconds (parallel workers via `pytest-xdist -n auto`) |
+| **Runtime** | ~65 seconds (parallel workers via `pytest-xdist -n auto`) |
 | **Database** | PostgreSQL (same as production) — **always use `make test`** |
 | **Framework** | pytest 9 + pytest-django + pytest-cov + pytest-xdist + pytest-randomly |
 | **Type checking** | mypy + django-stubs (pre-commit hook) |
@@ -2988,11 +3372,12 @@ Within each file, related tests are grouped into classes. Where a large file abs
 
 ### Unit Tests
 
-**49 files, 718 tests.** Direct-call tests — no HTTP stack, no URL resolver, no template rendering.
+**51 files, 738 tests.** Direct-call tests — no HTTP stack, no URL resolver, no template rendering.
 
 | File | Count | Coverage |
 | --- | --- | --- |
 | [`unit/test_schedule_utils.py`](project/tests/unit/test_schedule_utils.py) | 63 | `core.schedule_utils` — the single source of truth for how a group's timetable is rendered into the welcome email. Mon–Thu row bands, the Friday per-cell `FRIDAY_TIMES` map (four overlapping sessions), `is_valid_slot` grid validation, out-of-range rows returning a placeholder instead of raising, and `get_group_schedule_lines` (ordering, day grouping, empty group, column collapsing) |
+| [`unit/test_security_hardening.py`](project/tests/unit/test_security_hardening.py) | 52 | One regression test per finding of the v1.23.0 security review, each asserting behaviour that failed before the fix: the OAuth callback storing no token/refresh-token/client-secret in the session and failing closed on an empty allow-list or absent `email_verified`; `csv_safe` neutralising `=`/`+`/`-`/`@` in all four export paths while leaving a negative `Decimal` intact; `QAErrorEmailMiddleware` gated on `IS_TESTING_ENV` and redacting credentials from **both** urlencoded and multipart bodies; the rate limiter reading `X-Forwarded-For` from the right and throttling `/password-reset/`; 64-bit backup codes through `make_password` with the legacy sha256 digests still accepted; TOTP replay refused at or below `two_factor_last_counter`; the production start-up posture guard; CSP + Permissions-Policy headers; magic-byte screenshot validation; and the 12-character password minimum |
 | [`unit/test_models.py`](project/tests/unit/test_models.py) | 53 | Every model across `students`, `billing`, `core` — properties (`full_name`, `age`, `is_overdue`, `remaining_amount`, `is_paid`), `__str__`, unique constraints, FK behavior, academic-year helpers (`current_academic_year`, `academic_year_start_date`, `academic_year_end_date`), SiteConfiguration singleton, HistoryLog cap + debounce |
 | [`unit/test_expenses.py`](project/tests/unit/test_expenses.py) | 33 | `Expense` model + `ExpenseService` (v1.5): per-frequency `clean()` validation, monthly totals aggregation, `materialize_recurring` (monthly, 1st-of-month) and `materialize_recurring_for_date` (weekly `recurring_weekdays` CSV + yearly), idempotency on `generated_from` + exact `expense_date`, and `recurring_day` accepting the whole 1–31 range (29–31 clamp to the month's last day) |
 | [`unit/test_bugfix_regressions.py`](project/tests/unit/test_bugfix_regressions.py) | 31 | Regression guards for the v1.15.0 fix pass, each pinning a defect verified broken against the running app: adult-student payments crashing search + CSV export, quarterly discounts (sibling, language cheque, June), completed payments with no `payment_date` vanishing from income, non-idempotent quick-complete rewriting financial history, payments attaching to a finished enrollment, unvalidated choice fields, `str(e)` leaking to the browser, cancelled payments inflating "esperado", query strings that used to 500, negative prices, singleton deletion, and the `enrollment_amount` fallback |
@@ -3016,7 +3401,8 @@ Within each file, related tests are grouped into classes. Where a large file abs
 | [`unit/test_beat_tasks.py`](project/tests/unit/test_beat_tasks.py) | 12 | The v1.4 Beat tasks themselves: `generate_monthly_payments_task` (creates the month's pending fees, idempotent) and `send_monthly_report_task` (default + explicit recipient) |
 | [`unit/test_beat_commands.py`](project/tests/unit/test_beat_commands.py) | 12 | The Beat-task management-command wrappers (v1.14.2): each command runs its task synchronously via `.apply()`, `--recipient`/`--month`/`--year`/`--date`/`--days` forwarding, `materialize_recurring_expenses` flag validation (`--daily` vs monthly), real backlog-cleanup run (old done task deleted, fresh survives) |
 | [`unit/test_returning_student_discount.py`](project/tests/unit/test_returning_student_discount.py) | 11 | Returning-student enrollment discount (v1.13): `is_returning_student` detection, `compute_enrollment_fee` with the discount applied, `SiteConfiguration` default, and the `update_site_config` API accepting the new field |
-| [`unit/test_payment_scheduling.py`](project/tests/unit/test_payment_scheduling.py) | 11 | `PaymentService.schedule_academic_year_payments`: monthly enrollment -> 10 pending payments (Sep-Jun) due at month end, quarterly -> 3 (Oct/Jan/Apr), idempotent on re-run, inactive student skipped. Plus the v1.20.0 `special` pricing lock: monthly and quarterly payments use the hand-set amount, the June and sibling/cheque discounts are **not** re-applied on top, a standard enrollment still prices from `SiteConfiguration`, and the `generate_payments` cron agrees with `EnrollmentService` end to end |
+| [`unit/test_payment_scheduling.py`](project/tests/unit/test_payment_scheduling.py) | 17 | `PaymentService.schedule_academic_year_payments`: periods created on their first day, due on their last, idempotent on re-run, inactive student skipped. v1.22.0 adds the mid-year cases the fixed calendar got wrong — a 12-December joiner billed for December in both modalities, quarters anchored to the enrollment month (Sep gives four blocks, not three), the 15-September half month falling out of proration, only the first period prorated, a missed cron run back-filled, and a June signup rolling into the next academic year. Plus the v1.20.0 `special` pricing lock: the hand-set amount is used, June and sibling/cheque discounts are **not** re-applied on top, and a short period is scaled |
+| [`unit/test_reconcile_payment_schedule.py`](project/tests/unit/test_reconcile_payment_schedule.py) | 8 | The v1.22.0 migration aid. Dry run writes nothing; an enrollment with **completed** payments is reported `REVIEW` and survives `--apply --cancel-stale` untouched (`--force` overrides); legacy fixed-quarter rows are replaced rather than duplicated, so nobody is double-billed; the September gap every quarterly student had is filled; a second pass reports `0 payment(s) to create`; `--academic-year` scopes correctly |
 | [`unit/test_log_safe.py`](project/tests/unit/test_log_safe.py) | 11 | `core.log_safe.safe_log` — the log-injection sanitizer (v1.14.4): CR/LF stripping, control characters, non-string coercion, length clamping |
 | [`unit/test_analytics_service.py`](project/tests/unit/test_analytics_service.py) | 11 | Reports analytics service (v1.7): financial summary, collection rate, retention snapshot, group utilisation, and the composed dashboard report |
 | [`unit/test_coverage_boost_2.py`](project/tests/unit/test_coverage_boost_2.py) | 10 | Second branch-fill pass: waiting-list exception branches, student-create waiting mode, context-processor exception branches, audit-signal branches, PDF-service academy-info fallback, expense validation, Stripe cross-parent guard, rate-limit disabled path |
@@ -3032,6 +3418,7 @@ Within each file, related tests are grouped into classes. Where a large file abs
 | [`unit/test_pdf_service.py`](project/tests/unit/test_pdf_service.py) | 7 | reportlab PDF service (v1.3): payment receipt, quarterly summary, and tax certificate generation — byte output, academy-info population |
 | [`unit/test_payment_helpers.py`](project/tests/unit/test_payment_helpers.py) | 7 | `parse_date_value` (6 formats including invalid) + `payment_detail` AJAX helper called directly via `RequestFactory` |
 | [`unit/test_exports.py`](project/tests/unit/test_exports.py) | 7 | Excel workbook generation via `openpyxl`: Students, Enrollments, Payments sheets + combined workbook; empty-database edge case |
+| [`unit/test_version_consistency.py`](project/tests/unit/test_version_consistency.py) | 6 | The app version must agree everywhere it appears (v1.22.1): `pyproject.toml` is semver, `settings.APP_VERSION` derives from it and is never the `"unknown"` fallback, and the README badge, `uv.lock`'s own `[[package]]` entry and the **Recent Versions** table's lead row all match it. The copies used to drift silently — v1.20.0 shipped with the `settings.py` bump missing |
 | [`unit/test_audit_log.py`](project/tests/unit/test_audit_log.py) | 6 | Immutable audit trail (v1.10): the `post_save`/`post_delete` signal receivers write an `AuditLog` row with the contextvar actor, and the model rejects mutation after creation |
 | [`unit/test_qa_error_middleware.py`](project/tests/unit/test_qa_error_middleware.py) | 5 | `QAErrorEmailMiddleware.process_exception` via `RequestFactory`: pass-through, disabled config, no support email, send success, send failure swallowed |
 | [`unit/test_error_handlers.py`](project/tests/unit/test_error_handlers.py) | 5 | `handler400`/`handler403`/`handler404`/`handler405`/`handler500` render with correct status codes |
@@ -3044,7 +3431,7 @@ Within each file, related tests are grouped into classes. Where a large file abs
 
 ### Integration Tests
 
-**29 files, 657 tests.** Full HTTP stack through Django's test client.
+**30 files, 709 tests.** Full HTTP stack through Django's test client.
 
 | File | Count | Coverage |
 | --- | --- | --- |
@@ -3054,9 +3441,10 @@ Within each file, related tests are grouped into classes. Where a large file abs
 | [`integration/test_bugfix_security_and_features.py`](project/tests/integration/test_bugfix_security_and_features.py) | 57 | Security regressions + the v1.15.0 feature additions. Security: the three stored-XSS sinks (history feed, student autocomplete, schedule JSON block), rate-limit bypass via a spoofed `X-Forwarded-For`, parent-portal session fixation, the service worker caching `/login/`, schedule-slot validation, and teachers created in the UI being able to activate their account. Features: the short waiting-list form, the waiting-list round trip, the payment-history PDF, month and group filters, backlog export, Fun Friday double-send, newsletter fallback, adult receipts, payment receipt emails, enrollment churn, and Spanish enrollment labels |
 | [`integration/test_payment_views.py`](project/tests/integration/test_payment_views.py) | 38 | All HTTP payment endpoints: list (search, stats), create (+ invalid parent + unexpected exception), detail-view (+ 404), update (JSON + FormData + all error branches), delete (success + exception 500), deactivate (success + exception 400), quick-complete (success + invalid method + broken JSON), get-details (success + exception), search payments/parents (short query + hits), validate student-parent (all branches), export DB to Excel |
 | [`integration/test_v1175_fixes.py`](project/tests/integration/test_v1175_fixes.py) | 32 | Regression locks for the v1.20.0 fix round, one class per reported problem: Spanish choice labels (`get_<field>_display()` for every payment type/status and enrollment status), every email template defining its own `{% block title %}`, unfiltered dates rendering `dd/mm/yyyy` via `FORMAT_MODULE_PATH`, `search_students` carrying the parent (and reporting no parent for an adult), `update_expense` (amount raise, cadence change, already-generated rows untouched, weekly-without-weekdays rejected, unknown category coerced, zero amount rejected), the create-expense date default, the surname-free waiting-list form, `waiting_priority` ordering, and `StudentForm` still requiring a surname |
+| [`integration/test_features.py`](project/tests/integration/test_features.py) | 47 | Desarrollos, the QA epic board (v1.21.0). Model: `deadline` null by default, `is_overdue` only when the date passed **and** the epic is not done, `days_left`, the progress counters, Spanish status labels, and `SET_NULL` keeping the tasks when the epic is deleted. Views: both pages render, done epics sort last, the Jira template reaches the board, non-QA users get 404. Endpoints: create (with / without / invalid deadline), update (status, deadline, clearing it with `null`, title + description, and a status-only payload not clobbering the deadline), break-out-a-task (lands in the backlog linked to its epic, priority default, shows up on `/testing/`), and the JSON/CSV export in both scopes. Emails: creation reaches `SUPPORT_EMAIL`, done notifies the admin teachers exactly once, and a task email names its development |
 | [`integration/test_testing_tools.py`](project/tests/integration/test_testing_tools.py) | 28 | QA dashboard `/testing/` gated by `@qa_access_required` (via `override_settings`): dashboard renders + git failure handled, `api_seed_database` (success + reset + command error 500 + non-QA 404), `api_create_backlog_task` (all branches + screenshot attached to the email but never stored + send/swallow), `api_update_backlog_task` (success + invalid status + 404), the v1.20.0 `verified` QA tick (defaults off, toggles on/off, never touches `status` nor fires the done email, `done` still works alongside it) and the unfinished-first ordering shared by the dashboard and the export, `api_toggle_error_email` (on + off + bad JSON) |
 | [`integration/test_waiting_list_views.py`](project/tests/integration/test_waiting_list_views.py) | 27 | Waiting List & Group Capacity views (v1.1): waiting-list page, `assign_from_waiting_list` (capacity checks, and since v1.17.2 a redirect into the normal parent-then-student flow rather than an in-place promotion), `add_to_waiting_list`, student list excludes waiting students, dashboard waiting widget. v1.20.0 adds the short create form (no surname asked for, entry created without one, `waiting_priority` off by default, saved when ticked, flagged in the history line), the priority ordering (`-waiting_priority` first, FIFO within each band) and `StudentForm` still demanding a surname |
-| [`integration/test_student_views.py`](project/tests/integration/test_student_views.py) | 27 | `StudentListView` (search, exclude inactive, context), `StudentDetailView` (parents visible, 404), `StudentCreateView` (form + adult mode + success + full POST + error paths including invalid parent, existing-parent mode, create_sibling flag, email-task swallow), `search_students` JSON endpoint (results + short-query empty), and the v1.20.0 pricing surface: `price_config` exposing `quarterly_gross`, both hand-set prices reaching the payments, the matrícula falling back to the standard fee when left blank, and a special matrícula fee rejected without "Precio especial" ticked |
+| [`integration/test_student_views.py`](project/tests/integration/test_student_views.py) | 29 | `StudentListView` (search, exclude inactive, context), `StudentDetailView` (parents visible, 404), `StudentCreateView` (form + adult mode + success + full POST + error paths including invalid parent, existing-parent mode, create_sibling flag, email-task swallow), `search_students` JSON endpoint (results + short-query empty), and the v1.20.0 pricing surface: `price_config` exposing `quarterly_gross`, both hand-set prices reaching the payments, the matrícula falling back to the standard fee when left blank, and a special matrícula fee rejected without "Precio especial" ticked. v1.22.0 adds the first-period proration the creation form previews, asserting the context fraction comes from the same `PaymentService` helper the generator bills with |
 | [`integration/test_management_views.py`](project/tests/integration/test_management_views.py) | 24 | `gestion_view` + `update_site_config` (all fields + bad JSON), `create_teacher` (success + duplicate + missing field + bad JSON), `create_group` (success + missing fields + duplicate + nonexistent teacher + bad JSON), `api_get_teachers`, `update_enrollment_modality` (success + invalid + no enrollment + student not found), `language_cheque_students` |
 | [`integration/test_teacher_auth_flow.py`](project/tests/integration/test_teacher_auth_flow.py) | 21 | Login dispatcher branches (dev env-var vs `auth.User`-backed Teacher login), OAuth user creation/Teacher-linking, `_finalize_session_login` setting both `_auth_user_id` and `is_authenticated`, `SimpleAuthMiddleware` whitelist behaviour for non-admin Teachers (allowed routes, 403 JSON for `/api/*`, dashboard redirect with flash for HTML), template gating (sidebar swap, read-only management) |
 | [`integration/test_two_factor_views.py`](project/tests/integration/test_two_factor_views.py) | 17 | 2FA views and the login gate (v1.13): setup page (QR + secret), manage page (disable, rotate backup codes), the login gate flow (TOTP accepted, backup code accepted, wrong code rejected), and the `reset_two_factor` management command |
@@ -3080,50 +3468,49 @@ Within each file, related tests are grouped into classes. Where a large file abs
 
 ### Coverage Report
 
-Live snapshot from the last full run (`make test`) — the 31 source files below 100% coverage:
-
 | File | Stmts | Miss | Cover | Missing lines |
 | --- | --- | --- | --- | --- |
 | `billing/models.py` | 240 | 29 | 88% | 381-391, 482, 487, 625-653, 666, 668, 680 |
 | `billing/services/enrollment_service.py` | 93 | 3 | 97% | 178, 180, 207 |
 | `billing/services/enrollment_type_service.py` | 42 | 2 | 95% | 94-95 |
-| `billing/services/payment_service.py` | 110 | 2 | 98% | 42, 188 |
+| `billing/services/payment_service.py` | 133 | 2 | 98% | 44, 191 |
 | `billing/services/pdf_service.py` | 148 | 2 | 99% | 314-315 |
 | `billing/services/stripe_service.py` | 102 | 3 | 97% | 139-140, 168 |
 | `comms/services/email_service.py` | 63 | 1 | 98% | 59 |
 | `comms/services/sms_service.py` | 50 | 3 | 94% | 58, 63-64 |
-| `comms/tasks.py` | 242 | 6 | 98% | 400, 491, 640, 685-686, 720 |
+| `comms/tasks.py` | 242 | 4 | 98% | 400, 491, 640, 720 |
 | `core/audit_models.py` | 25 | 1 | 96% | 66 |
 | `core/audit_signals.py` | 92 | 6 | 93% | 109, 115, 131, 142-143, 148 |
 | `core/context_processors.py` | 31 | 1 | 97% | 22 |
-| `core/middleware.py` | 81 | 5 | 94% | 52-57, 173, 218-219 |
-| `core/models.py` | 124 | 5 | 96% | 48, 100, 212, 220, 245 |
+| `core/middleware.py` | 124 | 6 | 95% | 121, 132-137, 253, 298-299 |
+| `core/models.py` | 163 | 5 | 97% | 48, 100, 293, 301, 326 |
 | `core/services/google_sheets_service.py` | 99 | 9 | 91% | 74-76, 112-118 |
-| `core/tasks.py` | 20 | 5 | 75% | 41-46 |
-| `core/transactions.py` | 19 | 1 | 95% | 28 |
-| `core/views/app_forms.py` | 612 | 44 | 93% | 65, 151-153, 167-170, 187-188, 281-282, 305-306, 354-356, 385, 538-540, 546, 682, 704, 723, 797, 801, 823, 834, 910, 936, 949, 962, 974, 997-1000, 1115, 1161, 1189-1193, 1221-1224 |
-| `core/views/auth.py` | 167 | 18 | 89% | 45-48, 179, 183-199, 250, 285, 346-355 |
-| `core/views/dashboard.py` | 131 | 7 | 95% | 129-136, 177, 182, 193 |
+| `core/tasks.py` | 30 | 5 | 83% | 42-47 |
+| `core/transactions.py` | 19 | 1 | 95% | 30 |
+| `core/views/app_forms.py` | 612 | 44 | 93% | 65, 151-153, 167-170, 187-188, 281-282, 305-306, 354-356, 385, 538-540, 546, 682, 704, 723, 797, 801, 823, 834, 910, 936, 949, 962, 974, 997-1000, 1115, 1163, 1189-1193, 1221-1224 |
+| `core/views/auth.py` | 174 | 17 | 90% | 45-48, 185, 189-205, 256, 294, 373-374 |
+| `core/views/dashboard.py` | 131 | 5 | 96% | 129-136, 177 |
 | `core/views/expenses.py` | 123 | 12 | 90% | 72, 75-76, 121, 141-142, 174-176, 208-210 |
+| `core/views/features.py` | 173 | 20 | 88% | 137, 161-162, 212-216, 274-280, 337-341 |
 | `core/views/parent_portal.py` | 101 | 3 | 97% | 157, 184, 204 |
 | `core/views/parents.py` | 51 | 1 | 98% | 47 |
-| `core/views/payments.py` | 322 | 16 | 95% | 57-58, 81, 252-257, 307, 313-314, 453, 500-501, 523-524, 538-539 |
-| `core/views/students.py` | 369 | 17 | 95% | 202, 256-257, 402, 425, 433, 451-457, 462-464, 682, 685-687 |
-| `core/views/testing_tools.py` | 192 | 28 | 85% | 157, 159, 215-217, 320-324, 337, 355-356, 383-431 |
-| `core/views/two_factor.py` | 90 | 9 | 90% | 38, 49-50, 170-172, 177-178, 193 |
+| `core/views/payments.py` | 323 | 16 | 95% | 58-59, 82, 253-258, 308, 314-315, 454, 501-502, 524-525, 539-540 |
+| `core/views/students.py` | 385 | 21 | 95% | 126-128, 223, 277-278, 423, 446, 454, 472-478, 483-485, 703, 706-716 |
+| `core/views/testing_tools.py` | 214 | 35 | 84% | 64-65, 69-71, 176, 240, 247, 249, 279-281, 386-390, 403, 421-422, 449-497 |
+| `core/views/two_factor.py` | 87 | 8 | 91% | 38, 49-50, 170-172, 177-178 |
 | `core/views/waiting_list.py` | 105 | 1 | 99% | 284 |
 | `students/forms.py` | 69 | 2 | 97% | 188-189 |
-| `students/models.py` | 214 | 3 | 99% | 361, 378-379 |
+| `students/models.py` | 215 | 3 | 99% | 369, 386-387 |
 | `students/parent_portal_models.py` | 41 | 1 | 98% | 44 |
 
-**55 files** have 100% coverage (skipped above). Total coverage: **95%** (95.36%) across 5,306 statements, 246 uncovered. Coverage is **very good**. Coverage is enforced at three levels: pre-commit hook (>= 75%), CI hard floor (>= 75%), and CI warning (< 90%).
+**55 files** have 100% coverage (skipped above). Total coverage: **95.22%** across 5,689 statements. Coverage is **very good**. Coverage is enforced at three levels: pre-commit hook (≥ 75%), CI hard floor (≥ 75%), and CI warning (< 90%).
 
 > **Reading the number consistently (fixed in v1.14.7).** The CI test step runs with
 > `working-directory: project`, but `[tool.coverage.run]` — including the `omit` list for
 > migrations, management commands and `admin.py` — lives in the repo-root `pyproject.toml`.
 > Coverage only looks for config in the *current* directory, so CI was silently ignoring the
 > omit list: 42 extra files, ~993 extra statements, and a reported **86.44%** instead of
-> **95.49%**. That fired the `< 90%` warning on every run and sent the wrong figure to Codecov.
+> **95.49%**. That fired the `< 90%` warning on every run.
 > `ci.yml` now passes `--cov-config=../pyproject.toml`, so CI, `make test` and
 > `make test-cov-gate` all report the same number.
 
@@ -3162,6 +3549,7 @@ All migrations were regenerated from scratch during the v1.0.0 multi-app split.
 | `core` | `0006_alter_qaconfiguration_options` | `QAConfiguration` `Meta` options | `core.0005` |
 | `core` | `0007_alter_historylog_action` | Expanded `HistoryLog.action` choices | `core.0006` |
 | `core` | `0008_backlogtask_verified` | `BacklogTask.verified` — QA's tick, independent of `status="done"` (v1.20.0) | `core.0007` |
+| `core` | `0009_feature_backlogtask_feature` | New `Feature` model (QA epics — no priority, nullable `deadline`) + `BacklogTask.feature` FK (`SET_NULL`) (v1.21.0) | `core.0008` |
 | `comms` | — | (no models) | — |
 
 ```bash
@@ -3318,7 +3706,7 @@ changes an explicit, one-at-a-time operation.
 |------|---------------|
 | No hardcoded credentials | Dev auth refuses login when `LOGIN_USERNAME`/`LOGIN_PASSWORD` are missing; testing/prod auth refuses any password not matching a hashed `auth.User` record |
 | No secrets in YAML | Production credentials live in GCP Secret Manager, injected into Cloud Run at startup — never in the repo |
-| No secrets in GitHub Actions for deploy | CI uses only non-production Gmail SMTP + Codecov upload token. Production deploy runs manually with the operator's `gcloud` credentials |
+| No secrets in GitHub Actions for deploy | CI uses only non-production Gmail SMTP. Production deploy runs manually with the operator's `gcloud` credentials |
 | No secrets in Docker image | `.dockerignore` excludes all `.env*` files |
 | `.gitignore` coverage | `.env*` pattern excludes all env file variants |
 | Production startup validation | `settings.py` raises `ValueError` if `SECRET_KEY` is the dev default and `DEBUG=False` |
@@ -3423,6 +3811,12 @@ Here is a quick checklist of things to try. If anything does not work, take note
     push real tickets off the page). The shaded check beside each priority badge is the **tester's** own tick: click it once
     you have confirmed a fix on testing. It is deliberately independent of the developer's **done** status — verifying a
     ticket never changes its status nor sends the done notification
+  - **Desarrollos** (the book card, v1.21.0) — the epic board at `/testing/features/`. A *desarrollo*
+    describes a whole thing to build; the Backlog holds the individual tickets. It has **no priority**
+    (it is scheduled by an optional **fecha límite**, empty by default and shown in red once it passes)
+    and **no screenshot**. The description arrives pre-filled with a Jira-style template. Open one to
+    read it, edit it, change its status — and to **create tasks** from it: each goes straight into the
+    Backlog with its own priority, and is emailed to the development team like any other ticket
 
 ### How to report a problem
 
@@ -3475,13 +3869,15 @@ The testing environment mirrors production:
 
 #### Access control for `/testing/`
 
-The testing dashboard and all its API endpoints are protected by three conditions that must **all** be true:
+The testing dashboard, the **Desarrollos** board (v1.21.0) and all their API endpoints are
+protected by four conditions that must **all** be true:
 
 | Condition | Setting | Where it's checked |
 |---|---|---|
 | Environment is `testing` | `DJANGO_ENV=testing` | `settings.IS_TESTING_ENV` |
 | Debug is off | `DJANGO_DEBUG=False` | `settings.IS_TESTING_ENV` |
 | Request is a logged-in Teacher | linked `Teacher` on the session user | `core/decorators.py` (`_request_teacher`) |
+| That Teacher is an **admin** | `Teacher.admin=True` | `core/decorators.py` (`qa_access_required`) |
 
 If any condition fails, the page returns **404 Not Found** (not 403) so the URL appears not to exist. The sidebar icon is also hidden — controlled by the `show_testing_tools` context variable injected by `core/context_processors.py`.
 
@@ -3489,9 +3885,10 @@ This means:
 - In **development** (`DEBUG=True`): the page doesn't exist, no sidebar icon.
 - In **production** (`DJANGO_ENV=production`): the page doesn't exist, no sidebar icon.
 - In **testing** with a **non-Teacher session**: the page doesn't exist, no sidebar icon.
-- In **testing** logged in as **any Teacher** (admin or not): full access, sidebar icon visible.
+- In **testing** logged in as a **non-admin Teacher**: the page doesn't exist, no sidebar icon — they must not reach the dev tools (DB seed/reset, error-email toggle, git internals).
+- In **testing** logged in as an **admin Teacher**: full access, sidebar icon visible.
 
-Access is granted to every seeded Teacher account (`TEACHER_SEED_*`) — no dedicated QA user is needed. Non-admin teachers reach it because `testing_tools` and the QA API endpoints are on the non-admin whitelist in `core/middleware.py`.
+Access is granted to the seeded **admin** Teacher accounts (`TEACHER_SEED_<N>_ADMIN=True`) — no dedicated QA user is needed. Because the QA URLs are admin-only they are deliberately **not** in `NON_ADMIN_ALLOWED_URL_NAMES` (`core/middleware.py`); admins bypass that whitelist anyway.
 
 **Running locally (for developers):**
 
@@ -3580,20 +3977,21 @@ Email to hellofiveaday@gmail.com
 | `testing`     | Staging. Auto-merged from development.   | Minimal (no force/delete)| Only from auto-merge flow|
 | `development` | Active development. Day-to-day work.     | None                     | Yes                      |
 
-Feature branches off `development` are welcome for non-trivial work, but the expected flow is: work on `development` → wait 24 h → auto-promoted to `testing` → manual merge to `main`.
+Feature branches off `development` are welcome for non-trivial work, but the expected flow is: work on `development` → wait 24 h → auto-promoted to `testing` → **auto-deployed to the testing VM at 02:00** → manual merge to `main` → production deploy **arms itself and waits for your approval**. See [DEPLOYMENT.md → CI/CD](DEPLOYMENT.md#4-cicd--automated-deploys).
 
 ### Workflows
 
 | Workflow | File | Triggers | Purpose |
 |----------|------|----------|---------|
-| **CI** | [`ci.yml`](.github/workflows/ci.yml) | Push to `development`/`testing`/`main`; PRs to `testing`/`main` | Six jobs — **Lint** (Ruff + Bandit + pip-audit + Hadolint), **Type check** (mypy), **Tests** (pytest + PostgreSQL 16 + Codecov), **Docker build** (validates Dockerfile), **Trivy** (filesystem CVE scan → Security tab), **Docker publish** (GHCR push + image scan, on `main`/`testing` only) |
+| **CI** | [`ci.yml`](.github/workflows/ci.yml) | Push to `development`/`testing`/`main`; PRs to `development`/`testing`/`main` | Six jobs — **Lint** (Ruff + Bandit + pip-audit + Hadolint), **Type check** (mypy), **Tests** (pytest + PostgreSQL 16 + coverage artifact), **Docker build** (validates Dockerfile), **Trivy** (filesystem CVE scan → Security tab), **Docker publish** (GHCR push + image scan, on `main`/`testing` only) |
 | **Auto-merge** | [`auto-merge.yml`](.github/workflows/auto-merge.yml) | Hourly cron + manual dispatch | Merges `development` → `testing` when conditions pass, creates PR to `main`, emails owners |
+| **Deploy testing** | [`deploy-testing.yml`](.github/workflows/deploy-testing.yml) | Daily 02:00 Europe/Madrid + manual dispatch | Compares `/health/` on the VM against `pyproject.toml` on `origin/testing`; deploys only when they differ. Gates the DB volume and diffs row counts, then emails the result |
+| **Deploy production** | [`deploy-production.yml`](.github/workflows/deploy-production.yml) | Push to `main` + manual dispatch | Waits for CI to go green, lists the migrations, then **blocks on the `production` environment's required reviewer**. On approval: verified backup → repoint every Cloud Run job → migrate → roll out → verify |
 | **CodeQL** | [`codeql.yml`](.github/workflows/codeql.yml) | Push to `main`/`testing`/`development`; PRs to `main`; Monday 04:30 UTC | Python static security analysis (OWASP Top 10, Django-specific queries) |
 | **Notify production** | [`notify-production.yml`](.github/workflows/notify-production.yml) | Push to `main` | Emails `hellofiveaday@gmail.com` with commit info and `gcloud` deploy instructions |
-| **Dependabot auto-merge** | [`dependabot-auto-merge.yml`](.github/workflows/dependabot-auto-merge.yml) | Pull request (Dependabot only) | Enables auto-merge for minor/patch Dependabot PRs once CI passes |
 | **Dependency review** | [`dependency-review.yml`](.github/workflows/dependency-review.yml) | Pull request | Blocks PRs that introduce a HIGH/CRITICAL CVE dependency |
 | **OSSF Scorecard** | [`scorecard.yml`](.github/workflows/scorecard.yml) | Push to `main`; weekly Monday 06:00 UTC; branch protection rule changes | Grades supply-chain security posture; uploads SARIF to GitHub Security tab |
-| **Dependabot** | [`dependabot.yml`](.github/dependabot.yml) | Weekly (Mondays 08:00 Madrid) | Grouped Python and GitHub Actions updates targeting `development` |
+| **Dependabot** | [`dependabot.yml`](.github/dependabot.yml) | Weekly (Mondays 08:00 Madrid) | Grouped Python and GitHub Actions updates targeting `development`. PRs are **never merged automatically** — every one is reviewed and merged by hand |
 
 Concurrent CI runs on the same branch cancel each other automatically — new pushes always produce a fresh run.
 
@@ -3710,7 +4108,12 @@ Configure at **Settings → Secrets and variables → Actions**:
 | `TESTING_URL` | auto-merge.yml | Base URL of the testing environment, used for the "Open testing environment" button (falls back to the testing VM IP) |
 | `SUPPORT_EMAIL` | notify-production.yml | Support address added (alongside `hellofiveaday@gmail.com`) to the production deploy email |
 | `PRODUCTION_URL` | notify-production.yml | Base URL of production — adds the "Abrir producción" button to the production email. **Set** (v1.14.7) to `https://fiveaday-332600671945.europe-southwest1.run.app` |
-| `CODECOV_TOKEN` | ci.yml | Optional — only needed for private repos. Public repos push coverage anonymously |
+| `TESTING_VM_SSH_KEY` | deploy-testing.yml | ed25519 private key for the VM's `fiveaday-ci` user. The nightly deploy holds **no** GCP credential, so its blast radius is one rebuildable VM. Provisioned by `scripts/setup_cicd.sh` |
+| `TESTING_VM_KNOWN_HOSTS` | deploy-testing.yml | Pinned host key for the testing VM. If unset the workflow falls back to `StrictHostKeyChecking=accept-new` and warns |
+| `TESTING_VM_HOST` / `TESTING_VM_USER` | deploy-testing.yml | Default to `34.26.130.187` / `fiveaday-ci` when unset |
+| `GCP_WIF_PROVIDER` | deploy-production.yml | Workload Identity Federation provider resource. No key is stored — and the service-account binding is scoped to `attribute.environment/production`, so only an approved job can mint a token |
+| `GCP_DEPLOY_SA` | deploy-production.yml | `fiveaday-deploy@five-a-day-evolution.iam.gserviceaccount.com` |
+| `HEALTH_PROBE_TOKEN` | deploy-production.yml | **Set** (2026-08-31). Unlocks row counts on `/health/?deep=1` so a production deploy can prove the release landed on the right database. Must match the Secret Manager secret of the same name that Cloud Run reads |
 
 **Rotate `GH_PAT` annually.** Without it, the auto-merge falls back to the default `GITHUB_TOKEN`, which cannot trigger CI on PRs it creates — breaking the pipeline silently.
 
@@ -3719,7 +4122,9 @@ Configure at **Settings → Secrets and variables → Actions**:
 | Event | Recipient | Sent by |
 |-------|-----------|---------|
 | `development → testing` merged + PR opened to `main` | `TESTING_NOTIFY_EMAILS`, falling back to `OWNER_EMAILS` | auto-merge.yml |
+| Nightly deploy to testing succeeded or failed | `TESTING_NOTIFY_EMAILS`, falling back to `OWNER_EMAILS` | deploy-testing.yml |
 | New commit on `main` (production ready to deploy) | `hellofiveaday@gmail.com` (hardcoded) + `SUPPORT_EMAIL` when set | notify-production.yml |
+| Production deploy succeeded or failed | `hellofiveaday@gmail.com` + `SUPPORT_EMAIL` when set | deploy-production.yml |
 
 Both use Gmail SMTP via the `dawidd6/action-send-mail@v18` action. Emails include HTML formatting, links to the commit/PR, and actionable next steps.
 
@@ -3730,7 +4135,7 @@ Dependabot opens **weekly PRs on `development`** (Mondays, 08:00 Europe/Madrid) 
 - **Python packages** — minor and patch updates grouped into a single PR. Django major version bumps are intentionally ignored (require manual upgrade planning).
 - **GitHub Actions** — updates to `actions/*`, `astral-sh/setup-uv`, `dawidd6/action-send-mail`, etc.
 
-PRs are labelled `dependencies` + `python` or `github-actions` for easy filtering. The normal 24 h cycle carries merged updates to `testing` and then to `main`.
+PRs are labelled `dependencies` + `python` or `github-actions` for easy filtering. **Every Dependabot PR is reviewed and merged by hand — nothing merges them automatically.** CI runs on PRs into `development`, so a bump's checks are visible before you merge it. Once merged, the normal 24 h cycle carries the update to `testing` and then to `main`.
 
 ### CodeQL Security Scanning
 
@@ -3754,13 +4159,13 @@ make up                        # Start Docker (PostgreSQL + Redis + Django + Cel
 1. Work on `development` (or a short-lived branch off `development`)
 2. Make changes following the conventions below
 3. Run `make pc-run` — Ruff + mypy + bandit all pass, offers to auto-bump the patch version on success, and auto-stages `uv.lock` if regenerated
-4. Run `make test` — all 1,375 tests must pass (PostgreSQL via Docker, parallel, with coverage)
+4. Run `make test` — all 1,501 tests must pass (PostgreSQL via Docker, parallel, with coverage)
 5. `git commit` with a message like `v1.14.7 — Short description` (version first, em dash — matches every other release commit in the project)
 6. `git push origin development`
 7. CI runs automatically on your push (see [CI/CD](#cicd--github-actions))
 8. ~24 h later, the auto-merge pipeline promotes your commit to `testing` and opens a PR to `main` for your review
 
-Pre-commit hooks run **Ruff** (lint + format), **mypy** (type checking), and **bandit** (security) automatically on every `git commit`. If a hook modifies files (e.g. mypy regenerates `uv.lock`), the commit aborts — running `make pc-run` once resolves this by staging the regenerated lock file.
+Pre-commit hooks run **Ruff** (lint + format), **mypy** (type checking), and **bandit** (security) automatically on every `git commit`. Since v1.21.0 all three scan the **whole tree** rather than only the staged Python files, so a green hook means the same thing CI does — a violation in a file you edited but did not stage, or a commit touching only the Dockerfile or a template, no longer slips through to fail in CI. If a hook modifies files (e.g. mypy regenerates `uv.lock`), the commit aborts — running `make pc-run` once resolves this by staging the regenerated lock file.
 
 ### Make Commands (Developer Tooling)
 
@@ -3775,7 +4180,7 @@ Pre-commit hooks run **Ruff** (lint + format), **mypy** (type checking), and **b
 | **pytest-randomly** | Randomized test ordering | Built into `make test` (seed printed) |
 | **pytest-cov** | Coverage reporting + badge | `make test`, `make coverage-badge` |
 | **pre-commit** | Git hooks: ruff, ruff-format, mypy, bandit | `make pre-commit-install` (first-time), `make pc-run` (dry-run all hooks + auto bump) |
-| **make version** | Bump the version in all four places — `pyproject.toml`, `settings.py` (`APP_VERSION`), the README badge URL, and `uv.lock` | `make version x.y.z` (positional, with `y/N` confirmation); bare `make version` prints the current values and warns on drift |
+| **make version** | Bump the version at its source (`pyproject.toml`) plus the two places that cannot derive it — the README badge URL and `uv.lock`. `settings.py` reads pyproject at import time, so it needs no update | `make version x.y.z` (positional, with `y/N` confirmation); bare `make version` prints the current values and warns on drift |
 
 All tools are configured in `pyproject.toml` and installed as dev dependencies via `uv sync`.
 

@@ -5,6 +5,7 @@ error-reporting toggle.
 
 import json
 import logging
+import os
 import subprocess
 import sys
 from datetime import datetime
@@ -15,10 +16,12 @@ from django.core.mail import send_mail
 from django.db.models import Q
 from django.http import HttpResponse, JsonResponse
 from django.shortcuts import render
+from django.utils.text import get_valid_filename
 from django.views.decorators.http import require_http_methods
 
 from core.decorators import qa_access_required
 from core.models import BacklogTask, QAConfiguration
+from core.utils import csv_safe
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +37,38 @@ def _backlog_tasks_qs():
     boolean, and False sorts before True, so done tasks fall to the bottom.
     """
     return BacklogTask.objects.annotate(is_done=Q(status="done")).order_by("is_done", "-created_at")
+
+
+# Leading bytes of the formats a screenshot can plausibly be. Checked in
+# addition to the client-declared content type, which is not evidence.
+_IMAGE_MAGIC = (
+    b"\x89PNG\r\n\x1a\n",  # PNG
+    b"\xff\xd8\xff",  # JPEG
+    b"GIF87a",  # GIF
+    b"GIF89a",
+    b"BM",  # BMP
+)
+
+
+def _looks_like_image(upload) -> bool:
+    """True if `upload` starts with the magic bytes of a known image format.
+
+    Reads the first 32 bytes and rewinds, so the caller can still attach the
+    file afterwards. WEBP and AVIF are RIFF/ISO-BMFF containers, hence the
+    substring checks rather than a prefix.
+    """
+    try:
+        upload.seek(0)
+        head = upload.read(32)
+        upload.seek(0)
+    except Exception:
+        return False
+
+    if head.startswith(_IMAGE_MAGIC):
+        return True
+    if head[:4] == b"RIFF" and head[8:12] == b"WEBP":
+        return True
+    return head[4:8] == b"ftyp" and b"avif" in head[8:24]
 
 
 def _git_info():
@@ -125,6 +160,54 @@ def api_seed_database(request):
         )
 
 
+def email_backlog_task_created(task, screenshot=None, context_line=""):
+    """Email SUPPORT_EMAIL about a newly created backlog task.
+
+    Shared with the Desarrollos board, which breaks tasks out of an epic and
+    must announce them exactly like a task typed straight into ``/testing/`` —
+    hence ``context_line``, an extra header line naming the development the task
+    came from.
+
+    ``screenshot`` is an in-memory upload attached to the message and NEVER
+    persisted; tasks spawned from a development never carry one. Never raises.
+    """
+    support_email = getattr(settings, "SUPPORT_EMAIL", None)
+    if not support_email:
+        return
+
+    from django.core.mail import EmailMessage
+
+    body = (
+        f"Nueva tarea en el backlog de QA\n"
+        f"{'=' * 50}\n\n"
+        f"Titulo:      {task.title}\n"
+        f"Prioridad:   {task.priority}\n"
+        f"Creado por:  {task.created_by}\n"
+        f"Fecha:       {task.created_at:%Y-%m-%d %H:%M}\n"
+        f"{context_line}\n\n"
+        f"Descripcion:\n{task.description or '(ninguna)'}\n\n"
+        f"{'Se adjunta una captura de pantalla.' if screenshot else ''}\n"
+        f"{'=' * 50}\n"
+        f"Five a Day — Entorno QA\n"
+    )
+    try:
+        email = EmailMessage(
+            subject=f"[BACKLOG][{task.priority.upper()}] {task.title}",
+            body=body,
+            from_email=settings.DEFAULT_FROM_EMAIL,
+            to=[support_email],
+        )
+        if screenshot is not None:
+            # `get_valid_filename` on the basename: the client controls
+            # `screenshot.name`, and it reaches a MIME header here.
+            safe_name = get_valid_filename(os.path.basename(screenshot.name or "captura.png")) or "captura.png"
+            screenshot.seek(0)
+            email.attach(safe_name, screenshot.read(), screenshot.content_type)
+        email.send(fail_silently=True)
+    except Exception:  # noqa: BLE001 — never block task creation on email failure
+        logger.exception("Error sending the backlog-task notification")
+
+
 @qa_access_required
 @require_http_methods(["POST"])
 def api_create_backlog_task(request):
@@ -155,8 +238,17 @@ def api_create_backlog_task(request):
         if screenshot is not None:
             if screenshot.size > 5 * 1024 * 1024:
                 return JsonResponse({"success": False, "message": "La imagen supera los 5 MB."}, status=400)
+            # `content_type` is whatever the CLIENT declared — a browser sends it
+            # from the file extension and a scripted POST can claim anything. So
+            # check the declared type AND the actual leading bytes, otherwise
+            # this endpoint forwards an arbitrary file to the support inbox
+            # under an image's name.
             if not (screenshot.content_type or "").startswith("image/"):
                 return JsonResponse({"success": False, "message": "El adjunto debe ser una imagen."}, status=400)
+            if not _looks_like_image(screenshot):
+                return JsonResponse(
+                    {"success": False, "message": "El adjunto no parece una imagen valida."}, status=400
+                )
 
         username = request.session.get("username", "anonymous")
         task = BacklogTask.objects.create(
@@ -166,36 +258,8 @@ def api_create_backlog_task(request):
             created_by=username,
         )
 
-        # Email support — attach the screenshot in-memory (never persisted).
-        support_email = getattr(settings, "SUPPORT_EMAIL", None)
-        if support_email:
-            from django.core.mail import EmailMessage
-
-            subject = f"[BACKLOG][{priority.upper()}] {title}"
-            body = (
-                f"Nueva tarea en el backlog de QA\n"
-                f"{'=' * 50}\n\n"
-                f"Titulo:      {title}\n"
-                f"Prioridad:   {priority}\n"
-                f"Creado por:  {username}\n"
-                f"Fecha:       {task.created_at:%Y-%m-%d %H:%M}\n\n"
-                f"Descripcion:\n{description or '(ninguna)'}\n\n"
-                f"{'Se adjunta una captura de pantalla.' if screenshot else ''}\n"
-                f"{'=' * 50}\n"
-                f"Five a Day — Entorno QA\n"
-            )
-            try:
-                email = EmailMessage(
-                    subject=subject,
-                    body=body,
-                    from_email=settings.DEFAULT_FROM_EMAIL,
-                    to=[support_email],
-                )
-                if screenshot is not None:
-                    email.attach(screenshot.name, screenshot.read(), screenshot.content_type)
-                email.send(fail_silently=True)
-            except Exception:  # noqa: BLE001 — never block task creation on email failure
-                pass
+        # Email support — the screenshot is attached in-memory (never persisted).
+        email_backlog_task_created(task, screenshot=screenshot)
 
         return JsonResponse(
             {
@@ -263,7 +327,9 @@ def export_backlog_tasks(request):
         fieldnames = list(rows[0].keys()) if rows else ["id", "title", "description", "priority", "status"]
         writer = csv.DictWriter(buffer, fieldnames=fieldnames)
         writer.writeheader()
-        writer.writerows(rows)
+        # Titles and descriptions are free text; a leading =/+/-/@ would be
+        # evaluated as a formula by whoever opens the export.
+        writer.writerows([{k: csv_safe(v) for k, v in row.items()} for row in rows])
         # BOM so Excel opens the accented Spanish text correctly.
         response = HttpResponse("﻿" + buffer.getvalue(), content_type="text/csv; charset=utf-8")
         response["Content-Disposition"] = f'attachment; filename="{filename}.csv"'

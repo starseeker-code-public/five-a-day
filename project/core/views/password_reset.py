@@ -22,8 +22,11 @@ from django.contrib.auth.views import (
     PasswordResetView,
 )
 from django.urls import reverse_lazy
+from django.utils.decorators import method_decorator
 from django.utils.encoding import force_bytes
 from django.utils.http import urlsafe_base64_encode
+
+from core.rate_limit import rate_limit
 
 UserModel = get_user_model()
 
@@ -49,6 +52,18 @@ class ActivationFriendlyPasswordResetForm(PasswordResetForm):
         return UserModel._default_manager.filter(**{f"{email_field_name}__iexact": email, "is_active": True})
 
 
+# 3 requests / 15 min / IP. This endpoint is unauthenticated, public (it is in
+# SimpleAuthMiddleware.PUBLIC_PREFIXES so a locked-out teacher can reach it), and
+# it SENDS AN EMAIL on every hit — so before v1.23.0 anyone could loop a known
+# teacher address and (a) bury them in reset mail as cover for a social-
+# engineering attempt, and (b) burn the Gmail account's ~500/day send quota,
+# which is a SHARED resource: exhaust it and payment reminders, receipts,
+# welcome and birthday emails all stop, silently, because non-critical mail is
+# sent with fail_silently=True.
+#
+# The window is 15 min rather than the usual 60 s because a legitimate user asks
+# for a reset once, and Django itself applies no throttle of any kind here.
+@method_decorator(rate_limit("password_reset", limit=3, window_seconds=900), name="dispatch")
 class BrandedPasswordResetView(PasswordResetView):
     """Request-a-reset: user enters their email."""
 

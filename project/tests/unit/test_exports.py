@@ -45,7 +45,9 @@ class TestBuildEnrollmentsSheet:
         ws = wb.active
         build_enrollments_sheet(ws)
         assert ws.max_row == 2
-        assert ws.cell(row=2, column=5).value == "2025-2026"
+        # Read the year off the fixture: it tracks the current course, so a
+        # hard-coded literal here goes stale the day the calendar rolls over.
+        assert ws.cell(row=2, column=5).value == active_enrollment.academic_year
 
     def test_empty_when_no_enrollments(self, db):
         import openpyxl

@@ -23,8 +23,13 @@ class TestBeginEnrolment:
         assert quote(teacher.email, safe="") in payload.provisioning_uri
         assert payload.qr_png_base64
         assert len(payload.backup_codes) == 8
-        # Stored codes are hashed, not plaintext
-        assert all(len(h) == 64 for h in teacher.two_factor_backup_codes)
+        # 16 hex chars = 64 bits (was 8 chars / 32 bits before v1.23.0, which is
+        # brute-forceable offline once the hashes leak).
+        assert all(len(c) == 16 for c in payload.backup_codes)
+        # Stored codes go through Django's password hasher, not a bare sha256:
+        # they carry an `algorithm$...` prefix and never equal the plaintext.
+        assert all("$" in h for h in teacher.two_factor_backup_codes)
+        assert not set(payload.backup_codes) & set(teacher.two_factor_backup_codes)
         # Not enabled until confirmed
         assert teacher.two_factor_enabled is False
 

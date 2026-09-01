@@ -173,6 +173,77 @@ class HistoryLog(models.Model):
         return cls.log(action, message, icon=icon)
 
 
+class Feature(models.Model):
+    """A DESARROLLO — a Jira-style epic grouping the backlog tasks that deliver it.
+
+    Deliberately lighter than :class:`BacklogTask`: no priority (an epic is
+    scheduled by its ``deadline``, not ranked against its siblings) and no
+    screenshot (it describes work to be done, not a defect that was seen). The
+    tasks it spawns are ordinary backlog tasks and carry the priority.
+    """
+
+    STATUS_CHOICES = [
+        ("open", "Abierto"),
+        ("in_progress", "En progreso"),
+        ("done", "Hecho"),
+    ]
+
+    title = models.CharField(max_length=300, verbose_name="Título")
+    description = models.TextField(blank=True, verbose_name="Descripción")
+    status = models.CharField(max_length=15, choices=STATUS_CHOICES, default="open", verbose_name="Estado")
+    # Nullable and null by DEFAULT: a development is recorded long before anyone
+    # commits to a date, and an invented deadline is worse than no deadline.
+    deadline = models.DateField(
+        null=True,
+        blank=True,
+        default=None,
+        verbose_name="Fecha límite",
+        help_text="Opcional — fecha en la que debería estar terminado.",
+    )
+    created_by = models.CharField(max_length=100, default="anonymous", verbose_name="Creado por")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "features"
+        ordering = ["-created_at"]
+        verbose_name = "Desarrollo"
+        verbose_name_plural = "Desarrollos"
+
+    def __str__(self):
+        return self.title
+
+    @property
+    def is_overdue(self):
+        """True when the deadline has passed and the development is not done."""
+        if not self.deadline or self.status == "done":
+            return False
+        return self.deadline < timezone.localdate()
+
+    @property
+    def days_left(self):
+        """Days remaining until the deadline (negative when overdue), or None."""
+        if not self.deadline:
+            return None
+        return (self.deadline - timezone.localdate()).days
+
+    @property
+    def task_count(self):
+        return self.tasks.count()
+
+    @property
+    def done_task_count(self):
+        return self.tasks.filter(status="done").count()
+
+    @property
+    def progress_percent(self):
+        """Share of the linked tasks already done, 0–100 (0 when there are none)."""
+        total = self.task_count
+        if not total:
+            return 0
+        return round(self.done_task_count * 100 / total)
+
+
 class BacklogTask(models.Model):
     """QA backlog tasks — created by testers, optionally emailed to support."""
 
@@ -192,6 +263,16 @@ class BacklogTask(models.Model):
     priority = models.CharField(max_length=10, choices=PRIORITY_CHOICES, default="medium")
     status = models.CharField(max_length=15, choices=STATUS_CHOICES, default="open")
     created_by = models.CharField(max_length=100, default="anonymous")
+    # The Desarrollo (epic) this task was broken out of, when it came from one.
+    # SET_NULL: deleting the epic must never take the work items with it.
+    feature = models.ForeignKey(
+        "core.Feature",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="tasks",
+        verbose_name="Desarrollo",
+    )
     # Set by the TESTER, not by a developer: a tick they turn green once they
     # have checked the fix on the testing environment. Deliberately separate
     # from `status="done"` — that is the developer saying "shipped" (and it

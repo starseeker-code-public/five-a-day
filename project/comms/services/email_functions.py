@@ -446,7 +446,7 @@ def send_tax_certificate_email(parent, year: int) -> bool:
     payments_count = Payment.objects.filter(parent=parent, payment_status="completed", payment_date__year=year).count()
 
     if payments_count == 0:
-        logger.info(f"No hay pagos para {parent.full_name} en {year}, no se envia certificado")
+        logger.info("Sin pagos completados en %d para parent_id=%d; no se envia certificado", year, parent.id)
         return False
 
     # Generar el PDF del certificado. reportlab is a hard dependency, so the
@@ -458,8 +458,8 @@ def send_tax_certificate_email(parent, year: int) -> bool:
             pdf_content,
             "application/pdf",
         )
-    except Exception as e:
-        logger.error(f"Error generando PDF para {parent.full_name}: {e}")
+    except Exception:
+        logger.exception("Error generando el certificado fiscal para parent_id=%d", parent.id)
         return False
 
     return email_service.send_email(
@@ -492,11 +492,17 @@ def send_all_tax_certificates(year: int) -> dict[str, int]:
         payments__payment_status="completed", payments__payment_date__year=year
     ).distinct()
 
+    # Log parent_id, never names. These lines go to stdout and therefore into
+    # Cloud Logging — a second store with its own retention and its own access
+    # list — so logging names duplicates personal data outside the database that
+    # AuditLog already deliberately keeps DNI/email/phone out of. comms/tasks.py
+    # has always used the `student_id=%d` shape; this file was the exception.
+    # The %d coercion also breaks the log-injection taint path (see CLAUDE.md).
     results = {"sent": 0, "skipped": 0, "failed": 0}
 
     for parent in parents_with_payments:
         if not parent.email:
-            logger.warning(f"{parent.full_name}: sin email")
+            logger.warning("parent_id=%d no tiene email; se omite el certificado", parent.id)
             results["skipped"] += 1
             continue
 
@@ -504,10 +510,10 @@ def send_all_tax_certificates(year: int) -> dict[str, int]:
 
         if success:
             results["sent"] += 1
-            logger.info(f"Certificado enviado a {parent.full_name}")
+            logger.info("Certificado fiscal enviado a parent_id=%d", parent.id)
         else:
             results["failed"] += 1
-            logger.error(f"Error enviando a {parent.full_name}")
+            logger.error("Fallo al enviar el certificado fiscal a parent_id=%d", parent.id)
 
     logger.info(
         f"Certificados fiscales {year}: {results['sent']} enviados, "

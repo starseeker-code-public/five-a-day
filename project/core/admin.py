@@ -3,6 +3,7 @@ from django.contrib import admin
 from .models import (
     AuditLog,
     BacklogTask,
+    Feature,
     FunFridayAttendance,
     FunFridayScheduledSend,
     HistoryLog,
@@ -89,7 +90,19 @@ class FunFridayScheduledSendAdmin(admin.ModelAdmin):
 
 @admin.register(BacklogTask)
 class BacklogTaskAdmin(admin.ModelAdmin):
-    list_display = ("title", "priority", "status", "created_by", "created_at")
-    list_filter = ("status", "priority")
+    list_display = ("title", "priority", "status", "feature", "created_by", "created_at")
+    list_filter = ("status", "priority", "feature")
     search_fields = ("title", "description")
     ordering = ("-created_at",)
+
+
+@admin.register(Feature)
+class FeatureAdmin(admin.ModelAdmin):
+    list_display = ("title", "status", "deadline", "overdue_display", "created_by", "created_at")
+    list_filter = ("status", "deadline")
+    search_fields = ("title", "description")
+    ordering = ("-created_at",)
+
+    @admin.display(boolean=True, description="Vencido")
+    def overdue_display(self, obj):
+        return obj.is_overdue

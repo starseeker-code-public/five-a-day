@@ -1,0 +1,703 @@
+name: Deploy production
+
+# Arms itself automatically when a release lands on main (the testing → main PR
+# merge), then STOPS and waits for a human.
+#
+#   push to main  →  preflight: wait for CI green, read versions, list migrations
+#                 →  deploy: BLOCKED on the `production` environment's required
+#                    reviewer. Nothing touches GCP until somebody clicks
+#                    "Review deployments → Approve".
+#
+# So the automation does all the waiting and all the reporting, and the only
+# manual act left is the decision itself. Production is never deployed by a
+# timer. The `/deploy` skill remains the by-hand path for emergencies.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 'Deploy even when production already serves this version'
+        type: boolean
+        default: false
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  checks: read   # the preflight job polls check runs on the commit
+
+env:
+  GCP_PROJECT: five-a-day-evolution
+  GCP_REGION: europe-southwest1
+  SERVICE: fiveaday
+  SQL_INSTANCE: fiveaday-db
+  IMAGE_BASE: europe-southwest1-docker.pkg.dev/five-a-day-evolution/fiveaday/web
+  PROD_URL: ${{ secrets.PRODUCTION_URL || 'https://fiveaday-332600671945.europe-southwest1.run.app' }}
+
+jobs:
+  # ============================================================
+  # JOB 1: Preflight — uses NO cloud credentials
+  #
+  # Deliberately credential-free so the GCP service account can be pinned to the
+  # `production` environment (see scripts/setup_cicd.sh): only a job that has
+  # passed the approval gate can obtain a token at all.
+  # ============================================================
+  preflight:
+    name: Preflight
+    runs-on: ubuntu-latest
+    outputs:
+      should_deploy: ${{ steps.compare.outputs.should_deploy }}
+      sha: ${{ github.sha }}
+      short_sha: ${{ steps.versions.outputs.short_sha }}
+      new_version: ${{ steps.versions.outputs.new_version }}
+      live_version: ${{ steps.versions.outputs.live_version }}
+      migrations: ${{ steps.migrations.outputs.files }}
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+        with:
+          fetch-depth: 0   # migration diff needs history and tags
+
+      - name: Read versions
+        id: versions
+        run: |
+          NEW_VERSION=$(grep -E '^[[:space:]]*version[[:space:]]*=' pyproject.toml \
+            | head -1 | sed -E 's/.*version[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/')
+          [ -n "$NEW_VERSION" ] || { echo "::error::Could not read version from pyproject.toml"; exit 1; }
+
+          BODY=$(curl -fsS --max-time 25 --retry 3 --retry-delay 5 "$PROD_URL/health/" || echo '')
+          LIVE_VERSION=''
+          ENVIRONMENT=''
+          if [ -n "$BODY" ]; then
+            LIVE_VERSION=$(printf '%s' "$BODY" | jq -r '.version // empty')
+            ENVIRONMENT=$(printf '%s' "$BODY" | jq -r '.environment // empty')
+          fi
+
+          # Pointing at something that is not production means the URL is wrong.
+          # Never deploy on that basis.
+          if [ -n "$ENVIRONMENT" ] && [ "$ENVIRONMENT" != "production" ]; then
+            echo "::error::$PROD_URL/health/ reports environment='$ENVIRONMENT', expected 'production'. Refusing to continue."
+            exit 1
+          fi
+
+          {
+            echo "short_sha=$(git rev-parse --short HEAD)"
+            echo "new_version=$NEW_VERSION"
+            echo "live_version=$LIVE_VERSION"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "main pyproject: $NEW_VERSION"
+          echo "live on prod:   ${LIVE_VERSION:-unreachable}"
+
+      - name: Wait for CI to go green on this commit
+        id: ci
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b  # v7
+        with:
+          script: |
+            const sha = context.sha;
+
+            // Jobs of THIS workflow must never be waited on — that deadlocks.
+            const SELF = new Set(['Preflight', 'Deploy to production']);
+            // A failed notification email is not a reason to block a release.
+            const ADVISORY = new Set(['Send production notification']);
+            // Must be PRESENT and successful. Naming them closes the hole where
+            // "some check succeeded" is mistaken for "CI ran": CodeQL and
+            // Scorecard also report on main.
+            const REQUIRED = ['Lint', 'Type check', 'Tests', 'Docker build'];
+
+            const DEADLINE = Date.now() + 45 * 60 * 1000;
+            const SLEEP = 30_000;
+            const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+            while (true) {
+              const { data } = await github.rest.checks.listForRef({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                ref: sha,
+                filter: 'latest',
+                per_page: 100,
+              });
+
+              const runs = data.check_runs.filter(r => !SELF.has(r.name));
+
+              // Fail CLOSED. Zero check runs is not "healthy", it is "unknown".
+              if (runs.length === 0) {
+                core.setFailed('No CI check runs found on this commit — refusing to arm a deploy.');
+                return;
+              }
+
+              const pending = runs.filter(r => r.status !== 'completed');
+              if (pending.length > 0) {
+                if (Date.now() > DEADLINE) {
+                  core.setFailed('Timed out waiting for CI: ' + pending.map(r => r.name).join(', '));
+                  return;
+                }
+                core.info('Waiting on: ' + pending.map(r => r.name).join(', '));
+                await sleep(SLEEP);
+                continue;
+              }
+
+              const present = new Set(runs.map(r => r.name));
+              const missing = REQUIRED.filter(n => !present.has(n));
+              if (missing.length > 0) {
+                // Not a timeout case: every run has completed, so a required
+                // check that is absent is never going to appear.
+                core.setFailed('Required checks never ran: ' + missing.join(', '));
+                return;
+              }
+
+              const OK = ['success', 'skipped', 'neutral'];
+              const requiredFailed = runs.filter(
+                r => REQUIRED.includes(r.name) && !OK.includes(r.conclusion));
+              const otherFailed = runs.filter(
+                r => !REQUIRED.includes(r.name) && !ADVISORY.has(r.name)
+                     && !OK.includes(r.conclusion) && r.conclusion !== 'cancelled');
+
+              if (requiredFailed.length > 0 || otherFailed.length > 0) {
+                const all = [...requiredFailed, ...otherFailed]
+                  .map(r => `${r.name}: ${r.conclusion}`).join(', ');
+                core.setFailed('CI is not green: ' + all);
+                return;
+              }
+
+              const cancelled = runs.filter(r => r.conclusion === 'cancelled');
+              if (cancelled.length > 0) {
+                core.warning('Cancelled (non-required) checks ignored: ' +
+                  cancelled.map(r => r.name).join(', '));
+              }
+
+              core.info('CI is green on ' + sha);
+              core.summary.addHeading('CI status', 3);
+              core.summary.addTable([
+                [{ data: 'Check', header: true }, { data: 'Result', header: true }],
+                ...runs.map(r => [r.name, r.conclusion]),
+              ]);
+              await core.summary.write();
+              return;
+            }
+
+      - name: List migrations the approver is about to authorise
+        id: migrations
+        # Via env, never interpolated into the body: the value comes from the
+        # production /health/ response, i.e. off-box data.
+        env:
+          LIVE: ${{ steps.versions.outputs.live_version }}
+        run: |
+          # Based on the version /health/ reports, resolved through the release
+          # tag that notify-production.yml creates. Advisory only — the deploy
+          # job re-derives this from the image tag Cloud Run actually runs, which
+          # is authoritative. Shown here so the approver decides informed.
+          FILES=''
+          if [ -n "$LIVE" ] && git rev-parse -q --verify "refs/tags/v$LIVE" > /dev/null; then
+            FILES=$(git diff --name-only "v$LIVE..HEAD" -- '*/migrations/*.py' | tr '\n' ' ')
+            echo "diff v$LIVE..HEAD"
+          else
+            echo "No release tag v$LIVE — migration list unavailable until the deploy job reads the deployed image tag."
+          fi
+          echo "files=$FILES" >> "$GITHUB_OUTPUT"
+          echo "migrations: ${FILES:-none}"
+
+      - name: Compare and arm
+        id: compare
+        # All values via env. `FILES='${{ ... }}'` in particular would be an
+        # injection sink: it is a list of git paths, and a path may legally
+        # contain a single quote, which breaks out of the shell literal.
+        env:
+          NEW: ${{ steps.versions.outputs.new_version }}
+          LIVE: ${{ steps.versions.outputs.live_version }}
+          FILES: ${{ steps.migrations.outputs.files }}
+          FORCE: ${{ inputs.force }}
+          SHORT_SHA: ${{ steps.versions.outputs.short_sha }}
+        run: |
+          if [ "$NEW" = "$LIVE" ] && [ "$FORCE" != "true" ]; then
+            echo "should_deploy=false" >> "$GITHUB_OUTPUT"
+            {
+              echo "## Nothing to deploy"
+              echo ""
+              echo "Production already serves \`$NEW\`. Re-run this workflow with **force** if you"
+              echo "need to roll the same version again (for example after an env-var repair)."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          echo "should_deploy=true" >> "$GITHUB_OUTPUT"
+          {
+            echo "## Production deploy is armed and awaiting approval"
+            echo ""
+            echo "| Field | Value |"
+            echo "|---|---|"
+            echo "| Version | \`${LIVE:-unknown}\` → \`$NEW\` |"
+            echo "| Commit | \`$SHORT_SHA\` |"
+            echo "| Image tag | \`$SHORT_SHA\` |"
+            echo "| CI | green |"
+            echo ""
+            if [ -n "$FILES" ]; then
+              echo "### ⚠️ Schema migrations in this release"
+              echo ""
+              for f in $FILES; do echo "- \`$f\`"; done
+              echo ""
+              echo "Approving this deploy authorises applying them to the live database."
+              echo "A verified Cloud SQL backup is taken first and the deploy aborts if it is not \`SUCCESSFUL\`."
+            else
+              echo "### No schema migrations detected"
+              echo ""
+              echo "The migrate job is skipped unless the deploy job's authoritative diff disagrees."
+            fi
+            echo ""
+            echo "**To ship:** open the run and click *Review deployments → production → Approve and deploy*."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ============================================================
+  # JOB 2: Deploy — BLOCKED on the `production` environment approval
+  # ============================================================
+  deploy:
+    name: Deploy to production
+    needs: preflight
+    if: needs.preflight.outputs.should_deploy == 'true'
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: ${{ secrets.PRODUCTION_URL || 'https://fiveaday-332600671945.europe-southwest1.run.app' }}
+
+    permissions:
+      contents: read
+      id-token: write   # required for Workload Identity Federation
+
+    env:
+      NEW_SHA: ${{ needs.preflight.outputs.short_sha }}
+      NEW_VERSION: ${{ needs.preflight.outputs.new_version }}
+      LIVE_VERSION: ${{ needs.preflight.outputs.live_version }}
+
+    steps:
+      # Check out the EXACT commit preflight approved, not the branch tip. This
+      # is what makes the image tag honest: `gcloud builds submit` uploads the
+      # working tree, so building a moved `main` under this SHA's tag would
+      # permanently break the SHA→image mapping the migration diff relies on.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+        with:
+          ref: ${{ needs.preflight.outputs.sha }}
+          fetch-depth: 0
+
+      - name: Assert the tree matches the approved commit
+        run: |
+          ACTUAL=$(git rev-parse --short HEAD)
+          [ "$ACTUAL" = "$NEW_SHA" ] || { echo "::error::HEAD is $ACTUAL, expected $NEW_SHA"; exit 1; }
+          [ -z "$(git status --porcelain)" ] || { echo "::error::working tree is dirty"; exit 1; }
+          echo "building $NEW_SHA (v$NEW_VERSION)"
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@c200f3691d83b41bf9bbd8638997a462592937ed  # v2
+        with:
+          project_id: ${{ env.GCP_PROJECT }}
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_DEPLOY_SA }}
+
+      - uses: google-github-actions/setup-gcloud@e427ad8a34f8676edf47cf7d7925499adf3eb74f  # v2
+        with:
+          project_id: ${{ env.GCP_PROJECT }}
+
+      - name: Backup health — before anything else
+        run: |
+          # Every other safety net here assumes a restore is possible. Deploying
+          # on top of a broken backup chain is the one state with no way back,
+          # and a silently failing backup job looks identical to a working one.
+          gcloud sql instances describe "$SQL_INSTANCE" --project="$GCP_PROJECT" \
+            --format='yaml(settings.backupConfiguration, settings.deletionProtectionEnabled)'
+
+          CFG=$(gcloud sql instances describe "$SQL_INSTANCE" --project="$GCP_PROJECT" --format=json)
+          check() {
+            local path="$1" want="$2"
+            local got
+            got=$(printf '%s' "$CFG" | jq -r "$path")
+            if [ "$got" != "$want" ]; then
+              echo "::error::$path is '$got', expected '$want'"
+              return 1
+            fi
+            echo "OK: $path = $got"
+          }
+          FAILED=0
+          check '.settings.backupConfiguration.enabled' 'true' || FAILED=1
+          check '.settings.backupConfiguration.pointInTimeRecoveryEnabled' 'true' || FAILED=1
+          check '.settings.deletionProtectionEnabled' 'true' || FAILED=1
+
+          # Deleting the instance deletes every backup with it, hence the
+          # deletionProtection check above.
+          LATEST=$(gcloud sql backups list --instance="$SQL_INSTANCE" --project="$GCP_PROJECT" \
+            --limit=1 --format='value(status,windowStartTime)')
+          echo "newest backup: $LATEST"
+          STATUS=$(printf '%s' "$LATEST" | awk '{print $1}')
+          WHEN=$(printf '%s' "$LATEST" | awk '{print $2}')
+          [ "$STATUS" = "SUCCESSFUL" ] || { echo "::error::newest backup is $STATUS"; FAILED=1; }
+          if [ -n "$WHEN" ]; then
+            AGE=$(( ($(date +%s) - $(date -d "$WHEN" +%s)) / 3600 ))
+            echo "newest backup age: ${AGE}h"
+            [ "$AGE" -lt 48 ] || { echo "::error::newest backup is ${AGE}h old (>48h)"; FAILED=1; }
+          fi
+          [ "$FAILED" -eq 0 ] || exit 1
+
+      - name: Resolve the deployed image and the authoritative migration list
+        id: diff
+        run: |
+          OLD_SHA=$(gcloud run services describe "$SERVICE" --project="$GCP_PROJECT" --region="$GCP_REGION" \
+            --format='value(spec.template.spec.containers[0].image)' | sed 's/.*://')
+          echo "currently deployed image tag: ${OLD_SHA:-unknown}"
+
+          # Image tags are git short SHAs, so unapplied migrations are a git diff.
+          MIGRATIONS=''
+          KNOWN=false
+          if [ -n "$OLD_SHA" ] && git cat-file -e "${OLD_SHA}^{commit}" 2>/dev/null; then
+            MIGRATIONS=$(git diff --name-only "$OLD_SHA..$NEW_SHA" -- '*/migrations/*.py' | tr '\n' ' ')
+            KNOWN=true
+            echo "diff $OLD_SHA..$NEW_SHA -> ${MIGRATIONS:-none}"
+          else
+            echo "::warning::Deployed tag '$OLD_SHA' is not a commit in this repo, so the migration diff cannot be computed. Running migrate defensively."
+          fi
+
+          # Run migrate when there ARE migrations, or when we cannot prove there
+          # are none. `manage.py migrate` on an up-to-date schema is a no-op, so
+          # the defensive branch is cheap; skipping a needed migration is not.
+          if [ -n "$MIGRATIONS" ] || [ "$KNOWN" != "true" ]; then
+            echo "run_migrate=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run_migrate=false" >> "$GITHUB_OUTPUT"
+          fi
+          {
+            echo "old_sha=$OLD_SHA"
+            echo "migrations=$MIGRATIONS"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Take a backup and prove it succeeded
+        id: backup
+        run: |
+          # Hard rule: no migration and no rollout without a SUCCESSFUL backup id
+          # in hand. An unverified backup is not a rollback plan.
+          gcloud sql backups create --instance="$SQL_INSTANCE" --project="$GCP_PROJECT" \
+            --description="pre-deploy v$NEW_VERSION ($NEW_SHA) — GitHub Actions run ${{ github.run_id }}"
+
+          BACKUP_ID=$(gcloud sql backups list --instance="$SQL_INSTANCE" --project="$GCP_PROJECT" \
+            --limit=1 --format='value(id)')
+          STATUS=$(gcloud sql backups describe "$BACKUP_ID" --instance="$SQL_INSTANCE" \
+            --project="$GCP_PROJECT" --format='value(status)')
+          echo "backup $BACKUP_ID -> $STATUS"
+          [ "$STATUS" = "SUCCESSFUL" ] || { echo "::error::backup is $STATUS, not SUCCESSFUL"; exit 1; }
+          echo "backup_id=$BACKUP_ID" >> "$GITHUB_OUTPUT"
+
+          # On-demand backups are exempt from the automated retention count, so
+          # this will not age out. scripts/backup_retention.sh caps them at 3 —
+          # never hand-delete them here.
+
+      - name: Pre-deploy fingerprint
+        id: before
+        env:
+          PROBE: ${{ secrets.HEALTH_PROBE_TOKEN }}
+        run: |
+          BODY=$(curl -fsS --max-time 30 -H "X-Probe-Token: $PROBE" "$PROD_URL/health/?deep=1" || echo '')
+          echo "$BODY" | jq . || echo "$BODY"
+          printf '%s' "$BODY" > before.json
+          if [ -z "$PROBE" ] || [ "$(printf '%s' "$BODY" | jq -r '.database.counts // empty')" = "" ]; then
+            echo "::warning::HEALTH_PROBE_TOKEN is not configured, so row counts are unavailable and the post-deploy report CANNOT prove the data survived."
+            echo "counts=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "counts=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build and push the image
+        run: |
+          IMAGE="$IMAGE_BASE:$NEW_SHA"
+          # An existing tag means the image was built by an earlier attempt and
+          # only the rollout is missing. Rebuilding would be wasteful, not wrong.
+          if gcloud artifacts docker tags list "$IMAGE_BASE" --project="$GCP_PROJECT" \
+               --format='value(tag)' 2>/dev/null | grep -qx "$NEW_SHA"; then
+            echo "$IMAGE already exists — skipping build."
+          else
+            gcloud builds submit --tag "$IMAGE" --project="$GCP_PROJECT" .
+          fi
+
+      - name: Repoint every Cloud Run job at the new image
+        run: |
+          IMAGE="$IMAGE_BASE:$NEW_SHA"
+
+          # Enumerated, not hard-coded: a job added later would otherwise keep
+          # running last release's code forever, silently, because
+          # `gcloud run deploy` only ever touches the SERVICE.
+          mapfile -t JOBS < <(gcloud run jobs list --project="$GCP_PROJECT" --region="$GCP_REGION" \
+            --format='value(metadata.name)' | sort)
+          printf 'found %d jobs:\n' "${#JOBS[@]}"
+          printf '  %s\n' "${JOBS[@]}"
+          if [ "${#JOBS[@]}" -lt 8 ]; then
+            echo "::error::Expected at least 8 Cloud Run jobs, found ${#JOBS[@]}. Refusing to continue with a partial list."
+            exit 1
+          fi
+
+          for JOB in "${JOBS[@]}"; do
+            gcloud run jobs update "$JOB" --image="$IMAGE" \
+              --project="$GCP_PROJECT" --region="$GCP_REGION"
+          done
+
+          echo "--- verify the pins actually moved ---"
+          # Note the DOUBLED template in the path: a job's image lives at
+          # spec.template.spec.template.spec. The wrong path prints empty for
+          # every job, which reads exactly like a clean result.
+          FAILED=0
+          for JOB in "${JOBS[@]}"; do
+            TAG=$(gcloud run jobs describe "$JOB" --project="$GCP_PROJECT" --region="$GCP_REGION" \
+              --format='value(spec.template.spec.template.spec.containers[0].image)' | sed 's/.*://')
+            SQL=$(gcloud run jobs describe "$JOB" --project="$GCP_PROJECT" --region="$GCP_REGION" \
+              --format='value(spec.template.metadata.annotations."run.googleapis.com/cloudsql-instances")')
+            printf '%-32s %-12s %s\n' "$JOB" "$TAG" "$SQL"
+            [ "$TAG" = "$NEW_SHA" ] || { echo "::error::$JOB is pinned to '$TAG', expected '$NEW_SHA'"; FAILED=1; }
+            # A job attached to another instance would migrate somewhere
+            # invisible and still exit 0.
+            WANT="$GCP_PROJECT:$GCP_REGION:$SQL_INSTANCE"
+            [ "$SQL" = "$WANT" ] || { echo "::error::$JOB is attached to '$SQL', expected '$WANT'"; FAILED=1; }
+          done
+          [ "$FAILED" -eq 0 ] || exit 1
+
+      - name: Migrate — BEFORE the service rolls
+        if: steps.diff.outputs.run_migrate == 'true'
+        env:
+          MIGRATIONS: ${{ steps.diff.outputs.migrations }}
+        run: |
+          # Deliberately before the rollout: migrating afterwards leaves new code
+          # hitting an old schema for the whole rollout window.
+          echo "migrations: ${MIGRATIONS:-none (running defensively)}"
+          gcloud run jobs execute fiveaday-migrate \
+            --project="$GCP_PROJECT" --region="$GCP_REGION" --wait
+
+      - name: Roll out the service
+        run: |
+          # --image and NOTHING else. The service carries ~30 env vars plus 6
+          # Secret Manager refs; adding --set-env-vars replaces the entire set
+          # and silently drops everything not repeated on the line.
+          gcloud run deploy "$SERVICE" --image="$IMAGE_BASE:$NEW_SHA" \
+            --project="$GCP_PROJECT" --region="$GCP_REGION"
+
+      - name: Verify the deploy
+        id: verify
+        env:
+          PROBE: ${{ secrets.HEALTH_PROBE_TOKEN }}
+          HAVE_COUNTS: ${{ steps.before.outputs.counts }}
+        run: |
+          # Cloud Run needs a moment plus a possible cold start.
+          LIVE=''
+          for i in $(seq 1 20); do
+            LIVE=$(curl -fsS --max-time 20 "$PROD_URL/health/" 2>/dev/null | jq -r '.version // empty' || true)
+            [ "$LIVE" = "$NEW_VERSION" ] && break
+            echo "attempt $i: live='${LIVE:-<no reply>}' want='$NEW_VERSION'"
+            sleep 15
+          done
+          if [ "$LIVE" != "$NEW_VERSION" ]; then
+            # If the image is definitely current, check for an APP_VERSION env
+            # var: it overrides the value baked in from pyproject.toml and makes
+            # /health/ lie. Neither environment sets it today.
+            gcloud run services describe "$SERVICE" --project="$GCP_PROJECT" --region="$GCP_REGION" \
+              --format='value(spec.template.spec.containers[0].env)' | tr ',' '\n' | grep -i APP_VERSION || true
+            echo "::error::/health/ reports '${LIVE:-unreachable}', expected '$NEW_VERSION'. The deploy did NOT land."
+            exit 1
+          fi
+          echo "version $LIVE is live"
+
+          echo "--- Cloud SQL attachment ---"
+          SQL=$(gcloud run services describe "$SERVICE" --project="$GCP_PROJECT" --region="$GCP_REGION" \
+            --format='value(spec.template.metadata.annotations."run.googleapis.com/cloudsql-instances")')
+          WANT="$GCP_PROJECT:$GCP_REGION:$SQL_INSTANCE"
+          echo "$SQL"
+          [ "$SQL" = "$WANT" ] || { echo "::error::service is attached to '$SQL', expected '$WANT'"; exit 1; }
+
+          echo "--- DATABASE_URL must arrive by secret reference ---"
+          JSON=$(gcloud run services describe "$SERVICE" --project="$GCP_PROJECT" --region="$GCP_REGION" --format=json)
+          printf '%s' "$JSON" | jq -e '
+            .spec.template.spec.containers[0].env
+            | map(select(.name == "DATABASE_URL"))
+            | length == 1 and (.[0].valueFrom.secretKeyRef != null)' > /dev/null \
+            || { echo "::error::DATABASE_URL is not a secretKeyRef — a bad --set-env-vars may have flattened it"; exit 1; }
+
+          # POSTGRES_* on the service would turn a loud crash into a silently
+          # wrong database: settings.py falls back to localhost/fiveaday_db
+          # whenever DATABASE_URL is empty.
+          if printf '%s' "$JSON" | jq -e '
+              .spec.template.spec.containers[0].env
+              | map(select(.name | startswith("POSTGRES_"))) | length > 0' > /dev/null; then
+            echo "::error::POSTGRES_* env vars are set on the service — remove them, they mask DATABASE_URL"
+            exit 1
+          fi
+          echo "OK: DATABASE_URL is a secretKeyRef and no POSTGRES_* vars are present"
+
+          echo "--- deep probe ---"
+          AFTER=$(curl -fsS --max-time 30 -H "X-Probe-Token: $PROBE" "$PROD_URL/health/?deep=1" || echo '')
+          printf '%s' "$AFTER" > after.json
+          printf '%s' "$AFTER" | jq . || true
+          printf '%s' "$AFTER" | jq -e '.database.connected == true' > /dev/null \
+            || { echo "::error::deep probe says the database is not connected"; exit 1; }
+          UNAPPLIED=$(printf '%s' "$AFTER" | jq -r '.database.unapplied_migrations // "unknown"')
+          echo "unapplied migrations: $UNAPPLIED"
+          [ "$UNAPPLIED" = "0" ] || { echo "::error::$UNAPPLIED migrations are still unapplied"; exit 1; }
+
+          if [ "$HAVE_COUNTS" = "true" ]; then
+            echo "--- row counts: before → after ---"
+            jq -s '{before: .[0].database.counts, after: .[1].database.counts}' before.json after.json
+            jq -se '.[0].database.counts as $b | .[1].database.counts as $a
+                    | ($a.students >= $b.students) and ($a.payments >= $b.payments)' \
+              before.json after.json > /dev/null \
+              || echo "::warning::Student or payment counts DROPPED across the deploy. Investigate before announcing the release."
+          else
+            echo "::warning::Row counts unavailable (no HEALTH_PROBE_TOKEN) — this deploy cannot prove the data survived."
+          fi
+
+      - name: Summary
+        if: always()
+        env:
+          OLD_SHA: ${{ steps.diff.outputs.old_sha }}
+          MIGRATIONS: ${{ steps.diff.outputs.migrations }}
+          BACKUP_ID: ${{ steps.backup.outputs.backup_id }}
+          MIGRATE_RAN: ${{ steps.diff.outputs.run_migrate }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          {
+            echo "## Production deploy — ${{ job.status }}"
+            echo ""
+            echo "| Field | Value |"
+            echo "|---|---|"
+            echo "| Version | \`${LIVE_VERSION:-unknown}\` → \`$NEW_VERSION\` |"
+            echo "| Image | \`${OLD_SHA:-unknown}\` → \`$NEW_SHA\` |"
+            echo "| Backup | \`${BACKUP_ID:-not taken}\` |"
+            echo "| Migrate job | $([ "$MIGRATE_RAN" = "true" ] && echo executed || echo 'skipped (no migrations)') |"
+            # `github.actor` on a push event is whoever merged the release PR, NOT
+            # whoever clicked Approve — GitHub exposes no approver variable. The
+            # approval itself is recorded in the environment's deployment log.
+            echo "| Triggered by | $ACTOR |"
+            echo ""
+            if [ -n "$MIGRATIONS" ]; then
+              echo "### Migrations applied"
+              echo ""
+              for f in $MIGRATIONS; do echo "- \`$f\`"; done
+              echo ""
+            fi
+            echo "### Rollback"
+            echo ""
+            echo "Traffic: \`gcloud run services update-traffic $SERVICE --to-revisions=<previous>=100 --project=$GCP_PROJECT --region=$GCP_REGION\`"
+            echo ""
+            echo "Data: restore backup \`${BACKUP_ID:-n/a}\` — see DEPLOYMENT.md."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Notify success
+        if: success()
+        uses: dawidd6/action-send-mail@94de994a9f6fffee200243214e17002e2920bb59  # v18
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          secure: true
+          username: ${{ secrets.EMAIL_HOST_USER }}
+          password: ${{ secrets.EMAIL_SECRET }}
+          from: "Five a Day CI <${{ secrets.EMAIL_HOST_USER }}>"
+          to: hellofiveaday@gmail.com${{ secrets.SUPPORT_EMAIL && format(', {0}', secrets.SUPPORT_EMAIL) || '' }}
+          subject: "[Five a Day] v${{ needs.preflight.outputs.new_version }} desplegada en producción"
+          html_body: |
+            <div style="font-family: sans-serif; color:#1f2937; max-width:640px;">
+              <h2 style="color:#6d28d9;">✅ Nueva versión en producción</h2>
+              <p style="font-size:15px; line-height:1.6;">
+                La versión <strong>v${{ needs.preflight.outputs.new_version }}</strong>
+                (antes <strong>v${{ needs.preflight.outputs.live_version || 'desconocida' }}</strong>)
+                ya está publicada en <strong>producción</strong>. Se aprobó manualmente en GitHub;
+                el commit lo llevó a <code>main</code> <strong>${{ github.actor }}</strong>.
+              </p>
+              <p style="text-align:center; margin:24px 0;">
+                <a href="${{ secrets.PRODUCTION_URL || 'https://fiveaday-332600671945.europe-southwest1.run.app' }}"
+                   style="padding:12px 28px; background:#6d28d9; color:#fff; text-decoration:none; border-radius:8px; font-weight:600; font-size:15px;">
+                  Abrir la aplicación →
+                </a>
+              </p>
+              <hr style="border:none; border-top:1px solid #e5e7eb; margin:24px 0;">
+              <h3 style="color:#6b7280; font-size:12px; text-transform:uppercase; letter-spacing:0.05em;">Detalles técnicos</h3>
+              <table cellpadding="6" style="border-collapse:collapse; font-family:sans-serif; font-size:13px;">
+                <tr><td><strong>Imagen</strong></td><td><code>${{ steps.diff.outputs.old_sha }}</code> → <code>${{ needs.preflight.outputs.short_sha }}</code></td></tr>
+                <tr><td><strong>Copia de seguridad</strong></td><td><code>${{ steps.backup.outputs.backup_id }}</code> (verificada como SUCCESSFUL antes de migrar)</td></tr>
+                <tr><td><strong>Migraciones</strong></td><td>${{ steps.diff.outputs.migrations || 'ninguna' }}</td></tr>
+                <tr><td><strong>Trabajos Cloud Run</strong></td><td>todos repuntados a la nueva imagen y verificados</td></tr>
+              </table>
+              <p style="margin-top:16px;">
+                <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+                   style="padding:8px 16px; background:#6b46c1; color:#fff; text-decoration:none; border-radius:4px; font-size:13px;">Ver el despliegue →</a>
+              </p>
+            </div>
+
+      - name: Notify failure
+        if: failure()
+        uses: dawidd6/action-send-mail@94de994a9f6fffee200243214e17002e2920bb59  # v18
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          secure: true
+          username: ${{ secrets.EMAIL_HOST_USER }}
+          password: ${{ secrets.EMAIL_SECRET }}
+          from: "Five a Day CI <${{ secrets.EMAIL_HOST_USER }}>"
+          to: hellofiveaday@gmail.com${{ secrets.SUPPORT_EMAIL && format(', {0}', secrets.SUPPORT_EMAIL) || '' }}
+          subject: "[Five a Day] 🚨 El despliegue a producción ha fallado"
+          html_body: |
+            <div style="font-family: sans-serif; color:#1f2937; max-width:640px;">
+              <h2 style="color:#b91c1c;">🚨 Fallo en el despliegue a producción</h2>
+              <p style="font-size:15px; line-height:1.6;">
+                El despliegue de <strong>v${{ needs.preflight.outputs.new_version }}</strong>
+                se ha detenido. Producción sigue sirviendo
+                <strong>v${{ needs.preflight.outputs.live_version || 'la versión anterior' }}</strong>
+                salvo que el fallo ocurriera después del <em>rollout</em> — revisa el run.
+              </p>
+              <p style="font-size:14px; color:#4b5563; line-height:1.6;">
+                Copia de seguridad previa:
+                <code>${{ steps.backup.outputs.backup_id || 'no llegó a crearse' }}</code>.
+                Cloud Run mantiene la revisión anterior, así que el <em>rollback</em> de código es
+                <code>gcloud run services update-traffic</code> hacia la revisión previa.
+              </p>
+              <p style="margin-top:16px;">
+                <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+                   style="padding:8px 16px; background:#b91c1c; color:#fff; text-decoration:none; border-radius:4px; font-size:13px;">Ver el run fallido →</a>
+              </p>
+            </div>
+
+  # ============================================================
+  # JOB 3: A preflight failure means the release is NOT deployable
+  #
+  # The deploy job carries its own failure email, but it never starts when
+  # preflight fails — CI went red on main, a required check never ran, or the
+  # 45-minute wait expired. That is exactly the state somebody needs to know
+  # about, and without this it is only a red run in the Actions tab.
+  # ============================================================
+  notify-preflight-failure:
+    name: Notify preflight failure
+    needs: preflight
+    if: failure()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: dawidd6/action-send-mail@94de994a9f6fffee200243214e17002e2920bb59  # v18
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          secure: true
+          username: ${{ secrets.EMAIL_HOST_USER }}
+          password: ${{ secrets.EMAIL_SECRET }}
+          from: "Five a Day CI <${{ secrets.EMAIL_HOST_USER }}>"
+          to: hellofiveaday@gmail.com${{ secrets.SUPPORT_EMAIL && format(', {0}', secrets.SUPPORT_EMAIL) || '' }}
+          subject: "[Five a Day] ⚠️ La versión en main NO es desplegable"
+          html_body: |
+            <div style="font-family: sans-serif; color:#1f2937; max-width:640px;">
+              <h2 style="color:#b91c1c;">⚠️ El despliegue a producción no se ha podido preparar</h2>
+              <p style="font-size:15px; line-height:1.6;">
+                Ha llegado un commit a <code>main</code>, pero la comprobación previa ha fallado,
+                así que <strong>no hay ningún despliegue esperando aprobación</strong>.
+                Producción sigue intacta.
+              </p>
+              <p style="font-size:14px; color:#4b5563; line-height:1.6;">
+                Causas habituales: CI está en rojo en ese commit, un check obligatorio
+                (<code>Lint</code>, <code>Type check</code>, <code>Tests</code>,
+                <code>Docker build</code>) no llegó a ejecutarse, o CI no terminó en 45 minutos.
+                Arréglalo y vuelve a lanzar el workflow <em>Deploy production</em> a mano.
+              </p>
+              <p style="margin-top:16px;">
+                <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+                   style="padding:8px 16px; background:#b91c1c; color:#fff; text-decoration:none; border-radius:4px; font-size:13px;">Ver el run fallido →</a>
+              </p>
+            </div>

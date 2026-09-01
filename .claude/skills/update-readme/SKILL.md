@@ -87,7 +87,7 @@ Work through this list in order. **Do not skip a step just because nothing "look
 #### a. Header badges (≈lines 11-18)
 
 - Version badge must equal `pyproject.toml`'s version
-- CI and Codecov badges must use the owner/repo from `git remote -v`
+- The CI badge must use the owner/repo from `git remote -v`. The coverage badge is a **static** shields.io badge (`img.shields.io/badge/coverage-<pct>%25-brightgreen`) in two places — the header row and the Project Status row — so its number must be updated by hand
 - Don't bloat the header — no more badges than the originals + any new CI workflow
 
 #### b. Project Status table — **three rows, exact order: Production → Testing → Development**
@@ -139,7 +139,7 @@ If a roadmap item shipped, move its content to the Version History block for the
 
 Update every line that's wrong:
 
-- `tests/` line: `pytest suite (N tests, X% coverage)` — get N from `grep -r "^def test_" project/tests/ | wc -l` and X from the latest coverage report (or Codecov)
+- `tests/` line: `pytest suite (N tests, X% coverage)` — get N from `grep -r "^def test_" project/tests/ | wc -l` and X from the latest coverage report (`make test coverage`)
 - `core/views/` annotation: view module count must be accurate
 - `Makefile` line: command count
 - New top-level files or directories (e.g. `.github/`, `docs/`, `scripts/`)
@@ -155,7 +155,7 @@ Also refresh the App: core/students/billing/comms summary tables if models, view
 #### k. Testing
 
 - Total test count must match `grep -r "^def test_" project/tests/ | wc -l`
-- Coverage % must match the current Codecov or local coverage report
+- Coverage % must match the latest local coverage report (`make test coverage`; `make coverage-badge` renders an offline SVG)
 - Per-file test tables: test counts per file must match
 - **Coverage Report subsection** (see section k.1 below)
 
@@ -437,13 +437,13 @@ Certain facts appear in multiple documents. When they change, update **every** o
 |------|-------------------------|
 | **Current version (`x.y.z`)** | Main README header badge, Recent Versions top row, Version History latest `<details>`, `pyproject.toml`, `project/project/settings.py` APP_VERSION default |
 | **Test count (`N tests`)** | Main README header (Project Status area if mentioned), Testing section top, Directory Layout `tests/` annotation, per-app READMEs if they cite a count |
-| **Coverage %** | Main README Codecov badge, Testing Overview table, Directory Layout |
+| **Coverage %** | Main README coverage badge (static, **both** badge rows), Testing Overview table, Directory Layout |
 | **Make command count** | Main README Directory Layout (`60+ commands`), help text |
 | **Python version (`3.12+`)** | README badge, `pyproject.toml` `requires-python`, Dockerfile `FROM python:3.12-slim`, `[tool.ruff] target-version = "py312"` |
 | **Django version (`5.2`)** | README badge, `pyproject.toml` dependency |
 | **PostgreSQL version (`16`)** | README badge, `docker-compose.yml`, `DEPLOYMENT.md` Cloud SQL create command, CI workflow service image |
 | **GCP region (`europe-southwest1`)** | Project Status table, DEPLOYMENT.md (every `gcloud` example) |
-| **Owner/repo (`starseeker-code-public/five-a-day`)** | README badges (CI, Codecov), GITHUB.md examples |
+| **Owner/repo (`starseeker-code-public/five-a-day`)** | README badges (CI), GITHUB.md examples |
 | **Env var inventory** | `settings.py` (`os.getenv(...)`), README Env Variables Reference table, `.env.example`, DEPLOYMENT.md Secret Manager list. Every name that appears in one must appear in every other (modulo internal-only vars that never ship to production). |
 
 If a change appears in one place, **check the others**. A version-bump commit that only updates the badge but not Version History is a broken commit.

@@ -1,0 +1,127 @@
+{# Shared QA styling for /testing/, /testing/features/ and the development detail
+   page. Kept in one partial so the three pages cannot drift apart; the dark
+   variants live in core/static/css/theme.css under "Testing (QA) dashboard". #}
+<style>
+.qa-card {
+    background: #fff;
+    border-radius: 1.25rem;
+    padding: 1.75rem;
+    border: 2px solid #e5e7eb;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+}
+.qa-card-header {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin-bottom: 1rem;
+}
+.qa-card-icon {
+    width: 3rem;
+    height: 3rem;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+.qa-info-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 0.5rem 0;
+    border-bottom: 1px solid #f3f4f6;
+    font-size: 0.875rem;
+}
+.qa-info-row:last-child { border-bottom: none; }
+.qa-info-label { color: #6b7280; font-weight: 500; }
+.qa-info-value { color: #111827; font-family: ui-monospace, monospace; font-size: 0.8125rem; }
+
+/* Toggle switch */
+.toggle-switch { position: relative; width: 3rem; height: 1.625rem; }
+.toggle-switch input { opacity: 0; width: 0; height: 0; }
+.toggle-slider {
+    position: absolute; inset: 0; cursor: pointer;
+    background: #d1d5db; border-radius: 9999px; transition: 0.3s;
+}
+.toggle-slider::before {
+    content: ""; position: absolute; height: 1.25rem; width: 1.25rem;
+    left: 3px; bottom: 3px; background: #fff; border-radius: 50%; transition: 0.3s;
+}
+.toggle-switch input:checked + .toggle-slider { background: #06b6d4; }
+.toggle-switch input:checked + .toggle-slider::before { transform: translateX(1.375rem); }
+
+/* Circular action buttons */
+.circle-btn {
+    width: 3rem; height: 3rem; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    color: #fff; border: none; cursor: pointer;
+    transition: transform 0.15s, box-shadow 0.15s;
+    flex-shrink: 0;
+}
+.circle-btn:hover { transform: scale(1.1); box-shadow: 0 4px 12px rgba(0,0,0,0.15); }
+.circle-btn:disabled { opacity: 0.4; cursor: not-allowed; transform: none; box-shadow: none; }
+
+/* Backlog */
+.backlog-item {
+    display: flex; align-items: center; gap: 0.75rem;
+    padding: 0.75rem 1rem; border-radius: 0.75rem;
+    border: 1px solid #e5e7eb; background: #fafafa;
+    transition: background 0.15s;
+}
+.backlog-item:hover { background: #f0f9ff; }
+.priority-badge {
+    font-size: 0.6875rem; font-weight: 700; text-transform: uppercase;
+    padding: 0.125rem 0.5rem; border-radius: 9999px; letter-spacing: 0.05em;
+}
+.priority-high { background: #fecaca; color: #991b1b; }
+/* QA verification tick — shaded until the tester clicks it, then green. */
+.verify-btn { background: none; border: 0; padding: 0; line-height: 0; cursor: pointer; color: #cbd5e1; transition: color .15s ease, transform .15s ease; }
+.verify-btn:hover { color: #94a3b8; transform: scale(1.1); }
+.verify-btn.is-verified { color: #16a34a; }
+.verify-btn.is-verified:hover { color: #15803d; }
+html.dark .verify-btn { color: #475569; }
+html.dark .verify-btn:hover { color: #64748b; }
+html.dark .verify-btn.is-verified { color: #4ade80; }
+.priority-medium { background: #fef3c7; color: #92400e; }
+.priority-low { background: #d1fae5; color: #065f46; }
+.status-badge {
+    font-size: 0.6875rem; font-weight: 600; padding: 0.125rem 0.5rem;
+    border-radius: 9999px;
+}
+.status-open { background: #dbeafe; color: #1e40af; }
+.status-in_progress { background: #fef3c7; color: #92400e; }
+.status-done { background: #d1fae5; color: #065f46; }
+
+/* Desarrollos (epics) — a row is a link to the detail page, so it needs its
+   own hover affordance; the backlog rows are not clickable. */
+.feature-item {
+    display: flex; align-items: center; gap: 0.75rem;
+    padding: 0.9rem 1rem; border-radius: 0.75rem;
+    border: 1px solid #e5e7eb; background: #fafafa;
+    text-decoration: none; color: inherit;
+    transition: background 0.15s, border-color 0.15s, transform 0.15s;
+}
+.feature-item:hover { background: #f5f3ff; border-color: #c4b5fd; transform: translateX(2px); }
+.deadline-pill {
+    display: inline-flex; align-items: center; gap: 0.25rem;
+    font-size: 0.6875rem; font-weight: 600; padding: 0.125rem 0.5rem;
+    border-radius: 9999px; background: #ede9fe; color: #5b21b6; white-space: nowrap;
+}
+.deadline-pill.is-overdue { background: #fecaca; color: #991b1b; }
+.deadline-pill.is-none { background: #f3f4f6; color: #6b7280; }
+.task-counter {
+    font-size: 0.6875rem; font-weight: 700; padding: 0.125rem 0.5rem;
+    border-radius: 9999px; background: #e0e7ff; color: #3730a3; white-space: nowrap;
+}
+/* The Jira-style description: preserve the writer's line breaks verbatim. */
+.feature-description {
+    white-space: pre-wrap; word-break: break-word;
+    font-size: 0.875rem; line-height: 1.7; color: #374151;
+}
+
+.seed-output {
+    max-height: 12rem; overflow-y: auto;
+    font-family: ui-monospace, monospace; font-size: 0.75rem;
+    background: #111827; color: #a3e635; padding: 1rem; border-radius: 0.75rem;
+    white-space: pre-wrap; line-height: 1.6;
+}
+</style>

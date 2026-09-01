@@ -545,7 +545,7 @@ either — a bad value stays bad across every future deploy.
 One is currently wrong. `ACADEMY_IBAN_HOLDER` on the production service is:
 
 ```text
-Silvia Yubitza Moreno Carl?n     # should be: Silvia Yubitza Moreno Carlín
+Silvia Yubitza Moreno Carlín     # should be: Silvia Yubitza Moreno Carlín
 ```
 
 The `í` was lost to a console-codepage transcode when the var was first set from a cmd or
@@ -568,7 +568,7 @@ Three things matter here:
   received `U+00ED`). A Windows console with a legacy codepage is what created the bug in the
   first place — if you are unsure, probe first with a command that echoes the argument back,
   e.g. `gcloud run services describe "Carlín-probe" --region=$REGION --project=$PROJECT`, and
-  check that the error names `Carl\xedn` and not `Carl?n`.
+  check that the error names `Carl\xedn` and not `Carlín`.
 - **The `^@^` prefix sets `@` as the delimiter** so spaces and commas in the value are safe.
 
 Snapshot before and diff after — the whole risk of an env change is the vars you did not

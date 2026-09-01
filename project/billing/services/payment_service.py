@@ -5,7 +5,7 @@ Extracted from generate_payments management command and views.
 
 import calendar
 from datetime import date
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 
 from django.db import transaction
 
@@ -23,6 +23,8 @@ MONTH_NAMES_ES = {
     5: "Mayo",
     6: "Junio",
 }
+
+TEACHING_MONTHS = [9, 10, 11, 12, 1, 2, 3, 4, 5, 6]
 
 QUARTER_NAMES_ES = {
     10: "1er Trimestre (Oct-Dic)",
@@ -64,60 +66,42 @@ class PaymentService:
         return None
 
     @staticmethod
-    def calculate_monthly_amount(enrollment, config, month):
-        """Calculate the monthly payment amount for a given enrollment."""
-        special = PaymentService.hand_priced_amount(enrollment)
-        if special is not None:
-            return special
+    def calculate_period_amount(enrollment, config, months, fraction=Decimal("1"), quarterly=False):
+        """Price one billing period.
 
-        base = PaymentService._get_base_monthly_fee(enrollment, config)
-        if enrollment.schedule_type == "adult_group":
-            return base
+        ``months`` is the list of teaching months the period covers (``[12]`` for
+        a monthly December, ``[12, 1, 2]`` for a quarter starting in December).
+        ``fraction`` prorates the period's FIRST month for a student who joined
+        part-way through it — 15 September on a 30-day month gives 16/30. Every
+        later month of the period, and every later period, is billed in full.
 
-        amount = base
+        This is the single source of truth for what a period costs;
+        ``calculate_monthly_amount`` and ``calculate_quarterly_amount`` are thin
+        wrappers over it so the standard-price helpers and the generator can
+        never drift apart. The order of operations mirrors
+        ``EnrollmentService._apply_discounts``:
 
-        if enrollment.is_sibling_discount:
-            amount -= amount * (config.sibling_discount / Decimal("100"))
+            (months x monthly - quarterly%) - sibling% - (cheque x months) - june
 
-        if enrollment.has_language_cheque:
-            amount -= config.language_cheque_discount
-
-        if month == 6:
-            amount -= config.june_discount
-
-        return max(amount, Decimal("0.01"))
-
-    @staticmethod
-    def calculate_quarterly_amount(enrollment, config, quarter_due_month):
-        """Calculate a quarterly payment: 3 months, minus every discount the
-        enrollment carries.
-
-        This used to apply ONLY the quarterly percentage, so a quarterly
-        student with a sibling discount or a language cheque was billed the
-        full price — the enrollment record said one number and the generated
-        payments said another. The order of operations mirrors
-        ``EnrollmentService._apply_discounts`` so the two agree:
-
-            (3 x monthly - quarterly%) - sibling% - (language cheque x 3)
-
-        ``quarter_due_month`` is the month the quarter falls due (10 = Q1
-        Oct-Dec, 1 = Q2 Jan-Mar, 4 = Q3 Apr-Jun). Q3 covers June, so it also
-        picks up the June "complete the year" discount that
-        ``calculate_monthly_amount`` applies to month 6.
-
-        A ``special`` matrícula short-circuits all of it — see
-        ``hand_priced_amount``.
+        A ``special`` matricula short-circuits all of it — see
+        ``hand_priced_amount`` — but is still scaled when the period is short or
+        partial, because ``final_amount`` is the price of a WHOLE period.
         """
+        # Effective months billed: full months, plus the prorated first one.
+        effective = Decimal(len(months) - 1) + fraction
+
         special = PaymentService.hand_priced_amount(enrollment)
         if special is not None:
-            return special
+            whole_period = Decimal(3) if quarterly else Decimal(1)
+            return max(special * (effective / whole_period), Decimal("0.01"))
 
         base = PaymentService._get_base_monthly_fee(enrollment, config)
-        total = base * 3
-        total -= total * (config.quarterly_enrollment_discount / Decimal("100"))
+        total = base * effective
 
-        # Adult groups pay a flat rate — no sibling / cheque / June discounts,
-        # matching calculate_monthly_amount.
+        if quarterly:
+            total -= total * (config.quarterly_enrollment_discount / Decimal("100"))
+
+        # Adult groups pay a flat rate — no sibling / cheque / June discounts.
         if enrollment.schedule_type == "adult_group":
             return max(total, Decimal("0.01"))
 
@@ -125,13 +109,108 @@ class PaymentService:
             total -= total * (config.sibling_discount / Decimal("100"))
 
         if enrollment.has_language_cheque:
-            # The cheque is a per-month amount; a quarter covers three.
-            total -= config.language_cheque_discount * 3
+            # The cheque is a per-month amount; a period covers `effective` of them.
+            total -= config.language_cheque_discount * effective
 
-        if quarter_due_month == 4:  # Q3 = Apr-Jun, includes the June discount
+        if 6 in months:  # June carries the "complete the year" discount
             total -= config.june_discount
 
         return max(total, Decimal("0.01"))
+
+    @staticmethod
+    def calculate_monthly_amount(enrollment, config, month, fraction=Decimal("1")):
+        """Price one monthly fee. Thin wrapper over ``calculate_period_amount``."""
+        return PaymentService.calculate_period_amount(enrollment, config, [month], fraction, quarterly=False)
+
+    @staticmethod
+    def calculate_quarterly_amount(enrollment, config, quarter_due_month, fraction=Decimal("1")):
+        """Price a standard 3-month quarter. Thin wrapper over ``calculate_period_amount``.
+
+        ``quarter_due_month`` names the quarter by its first month under the old
+        FIXED calendar (10 = Oct-Dec, 1 = Jan-Mar, 4 = Apr-Jun). Since v1.22.0 the
+        generator anchors quarters to the enrollment month instead, so this helper
+        is kept for the standard-price question "what does a full quarter cost?" —
+        the reminder email and the pricing preview still ask exactly that.
+        """
+        months = [((quarter_due_month - 1 + i) % 12) + 1 for i in range(3)]
+        return PaymentService.calculate_period_amount(enrollment, config, months, fraction, quarterly=True)
+
+    @staticmethod
+    def teaching_months(academic_year):
+        """[(month, year), ...] for Sep..Jun of ``academic_year`` ("2025-2026")."""
+        start_year, end_year = (int(part) for part in academic_year.split("-"))
+        return [(m, start_year if m >= 9 else end_year) for m in TEACHING_MONTHS]
+
+    @staticmethod
+    def _last_day(month, year):
+        return date(year, month, calendar.monthrange(year, month)[1])
+
+    @staticmethod
+    def proration_fraction(reference, month, year):
+        """Fraction of (month, year) still to be taught from ``reference`` onwards.
+
+        A student joining on the 15th of a 30-day month is billed 16/30 — the day
+        they join counts. Joining on or before the 1st (or in an earlier month)
+        bills the whole thing.
+        """
+        days_in_month = calendar.monthrange(year, month)[1]
+        if (reference.year, reference.month) != (year, month) or reference.day <= 1:
+            return Decimal("1")
+        remaining = days_in_month - reference.day + 1
+        return Decimal(remaining) / Decimal(days_in_month)
+
+    @staticmethod
+    def billing_periods(enrollment):
+        """Ordered billing periods for the enrollment, from its start month to June.
+
+        Monthly plans get one period per teaching month. Quarterly plans get
+        consecutive 3-month blocks ANCHORED TO THE ENROLLMENT MONTH — not the old
+        fixed Oct/Jan/Apr calendar, which silently left a mid-year joiner's first
+        months unbilled (a student enrolling 12 Dec was never charged for December,
+        because Q1 had already fallen due on 31 Oct). The final block is short when
+        the academic year ends first: enrolling in December gives Dec-Feb, Mar-May
+        and a one-month June.
+
+        Each period is a dict:
+            months   [(month, year), ...] the period covers
+            starts   date the period opens — when Celery creates the payment
+            due      LAST day of the period — when the money is owed
+            fraction proration applied to the period's first month (1 unless the
+                     student joined part-way through it)
+        """
+        sequence = PaymentService.teaching_months(enrollment.academic_year)
+        reference = enrollment.enrollment_date or date.today()
+
+        # First period is the one still open when the student joined; anything
+        # whose last day already passed is not billable to them.
+        first_index = next(
+            (i for i, (m, y) in enumerate(sequence) if PaymentService._last_day(m, y) >= reference),
+            None,
+        )
+        if first_index is None:
+            return []
+
+        remaining = sequence[first_index:]
+        step = 3 if enrollment.payment_modality == "quarterly" else 1
+
+        periods = []
+        for offset in range(0, len(remaining), step):
+            block = remaining[offset : offset + step]
+            first_month, first_year = block[0]
+            last_month, last_year = block[-1]
+            periods.append(
+                {
+                    "months": block,
+                    "starts": max(date(first_year, first_month, 1), reference),
+                    "due": PaymentService._last_day(last_month, last_year),
+                    "fraction": (
+                        PaymentService.proration_fraction(reference, first_month, first_year)
+                        if offset == 0
+                        else Decimal("1")
+                    ),
+                }
+            )
+        return periods
 
     @staticmethod
     def complete_payment(payment_id):
@@ -144,19 +223,23 @@ class PaymentService:
         return payment
 
     @staticmethod
-    def schedule_academic_year_payments(enrollment, parent=None):
-        """Create all pending periodic payments for the enrollment's academic year.
+    def schedule_academic_year_payments(enrollment, parent=None, as_of=None):
+        """Create every periodic payment whose period has STARTED, and no more.
 
-        Monthly enrollments get one pending payment per academic month
-        (Sep–Jun); quarterly enrollments get three (Q1 due Oct, Q2 Jan, Q3 Apr).
-        Each is due at the END of its period and starts at the enrollment month,
-        so a student enrolling mid-year is never billed for months before they
-        joined.
+        Payments are created on the first day of their period and fall due on its
+        LAST day. So enrolling a student creates just the period they joined
+        (prorated for the days already gone), and the 1st-of-the-month Celery job
+        adds each new one as it opens. The first period is always issued even if
+        it starts later, so a student enrolled in August still has their September
+        fee on the ficha immediately.
 
-        Idempotent: skips any (student, payment_type, month, year) that already
-        has a payment — so the periodic ``generate_payments`` command (which
-        matches on due-date month/year) never double-creates. Returns the number
-        of payments created.
+        The job is also self-healing: it creates any period that has started but
+        has no payment, so a month the cron missed is picked up on the next run
+        rather than going silently unbilled forever.
+
+        Idempotent — skips any (student, payment_type, due month/year) that already
+        exists, which is what stops the cron and this call from double-creating.
+        Returns the number of payments created.
         """
         from billing.models import SiteConfiguration
 
@@ -164,44 +247,32 @@ class PaymentService:
         if not student.active:
             return 0
 
+        today = as_of or date.today()
         config = SiteConfiguration.get_config()
-        start_year = int(enrollment.academic_year.split("-")[0])
-        end_year = int(enrollment.academic_year.split("-")[1])
-        ref = enrollment.enrollment_date or date.today()
-
-        def cal_year(month):
-            return start_year if month >= 9 else end_year
-
-        def period_end(month):
-            year = cal_year(month)
-            return date(year, month, calendar.monthrange(year, month)[1])
-
-        if enrollment.payment_modality == "quarterly":
-            months, payment_type, names = [10, 1, 4], "quarterly", QUARTER_NAMES_ES
-        else:
-            months, payment_type, names = [9, 10, 11, 12, 1, 2, 3, 4, 5, 6], "monthly", MONTH_NAMES_ES
+        quarterly = enrollment.payment_modality == "quarterly"
+        payment_type = "quarterly" if quarterly else "monthly"
 
         created = 0
-        for month in months:
-            due_date = period_end(month)
-            if due_date < ref:
-                continue  # period already elapsed at enrollment time
+        for index, period in enumerate(PaymentService.billing_periods(enrollment)):
+            # The FIRST period is always issued, even when it opens in the future:
+            # enrolling a student in August for a course starting in September must
+            # still put their first fee on the ficha that day. Every later period
+            # waits for its own first day, when Celery creates it.
+            if index > 0 and period["starts"] > today:
+                break
 
-            year = cal_year(month)
+            due = period["due"]
             if Payment.objects.filter(
                 student=student,
                 payment_type=payment_type,
-                due_date__month=month,
-                due_date__year=year,
+                due_date__month=due.month,
+                due_date__year=due.year,
             ).exists():
                 continue
 
-            if payment_type == "quarterly":
-                amount = PaymentService.calculate_quarterly_amount(enrollment, config, month)
-                concept = f"Trimestre {names.get(month, '')} {year}"
-            else:
-                amount = PaymentService.calculate_monthly_amount(enrollment, config, month)
-                concept = f"Mensualidad {names.get(month, '')} {year}"
+            amount = PaymentService.calculate_period_amount(
+                enrollment, config, [m for m, _ in period["months"]], period["fraction"], quarterly
+            )
 
             Payment.objects.create(
                 student=student,
@@ -209,14 +280,35 @@ class PaymentService:
                 enrollment=enrollment,
                 payment_type=payment_type,
                 payment_method="transfer",
-                amount=amount,
+                amount=amount.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
                 payment_status="pending",
-                due_date=due_date,
-                concept=concept,
+                due_date=due,
+                concept=PaymentService.period_concept(period, quarterly),
             )
             created += 1
 
         return created
+
+    @staticmethod
+    def period_concept(period, quarterly):
+        """Human label for a period: "Mensualidad Diciembre 2025" / "Trimestre
+        Diciembre-Febrero 2026". Quarters are anchored to the enrollment month, so
+        the old fixed QUARTER_NAMES_ES labels ("2do Trimestre (Ene-Mar)") no longer
+        describe them and the range is spelled out instead. A partial first month
+        is marked so the family can see why the amount is not the usual one.
+        """
+        months = period["months"]
+        first_month, _ = months[0]
+        last_month, last_year = months[-1]
+        partial = " (parcial)" if period["fraction"] != Decimal("1") else ""
+
+        if not quarterly:
+            return f"Mensualidad {MONTH_NAMES_ES.get(first_month, '')} {last_year}{partial}"
+        if len(months) == 1:
+            return f"Trimestre {MONTH_NAMES_ES.get(first_month, '')} {last_year}{partial}"
+        return (
+            f"Trimestre {MONTH_NAMES_ES.get(first_month, '')}-{MONTH_NAMES_ES.get(last_month, '')} {last_year}{partial}"
+        )
 
     @staticmethod
     def should_generate_monthly(month):
