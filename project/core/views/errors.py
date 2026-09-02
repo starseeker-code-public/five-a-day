@@ -108,6 +108,12 @@ def health_check(request):
     state, and returns 503 when the database cannot be reached. Send a valid
     X-Probe-Token to also receive row counts. A shallow 200 proves the right
     IMAGE is running; only the deep probe can show which DATABASE it is using.
+
+    In the testing environment the deep probe also carries `ready_for_prod`,
+    QA's sign-off flag (QAConfiguration): deploy-production.yml's preflight
+    refuses to arm a release until it is true. It lives on the DEEP probe, not
+    the shallow response, because the flag is a database row and the shallow
+    response must never touch the database.
     """
     payload = {
         "status": "healthy",
@@ -124,5 +130,10 @@ def health_check(request):
     if not ok:
         payload["status"] = "degraded"
         return JsonResponse(payload, status=503)
+
+    if getattr(settings, "IS_TESTING_ENV", False):
+        from core.models import QAConfiguration
+
+        payload["ready_for_prod"] = QAConfiguration.get_config().ready_for_prod
 
     return JsonResponse(payload, status=200)

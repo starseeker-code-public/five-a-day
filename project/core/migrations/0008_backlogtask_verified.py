@@ -15,7 +15,7 @@ class Migration(migrations.Migration):
             field=models.BooleanField(
                 default=False,
                 help_text="El tester ha comprobado que el ticket está correcto.",
-                verbose_name="Verificado por QA",
+                verbose_name="desarrollado",
             ),
         ),
     ]

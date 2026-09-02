@@ -65,6 +65,7 @@ class TestGoogleOauthRedirect:
 
         mock_flow = MagicMock()
         mock_flow.authorization_url.return_value = ("https://accounts.google.com/oauth", "state123")
+        mock_flow.code_verifier = "pkce-verifier-123"  # real Flows expose a str here
 
         with patch("core.views.auth._build_flow", return_value=mock_flow):
             response = client.get(reverse("google_oauth_redirect"))
@@ -79,6 +80,7 @@ class TestGoogleOauthRedirect:
 
         mock_flow = MagicMock()
         mock_flow.authorization_url.return_value = ("https://accounts.google.com/oauth", "s")
+        mock_flow.code_verifier = "pkce-verifier-123"
         with patch("core.views.auth._build_flow", return_value=mock_flow) as mocked:
             client.get(reverse("google_oauth_redirect"))
         # _build_flow was called with callback_uri = explicit env value
@@ -252,3 +254,19 @@ class TestGoogleOauthCallback:
         # Session should be marked authenticated
         assert client.session.get("is_authenticated") is True
         assert client.session.get("google_authenticated") is True
+
+
+@pytest.mark.django_db
+class TestOauthPkceVerifier:
+    """Regression: google-auth-oauthlib >=1.3 uses PKCE, and the verifier
+    generated at redirect must survive to the callback or the token exchange
+    fails with `invalid_grant: Missing code verifier`."""
+
+    def test_redirect_stashes_the_pkce_verifier_in_the_session(self, client, monkeypatch):
+        monkeypatch.setenv("GOOGLE_CLIENT_ID", "abc")
+        monkeypatch.setenv("GOOGLE_CLIENT_SECRET", "xyz")
+        # Real Flow so authorization_url() actually generates a verifier.
+        response = client.get(reverse("google_oauth_redirect"))
+        assert response.status_code == 302
+        assert "code_challenge=" in response.url, "PKCE challenge must be sent to Google"
+        assert client.session.get("google_oauth_code_verifier"), "verifier must be stashed for the callback"

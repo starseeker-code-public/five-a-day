@@ -316,6 +316,25 @@ jobs:
           echo "::error::Timed out after 10 min. /health/ never reported $TARGET_VERSION."
           exit 1
 
+      - name: Lock the new version for production (reset ready_for_prod)
+        run: |
+          # Every freshly deployed version starts NOT ready for production.
+          # deploy-production.yml's preflight refuses to arm a release until QA
+          # presses "¿Listo para desplegar?" on /testing/, which sets the flag
+          # back to true. Skipping this reset would leave the previous version's
+          # sign-off silently covering a build nobody has tested — the exact
+          # hole the flag exists to close — so a failure here fails the deploy.
+          ssh $SSH_OPTS "$VM_USER@$VM_HOST" \
+            'sudo docker exec fiveaday_django python project/manage.py set_ready_for_prod off'
+
+          # Prove it through the same channel production's preflight will read.
+          READY=$(curl -fsS --max-time 20 "$TEST_URL/health/?deep=1" | jq -r '.ready_for_prod')
+          echo "/health/?deep=1 reports ready_for_prod=$READY"
+          if [ "$READY" != "false" ]; then
+            echo "::error::ready_for_prod is '$READY' after the reset, expected 'false'."
+            exit 1
+          fi
+
       - name: Assert the right database survived
         run: |
           # The version check passes even when the stack mounted the dev volume,
@@ -399,6 +418,11 @@ jobs:
                 Comprobado tras el despliegue: la versión que responde <code>/health/</code> coincide
                 con <code>pyproject.toml</code> en <code>testing</code>, el contenedor de base de datos
                 ha montado el volumen <code>testing_postgres_data</code> y no hay volúmenes huérfanos.
+              </p>
+              <p style="font-size:13px; color:#4b5563; line-height:1.6;">
+                <strong>Esta versión queda bloqueada para producción</strong> hasta que alguien la
+                valide con el botón <em>¿Listo para desplegar?</em> del panel de pruebas. Hasta
+                entonces, el workflow de despliegue a producción no se armará.
               </p>
               <p style="margin-top:16px;">
                 <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"

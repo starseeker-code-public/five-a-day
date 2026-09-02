@@ -1,0 +1,258 @@
+name: Rollback production
+
+# On-demand rollback of the production Cloud Run SERVICE and all Cloud Run JOBS
+# to a previous image tag. Complements the automatic rollback step inside
+# deploy-production.yml, which only fires when a deploy fails mid-run — this
+# workflow is for the case discovered later ("v1.27.0 is live and broken, put
+# v1.26.2 back"), or for finishing the job when the automatic rollback itself
+# failed.
+#
+#   Actions → Rollback production → Run workflow
+#     · leave image_tag empty  →  rolls back to the most recent revision whose
+#       image differs from the one currently serving
+#     · pass a git short SHA   →  rolls back to exactly that image tag
+#
+# CODE ONLY, deliberately: the database is never touched. Migrations applied by
+# the release being rolled back REMAIN applied — that is the same state every
+# normal deploy passes through (migrate runs before the rollout), so old code
+# on the new schema is already proven viable. Restoring a Cloud SQL backup
+# discards data written since it was taken and stays a manual, human decision.
+#
+# The job runs under `environment: production` for two reasons: the Workload
+# Identity binding is scoped to attribute.environment/production (no other job
+# can mint a token at all), and it puts the same approval click in front of a
+# rollback as in front of a deploy.
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: 'Image tag (git short SHA) to roll back to. Empty = previous image.'
+        type: string
+        default: ''
+
+# Share the deploy-production group: a rollback must never race a deploy.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  GCP_PROJECT: five-a-day-evolution
+  GCP_REGION: europe-southwest1
+  SERVICE: fiveaday
+  IMAGE_BASE: europe-southwest1-docker.pkg.dev/five-a-day-evolution/fiveaday/web
+  PROD_URL: ${{ secrets.PRODUCTION_URL || 'https://fiveaday-332600671945.europe-southwest1.run.app' }}
+
+jobs:
+  rollback:
+    name: Roll back production
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: https://fiveaday-332600671945.europe-southwest1.run.app
+
+    permissions:
+      contents: read
+      id-token: write   # Workload Identity Federation
+
+    steps:
+      # Full history: image tags are git short SHAs, and the target commit's
+      # pyproject.toml is what tells us which version /health/ must report
+      # after the rollback.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+        with:
+          fetch-depth: 0
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@c200f3691d83b41bf9bbd8638997a462592937ed  # v2
+        with:
+          project_id: ${{ env.GCP_PROJECT }}
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_DEPLOY_SA }}
+
+      - uses: google-github-actions/setup-gcloud@e427ad8a34f8676edf47cf7d7925499adf3eb74f  # v2
+        with:
+          project_id: ${{ env.GCP_PROJECT }}
+
+      - name: Resolve the target image
+        id: target
+        # The input arrives via env, never interpolated into the body, and is
+        # validated to a hex shape before it goes anywhere near a command line.
+        env:
+          INPUT_TAG: ${{ inputs.image_tag }}
+        run: |
+          CURRENT=$(gcloud run services describe "$SERVICE" --project="$GCP_PROJECT" --region="$GCP_REGION" \
+            --format='value(spec.template.spec.containers[0].image)' | sed 's/.*://')
+          echo "currently serving image tag: ${CURRENT:-unknown}"
+
+          TAG="$INPUT_TAG"
+          if [ -n "$TAG" ]; then
+            if ! printf '%s' "$TAG" | grep -qE '^[0-9a-f]{7,40}$'; then
+              echo "::error::image_tag '$TAG' does not look like a git SHA."
+              exit 1
+            fi
+          else
+            # Most recent revision whose image differs from the serving one.
+            TAG=$(gcloud run revisions list --service="$SERVICE" --project="$GCP_PROJECT" --region="$GCP_REGION" \
+              --sort-by='~metadata.creationTimestamp' --format='value(spec.containers[0].image)' \
+              | sed 's/.*://' | awk -v cur="$CURRENT" '$0 != cur { print; exit }')
+            if [ -z "$TAG" ]; then
+              echo "::error::No previous image found among the service revisions — pass image_tag explicitly."
+              exit 1
+            fi
+            echo "auto-selected previous image tag: $TAG"
+          fi
+
+          if [ "$TAG" = "$CURRENT" ]; then
+            echo "::error::Target tag '$TAG' is what production already serves — nothing to roll back to."
+            exit 1
+          fi
+
+          # The image must exist: `gcloud run deploy` with a missing tag fails
+          # AFTER creating a broken revision, which is noise we can avoid.
+          if ! gcloud artifacts docker tags list "$IMAGE_BASE" --project="$GCP_PROJECT" \
+               --format='value(tag)' 2>/dev/null | grep -qx "$TAG"; then
+            echo "::error::Image $IMAGE_BASE:$TAG does not exist in Artifact Registry."
+            exit 1
+          fi
+
+          # Which version should /health/ report afterwards? Tags are git short
+          # SHAs, so the answer is in that commit's pyproject.toml.
+          EXPECTED=''
+          if git cat-file -e "${TAG}^{commit}" 2>/dev/null; then
+            EXPECTED=$(git show "${TAG}:pyproject.toml" 2>/dev/null \
+              | grep -E '^[[:space:]]*version[[:space:]]*=' | head -1 \
+              | sed -E 's/.*version[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/')
+          fi
+          if [ -z "$EXPECTED" ]; then
+            echo "::warning::Tag '$TAG' is not a commit in this repo — the post-rollback version cannot be asserted, only that /health/ answers."
+          else
+            echo "expected version after rollback: $EXPECTED"
+          fi
+
+          {
+            echo "tag=$TAG"
+            echo "current=$CURRENT"
+            echo "expected_version=$EXPECTED"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Repoint every Cloud Run job at the target image
+        env:
+          TAG: ${{ steps.target.outputs.tag }}
+        run: |
+          IMAGE="$IMAGE_BASE:$TAG"
+          mapfile -t JOBS < <(gcloud run jobs list --project="$GCP_PROJECT" --region="$GCP_REGION" \
+            --format='value(metadata.name)' | sort)
+          printf 'found %d jobs:\n' "${#JOBS[@]}"
+          printf '  %s\n' "${JOBS[@]}"
+          if [ "${#JOBS[@]}" -lt 8 ]; then
+            echo "::error::Expected at least 8 Cloud Run jobs, found ${#JOBS[@]}. Refusing to continue with a partial list."
+            exit 1
+          fi
+
+          for JOB in "${JOBS[@]}"; do
+            gcloud run jobs update "$JOB" --image="$IMAGE" \
+              --project="$GCP_PROJECT" --region="$GCP_REGION"
+          done
+
+          # Doubled template in the path — the wrong path prints empty for
+          # every job, which reads exactly like a clean result.
+          FAILED=0
+          for JOB in "${JOBS[@]}"; do
+            GOT=$(gcloud run jobs describe "$JOB" --project="$GCP_PROJECT" --region="$GCP_REGION" \
+              --format='value(spec.template.spec.template.spec.containers[0].image)' | sed 's/.*://')
+            printf '%-32s %s\n' "$JOB" "$GOT"
+            [ "$GOT" = "$TAG" ] || { echo "::error::$JOB is pinned to '$GOT', expected '$TAG'"; FAILED=1; }
+          done
+          [ "$FAILED" -eq 0 ] || exit 1
+
+      - name: Roll the service back
+        env:
+          TAG: ${{ steps.target.outputs.tag }}
+        run: |
+          # A fresh revision from the old image, NOT update-traffic to a named
+          # revision: pinned traffic makes every future deploy land at 0% and
+          # silently fail its verify. --image alone, as always — anything else
+          # clobbers the ~30 env vars and 6 secret refs on the service.
+          gcloud run deploy "$SERVICE" --image="$IMAGE_BASE:$TAG" \
+            --project="$GCP_PROJECT" --region="$GCP_REGION"
+
+      - name: Verify
+        env:
+          EXPECTED: ${{ steps.target.outputs.expected_version }}
+        run: |
+          LIVE=''
+          for i in $(seq 1 20); do
+            LIVE=$(curl -fsS --max-time 20 "$PROD_URL/health/" 2>/dev/null | jq -r '.version // empty' || true)
+            if [ -n "$LIVE" ] && { [ -z "$EXPECTED" ] || [ "$LIVE" = "$EXPECTED" ]; }; then break; fi
+            echo "attempt $i: live='${LIVE:-<no reply>}' want='${EXPECTED:-any response}'"
+            sleep 15
+          done
+          if [ -z "$LIVE" ] || { [ -n "$EXPECTED" ] && [ "$LIVE" != "$EXPECTED" ]; }; then
+            echo "::error::/health/ reports '${LIVE:-unreachable}', expected '${EXPECTED:-a response}'. The rollback did NOT land."
+            exit 1
+          fi
+          echo "rollback verified: /health/ reports v$LIVE"
+
+      - name: Summary
+        if: always()
+        env:
+          TAG: ${{ steps.target.outputs.tag }}
+          CURRENT: ${{ steps.target.outputs.current }}
+          EXPECTED: ${{ steps.target.outputs.expected_version }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          {
+            echo "## Production rollback — ${{ job.status }}"
+            echo ""
+            echo "| Field | Value |"
+            echo "|---|---|"
+            echo "| Image | \`${CURRENT:-unknown}\` → \`${TAG:-unresolved}\` |"
+            echo "| Expected version | \`${EXPECTED:-unknown}\` |"
+            echo "| Requested by | $ACTOR |"
+            echo ""
+            echo "The database was NOT touched: migrations applied by the rolled-back release"
+            echo "remain applied. Restoring a backup is a separate, manual decision (DEPLOYMENT.md)."
+            echo ""
+            echo "Production preflight will now see a version mismatch, so re-deploying the"
+            echo "newer release later needs no \`force\` — just re-run *Deploy production*."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Notify result
+        if: always()
+        uses: dawidd6/action-send-mail@94de994a9f6fffee200243214e17002e2920bb59  # v18
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          secure: true
+          username: ${{ secrets.EMAIL_HOST_USER }}
+          password: ${{ secrets.EMAIL_SECRET }}
+          from: "Five a Day CI <${{ secrets.EMAIL_HOST_USER }}>"
+          to: hellofiveaday@gmail.com${{ secrets.SUPPORT_EMAIL && format(', {0}', secrets.SUPPORT_EMAIL) || '' }}
+          subject: "[Five a Day] ${{ job.status == 'success' && '⏪ Producción revertida a una versión anterior' || '🚨 El rollback de producción ha fallado' }}"
+          html_body: |
+            <div style="font-family: sans-serif; color:#1f2937; max-width:640px;">
+              <h2 style="color:${{ job.status == 'success' && '#6d28d9' || '#b91c1c' }};">
+                ${{ job.status == 'success' && '⏪ Rollback de producción completado' || '🚨 Fallo en el rollback de producción' }}
+              </h2>
+              <p style="font-size:15px; line-height:1.6;">
+                ${{ github.actor }} ha lanzado un <em>rollback</em> de producción a la imagen
+                <code>${{ steps.target.outputs.tag || 'sin resolver' }}</code>
+                (versión esperada:
+                <strong>v${{ steps.target.outputs.expected_version || 'desconocida' }}</strong>).
+                Estado del workflow: <strong>${{ job.status }}</strong>.
+              </p>
+              <p style="font-size:14px; color:#4b5563; line-height:1.6;">
+                La base de datos <strong>no</strong> se ha tocado: las migraciones de la versión
+                retirada siguen aplicadas, y restaurar una copia de seguridad es una decisión
+                manual. Los <em>jobs</em> de Cloud Run se han repuntado a la misma imagen que el
+                servicio.
+              </p>
+              <p style="margin-top:16px;">
+                <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+                   style="padding:8px 16px; background:#6b46c1; color:#fff; text-decoration:none; border-radius:4px; font-size:13px;">Ver el run →</a>
+              </p>
+            </div>

@@ -46,6 +46,20 @@ repos:
         pass_filenames: false
         always_run: true
 
+      # Guards that `make version` AND the /update-readme skill were both run:
+      # pyproject.toml is the source of truth, and the README badge, uv.lock,
+      # the Recent Versions table and the Version History <details> block must
+      # all agree with it. test_version_consistency.py enforces most of this
+      # too, but only inside the Docker suite — this fails in milliseconds,
+      # before the coverage gate spends minutes on a doomed commit. Stdlib
+      # only, hence --no-project (no dependency sync needed).
+      - id: version-coherence
+        name: version coherence (make version + /update-readme)
+        entry: uv run --no-project python scripts/check_version_coherence.py
+        language: system
+        pass_filenames: false
+        always_run: true
+
       # Runs the full pytest suite inside Docker and fails the commit if
       # coverage drops below 75%. Requires `make up` (containers running).
       # Pass --no-verify to git commit if you need to bypass (e.g. docker is
