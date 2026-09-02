@@ -188,6 +188,15 @@ class TestSpecialPriceIsBilled:
         assert enrollment.enrollment_type.name == "special"
         assert enrollment.final_amount == Decimal("42.50")
 
+        # Join date pinned to the 1st so the first period is NOT prorated.
+        # `billing_periods` takes its proration reference from
+        # `enrollment.enrollment_date` (NOT from `as_of`), and
+        # `EnrollmentService` stamps that with today — so asserting the bare price
+        # only held when the suite ran on the 1st of a month. It was green for
+        # months and went red on 2026-09-02 (fraction 29/30) with no code change
+        # involved. The price is what this test is about; proration has its own.
+        enrollment.enrollment_date = date.today().replace(day=1)
+        enrollment.save(update_fields=["enrollment_date"])
         PaymentService.schedule_academic_year_payments(enrollment, parent)
         assert set(Payment.objects.filter(enrollment=enrollment).values_list("amount", flat=True)) == {
             enrollment.final_amount

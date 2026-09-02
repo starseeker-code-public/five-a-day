@@ -370,7 +370,10 @@ class StudentListView(ListView):
         context["result_truncated"] = total > _STUDENT_LIST_CAP
         context["list_cap"] = _STUDENT_LIST_CAP
         context["groups"] = Group.objects.filter(active=True)
-        context["parents"] = Parent.objects.all()
+        # `context["parents"]` used to be an unbounded `Parent.objects.all()` here.
+        # No template consumes it (students.html reads `student.parents.all`, which is
+        # prefetched), so it was dead weight one edit away from becoming a full-table
+        # render on a 2,000-student academy.
 
         context["this_week_ids"] = get_ff_student_ids(get_next_friday())
         context["last_week_ids"] = get_ff_student_ids(get_last_friday())
@@ -520,7 +523,8 @@ class StudentDetailView(DetailView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context["parents"] = self.object.parents.all()
-        context["enrollments"] = self.object.enrollments.all().order_by("-created_at")
+        # `enrollment.enrollment_type.display_name` is rendered per row.
+        context["enrollments"] = self.object.enrollments.select_related("enrollment_type").order_by("-created_at")
         context["payments"] = Payment.objects.filter(student=self.object).order_by("-payment_date")
         context["fun_friday_dates"] = self.object.fun_friday_dates.all()
         return context

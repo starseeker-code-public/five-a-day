@@ -6,7 +6,8 @@ from decimal import Decimal, InvalidOperation
 
 from django.contrib import messages
 from django.core.exceptions import ValidationError
-from django.db.models import Case, DecimalField, Q, Sum, Value, When
+from django.db import IntegrityError
+from django.db.models import Case, DecimalField, Max, Min, Q, Sum, Value, When
 from django.http import HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_http_methods
@@ -113,10 +114,18 @@ def payments_list(request):
 
     # Years that actually have payments, so the dropdown never offers an
     # empty year. Always includes the current one.
-    year_choices = sorted(
-        {current_year} | {y for y in Payment.objects.values_list("due_date__year", flat=True).distinct() if y},
-        reverse=True,
-    )
+    #
+    # Min/Max over `due_date` rather than `DISTINCT EXTRACT(YEAR FROM due_date)`:
+    # the latter cannot use the `due_date` index and sequentially scanned the whole
+    # payments table on every page load. Min/Max are index-only lookups. The span
+    # between the first and last payment is contiguous in practice, and offering a
+    # year with no rows is harmless — it renders an empty table, which is exactly
+    # what the old query was avoiding at the cost of a full scan.
+    span = Payment.objects.aggregate(first=Min("due_date"), last=Max("due_date"))
+    years = {current_year}
+    if span["first"] and span["last"]:
+        years |= set(range(span["first"].year, span["last"].year + 1))
+    year_choices = sorted(years, reverse=True)
 
     # Summary figures describe the SELECTED period, not "today", so the totals
     # always match the rows on screen. Previously "Esperado"/"Cobrado" were
@@ -309,6 +318,23 @@ def create_payment(request):
         except InvalidOperation:
             logger.exception("Invalid amount submitted when creating a payment")
             messages.error(request, "El importe introducido no es válido.")
+            return redirect("payments_list")
+        except IntegrityError as e:
+            # `full_clean()` above validates the constraint and raises ValidationError
+            # with its own Spanish message, so this branch only catches the RACE: two
+            # requests that both passed validation before either inserted. Matched on
+            # the constraint name so a genuinely different IntegrityError still gets
+            # the generic message rather than a confidently wrong one. Nothing from
+            # the exception is echoed to the client.
+            logger.exception("IntegrityError while creating a payment")
+            if "unique_pending_periodic_payment_per_month" in str(e):
+                messages.error(
+                    request,
+                    "Ya existe un pago pendiente de ese tipo para ese alumno en ese mes. "
+                    "Edita o cancela el pago existente en lugar de crear otro.",
+                )
+            else:
+                messages.error(request, "Error al crear el pago. Revisa los datos e inténtalo de nuevo.")
             return redirect("payments_list")
         except Exception:
             # Never echo str(e): on an IntegrityError it leaks the table and

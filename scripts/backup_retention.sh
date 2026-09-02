@@ -12,7 +12,7 @@
 #   longer tiers are built from on-demand backups tagged via --description, and
 #   pruned here.
 #
-#   NOTE (v1.24.0): the SCHEDULED implementation of this policy is the
+#   NOTE (v1.26.0): the SCHEDULED implementation of this policy is the
 #   `backup_retention` management command (fiveaday-backup-retention Cloud Run
 #   Job, daily 05:30). This script is the by-hand equivalent for a workstation
 #   with gcloud; keep the two policies identical if you change either.

@@ -209,20 +209,22 @@
                                 <td class="px-4 py-3">
                                     <div style="display:flex;align-items:center;gap:10px;">
                                         <span style="width:14px;height:14px;border-radius:50%;display:inline-block;flex-shrink:0;background-color:{{ group.color }};"></span>
-                                        <span class="text-sm font-medium text-neutral-800">{{ group.group_name }}</span>
+                                        <span class="text-sm font-medium text-neutral-800">{{ group.name }}</span>
                                     </div>
                                 </td>
                                 <td class="px-4 py-3 text-neutral-700">
-                                    {{ group.teacher.full_name }}
+                                    {{ group.group.teacher.full_name }}
                                 </td>
                                 <td class="px-4 py-3 text-neutral-600">
+                                    {# `groups` is group_capacity_summary() — counts already annotated.
+                                       `group.enrolled_count` / `.is_full` were COUNT queries per row. #}
                                     {% if group.max_students %}
-                                        {{ group.enrolled_count }}/{{ group.max_students }} estudiantes
+                                        {{ group.enrolled }}/{{ group.max_students }} estudiantes
                                         {% if group.is_full %}
                                             <span class="text-xs text-red-500 ml-1">Completo</span>
                                         {% endif %}
                                     {% else %}
-                                        {{ group.enrolled_count }} estudiantes
+                                        {{ group.enrolled }} estudiantes
                                         <span class="text-xs text-neutral-400 ml-1">(sin cupo)</span>
                                     {% endif %}
                                 </td>

@@ -130,6 +130,16 @@ PAYMENT_TYPE_CHOICES = [
 LIVE_PAYMENT_STATUSES = ("pending", "completed")
 
 
+# The payment types the recurring schedule issues, as opposed to the one-off
+# `enrollment` matrícula and ad-hoc `other` rows. Everything that reasons about
+# "the billing schedule" filters on these: `PaymentService.billed_months_map`,
+# `reconcile_payment_schedule`, and the
+# `unique_pending_periodic_payment_per_month` constraint (which cannot import
+# this — a constraint's deconstruction has to be a literal for migrations to
+# compare, so `billing/models.py` repeats the tuple; keep the two in step).
+PERIODIC_PAYMENT_TYPES = ("monthly", "quarterly")
+
+
 # ============================================================================
 # VALIDACIONES
 # ============================================================================

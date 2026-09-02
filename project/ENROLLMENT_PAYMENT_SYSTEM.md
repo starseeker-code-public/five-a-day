@@ -61,7 +61,7 @@ Each block is created on its first day and falls **due on its last** day.
 
 > The fixed Oct/Jan/Apr calendar this replaced had two silent revenue holes — September
 > fell outside every quarter, and a mid-quarter joiner's first months were never billed.
-> The `QUARTERS` constant that encoded it survived, unread, until v1.24.0.
+> The `QUARTERS` constant that encoded it survived, unread, until v1.26.0.
 
 Quarterly amount = 3 months × monthly fee × 0.95 (5% discount), **then the same discounts a
 monthly student would receive**.
@@ -114,15 +114,25 @@ Pending (due, not paid) periodic payments are created two ways, and the two are 
 
 **2. On the 1st of each month (Celery / Cloud Run Job).** The `generate_payments` management command opens every period that has started since the last run — the new month for monthly students, the new block for quarterly ones. It calls exactly the same `schedule_academic_year_payments()` the enrollment form does, so there is one code path and the two can never disagree.
 
-Since v1.24.0 the question *"should this period be billed yet?"* is answered in exactly one place, `PaymentService.pending_periods()`, which both the real run and `generate_payments --dry-run` consume. They used to apply the rules separately and had already drifted on both of them — the preview dropped a first period opening in the future, and matched existing payments on the exact due date rather than payment type + due month/year — so `--dry-run` could disagree with the run it was previewing.
+Since v1.26.0 the question *"should this period be billed yet?"* is answered in exactly one place, `PaymentService.pending_periods()`, which both the real run and `generate_payments --dry-run` consume. They used to apply the rules separately and had already drifted on both of them — the preview dropped a first period opening in the future, and matched existing payments on the exact due date rather than payment type + due month/year — so `--dry-run` could disagree with the run it was previewing.
 
 It also **back-fills**: any period that has started and has no payment is created, so a run the scheduler missed is repaired on the next one instead of leaving a month permanently unbilled.
 
 Because both paths match on `(student, payment_type, due-date month/year)` before creating, nothing is ever charged twice.
 
+**Since v1.26.1 that guarantee is the DATABASE's, not just Python's.** The match above is a read-then-write, and Cloud Run Jobs retry on failure — so two overlapping `generate_payments` runs could both pass the check and bill a family twice, which is precisely the failure this whole schedule design assumes cannot happen. `payments.unique_pending_periodic_payment_per_month` is a partial unique index on `(student, payment_type, EXTRACT(YEAR/MONTH FROM due_date))`, and it is deliberately **narrower** than the Python check:
+
+- **Only `pending` rows.** The generators only ever create `pending`, so pending-vs-pending is the whole of the race they can lose, and two pending periodic rows for one month is the double-billing symptom and nothing else. Including `completed` would forbid states the academy really has — a month paid part in cash and part by transfer, or a correction billed after a partial collection.
+- **Only `monthly` / `quarterly`.** A student can legitimately owe several `enrollment` or `other` payments in one month.
+- **Cancelling frees the month again**, which is what lets `reconcile_payment_schedule` supersede a stale row with one due in the same month. That command therefore cancels *before* it creates.
+
+`schedule_academic_year_payments` wraps each create in a transaction and swallows the resulting `IntegrityError`: losing the race means the payment now exists, which is the outcome wanted, and one lost race must not abort the remaining periods or the rest of the cron. In the UI the constraint surfaces through `full_clean()` as a Spanish message telling the admin to edit or cancel the existing payment.
+
+Migration `billing/0010` **refuses to apply** against a database that already holds duplicates, naming the offending students, rather than dying with a bare Postgres error part-way through a deploy. If it blocks a deploy, that database really is double-billed: repair it with `manage.py reconcile_payment_schedule` (dry run by default) and re-run.
+
 Cancelled payments count as existing, so a payment an admin soft-deleted through `deactivate_payment` is **not** re-created — by the cron or by `reconcile_payment_schedule`.
 
-> **Resolved in v1.22.0.** This section previously carried a "known gap" noting that a quarterly student's September went unbilled, because Q1 ran Oct–Dec under the fixed calendar. Anchoring quarters to the enrollment month closed it: the first block starts in the month the student joined, so September is inside it for anyone enrolling in September. The `QUARTERS` list that encoded that calendar (and its never-read `includes_sept` flag) was removed from `billing/constants.py` in v1.24.0.
+> **Resolved in v1.22.0.** This section previously carried a "known gap" noting that a quarterly student's September went unbilled, because Q1 ran Oct–Dec under the fixed calendar. Anchoring quarters to the enrollment month closed it: the first block starts in the month the student joined, so September is inside it for anyone enrolling in September. The `QUARTERS` list that encoded that calendar (and its never-read `includes_sept` flag) was removed from `billing/constants.py` in v1.26.0.
 
 ### Payment Amount Calculation
 

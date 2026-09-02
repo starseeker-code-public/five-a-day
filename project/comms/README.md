@@ -1,6 +1,6 @@
 # comms — Communications
 
-The `comms` app owns all outbound communication: the EmailService class, the Twilio SmsService, 12 convenience email functions, 12 Celery async tasks, and management commands for sending emails and for wrapping the Beat tasks.
+The `comms` app owns all outbound communication: the EmailService class, the Twilio SmsService, 10 convenience email functions, 12 Celery async tasks, and management commands for sending emails and for wrapping the Beat tasks.
 
 **No database models** — all state lives in the other apps. Comms is purely a service layer for communications.
 
@@ -69,7 +69,7 @@ All tasks have retry logic (3 retries, exponential backoff):
 | Task | Purpose | Trigger |
 | ---- | ------- | ------- |
 | `send_welcome_email_task` | Async welcome email (includes the group's timetable). Reports the payment modality in Spanish, and "Especial" for a `special` matrícula — its cadence is whatever was agreed with the family, not a standard one (v1.20.0) | On student creation, fired `on_commit` |
-| `send_birthday_email_task` | Individual birthday email | Called by batch task |
+| `send_birthday_email_task` | Individual birthday email — every parent with an address, adult students themselves | Called by batch task. Production runs `CELERY_TASK_ALWAYS_EAGER=True`, so this executes **inline**: 2 queries per student since v1.26.1, down from 3 (a `prefetch_related` that its own `exclude()` discarded). Fan-out task costs are invisible in dev, where subtask queries land in the worker |
 | `send_birthday_emails_task` | Daily birthday batch — goes to **all** of a student's parents, dated with `localdate()` | Celery Beat (daily 08:00) / `send_birthday_emails` command |
 | `send_payment_reminders` | Weekly payment reminder batch, deduped against the SMS channel | Celery Beat (Mondays 09:00) / `send_payment_reminders` command |
 | `send_payment_reminder_sms_task` | Twilio SMS reminder for one payment — opt-in parents only (v1.8) | Called from the reminder batch |

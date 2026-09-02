@@ -12,6 +12,34 @@ from students.models import Student
 pytestmark = pytest.mark.django_db
 
 
+def first_period_amount(base):
+    """`base` scaled by the FIRST period's proration, the way the generator bills it.
+
+    The first period is prorated by join date by design, so any assertion of the
+    bare price only holds when the suite runs on the 1st of a month. Two tests
+    below asserted exactly that and were green for months; they went red the
+    moment the clock rolled from 2026-09-01 (fraction 30/30) to 2026-09-02
+    (29/30), with no code change involved. Same class of date bomb as a fixture
+    hard-coding an academic year.
+
+    Derived from `proration_fraction` — the documented rule — and NOT from the
+    pricing code these tests exercise, so it stays an independent expectation.
+    """
+    from datetime import date as _date
+    from decimal import ROUND_HALF_UP
+
+    from billing.models import current_academic_year
+    from billing.services.payment_service import PaymentService
+
+    # `student_create` stamps `enrollment_date` with today, and `billing_periods`
+    # takes its proration reference from that field.
+    today = _date.today()
+    sequence = PaymentService.teaching_months(current_academic_year(today))
+    first = next(((m, y) for m, y in sequence if PaymentService._last_day(m, y) >= today), None)
+    fraction = PaymentService.proration_fraction(today, *first) if first else Decimal("1")
+    return (Decimal(base) * fraction).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+
 class TestStudentListView:
     def test_loads_ok(self, authenticated_client, student, active_enrollment):
         response = authenticated_client.get(reverse("students_list"))
@@ -33,10 +61,24 @@ class TestStudentListView:
         assert response.status_code == 200
         assert len(response.context["students"]) == 0
 
-    def test_context_has_groups_and_parents(self, authenticated_client, student, active_enrollment):
+    def test_context_has_groups(self, authenticated_client, student, active_enrollment):
         response = authenticated_client.get(reverse("students_list"))
         assert "groups" in response.context
-        assert "parents" in response.context
+
+    def test_context_does_not_carry_every_parent(self, authenticated_client, student_with_parent, active_enrollment):
+        """`students.html` reads `student.parents.all` (prefetched) per row.
+
+        The view also used to put an unbounded `Parent.objects.all()` in the
+        context, which no template consumed. It stayed harmless only because a
+        queryset nobody iterates is never executed — one `{% for %}` away from
+        rendering every parent in the academy on a page already capped at 500
+        students. Asserted absent so it is not reinstated.
+        """
+        response = authenticated_client.get(reverse("students_list"))
+        assert "parents" not in response.context
+        # The per-row parents still render.
+        assert student_with_parent.parents.exists()
+        assert b"students" in response.content.lower()
 
 
 class TestStudentDetailView:
@@ -337,7 +379,9 @@ class TestSpecialEnrollmentPricing:
         # fee — Celery adds the rest on the 1st of each month.
         monthly = Payment.objects.filter(student=student, payment_type="monthly")
         assert monthly.count() == 1
-        assert set(monthly.values_list("amount", flat=True)) == {Decimal("35.00")}
+        assert set(monthly.values_list("amount", flat=True)) == {first_period_amount("35.00")}
+        # The point of the test: the hand-set price, not the configured 2-day fee.
+        assert set(monthly.values_list("amount", flat=True)) != {first_period_amount(site_config.full_time_monthly_fee)}
 
     def test_matricula_falls_back_to_the_standard_fee_when_left_blank(
         self, authenticated_client, parent, group, site_config, enrollment_type_special
@@ -351,7 +395,7 @@ class TestSpecialEnrollmentPricing:
         assert matricula.amount == site_config.children_enrollment_fee
         assert set(
             Payment.objects.filter(student=student, payment_type="monthly").values_list("amount", flat=True)
-        ) == {Decimal("35.00")}
+        ) == {first_period_amount("35.00")}
 
     def test_matricula_fee_without_the_special_checkbox_is_rejected(
         self, authenticated_client, parent, group, site_config, enrollment_type_new_student

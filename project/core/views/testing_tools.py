@@ -36,7 +36,13 @@ def _backlog_tasks_qs():
     with the dashboard capped at 50, off the page entirely. `Q()` annotates a
     boolean, and False sorts before True, so done tasks fall to the bottom.
     """
-    return BacklogTask.objects.annotate(is_done=Q(status="done")).order_by("is_done", "-created_at")
+    # `select_related("feature")`: the dashboard renders `task.feature.title` for any
+    # task broken out of a development, which was one query per row (51 for 50).
+    return (
+        BacklogTask.objects.select_related("feature")
+        .annotate(is_done=Q(status="done"))
+        .order_by("is_done", "-created_at")
+    )
 
 
 # Leading bytes of the formats a screenshot can plausibly be. Checked in

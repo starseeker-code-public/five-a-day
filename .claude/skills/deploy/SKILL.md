@@ -330,7 +330,7 @@ now**, before Step 2c. Do not proceed on silence. If the diff is empty, skip the
 entirely and say so.
 
 **Get that confirmation here, not at 2e.** Everything from 2c onward is externally visible:
-2c publishes an image to Artifact Registry and 2d repoints all 8 jobs at it. Defer the
+2c publishes an image to Artifact Registry and 2d repoints all the Cloud Run Jobs at it (11 as of v1.26.0). Defer the
 question to the migrate step and a declining user leaves you having already published an
 image and pinned 8 production jobs to code that never rolled out.
 
@@ -381,9 +381,7 @@ gcloud run jobs list --project=$PROJECT --region=$REGION
 ```
 
 ```bash
-for JOB in fiveaday-migrate fiveaday-birthday-emails fiveaday-generate-payments \
-           fiveaday-expenses-daily fiveaday-expenses-monthly fiveaday-funfriday-emails \
-           fiveaday-monthly-report fiveaday-payment-reminders; do
+for JOB in $(gcloud run jobs list --project=$PROJECT --region=$REGION --format='value(metadata.name)'); do
   gcloud run jobs update $JOB --image=$IMAGE --project=$PROJECT --region=$REGION
 done
 ```
@@ -394,24 +392,20 @@ image lives at `spec.template.spec.template.spec...`, and the wrong path prints 
 every job, which reads exactly like a clean result.
 
 ```bash
-for JOB in fiveaday-migrate fiveaday-birthday-emails fiveaday-generate-payments \
-           fiveaday-expenses-daily fiveaday-expenses-monthly fiveaday-funfriday-emails \
-           fiveaday-monthly-report fiveaday-payment-reminders; do
+for JOB in $(gcloud run jobs list --project=$PROJECT --region=$REGION --format='value(metadata.name)'); do
   printf '%-32s ' "$JOB"
   gcloud run jobs describe $JOB --project=$PROJECT --region=$REGION \
     --format='value(spec.template.spec.template.spec.containers[0].image)' | sed 's/.*://'
 done
 ```
 
-All 8 must print `$NEW_SHA` before you continue.
+Every listed job (11 as of v1.26.0) must print `$NEW_SHA` before you continue.
 
 Then assert every job is attached to **the** database. A job pointed at another instance
 would apply migrations somewhere invisible and still exit 0:
 
 ```bash
-for JOB in fiveaday-migrate fiveaday-birthday-emails fiveaday-generate-payments \
-           fiveaday-expenses-daily fiveaday-expenses-monthly fiveaday-funfriday-emails \
-           fiveaday-monthly-report fiveaday-payment-reminders; do
+for JOB in $(gcloud run jobs list --project=$PROJECT --region=$REGION --format='value(metadata.name)'); do
   printf '%-32s ' "$JOB"
   gcloud run jobs describe $JOB --project=$PROJECT --region=$REGION \
     --format='value(spec.template.metadata.annotations."run.googleapis.com/cloudsql-instances")'
@@ -645,7 +639,7 @@ gcloud run services update-traffic $SERVICE --project=$PROJECT --region=$REGION 
   --to-revisions=<PREVIOUS_REVISION>=100
 ```
 
-Then point the 8 jobs back at the old image tag (same loop as 2d, with the old tag).
+Then point the jobs back at the old image tag (same loop as 2d, with the old tag).
 
 A rolled-back **schema** is not automatic. If the bad deploy applied migrations, restore the
 backup from 2b — this loses any data written since, so confirm with the user first:

@@ -46,6 +46,14 @@ class FunFridayAttendance(models.Model):
         constraints = [
             models.UniqueConstraint(fields=["student", "date"], name="unique_fun_friday_attendance"),
         ]
+        # The unique constraint indexes (student, date) — leading column `student`,
+        # so it cannot serve a date-only lookup, and `EXPLAIN` confirmed a Seq Scan.
+        # `get_ff_student_ids()` runs TWICE per students-list and schedule page load
+        # and filters on `date` alone, and this table grows by one row per student
+        # per Friday.
+        indexes = [
+            models.Index(fields=["date"]),
+        ]
         ordering = ["-date"]
 
     def __str__(self):

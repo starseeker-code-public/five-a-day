@@ -7,6 +7,8 @@ from django.core.exceptions import ValidationError
 from django.core.signals import request_finished, request_started
 from django.core.validators import MinValueValidator
 from django.db import models
+from django.db.models import Q
+from django.db.models.functions import ExtractMonth, ExtractYear
 
 from billing import constants
 
@@ -557,6 +559,57 @@ class Payment(models.Model):
             models.Index(fields=["due_date"]),
             models.Index(fields=["payment_date"]),
             models.Index(fields=["enrollment"]),
+            # The dominant filter shape across the app: `payments_list` stats,
+            # `dashboard.home`, `analytics_service` and the reminder cron all ask
+            # "pending/completed money in this date window". Postgres can bitmap-AND
+            # the two single-column indexes above, so this is an optimisation of an
+            # already-indexed path rather than a fix.
+            models.Index(fields=["payment_status", "due_date"], name="payment_status_due_idx"),
+        ]
+        constraints = [
+            # Idempotency, enforced by the DATABASE and not only by Python.
+            #
+            # `PaymentService.pending_periods` decides whether to bill a period by
+            # reading the already-billed (month, year) pairs and then creating what
+            # is missing. That read-then-write has no constraint behind it, so two
+            # overlapping `generate_payments` runs — and Cloud Run Jobs retry on
+            # failure — could both pass the check and DOUBLE-BILL a family. The
+            # whole v1.22.0 schedule design rests on this being idempotent.
+            #
+            # Scoped to PENDING rows, and deliberately narrower than the Python
+            # check, which counts cancelled payments as occupying a period so a
+            # soft-deleted one is not silently re-created. The generators only ever
+            # create `pending`, so pending-vs-pending is the whole of the race they
+            # can lose — and two pending periodic rows for one month is exactly the
+            # double-billing symptom, nothing else.
+            #
+            # Including `completed` would forbid states the academy really has: a
+            # family paying one month part in cash and part by transfer, or a
+            # correction billed after a partial collection, both leave a completed
+            # and a pending row in the same month. Excluding cancelled also lets
+            # `reconcile_payment_schedule` supersede a stale row with one due in the
+            # same month (it cancels before it creates, for this reason).
+            #
+            # Only periodic payments are covered: a student can legitimately have
+            # several `enrollment` / `other` payments due in one month.
+            models.UniqueConstraint(
+                "student",
+                "payment_type",
+                ExtractYear("due_date"),
+                ExtractMonth("due_date"),
+                condition=Q(payment_status="pending", payment_type__in=("monthly", "quarterly")),
+                name="unique_pending_periodic_payment_per_month",
+                # `full_clean()` DOES validate expression constraints (Django 4.1+),
+                # so `create_payment` surfaces this to the admin through its existing
+                # `except ValidationError` branch. Without an explicit message Django
+                # renders 'No se cumple la restricción "unique_pending_periodic_..."'
+                # — a half-translated string that leaks the constraint name into the
+                # UI and tells the admin nothing they can act on.
+                violation_error_message=(
+                    "Ya existe un pago pendiente de ese tipo para ese alumno en ese mes. "
+                    "Edita o cancela el pago existente en lugar de crear otro."
+                ),
+            ),
         ]
 
     def __str__(self):
@@ -701,6 +754,18 @@ class Expense(models.Model):
             models.Index(fields=["expense_date"]),
             models.Index(fields=["category"]),
             models.Index(fields=["is_recurring"]),
+        ]
+        constraints = [
+            # `expense_service._create_if_absent` checks `.exists()` then creates,
+            # with nothing behind it — so the monthly and daily materialisers (which
+            # both run, on different cadences, over overlapping templates) could each
+            # pass the check and produce a duplicate row. NULL `generated_from` never
+            # collides in Postgres, so hand-entered expenses are untouched by this.
+            models.UniqueConstraint(
+                fields=["generated_from", "expense_date"],
+                name="unique_materialized_expense_per_date",
+                violation_error_message=("Ese gasto recurrente ya se ha generado para esa fecha."),
+            ),
         ]
 
     def __str__(self):

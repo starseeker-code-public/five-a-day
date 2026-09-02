@@ -212,7 +212,10 @@
                     <td class="px-6 py-3 text-sm text-neutral-600">{{ e.expense_date|date:"d/m/Y" }}</td>
                     <td class="px-6 py-3 text-sm text-neutral-800">
                         {{ e.description }}
-                        {% if e.generated_from %}
+                        {# `generated_from_id`, NOT `generated_from`: touching the FK
+                           descriptor fetches the related row, one query per generated
+                           expense (61 for 60 rows). We only need "is there one?". #}
+                        {% if e.generated_from_id %}
                             <span class="text-xs text-neutral-400">(recurrente)</span>
                         {% endif %}
                         {% if e.notes %}

@@ -131,9 +131,9 @@ Watch the logs after `docker compose up -d` for `✅ Teacher created/updated: ..
 
 #### 5. Routine updates
 
-**Normally you do nothing.** The `Deploy testing` workflow runs every night at 02:00
-Europe/Madrid, compares `/health/` against `pyproject.toml` on `origin/testing`, and deploys
-only when they differ — see [CI/CD — automated deploys](#4-cicd--automated-deploys). Use the
+**Normally you do nothing.** The `Deploy testing` workflow runs every night in the
+02:00-05:00 Europe/Madrid window, compares `/health/` against `pyproject.toml` on
+`origin/testing`, and deploys only when they differ — see [CI/CD — automated deploys](#4-cicd--automated-deploys). Use the
 `/deploy` skill and pick **Solo testing** when you need it *now*. By hand, from your
 workstation:
 
@@ -581,7 +581,27 @@ gcloud run jobs execute fiveaday-migrate --region=$REGION --wait
 > stores the image tag it was created or last updated with; deploying a new image to the *service*
 > does not touch them. Executing `fiveaday-migrate` without the `update` above runs the **previous
 > release's** migration set against production, and leaves all seven scheduled jobs executing old
-> code indefinitely. See [Routine deploys](#routine-deploys) for the full loop over all 8 jobs.
+> code indefinitely. See [Routine deploys](#routine-deploys) for the full loop over all the jobs.
+
+> **v1.26.1 — `billing/0010` can legitimately REFUSE to apply.** It adds
+> `unique_pending_periodic_payment_per_month`, and it pre-checks the table first: if production
+> already holds more than one **pending** monthly/quarterly payment for the same student and due
+> month, the migration aborts with a `CommandError` naming the offending `student_id`s instead of
+> failing with a bare Postgres constraint violation half-way through. That is not a bug in the
+> migration — those rows are double-billed. Repair them and re-run:
+>
+> ```bash
+> # Inspect first — dry run is the default and writes nothing.
+> gcloud run jobs update fiveaday-reconcile --image=$IMAGE --region=$REGION   # if the job exists
+> # ...or from a shell against the same database:
+> python manage.py reconcile_payment_schedule
+> python manage.py reconcile_payment_schedule --apply --cancel-stale
+> ```
+>
+> The migration also adds an index to `payments` and one to `fun_friday_attendance`. Both are
+> single statements and are subject to the new `statement_timeout` (30 s by default) — at this
+> academy's row counts an index build is sub-second, but set `DB_STATEMENT_TIMEOUT_MS` higher for
+> the run if a future migration rewrites a large table.
 
 ### Celery Beat → Cloud Scheduler
 
@@ -623,7 +643,7 @@ run inline):
 > gcloud scheduler jobs resume sched-fiveaday-purge-sessions >   --project=five-a-day-evolution --location=europe-west1
 > ```
 >
-> `fiveaday-backup-retention` (v1.24.0) is the **scheduled** port of
+> `fiveaday-backup-retention` (v1.26.0) is the **scheduled** port of
 > `scripts/backup_retention.sh` — `manage.py backup_retention --apply`, daily 05:30. The
 > Cloud Run Job exists (cloned from `fiveaday-prune-audit-log`, SQL annotation intact) and
 > needs two one-off steps by a human with IAM rights:
@@ -638,7 +658,7 @@ run inline):
 > gcloud scheduler jobs pause sched-fiveaday-backup-retention --location=europe-west1
 > ```
 >
-> **Resume it right after the v1.24.0 production deploy** (and run once with
+> **Resume it right after the v1.26.0 production deploy** (and run once with
 > `--bootstrap` via `gcloud run jobs execute fiveaday-backup-retention --args` if the
 > tiers have never been seeded): like `purge_sessions` above, an enabled schedule against
 > the current image would just fail nightly.
@@ -766,10 +786,8 @@ gcloud sql backups create --instance=fiveaday-db
 # 2. Build new image
 gcloud builds submit --tag $IMAGE .
 
-# 3. Repoint ALL 8 jobs at the new image — they each pin their own tag
-for JOB in fiveaday-migrate fiveaday-birthday-emails fiveaday-generate-payments \
-           fiveaday-expenses-daily fiveaday-expenses-monthly fiveaday-funfriday-emails \
-           fiveaday-monthly-report fiveaday-payment-reminders; do
+# 3. Repoint ALL Cloud Run Jobs at the new image (11 as of v1.26.0) — they each pin their own tag
+for JOB in $(gcloud run jobs list --region=$REGION --format='value(metadata.name)'); do
   gcloud run jobs update $JOB --image=$IMAGE --region=$REGION
 done
 
@@ -926,7 +944,7 @@ grandfather-father-son option — so on its own the recovery horizon is one week
 backups are exempt from that count and persist until explicitly deleted, so the longer tiers
 are built from on-demand backups tagged through `--description` and pruned daily.
 
-Since v1.24.0 the policy is **scheduled**: the `fiveaday-backup-retention` Cloud Run Job runs
+Since v1.26.0 the policy is **scheduled**: the `fiveaday-backup-retention` Cloud Run Job runs
 `manage.py backup_retention --apply` daily at 05:30 (see the Cloud Scheduler table above —
 for months this section said "run daily" while nothing did, so the biweekly and monthly
 points did not exist). `scripts/backup_retention.sh` remains the by-hand equivalent for a
@@ -1041,7 +1059,8 @@ The contract is a single equality: **the version answering `/health/` on the VM 
 when they differ, so a quiet night costs one `curl`.
 
 ```text
-02:00  →  check   read pyproject.toml on origin/testing
+02:00-  →  check   read pyproject.toml on origin/testing
+04:59
                   read /health/ on the VM
                   equal? stop. different (or unreachable)? continue
        →  deploy  record row counts
@@ -1055,9 +1074,17 @@ when they differ, so a quiet night costs one `curl`.
 
 Three details that are load-bearing:
 
-- **Two cron entries, one deploy.** GitHub cron is UTC and has no DST. `0 0 * * *` is 02:00
-  CEST and `0 1 * * *` is 02:00 CET, and the first step discards whichever tick is not 02:00
-  in Madrid. Exactly one check runs per night, year-round.
+- **Two cron entries, and a WINDOW — not an exact hour.** GitHub cron is UTC, has no DST, and
+  is best-effort: a tick routinely lands 10-90+ min late. `0 0 * * *` is 02:00 CEST / 01:00 CET
+  and `0 1 * * *` is 03:00 CEST / 02:00 CET, and the first step accepts whichever tick lands
+  inside **02:00-04:59 Madrid**. So both ticks are real attempts — two chances a night, in
+  either DST regime — and if the first already deployed, the second's version compare finds
+  nothing to do. The gate used to demand exactly `02`, which assumed the tick that *runs* is
+  the tick that was *scheduled*; on 2026-09-02 GitHub delivered them at 01:48 and 05:29 UTC
+  (03:48 and 07:29 Madrid), both were discarded, and no check ran at all. **That failure is
+  green:** `check` reports `should_deploy=false` and `deploy` is *skipped*, so the run
+  succeeds while the VM drifts. Verify a deploy with `/health/`, not with the green tick;
+  `workflow_dispatch` bypasses the gate and is how you deploy off-window.
 - **A dirty tree on the VM aborts *before* the pull.** `git status --porcelain` exits 0 on a
   dirty tree, so under `set -e` a bare call stops nothing and the pull clobbers the changes on
   the next line. The gate exits non-zero. If it fires, fix the VM — do not re-run without it.

@@ -623,9 +623,38 @@ grade and one sentence on what holds it back.>
 
 <Each section OPENS WITH ONE PLAIN-LANGUAGE SENTENCE saying what the area is, written for
 someone non-technical — the academy owner, a manager, a client. No jargon, no hedging, one
-sentence in italics. Then: what is good (specific, measured), then "Concerns:" as a
-bulleted list. Every concern names the file, states the consequence, and where useful how
-it was proven. Order by impact, not by discovery order.
+sentence in italics.
+
+Then **two to three substantial paragraphs of assessment prose** before the concerns list.
+This is the part readers quote back at you, and a two-line section reads as an area you did
+not really look at. Aim for **150–250 words** of prose per section — roughly double or triple
+what a terse review gives. Structure those paragraphs like this:
+
+1. **What is actually there, in numbers.** The specific mechanisms, files and counts that
+   define how *this* project does *this* thing — not a generic description of the area.
+   "All 20 models declare `db_table`; 30 indexes; money is `Decimal` in all 22 places and
+   `FloatField` appears zero times" tells the reader something. "Good database design"
+   does not. Name the file that embodies the approach, and the one that departs from it.
+2. **Why it is the way it is, and whether that judgement holds.** Surface the deliberate
+   choices and say whether they were right *for this project at this scale* — a capped
+   list plus client-side filtering is wrong for a public SaaS and correct for a 2,000-row
+   internal tool, and saying which is the actual review. Where the code documents its own
+   reasoning, quote it and credit it specifically; where it does not, say whether the
+   choice still reads as intentional.
+3. **The pattern, where there is one.** What connects this section's findings to each
+   other, or to another section's. This is the sentence a linter cannot produce, and the
+   main reason a human is reading the report at all.
+
+Then "Concerns:" as a bulleted list. Every concern names the file, states the consequence
+in terms somebody can act on, and where useful how it was proven. Order by impact, not by
+discovery order.
+
+**Longer is not the same as padded.** Every added sentence must carry a measurement, a
+named file or line, a judgement with a reason, or a comparison. Sentences that restate the
+heading, hedge, or describe what the area would be like in general are worse than nothing —
+they are exactly what makes a reader stop trusting the length. If after honest effort an
+area genuinely yields less, say so outright ("nothing here beyond the counts above") rather
+than inflating it; that admission is itself information.
 
 The intro sentences exist because these reports get forwarded to people who pay for the
 work but do not write it. Suggested phrasings — adapt, do not copy verbatim:
@@ -704,4 +733,9 @@ contract, data migration). Say which you chose if it is not obvious.
   reader who does not write code. These reports get forwarded to whoever pays for the work.
 - **Keep the census to two paragraphs.** Run the full tables to get the data, then distil —
   a wall of tables buries the finding.
-- **Do not pad.** If an area is genuinely fine, three sentences and a grade is right.
+- **Give every section two to three real paragraphs (150–250 words) before its concerns
+  list**, following the three-move structure in Part D: what is measurably there, whether
+  the choices were right at this project's scale, and the pattern behind the findings.
+- **Do not pad to reach that length.** Every sentence must carry a measurement, a named
+  file, a reason or a comparison. An area that honestly yields less should say so outright
+  rather than be inflated — a padded section discredits the measured ones around it.

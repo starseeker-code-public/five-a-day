@@ -168,7 +168,12 @@ def _capture_pre_save_snapshot(sender, instance, **kwargs):
         instance._audit_pre = None
         return
     try:
-        current = sender.objects.get(pk=instance.pk)
+        # Reuse the row an earlier pre_save receiver already fetched, when there is
+        # one — `students.models._capture_active_transition` publishes it. Falls
+        # back to its own read, so nothing here depends on receiver ordering.
+        current = getattr(instance, "_presave_db_obj", None)
+        if not isinstance(current, sender):
+            current = sender.objects.get(pk=instance.pk)
         instance._audit_pre = _snapshot_fields(current)
     except sender.DoesNotExist:
         instance._audit_pre = None

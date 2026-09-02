@@ -132,7 +132,9 @@ def parent_portal_dashboard(request):
     if redirect_resp:
         return redirect_resp
 
-    children = parent.children.select_related("group").prefetch_related("enrollments").order_by("first_name")
+    # No `prefetch_related("enrollments")`: dashboard.html renders only the name, age
+    # and group, so it was one wasted query per page load.
+    children = parent.children.select_related("group").order_by("first_name")
     today = date.today()
     upcoming = (
         Payment.objects.filter(parent=parent, payment_status="pending", due_date__gte=today)

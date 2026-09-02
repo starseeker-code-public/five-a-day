@@ -112,6 +112,13 @@ class FunFridayAttendanceAdmin(admin.ModelAdmin):
     list_filter = ("date",)
     ordering = ("-date",)
     raw_id_fields = ("student",)
+    # Explicit rather than load-bearing: `ChangeList.apply_select_related` already
+    # auto-joins any PLAIN FK named in `list_display`, so this changelist was never
+    # N+1 (measured: 12 queries either way). Declaring it keeps that true if
+    # `student` is ever wrapped in a display callable — the auto-detection only
+    # sees bare field names, which is exactly how
+    # `EnrollmentAdmin.payment_status_display` slipped past it.
+    list_select_related = ("student",)
 
 
 @admin.register(AuditLog)
@@ -174,6 +181,8 @@ class BacklogTaskAdmin(admin.ModelAdmin):
     list_filter = ("status", "priority", "feature")
     search_fields = ("title", "description")
     ordering = ("-created_at",)
+    # Explicit, not load-bearing — see the note on FunFridayAttendanceAdmin.
+    list_select_related = ("feature",)
 
 
 @admin.register(Feature)

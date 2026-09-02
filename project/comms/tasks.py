@@ -154,16 +154,33 @@ def send_birthday_email_task(self, student_id: int):
     mom and dad want to know it's their kid's birthday; before this fix the
     task did `.first()` and only picked the arbitrary first row.
     """
+    from django.db.models import Prefetch
+
     from comms.services.email_service import email_service
-    from students.models import Student
+    from students.models import Parent, Student
 
     try:
-        student = Student.objects.prefetch_related("parents").get(id=student_id)
+        # The email filter goes INSIDE the prefetch. It used to be
+        # `prefetch_related("parents")` followed by
+        # `parents.exclude(...).values_list(...)`, and an `exclude()` on a related
+        # manager builds a new queryset that ignores the prefetch cache — so the
+        # prefetch was pure overhead and the task cost three queries per student
+        # instead of two. Invisible in development, where
+        # `CELERY_TASK_ALWAYS_EAGER=False` runs this in the worker so its queries
+        # never appear in the parent task's count; production runs eager, and the
+        # birthday cron fans out one of these per student with a birthday today.
+        student = Student.objects.prefetch_related(
+            Prefetch(
+                "parents",
+                queryset=Parent.objects.exclude(email="").exclude(email__isnull=True).order_by("id"),
+                to_attr="emailable_parents",
+            )
+        ).get(id=student_id)
     except Student.DoesNotExist:
         logger.error("Student not found: id=%d", student_id)
         return {"status": "error", "message": "Student not found"}
 
-    recipients = list(student.parents.exclude(email="").exclude(email__isnull=True).values_list("email", flat=True))
+    recipients = [p.email for p in student.emailable_parents]
     # Adult students receive the email themselves when no parent is on file.
     if not recipients and student.is_adult and student.email:
         recipients = [student.email]
@@ -343,15 +360,19 @@ def send_payment_reminders(self):
 
     due_date_limit = date.today() + timedelta(days=7)
 
-    pending_payments = Payment.objects.filter(
-        payment_status="pending", due_date__lte=due_date_limit, due_date__gte=date.today()
-    ).select_related("student", "parent")
+    # `list()` once: this was `.exists()`, then `.count()`, then the loop below —
+    # three executions of the same query for one pass over the rows.
+    pending_payments = list(
+        Payment.objects.filter(
+            payment_status="pending", due_date__lte=due_date_limit, due_date__gte=date.today()
+        ).select_related("student", "parent")
+    )
 
-    if not pending_payments.exists():
+    if not pending_payments:
         logger.info("No hay pagos pendientes proximos a vencer")
         return {"status": "no_pending_payments", "sent": 0}
 
-    logger.info(f"Enviando {pending_payments.count()} recordatorios de pago")
+    logger.info("Enviando %d recordatorios de pago", len(pending_payments))
 
     emails_data = []
     # Dedupe SMS by parent so families with several kids only get one SMS

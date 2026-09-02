@@ -1,13 +1,17 @@
 import csv
 from datetime import date
+from decimal import Decimal
 
 from django.contrib import admin
+from django.db.models import Count, DecimalField, Q, Sum, Value
+from django.db.models.functions import Coalesce
 from django.http import HttpResponse
 from django.urls import reverse
 from django.utils.html import format_html
 
 from billing.models import (
     Enrollment,
+    EnrollmentPaymentTotals,
     EnrollmentType,
     Expense,
     Payment,
@@ -327,7 +331,42 @@ class EnrollmentAdmin(admin.ModelAdmin):
     raw_id_fields = ["student"]
 
     def get_queryset(self, request):
-        return super().get_queryset(request).select_related("student", "enrollment_type")
+        """Resolve the payment-status column in the LIST query, not per row.
+
+        `payment_status_display` calls `Enrollment.payment_totals()`, which is one
+        query per enrollment — so the changelist cost 101 queries for a 100-row
+        page. It cannot be fixed with `prefetch_related` either: `payment_totals`
+        reads `self.payments.values_list(...)`, and a `values_list()` on a related
+        manager builds a fresh queryset that ignores the prefetch cache.
+
+        Annotating gets the same three figures in the single changelist query. The
+        display method still falls back to `payment_totals()` when the annotations
+        are absent, so the change form (which renders `overdue_amount` /
+        `outstanding_amount` as readonly fields on a plain instance) is unaffected.
+        """
+        today = date.today()
+        money = DecimalField(max_digits=12, decimal_places=2)
+        zero = Value(Decimal("0.00"), output_field=money)
+        return (
+            super()
+            .get_queryset(request)
+            .select_related("student", "enrollment_type")
+            .annotate(
+                _billed=Count("payments", distinct=True),
+                _outstanding=Coalesce(
+                    Sum("payments__amount", filter=Q(payments__payment_status="pending"), output_field=money),
+                    zero,
+                ),
+                _overdue=Coalesce(
+                    Sum(
+                        "payments__amount",
+                        filter=Q(payments__payment_status="pending", payments__due_date__lt=today),
+                        output_field=money,
+                    ),
+                    zero,
+                ),
+            )
+        )
 
     fieldsets = (
         ("Alumno", {"fields": ("student",)}),
@@ -392,7 +431,12 @@ class EnrollmentAdmin(admin.ModelAdmin):
         RemovedInDjango60Warning before), and the branch that had none 500'd the
         whole changelist as soon as one enrollment reached it.
         """
-        totals = obj.payment_totals()
+        # Annotated by get_queryset on the changelist; computed on demand for a
+        # single instance (the change form, a shell, a test).
+        if hasattr(obj, "_overdue"):
+            totals = EnrollmentPaymentTotals(overdue=obj._overdue, outstanding=obj._outstanding, billed=obj._billed)
+        else:
+            totals = obj.payment_totals()
         if totals.overdue:
             return format_html('<span style="color: red;">&#10007; Vencido (&euro;{})</span>', totals.overdue)
         if totals.outstanding:

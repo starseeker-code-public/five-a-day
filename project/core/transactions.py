@@ -27,11 +27,15 @@ def get_all_payments_unrestricted():
             "parent",
             "enrollment",
             "enrollment__enrollment_type",
+            # Was `Prefetch("student__group__teacher")`, which is a chain of
+            # forward FKs: prefetching it costs two extra queries where a join
+            # costs none.
+            "student__group",
+            "student__group__teacher",
         )
         .prefetch_related(
             "student__parents",
             "student__enrollments",
-            Prefetch("student__group__teacher"),
         )
         .order_by("-created_at", "-id")  # tie-break — see helper above
     )

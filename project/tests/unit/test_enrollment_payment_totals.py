@@ -97,7 +97,14 @@ class TestPaymentTotals:
         assert active_enrollment.is_up_to_date is True
 
     def test_costs_one_query(self, active_enrollment, student, django_assert_num_queries):
-        _payment(active_enrollment, student, status="pending", days=-1)
+        # Two pending rows, deliberately in DIFFERENT months. Both were
+        # `today +/- a few days`, which put them in the same month whenever the
+        # suite ran near a month boundary — two pending monthly payments for one
+        # student in one month is the double-billing that
+        # `unique_pending_periodic_payment_per_month` now forbids, so this fixture
+        # was only ever valid by calendar luck. What the test needs is two pending
+        # rows, not two in one month.
+        _payment(active_enrollment, student, status="pending", days=-45)
         _payment(active_enrollment, student, status="pending", days=10)
 
         with django_assert_num_queries(1):
