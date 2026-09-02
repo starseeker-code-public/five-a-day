@@ -39,10 +39,21 @@ updates:
       - dependencies
       - github-actions
 
-  # Keeps the digest-pinned base image in the Dockerfile current. Without this
-  # nothing watches python:3.12-slim at all — pip and github-actions were
-  # covered, the container base was not.
+  # Keeps the digest-pinned images in the Dockerfile current (python:3.12-slim
+  # base and the ghcr.io/astral-sh/uv COPY --from). Without this nothing
+  # watches them at all — pip and github-actions were covered, the container
+  # images were not. target-branch matters: without it these PRs land on the
+  # DEFAULT branch (main), planting non-ancestor commits outside the
+  # development → testing → main path.
   - package-ecosystem: docker
     directory: /
     schedule:
       interval: weekly
+      day: monday
+      time: "08:00"
+      timezone: "Europe/Madrid"
+    open-pull-requests-limit: 5
+    target-branch: development
+    labels:
+      - dependencies
+      - docker

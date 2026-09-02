@@ -629,10 +629,10 @@ run inline):
 | `purge_expired_sessions` | `purge_sessions` | daily, 03:30 | `30 3 * * *` |
 | — (ops only, no Beat task) | `backup_retention --apply` | daily, 05:30 | `30 5 * * *` |
 
-> **Provisioning status (verified 2026-09-01).** 11 Cloud Run Jobs, 9 Cloud Scheduler
-> entries — 12 and 10 once v1.26.5 deploys: `fiveaday-archive-gcp-costs` + its
-> 3rd-of-month schedule are created at that release deploy (see the `archive_gcp_costs`
-> note below for the BigQuery export + IAM prerequisites).
+> **Provisioning status (verified 2026-09-02).** 12 Cloud Run Jobs, 11 Cloud Scheduler
+> entries: `fiveaday-archive-gcp-costs` + its 3rd-of-month schedule already exist, created
+> ahead of the v1.26.x release with `GCP_BILLING_EXPORT_TABLE` in the job env; the schedule
+> is **PAUSED** until that release is live (see the `archive_gcp_costs` note below).
 > `fiveaday-migrate` has no schedule by design (deploy-time only). Note the
 > **schedulers live in `europe-west1`**, not the service's `europe-southwest1` — Cloud
 > Scheduler is not available in that region, so `gcloud scheduler jobs list --location`
@@ -710,21 +710,22 @@ run inline):
 > `GCP_BILLING_EXPORT_TABLE=five-a-day-evolution.billing_export.gcp_billing_export_v1_010D7C_DF2EDA_0B0E10`
 > set on the production service (revision `fiveaday-00024-j9x`, verified healthy — inert until
 > the image carrying `gcp_cost_service` deploys) and pre-set in all local `.env*` files.
-> Billing account: `010D7C-DF2EDA-0B0E10`. Still pending, in order:
+> Billing account: `010D7C-DF2EDA-0B0E10`. The TESTING VM is also done: its scopes now
+> include `bigquery.readonly` (stop → `set-service-account` → start; its IAM was already
+> sufficient — the Compute default SA holds `roles/editor`; note `--scopes=` must be QUOTED
+> in PowerShell or the commas split the argument), the `.env` carries the table id, and the
+> stack was recreated with BOTH compose files (`env_file` env is baked at container
+> creation — a plain `restart` does NOT pick up a new `.env` line) and verified: testing
+> volume mounted, `/health/` green, var visible via `docker exec printenv`. The
+> `fiveaday-archive-gcp-costs` Cloud Run Job also exists already (cloned via YAML replace
+> from `fiveaday-prune-audit-log`, args `project/manage.py archive_gcp_costs`, env includes
+> `GCP_BILLING_EXPORT_TABLE`; the release deploy repoints its image like the other 11) and
+> `sched-fiveaday-archive-gcp-costs` (`45 6 3 * *`, Europe/Madrid, europe-west1) is created
+> **PAUSED**. The single remaining step, right after the release with `archive_gcp_costs`
+> is live in production:
 >
 > ```bash
-> # 1. The TESTING VM cannot reach BigQuery via ADC yet: it runs as the Compute default SA
-> #    (332600671945-compute@) with legacy scopes that exclude BigQuery. Its IAM is already
-> #    sufficient (the SA holds roles/editor) — only the SCOPES need fixing, brief stop/start:
-> gcloud compute instances stop fiveaday-testing --zone=us-east1-c
-> gcloud compute instances set-service-account fiveaday-testing --zone=us-east1-c --service-account=332600671945-compute@developer.gserviceaccount.com --scopes=https://www.googleapis.com/auth/bigquery.readonly,https://www.googleapis.com/auth/devstorage.read_only,https://www.googleapis.com/auth/logging.write,https://www.googleapis.com/auth/monitoring.write,https://www.googleapis.com/auth/pubsub,https://www.googleapis.com/auth/service.management.readonly,https://www.googleapis.com/auth/servicecontrol,https://www.googleapis.com/auth/trace.append
-> gcloud compute instances start fiveaday-testing --zone=us-east1-c
-> #    ...then append the GCP_BILLING_EXPORT_TABLE line (same value as above) to the VM's .env
-> #    and restart the stack (BOTH compose files, per the two-file gotcha).
->
-> # 2. At the release deploy: clone the fiveaday-archive-gcp-costs Cloud Run Job (YAML replace,
-> #    like the others) — the cloned env must include GCP_BILLING_EXPORT_TABLE — and create its
-> #    Cloud Scheduler entry (45 6 3 * *, europe-west1), PAUSED until the release is live.
+> gcloud scheduler jobs resume sched-fiveaday-archive-gcp-costs --project=five-a-day-evolution --location=europe-west1
 > ```
 
 > **Fun Friday announcements** are NOT sent with `apply_async(eta=...)` (the ETA is silently
@@ -1096,7 +1097,7 @@ production is never deployed by a timer.
 | | `Deploy testing` | `Deploy production` |
 |---|---|---|
 | File | `.github/workflows/deploy-testing.yml` | `.github/workflows/deploy-production.yml` |
-| Trigger | cron, 02:00 Europe/Madrid | push to `main` (the release PR merge) |
+| Trigger | cron, 02:00 Europe/Madrid | `Deploy testing` finishing without issues (`workflow_run`) |
 | Human in the loop | no | **yes — required reviewer** |
 | Target | Compute Engine VM | Cloud Run + Cloud SQL |
 | Credential | SSH deploy key (repo secret) | Workload Identity Federation (no stored key) |
@@ -1110,8 +1111,8 @@ Both deploy workflows are additions to the pipeline, not replacements: the `/dep
 still the by-hand path when you need to ship right now, and it is the documented fallback if a
 workflow is broken.
 
-> **Neither workflow does anything until it is on `main`.** `on: schedule` only ever fires for
-> the repository's default branch, and the production workflow triggers on `push` to `main`.
+> **Neither workflow does anything until it is on `main`.** `on: schedule` and
+> `on: workflow_run` only ever fire from the workflow file on the repository's default branch.
 > A change to either file takes effect only after it has travelled
 > `development → testing → main` through the normal release path.
 
@@ -1170,20 +1171,36 @@ Manual repair (both directions): `python manage.py set_ready_for_prod on|off` in
 
 ### Production deploy — armed automatically, shipped by hand
 
-When the `testing → main` release PR merges, the workflow arms itself and then stops:
+Every time `Deploy testing` finishes without issues, the workflow re-evaluates whether a
+release is ready, arms itself when it is, and then stops:
 
 ```text
-push to main  →  preflight   read pyproject.toml on main + /health/ on production
-                             GATE: /health/?deep=1 on TESTING must be healthy,
-                                   serve this exact version, and report
-                                   ready_for_prod=true (the QA sign-off)
-                             already the same version in production? stop
-                             WAIT for CI to go green on this exact commit (45 min budget)
-                             list the migrations in this release
-                             write it all to the run summary
-              →  deploy      ⏸ BLOCKED on the `production` environment
-                             (required reviewer + 5-minute wait timer)
+Deploy testing   →  preflight   read pyproject.toml on main + /health/ on production
+completes cleanly               already the same version in production? stop — green
+(workflow_run)                  and silent, the normal outcome of a quiet night
+                                GATE: /health/?deep=1 on TESTING must be healthy,
+                                      serve this exact version, and report
+                                      ready_for_prod=true (the QA sign-off)
+                                WAIT for CI to go green on main's tip (45 min budget;
+                                      named required checks, external apps' check
+                                      runs — e.g. the Cloud Build trigger — ignored)
+                                list the migrations in this release
+                                write it all to the run summary
+                 →  deploy      ⏸ BLOCKED on the `production` environment
+                                (required reviewer + 5-minute wait timer)
 ```
+
+Merging the `testing → main` release PR fires **nothing** by itself. It used to trigger this
+workflow directly, which raced the pipeline it depends on: the QA gate demands that testing
+serve the release version, but the VM only picks a version up on the next nightly deploy, so
+a same-day merge always failed the gate. Chaining off `Deploy testing` means every arming
+attempt happens right after testing's state changed — the only moment the gate can pass.
+The resulting cadence: **night 1** deploys the release to the VM and resets
+`ready_for_prod`; **QA signs off during the day**; **night 2's no-op testing run** (versions
+already match, so the flag survives) re-triggers production, which arms and waits for
+approval. To ship the same day, dispatch `Deploy production` by hand after signing off.
+While a merged release sits unsigned, every nightly attempt fails the gate loudly and emails
+— deliberate insistence; an unshipped release is a state to resolve, not to sit in.
 
 So a release clears **two human gates**: QA's sign-off on the testing dashboard (phase 1,
 checked automatically) and the required reviewer's approval on the run (phase 2). A
@@ -1214,7 +1231,7 @@ a hard gate:
 | Resolve the deployed image tag → migration diff | image tags are git short SHAs, so pending migrations are a `git diff` |
 | Take a backup, assert `SUCCESSFUL` | an unverified backup is not a rollback plan |
 | Pre-deploy `/health/?deep=1` fingerprint | gives the post-deploy report something to reconcile against |
-| Build and push `web:<short-sha>` | skipped when the tag already exists — only the rollout was missing |
+| Build and push `web:<short-sha>` | usually skipped: the `fiveaday-build` Cloud Build trigger (europe-southwest1) pre-builds `web:<short-sha>` + `latest` on the merge push. Its check run is advisory — if the pre-build failed, this step builds inline |
 | Repoint **every** Cloud Run job, then verify | jobs pin their own tag; `gcloud run deploy` touches only the *service* |
 | Assert every job's Cloud SQL attachment | a job on another instance would migrate somewhere invisible and exit 0 |
 | Execute `fiveaday-migrate` | **before** the rollout, so new code never meets an old schema |

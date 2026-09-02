@@ -2,16 +2,17 @@
 
 {% block title %}Cumpleaños - Saludos Automáticos{% endblock %}
 
+{% block page_title %}Cumpleaños{% endblock %}
+{% block page_subtitle %}Gestión de emails de cumpleaños{% endblock %}
+
+{% block header_actions %}
+<a href="{% url 'apps' %}" class="header-action-btn bg-primary-500 hover:bg-primary-600 text-white px-6 py-3 rounded-md flex items-center gap-2 transition-all duration-200 transform hover:scale-105 hover:shadow-md text-base font-semibold leading-none no-underline">
+    <span class="material-symbols-outlined text-xl">arrow_back</span> Aplicaciones
+</a>
+{% endblock %}
+
 {% block content %}
 <div class="max-w-4xl mx-auto">
-    <!-- Header -->
-    <div class="flex items-center justify-between mb-8">
-        <div>
-            <h1 class="text-2xl font-bold text-neutral-800">Cumpleaños</h1>
-            <p class="text-neutral-700">Gestión de emails de cumpleaños</p>
-        </div>
-        <a href="{% url 'apps' %}" class="text-primary-600 hover:text-primary-700" style="text-decoration: none;" title="Volver"><span class="material-symbols-outlined" style="font-size: 2rem; display: block;">arrow_back</span></a>
-    </div>
 
     {% if messages %}
     <div class="mb-6">
@@ -24,7 +25,7 @@
     {% endif %}
 
     <!-- Info automática -->
-    <div class="bg-amber-50 rounded-xl p-6 border border-amber-200 mb-6">
+    <div class="bg-amber-50 rounded-lg p-6 border border-amber-200 mb-6">
         <div class="flex items-start">
             <span class="material-symbols-outlined text-amber-500 mr-3 mt-0.5">schedule</span>
             <div>
@@ -35,7 +36,7 @@
     </div>
 
     <!-- Cumpleaños de hoy -->
-    <div class="bg-white rounded-xl p-6 border border-neutral-200 mb-6">
+    <div class="bg-white rounded-lg shadow-sm p-6 mb-6">
         <h2 class="text-lg font-semibold text-neutral-700 mb-4 flex items-center">
             <span class="material-symbols-outlined text-primary-500 mr-2">today</span>
             Cumpleaños hoy ({{ today }})
@@ -61,7 +62,7 @@
     </div>
 
     <!-- Cumpleaños este mes -->
-    <div class="bg-white rounded-xl p-6 border border-neutral-200 mb-6">
+    <div class="bg-white rounded-lg shadow-sm p-6 mb-6">
         <h2 class="text-lg font-semibold text-neutral-700 mb-4 flex items-center">
             <span class="material-symbols-outlined text-primary-500 mr-2">calendar_month</span>
             Cumpleaños este mes
