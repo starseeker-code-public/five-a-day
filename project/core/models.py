@@ -305,7 +305,7 @@ class BacklogTask(models.Model):
     # emails the admin teachers); this is QA saying "verified correct".
     verified = models.BooleanField(
         default=False,
-        verbose_name="Verificado por QA",
+        verbose_name="desarrollado",
         help_text="El tester ha comprobado que el ticket está correcto.",
     )
     created_at = models.DateTimeField(auto_now_add=True)
@@ -337,6 +337,14 @@ class QAConfiguration(models.Model):
     error_email_enabled = models.BooleanField(
         default=False,
         verbose_name="Send error reports via email",
+    )
+    # QA's sign-off that the deployed version may ship to production. Set to
+    # True by the "¿Listo para desplegar?" button on /testing/, reset to False
+    # by the nightly testing deploy (manage.py set_ready_for_prod off), and read
+    # by deploy-production.yml's preflight through /health/?deep=1.
+    ready_for_prod = models.BooleanField(
+        default=False,
+        verbose_name="Versión lista para producción",
     )
     updated_at = models.DateTimeField(auto_now=True)
 

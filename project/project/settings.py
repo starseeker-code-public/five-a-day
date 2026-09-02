@@ -554,6 +554,27 @@ GOOGLE_SHEETS_SERVICE_ACCOUNT_FILE = os.getenv("GOOGLE_SHEETS_SERVICE_ACCOUNT_FI
 GOOGLE_SHEETS_SPREADSHEET_ID = os.getenv("GOOGLE_SHEETS_SPREADSHEET_ID", "")
 
 # ============================================================================
+# GCP BILLING EXPORT — OPTIONAL
+# ============================================================================
+# Actual Google Cloud spend for the QA dashboard's "Gastos GCP" line and the
+# automated monthly "Software" expense (billing/services/gcp_cost_service.py).
+# GCP only exposes real costs through the standard billing export to BigQuery,
+# so this needs that export enabled and points at its table:
+#   "project.dataset.gcp_billing_export_v1_XXXXXX"
+# Unset ⇒ the feature is off (the UI shows "—" and nothing is archived).
+GCP_BILLING_EXPORT_TABLE = os.getenv("GCP_BILLING_EXPORT_TABLE", "")
+# Project the BigQuery query job runs under (needs BigQuery Job User on it).
+# Defaults to the export table's own project.
+GCP_BILLING_PROJECT_ID = os.getenv("GCP_BILLING_PROJECT_ID", "")
+# Optional `project.id` filter for billing accounts covering several projects.
+GCP_BILLING_PROJECT_FILTER = os.getenv("GCP_BILLING_PROJECT_FILTER", "")
+# Dedicated credential (JSON inline wins). When both are unset the service
+# falls back to the Google Sheets service account, then to Application Default
+# Credentials (the attached service account on the VM / Cloud Run).
+GCP_BILLING_SERVICE_ACCOUNT_JSON = os.getenv("GCP_BILLING_SERVICE_ACCOUNT_JSON", "")
+GCP_BILLING_SERVICE_ACCOUNT_FILE = os.getenv("GCP_BILLING_SERVICE_ACCOUNT_FILE", "")
+
+# ============================================================================
 # TWILIO SMS (v1.8) — OPTIONAL
 # ============================================================================
 # All three must be set for the SMS service to be considered "configured".
