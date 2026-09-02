@@ -5,6 +5,7 @@ from decimal import Decimal
 
 import pytest
 from django.core.exceptions import ValidationError
+from django.urls import reverse
 
 from billing.models import Expense
 from billing.services.expense_service import (
@@ -12,6 +13,7 @@ from billing.services.expense_service import (
     materialize_recurring_for_date,
     monthly_totals,
 )
+from core.views.expenses import _parse_amount
 
 pytestmark = pytest.mark.django_db
 
@@ -377,3 +379,59 @@ class TestMaterializeRecurringForDate:
         )
         # A Monday that also happens to be day 2 — must NOT materialise monthly here.
         assert materialize_recurring_for_date(date(2026, 3, 2)) == 0
+
+
+class TestAmountParsing:
+    """`Decimal()` accepts "NaN" and "Infinity" — they are values, not parse
+    errors — so they sailed past `except InvalidOperation` and then raised on
+    the very next line, because `Decimal("NaN") <= 0` signals InvalidOperation
+    itself. Nothing caught that, so `amount=NaN` was an unhandled 500 on a form
+    non-admin teachers can reach.
+    """
+
+    @pytest.mark.parametrize("raw", ["NaN", "Infinity", "-Infinity"])
+    def test_non_finite_amounts_are_rejected(self, raw):
+        assert _parse_amount(raw) is None
+
+    @pytest.mark.parametrize("raw", ["", "abc", "1.2.3"])
+    def test_unparseable_amounts_are_rejected(self, raw):
+        """The other two branches of the same function."""
+        assert _parse_amount(raw) is None
+
+    @pytest.mark.parametrize(("raw", "expected"), [("12.50", Decimal("12.50")), ("12,50", Decimal("12.50"))])
+    def test_ordinary_amounts_still_parse(self, raw, expected):
+        """The guard must not over-reject: the comma decimal separator is how
+        the form is actually filled in."""
+        assert _parse_amount(raw) == expected
+
+    def test_a_nan_amount_is_a_form_error_not_a_crash(self, authenticated_client):
+        response = authenticated_client.post(
+            reverse("create_expense"),
+            {"description": "Material", "amount": "NaN", "category": "other"},
+        )
+
+        assert response.status_code == 302
+        assert not Expense.objects.filter(description="Material").exists()
+
+
+class TestExpenseListQueryStringIsRangeChecked:
+    """Parsing was not enough. `expense_date__year` makes Django build a real
+    `date(year, 1, 1)` for the bounds, so `?year=-5` raised ValueError and
+    `?year=99999999999` raised OverflowError — both past an
+    `except (TypeError, ValueError)` that only wrapped the `int()` call.
+    """
+
+    @pytest.mark.parametrize("year", ["-5", "99999999999", "abc"])
+    def test_a_hostile_year_does_not_crash_the_page(self, authenticated_client, year):
+        assert authenticated_client.get(reverse("expenses_list"), {"year": year}).status_code == 200
+
+    @pytest.mark.parametrize("month", ["0", "13", "abc"])
+    def test_a_hostile_month_does_not_crash_the_page(self, authenticated_client, month):
+        assert authenticated_client.get(reverse("expenses_list"), {"month": month}).status_code == 200
+
+    def test_a_real_filter_is_still_honoured(self, authenticated_client):
+        response = authenticated_client.get(reverse("expenses_list"), {"year": "2024", "month": "3"})
+
+        assert response.context["year"] == 2024
+        assert response.context["month"] == 3
+        assert response.context["default_expense_date"] == date(2024, 3, 1)

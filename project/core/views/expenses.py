@@ -11,6 +11,7 @@ from django.views.decorators.http import require_http_methods
 
 from billing.models import Expense
 from billing.services.expense_service import monthly_totals
+from core.utils import MAX_QUERY_YEAR, MIN_QUERY_YEAR, safe_int
 
 
 def _default_expense_date(month: int, year: int, today: date) -> date:
@@ -31,11 +32,11 @@ def _default_expense_date(month: int, year: int, today: date) -> date:
 def expenses_list(request):
     """Table of every expense with a month/category filter."""
     today = date.today()
-    try:
-        month = int(request.GET.get("month") or today.month)
-        year = int(request.GET.get("year") or today.year)
-    except (TypeError, ValueError):
-        month, year = today.month, today.year
+    # Range-checked, not just parsed: `expense_date__year` makes Django build a
+    # real date for the bounds, so `?year=-5` and `?year=99999999999` were 500s
+    # that sailed straight through an `except (TypeError, ValueError)`.
+    month = safe_int(request.GET.get("month"), default=today.month, low=1, high=12)
+    year = safe_int(request.GET.get("year"), default=today.year, low=MIN_QUERY_YEAR, high=MAX_QUERY_YEAR)
 
     category = request.GET.get("category", "").strip()
 
@@ -68,12 +69,22 @@ def expenses_list(request):
 
 
 def _parse_amount(raw: str) -> Decimal | None:
+    """Parse the amount field, or None when it is not a usable number.
+
+    `Decimal()` accepts "NaN" and "Infinity" — they are valid Decimals, not
+    parse errors — so they slipped past the `except InvalidOperation` and blew
+    up on the very next line: `Decimal("NaN") <= 0` raises InvalidOperation
+    itself, which nothing here catches. That turned `amount=NaN` on a form any
+    non-admin teacher can reach into an unhandled 500. `is_finite()` rejects
+    both, and the caller then reports the normal "importe válido" message.
+    """
     if not raw:
         return None
     try:
-        return Decimal(raw.replace(",", "."))
+        value = Decimal(raw.replace(",", "."))
     except InvalidOperation:
         return None
+    return value if value.is_finite() else None
 
 
 _VALID_CATEGORIES = {value for value, _ in Expense.EXPENSE_CATEGORY_CHOICES}

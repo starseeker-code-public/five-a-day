@@ -20,6 +20,33 @@ from celery.utils.log import get_task_logger
 logger = get_task_logger(__name__)
 
 
+def _dispatch(task, *args, what: str = "subtask", **kwargs) -> bool:
+    """Queue `task` without letting one failure abort the caller's batch.
+
+    **Production has no Celery broker.** `settings.CELERY_TASK_ALWAYS_EAGER` and
+    `CELERY_TASK_EAGER_PROPAGATES` are both `not CELERY_BROKER_URL`, so on Cloud
+    Run `.delay()` executes the task INLINE and re-raises whatever it raises —
+    and `autoretry_for` makes it worse, surfacing as `Retry` once the retry
+    budget is spent.
+
+    A bare fan-out loop therefore stops dead on its first bad item. Measured on
+    a four-item loop under the production settings: item 0 ran, items 1-3 never
+    did. With a broker the "queue each one separately for better error handling"
+    comment is true; without one it is exactly backwards.
+
+    Returns True when the item was handled, False when it failed. The caller
+    counts and carries on.
+    """
+    try:
+        task.delay(*args, **kwargs)
+        return True
+    except Exception:
+        # Do not log the args — they carry recipient addresses and ids. The
+        # task itself logs its own context.
+        logger.exception("%s failed and was skipped; the batch continues", what)
+        return False
+
+
 @shared_task(
     name="comms.tasks.send_welcome_email_task",
     bind=True,
@@ -127,16 +154,33 @@ def send_birthday_email_task(self, student_id: int):
     mom and dad want to know it's their kid's birthday; before this fix the
     task did `.first()` and only picked the arbitrary first row.
     """
+    from django.db.models import Prefetch
+
     from comms.services.email_service import email_service
-    from students.models import Student
+    from students.models import Parent, Student
 
     try:
-        student = Student.objects.prefetch_related("parents").get(id=student_id)
+        # The email filter goes INSIDE the prefetch. It used to be
+        # `prefetch_related("parents")` followed by
+        # `parents.exclude(...).values_list(...)`, and an `exclude()` on a related
+        # manager builds a new queryset that ignores the prefetch cache — so the
+        # prefetch was pure overhead and the task cost three queries per student
+        # instead of two. Invisible in development, where
+        # `CELERY_TASK_ALWAYS_EAGER=False` runs this in the worker so its queries
+        # never appear in the parent task's count; production runs eager, and the
+        # birthday cron fans out one of these per student with a birthday today.
+        student = Student.objects.prefetch_related(
+            Prefetch(
+                "parents",
+                queryset=Parent.objects.exclude(email="").exclude(email__isnull=True).order_by("id"),
+                to_attr="emailable_parents",
+            )
+        ).get(id=student_id)
     except Student.DoesNotExist:
         logger.error("Student not found: id=%d", student_id)
         return {"status": "error", "message": "Student not found"}
 
-    recipients = list(student.parents.exclude(email="").exclude(email__isnull=True).values_list("email", flat=True))
+    recipients = [p.email for p in student.emailable_parents]
     # Adult students receive the email themselves when no parent is on file.
     if not recipients and student.is_adult and student.email:
         recipients = [student.email]
@@ -193,11 +237,21 @@ def send_birthday_emails_task(self):
 
     logger.info(f"Encontrados {len(birthday_students)} cumpleanos hoy")
 
-    # Queue each email as a separate task (for better error handling and retries)
-    for student_id in birthday_students:
-        send_birthday_email_task.delay(student_id)
+    # One task per student, dispatched through `_dispatch` so a single bad address
+    # cannot stop the rest. A bare `.delay()` here aborted the whole loop under
+    # production's eager settings: the first failure raised and nobody after it
+    # got a birthday email.
+    queued = sum(_dispatch(send_birthday_email_task, sid, what="birthday email") for sid in birthday_students)
+    failed = len(birthday_students) - queued
+    if failed:
+        logger.warning("%d de %d emails de cumpleanos no se pudieron enviar", failed, len(birthday_students))
 
-    return {"status": "success", "birthdays_found": len(birthday_students), "tasks_queued": len(birthday_students)}
+    return {
+        "status": "success",
+        "birthdays_found": len(birthday_students),
+        "tasks_queued": queued,
+        "tasks_failed": failed,
+    }
 
 
 @shared_task(name="comms.tasks.send_monthly_report_task", bind=True)
@@ -306,15 +360,19 @@ def send_payment_reminders(self):
 
     due_date_limit = date.today() + timedelta(days=7)
 
-    pending_payments = Payment.objects.filter(
-        payment_status="pending", due_date__lte=due_date_limit, due_date__gte=date.today()
-    ).select_related("student", "parent")
+    # `list()` once: this was `.exists()`, then `.count()`, then the loop below —
+    # three executions of the same query for one pass over the rows.
+    pending_payments = list(
+        Payment.objects.filter(
+            payment_status="pending", due_date__lte=due_date_limit, due_date__gte=date.today()
+        ).select_related("student", "parent")
+    )
 
-    if not pending_payments.exists():
+    if not pending_payments:
         logger.info("No hay pagos pendientes proximos a vencer")
         return {"status": "no_pending_payments", "sent": 0}
 
-    logger.info(f"Enviando {pending_payments.count()} recordatorios de pago")
+    logger.info("Enviando %d recordatorios de pago", len(pending_payments))
 
     emails_data = []
     # Dedupe SMS by parent so families with several kids only get one SMS
@@ -322,6 +380,7 @@ def send_payment_reminders(self):
     # email is per-payment, per-student) — the SMS medium is noisier and
     # would look spammy at 3-4 texts in a row.
     sms_parent_ids: set[int] = set()
+    sms_payload: list[int] = []
     for payment in pending_payments:
         if payment.parent and payment.parent.email:
             emails_data.append(
@@ -337,11 +396,12 @@ def send_payment_reminders(self):
                     },
                 }
             )
-        # v1.8: SMS to opted-in parents (async, so a Twilio outage doesn't stall email)
+        # v1.8: SMS to opted-in parents. SMS is a SUPPLEMENT to email, so the ids
+        # are collected here and dispatched *after* the emails go out — see below.
         if payment.parent and payment.parent.sms_opt_in and payment.parent.phone:
             if payment.parent_id not in sms_parent_ids:
-                send_payment_reminder_sms_task.delay(payment.id)
                 sms_parent_ids.add(payment.parent_id)
+                sms_payload.append(payment.id)
 
     # Use payment_reminder_simple (student_name/amount/due_date context) —
     # the full payment_reminder.html template expects a batch context (IBAN,
@@ -351,13 +411,22 @@ def send_payment_reminders(self):
     results = email_service.send_bulk_emails(
         template_name="payment_reminder_simple", emails_data=emails_data, fail_silently=True
     )
-    results["sms_queued"] = len(sms_parent_ids)
+
+    # SMS goes out AFTER the email, and through `_dispatch`. This used to be a
+    # `.delay()` inside the loop above, which on Cloud Run (no broker, eager +
+    # propagate) raised before `send_bulk_emails` was ever reached — so one
+    # Twilio failure silently suppressed EVERY payment-reminder email. The
+    # comment on that line asserted the opposite.
+    sms_sent = sum(_dispatch(send_payment_reminder_sms_task, pid, what="payment-reminder SMS") for pid in sms_payload)
+    results["sms_queued"] = sms_sent
+    results["sms_failed"] = len(sms_payload) - sms_sent
 
     logger.info(
-        "Recordatorios enviados: %d exitosos, %d fallidos; SMS: %d",
+        "Recordatorios enviados: %d exitosos, %d fallidos; SMS: %d enviados, %d fallidos",
         results["sent"],
         results["failed"],
-        len(sms_parent_ids),
+        results["sms_queued"],
+        results["sms_failed"],
     )
     return results
 
@@ -709,6 +778,7 @@ def send_due_fun_friday_emails_task(self):
 
     processed = 0
     sent_total = 0
+    failed = 0
     for row_id in due_ids:
         # CLAIM the row before sending, with a conditional UPDATE that only
         # matches while sent_at IS NULL. Marking it after the send left a
@@ -720,21 +790,45 @@ def send_due_fun_friday_emails_task(self):
             continue  # another worker got there first
         scheduled = FunFridayScheduledSend.objects.get(id=row_id)
 
-        result = _send_fun_friday_batch(
-            recipients=scheduled.recipients,
-            day_name=scheduled.day_name,
-            day_number=scheduled.day_number,
-            month=scheduled.month,
-            start_time=scheduled.start_time,
-            end_time=scheduled.end_time,
-            activity_description=scheduled.activity_description,
-            minimum_age=scheduled.minimum_age,
-            maximum_age=scheduled.maximum_age,
-            meeting_point=scheduled.meeting_point,
-        )
+        # The row is CLAIMED above, before sending. If the send then raises, the
+        # row stays claimed on purpose: `_send_fun_friday_batch` mails parents
+        # one at a time and may have delivered some already, so releasing the
+        # claim would re-mail them. Losing an announcement is recoverable by
+        # hand; sending it twice to every family is not.
+        #
+        # The `try` is what stops one bad row taking the whole drain down —
+        # previously an exception here aborted the loop and every later due row
+        # silently went unsent, with its claim already written.
+        try:
+            result = _send_fun_friday_batch(
+                recipients=scheduled.recipients,
+                day_name=scheduled.day_name,
+                day_number=scheduled.day_number,
+                month=scheduled.month,
+                start_time=scheduled.start_time,
+                end_time=scheduled.end_time,
+                activity_description=scheduled.activity_description,
+                minimum_age=scheduled.minimum_age,
+                maximum_age=scheduled.maximum_age,
+                meeting_point=scheduled.meeting_point,
+            )
+        except Exception:
+            failed += 1
+            logger.exception(
+                "Fun Friday scheduled send %d failed AFTER being claimed — it will not retry. "
+                "Re-create it from /apps/ if the announcement still needs to go out.",
+                int(row_id),
+            )
+            continue
+
         processed += 1
         sent_total += result["sent"]
 
-    if processed:
-        logger.info("Fun Friday drain: %d scheduled send(s) processed, %d email(s) sent", processed, sent_total)
-    return {"status": "success", "processed": processed, "sent": sent_total}
+    if processed or failed:
+        logger.info(
+            "Fun Friday drain: %d scheduled send(s) processed, %d email(s) sent, %d failed",
+            processed,
+            sent_total,
+            failed,
+        )
+    return {"status": "success", "processed": processed, "sent": sent_total, "failed": failed}

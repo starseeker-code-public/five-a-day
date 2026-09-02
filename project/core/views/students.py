@@ -3,11 +3,9 @@ from datetime import date
 from decimal import Decimal
 
 from django.contrib import messages
-from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.db.models import Q
 from django.http import HttpResponseRedirect, JsonResponse
-from django.shortcuts import get_object_or_404, redirect
 from django.urls import reverse, reverse_lazy
 from django.views.generic import CreateView, DetailView, ListView, UpdateView
 
@@ -138,7 +136,6 @@ class StudentCreateView(CreateView):
         import calendar
 
         from comms.tasks import send_welcome_email_task
-        from core.models import HistoryLog
 
         is_waiting_mode = (
             self.request.POST.get("is_waiting") in ("on", "true", "1") or self.request.GET.get("mode") == "waiting"
@@ -186,7 +183,16 @@ class StudentCreateView(CreateView):
                 if is_waiting_mode:
                     HistoryLog.log(
                         "waiting_list_added",
-                        f"Nuevo en lista de espera: {student.full_name} — {student.group.group_name}",
+                        # `Student.group` is nullable (v1.15) and the form field is
+                        # not required, so a waiting entry taken over the phone
+                        # legitimately has none. Unguarded, this raised
+                        # AttributeError inside the atomic block and the whole
+                        # creation failed with the generic "Error al crear el
+                        # estudiante" — for exactly the case the nullable group
+                        # was introduced to support. `waiting_list_create`
+                        # already words it this way.
+                        f"Nuevo en lista de espera: {student.full_name} — "
+                        f"{student.group.group_name if student.group_id else 'sin grupo preferido'}",
                         icon="hourglass_top",
                     )
                     messages.success(
@@ -313,6 +319,16 @@ class StudentCreateView(CreateView):
         return self.render_to_response(context)
 
 
+#: Max student rows sent to the browser in one page load. The table filters and
+#: sorts CLIENT-side (every row carries `data-*` attributes that `students.js`
+#: reads), so server pagination would silently reduce "search all students" to
+#: "search this page". The cap bounds the response instead, and
+#: `result_truncated` surfaces it rather than dropping rows quietly — the same
+#: shape `payments_list` already uses. The academy is sized for ~2,000 students,
+#: so this is the ceiling that matters.
+_STUDENT_LIST_CAP = 500
+
+
 class StudentListView(ListView):
     """Vista para listar todos los estudiantes"""
 
@@ -340,13 +356,24 @@ class StudentListView(ListView):
         if search_query:
             queryset = queryset.filter(Q(first_name__icontains=search_query) | Q(last_name__icontains=search_query))
 
-        return queryset.order_by("-created_at")
+        # `_total_count` is stashed for get_context_data so the truncation
+        # notice can report the real figure, not the capped one.
+        queryset = queryset.order_by("-created_at")
+        self._total_count = queryset.count()
+        return queryset[:_STUDENT_LIST_CAP]
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context["search_query"] = self.request.GET.get("search", "")
+        total = getattr(self, "_total_count", 0)
+        context["total_count"] = total
+        context["result_truncated"] = total > _STUDENT_LIST_CAP
+        context["list_cap"] = _STUDENT_LIST_CAP
         context["groups"] = Group.objects.filter(active=True)
-        context["parents"] = Parent.objects.all()
+        # `context["parents"]` used to be an unbounded `Parent.objects.all()` here.
+        # No template consumes it (students.html reads `student.parents.all`, which is
+        # prefetched), so it was dead weight one edit away from becoming a full-table
+        # render on a 2,000-student academy.
 
         context["this_week_ids"] = get_ff_student_ids(get_next_friday())
         context["last_week_ids"] = get_ff_student_ids(get_last_friday())
@@ -496,7 +523,8 @@ class StudentDetailView(DetailView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context["parents"] = self.object.parents.all()
-        context["enrollments"] = self.object.enrollments.all().order_by("-created_at")
+        # `enrollment.enrollment_type.display_name` is rendered per row.
+        context["enrollments"] = self.object.enrollments.select_related("enrollment_type").order_by("-created_at")
         context["payments"] = Payment.objects.filter(student=self.object).order_by("-payment_date")
         context["fun_friday_dates"] = self.object.fun_friday_dates.all()
         return context
@@ -577,210 +605,3 @@ def search_students(request):
             }
         )
     return JsonResponse({"results": results})
-
-
-def handle_student_form(request):
-    """
-    Handle student creation and updates
-    """
-
-    try:
-        # Get form data
-        first_name = request.POST.get("first_name", "").strip()
-        last_name = request.POST.get("last_name", "").strip()
-        birth_date = request.POST.get("birth_date")
-        email = request.POST.get("email", "").strip()
-        school = request.POST.get("school", "").strip()
-        group_id = request.POST.get("group")
-        allergies = request.POST.get("allergies", "").strip()
-        gdpr_signed = request.POST.get("gdpr_signed") == "on"
-        active = request.POST.get("active") == "on"
-        parent_ids = request.POST.getlist("parents")
-
-        # Validation
-        if not first_name or not last_name:
-            messages.error(request, "El nombre y apellidos son obligatorios.")
-            return redirect("students_list")
-
-        if not birth_date:
-            messages.error(request, "La fecha de nacimiento es obligatoria.")
-            return redirect("students_list")
-
-        if not group_id:
-            messages.error(request, "Debe seleccionar un grupo.")
-            return redirect("students_list")
-
-        if not parent_ids:
-            messages.error(request, "Debe seleccionar al menos un padre/tutor.")
-            return redirect("students_list")
-
-        # Get the group
-        try:
-            group = Group.objects.get(id=group_id, active=True)
-        except Group.DoesNotExist:
-            messages.error(request, "El grupo seleccionado no existe.")
-            return redirect("students_list")
-
-        # Get parents
-        parents = Parent.objects.filter(id__in=parent_ids)
-        if len(parents) != len(parent_ids):
-            messages.error(request, "Algunos padres seleccionados no existen.")
-            return redirect("students_list")
-
-        # Use transaction to ensure data consistency
-        with transaction.atomic():
-            # Check if this is an update (student_id present) or create
-            student_id = request.POST.get("student_id")
-
-            if student_id:  # Update existing student
-                try:
-                    student = Student.objects.select_related("group").get(id=student_id)
-                    old_group = student.group
-
-                    # Update student fields
-                    student.first_name = first_name
-                    student.last_name = last_name
-                    student.birth_date = birth_date
-                    student.email = email if email else ""
-                    student.school = school if school else ""
-                    student.group = group
-                    student.allergies = allergies if allergies else ""
-                    student.gdpr_signed = gdpr_signed
-                    student.active = active
-
-                    student.full_clean()  # Validate the model
-                    student.save()
-
-                    if old_group != group:
-                        HistoryLog.log(
-                            "group_updated",
-                            f"Grupo cambiado: {student.full_name} — {old_group.group_name} → {group.group_name}",
-                            icon="swap_horiz",
-                        )
-
-                    # Update parent relationships
-                    student.parents.clear()  # Remove all current relationships
-                    student.parents.set(parents)  # Set new relationships
-
-                    messages.success(
-                        request,
-                        f"Estudiante {student.full_name} actualizado correctamente.",
-                    )
-
-                except Student.DoesNotExist:
-                    messages.error(request, "El estudiante a actualizar no existe.")
-                    return redirect("students_list")
-
-            else:  # Create new student
-                student = Student(
-                    first_name=first_name,
-                    last_name=last_name,
-                    birth_date=birth_date,
-                    email=email if email else "",
-                    school=school if school else "",
-                    group=group,
-                    allergies=allergies if allergies else "",
-                    gdpr_signed=gdpr_signed,
-                    active=active,
-                )
-
-                student.full_clean()  # Validate the model
-                student.save()
-
-                # Add parent relationships
-                student.parents.set(parents)
-
-                messages.success(request, f"Estudiante {student.full_name} creado correctamente.")
-
-        return redirect("students_list")
-
-    except ValidationError as e:
-        if hasattr(e, "message_dict"):
-            for field, errors in e.message_dict.items():
-                for error in errors:
-                    messages.error(request, f"{field}: {error}")
-        else:
-            messages.error(request, f"Error de validación: {e.message}")
-        return redirect("students_list")
-
-    except Exception:
-        # Never return `str(e)` to the client: on an IntegrityError it names the
-        # table and column, on a DataError the column type and length. The
-        # ValidationError branch above is the exception to that rule, because
-        # ValidationError.messages is text written for humans.
-        #
-        # And log it — this used to show the operator the only copy of the error
-        # and keep nothing, so a recurring failure left no trace at all.
-        logger.exception("Unhandled error while processing the student form")
-        messages.error(request, "Error al procesar el formulario. Inténtalo de nuevo.")
-        return redirect("students_list")
-
-
-def student_detail(request, student_id):
-    """
-    API endpoint to get student details for editing
-    """
-    if request.method != "GET":
-        return JsonResponse({"error": "Method not allowed"}, status=405)
-
-    try:
-        student = get_object_or_404(
-            Student.objects.select_related("group").prefetch_related("parents"),
-            id=student_id,
-        )
-
-        # Prepare student data
-        student_data = {
-            "id": student.id,
-            "first_name": student.first_name,
-            "last_name": student.last_name,
-            "birth_date": student.birth_date.strftime("%Y-%m-%d") if student.birth_date else "",
-            "email": student.email,
-            "school": student.school,
-            "group": student.group.id,
-            "allergies": student.allergies,
-            "gdpr_signed": student.gdpr_signed,
-            "active": student.active,
-            "parents": [parent.id for parent in student.parents.all()],
-        }
-
-        return JsonResponse(student_data)
-
-    except Exception:
-        logger.exception("Error building student payload for student %s", student_id)
-        return JsonResponse({"error": "No se pudieron cargar los datos del alumno."}, status=500)
-
-
-def update_student(request, student_id):
-    """
-    Maneja la edición de un estudiante:
-    - GET: devuelve datos en JSON para rellenar el modal (AJAX).
-    - POST: actualiza datos usando handle_student_form y redirige a /students.
-    """
-    if request.method == "GET":
-        student = get_object_or_404(
-            Student.objects.select_related("group").prefetch_related("parents"),
-            id=student_id,
-        )
-
-        data = {
-            "id": student.id,
-            "first_name": student.first_name,
-            "last_name": student.last_name,
-            "birth_date": student.birth_date.strftime("%Y-%m-%d") if student.birth_date else "",
-            "email": student.email,
-            "school": student.school,
-            "group": student.group.id if student.group else None,
-            "allergies": student.allergies,
-            "gdpr_signed": student.gdpr_signed,
-            "active": student.active,
-            "parents": list(student.parents.values_list("id", flat=True)),
-        }
-        return JsonResponse(data)
-
-    elif request.method == "POST":
-        request.POST = request.POST.copy()
-        request.POST["student_id"] = student_id
-        return handle_student_form(request)
-
-    return JsonResponse({"error": "Method not allowed"}, status=405)

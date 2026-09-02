@@ -5,7 +5,7 @@ deliberately does not expose (`Student.waiting_priority`, `Group.max_students`,
 promoting a Teacher to admin), so a 500 there is not cosmetic.
 
 `*/admin.py` is excluded from coverage (`pyproject.toml [tool.coverage.run]`),
-which is exactly how `EnrollmentAdmin.is_paid_display` shipped a `format_html()`
+which is exactly how `EnrollmentAdmin.payment_status_display` shipped a `format_html()`
 call with no interpolation arguments. That raises `TypeError: args or kwargs
 must be provided.` on Django 6.0+ (it was a `RemovedInDjango60Warning` before),
 but only on the branch taken once an enrollment is **fully paid** — so it stayed
@@ -15,6 +15,9 @@ exist, taking down `/admin/billing/enrollment/` entirely.
 These tests do not assert on rendered markup beyond the regression cases; the
 contract is "no admin view 500s".
 """
+
+from datetime import date, timedelta
+from decimal import Decimal
 
 import pytest
 from django.contrib import admin
@@ -87,36 +90,69 @@ class TestAdminSiteSmoke:
 
 
 class TestEnrollmentAdminChangelist:
-    """Regression: both branches of `EnrollmentAdmin.is_paid_display`.
+    """Regression: every branch of `EnrollmentAdmin.payment_status_display`.
 
-    The paid branch is the one that used to raise; keep both covered so a future
-    edit cannot drop the interpolation argument from either.
+    `format_html()` raises TypeError on Django 6.0+ when given only a format
+    string, and the branch that had no argument 500'd the whole changelist the
+    first time an enrollment reached it. Coverage omits `*/admin.py`, so nothing
+    else in the suite executes these.
+
+    The column answers "does this family owe money, and is any of it late?". It
+    used to compare every completed payment on the enrollment against
+    `final_amount` — the price of ONE period — so a student with nine months
+    still to pay rendered as fully paid.
     """
 
     def _changelist(self, client):
         return client.get(reverse("admin:billing_enrollment_changelist"))
 
-    def test_renders_unpaid_enrollment(self, admin_site_client, active_enrollment):
+    def _pending(self, enrollment, student, *, days):
+        return Payment.objects.create(
+            student=student,
+            enrollment=enrollment,
+            payment_type="monthly",
+            payment_method="transfer",
+            amount=Decimal("54.00"),
+            payment_status="pending",
+            due_date=date.today() + timedelta(days=days),
+            concept="Mensualidad",
+        )
+
+    def test_renders_enrollment_with_nothing_billed(self, admin_site_client, active_enrollment):
         response = self._changelist(admin_site_client)
         assert response.status_code == 200
-        assert "Pending" in response.content.decode()
+        assert "Sin cobros emitidos" in response.content.decode()
 
-    def test_renders_fully_paid_enrollment(self, admin_site_client, active_enrollment, completed_payment):
-        """`completed_payment` is 54.00 against a 54.00 enrollment, so is_paid is True."""
-        assert active_enrollment.is_paid is True
+    def test_renders_overdue_enrollment(self, admin_site_client, active_enrollment, student):
+        self._pending(active_enrollment, student, days=-1)
+        assert active_enrollment.is_up_to_date is False
+
         response = self._changelist(admin_site_client)
         assert response.status_code == 200
-        assert "Paid" in response.content.decode()
+        assert "Vencido" in response.content.decode()
 
-    def test_renders_overpaid_enrollment(self, admin_site_client, active_enrollment, completed_payment):
-        """Overpayment stays on the paid branch and must not produce a negative remainder."""
-        completed_payment.amount = active_enrollment.final_amount * 2
-        completed_payment.save()
-        assert active_enrollment.remaining_amount == 0
-        assert self._changelist(admin_site_client).status_code == 200
+    def test_renders_up_to_date_enrollment_with_an_open_period(self, admin_site_client, active_enrollment, student):
+        """The state the old two-way column could not express: nothing late, but
+        the current month still outstanding."""
+        self._pending(active_enrollment, student, days=10)
+        assert active_enrollment.is_up_to_date is True
+        assert active_enrollment.outstanding_amount == Decimal("54.00")
+
+        response = self._changelist(admin_site_client)
+        assert response.status_code == 200
+        assert "aún no vencidos" in response.content.decode()
+
+    def test_renders_settled_enrollment(self, admin_site_client, active_enrollment, completed_payment):
+        assert active_enrollment.is_up_to_date is True
+        assert active_enrollment.outstanding_amount == Decimal("0.00")
+
+        response = self._changelist(admin_site_client)
+        assert response.status_code == 200
+        assert "Al corriente" in response.content.decode()
 
     def test_renders_enrollment_with_cancelled_payments_only(self, admin_site_client, active_enrollment, student):
-        """Cancelled money must not count as paid — the unpaid branch still renders."""
+        """Cancelled money is neither owed nor collected, so it must not make
+        the row look overdue."""
         Payment.objects.create(
             student=student,
             enrollment=active_enrollment,
@@ -124,10 +160,22 @@ class TestEnrollmentAdminChangelist:
             payment_method="cash",
             amount=active_enrollment.final_amount,
             payment_status="cancelled",
-            due_date=active_enrollment.enrollment_date,
+            due_date=date.today() - timedelta(days=30),
             concept="Cancelled duplicate",
         )
-        assert active_enrollment.is_paid is False
+        assert active_enrollment.overdue_amount == Decimal("0.00")
+
         response = self._changelist(admin_site_client)
         assert response.status_code == 200
-        assert "Pending" in response.content.decode()
+        assert "Al corriente" in response.content.decode()
+
+    def test_overdue_wins_over_a_later_open_period(self, admin_site_client, active_enrollment, student):
+        """One late month and one not yet due: the row must show the arrears,
+        not the reassuring half."""
+        self._pending(active_enrollment, student, days=-40)
+        self._pending(active_enrollment, student, days=10)
+
+        totals = active_enrollment.payment_totals()
+        assert totals.overdue == Decimal("54.00")
+        assert totals.outstanding == Decimal("108.00")
+        assert "Vencido" in self._changelist(admin_site_client).content.decode()

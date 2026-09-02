@@ -3,6 +3,7 @@ import logging
 from decimal import Decimal
 
 from django.core.exceptions import ValidationError
+from django.db.models import Prefetch
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404, render
 from django.views.decorators.http import require_http_methods
@@ -10,7 +11,7 @@ from django.views.decorators.http import require_http_methods
 from billing import constants
 from billing.models import Enrollment, SiteConfiguration, current_academic_year, relevant_academic_years
 from core.models import HistoryLog
-from students.models import Group, Student, Teacher
+from students.models import Group, Parent, Student, Teacher
 
 logger = logging.getLogger(__name__)
 
@@ -19,9 +20,16 @@ def gestion_view(request):
     """
     Vista principal de gestión con configuración de precios, profesores y grupos.
     """
+    from core.views.waiting_list import group_capacity_summary
+
     config = SiteConfiguration.get_config()
     teachers = Teacher.objects.filter(active=True).order_by("first_name", "last_name")
-    groups = Group.objects.filter(active=True).select_related("teacher").order_by("group_name")
+    # One annotated query for every group's occupancy. The template read
+    # `group.enrolled_count` twice plus `group.is_full` per row, and all three are
+    # uncached `.count()` properties — three queries per group (40 for 13 groups).
+    # Same helper `waiting_list_view` and the dashboard use, so the three pages
+    # cannot disagree about whether a group is full.
+    groups = group_capacity_summary()
 
     context = {
         "config": config,
@@ -111,7 +119,7 @@ def create_teacher(request):
         # Teachers created here are ALWAYS non-admin. Only the seeded teachers
         # (TEACHER_SEED_*) and the superuser/admin profile are admins; an
         # existing admin can promote a teacher afterwards via /admin/.
-        teacher = Teacher.objects.create(
+        teacher = Teacher(
             first_name=data["first_name"],
             last_name=data["last_name"],
             email=data["email"],
@@ -119,6 +127,12 @@ def create_teacher(request):
             active=True,
             admin=False,
         )
+        # `objects.create()` runs no validators, so "notanemail" persisted
+        # happily into an EmailField — and the account it produces is
+        # unreachable: `ensure_user()` mirrors the address onto the auth.User,
+        # and activation happens over `/password-reset/`, which emails it.
+        teacher.full_clean()
+        teacher.save()
 
         # Create the linked auth.User with an unusable password. Without this a
         # teacher created here had no login identity at all: they could not sign
@@ -139,6 +153,13 @@ def create_teacher(request):
                     "email": teacher.email,
                 },
             }
+        )
+    except ValidationError as e:
+        # Django's own field messages — written to be shown to a user, unlike
+        # the exception text the catch-all below deliberately swallows.
+        return JsonResponse(
+            {"success": False, "message": " ".join(m for msgs in e.message_dict.values() for m in msgs)},
+            status=400,
         )
     except Exception:
         logger.exception("Error creating teacher")
@@ -294,13 +315,17 @@ def language_cheque_students(request):
             has_language_cheque=True,
         )
         .select_related("student", "student__group")
-        .prefetch_related("student__parents")
+        # Ordered so the parent shown is the same one `.first()` used to return
+        # (an unordered `first()` sorts by pk) — see generate_payments.py.
+        .prefetch_related(Prefetch("student__parents", queryset=Parent.objects.order_by("id")))
     )
 
     students_data = []
     for enrollment in enrollments:
         s = enrollment.student
-        parent = s.parents.first()
+        # `.first()` re-queries and discards the prefetch above — see the note in
+        # billing/management/commands/generate_payments.py.
+        parent = next(iter(s.parents.all()), None)
         students_data.append(
             {
                 "id": s.id,

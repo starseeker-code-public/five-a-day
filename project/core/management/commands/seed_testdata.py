@@ -20,7 +20,8 @@ import calendar
 from datetime import date, timedelta
 from decimal import Decimal
 
-from django.core.management.base import BaseCommand
+from django.conf import settings
+from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 
 from billing.models import (
@@ -275,6 +276,20 @@ class Command(BaseCommand):
 
     @transaction.atomic
     def handle(self, *args, **options):
+        # Refuse --reset outright in production. The HTTP route into this
+        # command (`api_seed_database`) is already gated on IS_TESTING_ENV plus
+        # an admin Teacher, but the command itself would run anywhere — a
+        # mis-targeted `gcloud run jobs execute` away from deleting every
+        # student, parent, enrollment and payment the academy has. Every other
+        # destructive surface in this project is environment-guarded; this was
+        # the one that was not.
+        if options["reset"] and getattr(settings, "ENVIRONMENT", "development") == "production":
+            raise CommandError(
+                "seed_testdata --reset borra TODOS los alumnos, padres, matriculas y pagos "
+                "y esta bloqueado en produccion. Si de verdad es lo que quieres, cambia "
+                "ENVIRONMENT primero — no existe un override por diseno."
+            )
+
         if options["reset"]:
             self._reset()
 

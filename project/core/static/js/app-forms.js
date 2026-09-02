@@ -1,22 +1,22 @@
 (function () {
-    var toggleBtn   = document.getElementById('emailPreviewToggleBtn');
-    var toggleIcon  = document.getElementById('emailPreviewToggleIcon');
-    var toggleLabel = document.getElementById('emailPreviewToggleLabel');
-    var panel       = document.getElementById('emailPreviewPanel');
-    var spinner     = document.getElementById('emailPreviewSpinner');
-    var bodyEl      = document.getElementById('emailPreviewBody');
-    var refreshBtn  = document.getElementById('emailPreviewRefreshBtn');
-    var testSendBtn = document.getElementById('previewTestSendBtn');
-    var feedback    = document.getElementById('previewTestFeedback');
+    const toggleBtn   = document.getElementById('emailPreviewToggleBtn');
+    const toggleIcon  = document.getElementById('emailPreviewToggleIcon');
+    const toggleLabel = document.getElementById('emailPreviewToggleLabel');
+    const panel       = document.getElementById('emailPreviewPanel');
+    const spinner     = document.getElementById('emailPreviewSpinner');
+    const bodyEl      = document.getElementById('emailPreviewBody');
+    const refreshBtn  = document.getElementById('emailPreviewRefreshBtn');
+    const testSendBtn = document.getElementById('previewTestSendBtn');
+    const feedback    = document.getElementById('previewTestFeedback');
 
     function getForm() {
         return toggleBtn ? (toggleBtn.closest('form') || document.querySelector('form')) : document.querySelector('form');
     }
 
     function fetchPreview() {
-        var form = getForm();
+        let form = getForm();
         if (!form) return;
-        var data = new FormData(form);
+        let data = new FormData(form);
         data.set('action', 'preview');
 
         bodyEl.classList.add('hidden');
@@ -41,7 +41,7 @@
 
     if (toggleBtn) {
         toggleBtn.addEventListener('click', function () {
-            var isHidden = panel.classList.toggle('hidden');
+            const isHidden = panel.classList.toggle('hidden');
             if (isHidden) {
                 toggleIcon.textContent  = 'visibility';
                 toggleLabel.textContent = 'Ver vista previa del email';
@@ -59,9 +59,9 @@
 
     if (testSendBtn) {
         testSendBtn.addEventListener('click', function () {
-            var form = getForm();
+            let form = getForm();
             if (!form) return;
-            var data = new FormData(form);
+            let data = new FormData(form);
             data.set('action', 'test_send');
 
             testSendBtn.disabled = true;
@@ -102,12 +102,12 @@
 (function () {
     document.querySelectorAll('form[data-confirm]').forEach(function (form) {
         form.addEventListener('submit', function (e) {
-            var msg = form.dataset.confirm;
+            const msg = form.dataset.confirm;
             if (msg && !confirm(msg)) {
                 e.preventDefault();
                 return;
             }
-            var btn = form.querySelector('button[type="submit"], input[type="submit"]');
+            const btn = form.querySelector('button[type="submit"], input[type="submit"]');
             if (btn) {
                 btn.disabled = true;
                 btn.innerHTML = '<span class="material-symbols-outlined animate-spin mr-2">sync</span>Enviando...';
@@ -116,10 +116,10 @@
     });
 
     /* Form-specific: receipt type toggle */
-    var receiptTypeSelect = document.getElementById('receiptType');
+    const receiptTypeSelect = document.getElementById('receiptType');
     if (receiptTypeSelect) {
-        var childFields = document.getElementById('quarterly-child-fields');
-        var adultFields = document.getElementById('adult-fields');
+        const childFields = document.getElementById('quarterly-child-fields');
+        const adultFields = document.getElementById('adult-fields');
         receiptTypeSelect.addEventListener('change', function () {
             if (childFields) childFields.classList.toggle('hidden', this.value !== 'quarterly_child');
             if (adultFields) adultFields.classList.toggle('hidden', this.value !== 'monthly_adult');
@@ -127,13 +127,53 @@
     }
 
     /* Form-specific: enrollment email type toggle */
-    var emailTypeSelect = document.getElementById('emailTypeSelect');
+    const emailTypeSelect = document.getElementById('emailTypeSelect');
     if (emailTypeSelect) {
-        var welcomeFields = document.getElementById('welcome-fields');
-        var enrollmentFields = document.getElementById('enrollment-fields');
+        const welcomeFields = document.getElementById('welcome-fields');
+        const enrollmentFields = document.getElementById('enrollment-fields');
         emailTypeSelect.addEventListener('change', function () {
             if (welcomeFields) welcomeFields.classList.toggle('hidden', this.value !== 'welcome');
             if (enrollmentFields) enrollmentFields.classList.toggle('hidden', this.value !== 'enrollment');
         });
     }
 }());
+
+/* ── Enrollment-form tabs (apps/enrollment_form.html) ─────────────────────────
+   The template shipped with onclick="switchTab(...)" and NO script defining it:
+   both tab buttons threw ReferenceError and the "Confirmación de Matrícula" tab
+   was unreachable since the page was created. Wired here with listeners so the
+   template carries no inline handlers (CSP), guarded so this block no-ops on
+   every other page that loads this file. */
+(function () {
+    const tabWelcome = document.getElementById('tab-welcome');
+    const tabEnrollment = document.getElementById('tab-enrollment');
+    if (!tabWelcome || !tabEnrollment) return;
+
+    const emailType = document.getElementById('email_type');
+    const infoWelcome = document.getElementById('info-welcome');
+    const infoEnrollment = document.getElementById('info-enrollment');
+    const enrollmentFields = document.getElementById('enrollment-fields');
+
+    const ACTIVE = ['border-primary-500', 'text-primary-600'];
+    const INACTIVE = ['border-transparent', 'text-neutral-500'];
+
+    function paint(btn, active) {
+        btn.classList.remove(...(active ? INACTIVE : ACTIVE));
+        btn.classList.add(...(active ? ACTIVE : INACTIVE));
+        btn.setAttribute('aria-selected', active ? 'true' : 'false');
+    }
+
+    function switchTab(which) {
+        const enrollment = which === 'enrollment';
+        if (emailType) emailType.value = which;
+        paint(tabWelcome, !enrollment);
+        paint(tabEnrollment, enrollment);
+        if (infoWelcome) infoWelcome.classList.toggle('hidden', enrollment);
+        if (infoEnrollment) infoEnrollment.classList.toggle('hidden', !enrollment);
+        if (enrollmentFields) enrollmentFields.classList.toggle('hidden', !enrollment);
+    }
+
+    tabWelcome.addEventListener('click', () => switchTab('welcome'));
+    tabEnrollment.addEventListener('click', () => switchTab('enrollment'));
+    switchTab('welcome');
+})();

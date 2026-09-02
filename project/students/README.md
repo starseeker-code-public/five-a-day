@@ -31,6 +31,7 @@ Each Teacher can be linked to a Django `auth.User` via a nullable `OneToOneField
 
 - **`Teacher.ensure_user(password=None)`** — idempotent helper that get-or-creates the linked User (username = email), syncs first_name / last_name / email, mirrors `Teacher.admin` onto `is_staff` + `is_superuser`, and optionally sets a hashed password. Omitting the password leaves the user with `unusable_password` so they must use `/password-reset/` to activate the account.
 - **`post_save` signal** — when an existing Teacher is updated, the signal mirrors email/name/admin flags onto the linked User so the two records never drift.
+- **`pre_save` on Student** — `_capture_active_transition` stashes the DB row so `post_save` can spot an `active` True→False transition and notify the waiting list. It fetches the **full** row and publishes it as `instance._presave_db_obj`, which `core.audit_signals` reuses: both are `pre_save` receivers that wanted the same row and each was issuing its own `objects.get()`, so every Student save cost two round trips for one row. Correctness does not depend on receiver order — the audit receiver falls back to fetching for itself.
 - **Migration** — `0003_teacher_user` adds the FK as `null=True, on_delete=SET_NULL` so existing Teachers remain valid without a linked User. The app is at **7 migrations**, through `0007_add_teacher_two_factor`.
 
 Dev environment (`DJANGO_ENV=development`) keeps using the legacy env-var basic-auth via `LOGIN_USERNAME` / `LOGIN_PASSWORD` and never touches Teacher login; the linked User is only required in testing/production.
@@ -44,10 +45,26 @@ Dev environment (`DJANGO_ENV=development`) keeps using the legacy env-var basic-
 
 ## Admin
 
-- `StudentAdmin` with `StudentParentInline` — fieldsets for personal, school, health, status info
-- `ParentAdmin` with `ParentStudentInline` — fieldsets for personal and contact info
+- `TeacherAdmin` (v1.26.0) — **excludes** `two_factor_secret` and `two_factor_backup_codes`.
+  Teacher was registered bare until then, so every field rendered as an editable input,
+  including the plaintext TOTP seed: any admin could read a colleague's, enrol it in their
+  own authenticator and hold that second factor indefinitely. They are excluded rather than
+  made read-only, because a read-only field still prints its value. `two_factor_enabled` is
+  visible but read-only — `manage.py reset_two_factor <email>` is the supported recovery
+  path. `save_model` calls `ensure_user()`, so a Teacher added here can actually log in and
+  be activated via `/password-reset/`; the `login_account` column flags rows that predate
+  this and still have no linked `auth.User`.
+- `StudentAdmin` with `StudentParentInline` — fieldsets for personal, school, contact,
+  health and status info. The contact fieldset (`is_adult`, `email`, `phone`) and the
+  waiting-list contact (`waiting_contact_name`, `waiting_contact_phone`) were added in
+  v1.26.0: an adult student has no `Parent` row, so those fields are their only contact,
+  and a fieldset that omits a field makes it unreachable rather than merely hidden.
+- `ParentAdmin` with `ParentStudentInline` — personal and contact info, including
+  `sms_opt_in` (v1.26.0). That flag gates every SMS in `comms.tasks` and there was no
+  screen anywhere in the app that could grant or revoke it.
 - `StudentParentAdmin` with autocomplete
-- `Teacher` and `Group` — simple registration
+- `GroupAdmin` — annotates the enrolled count in the queryset, so the changelist costs a
+  fixed number of queries instead of three per row (`max_students=0` reads "sin límite")
 
 ## URL Patterns (students/urls.py)
 

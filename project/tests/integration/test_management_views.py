@@ -10,6 +10,7 @@ import pytest
 from django.urls import reverse
 
 from conftest import current_course_year
+from students.models import Teacher
 
 pytestmark = pytest.mark.django_db
 
@@ -268,3 +269,41 @@ class TestLanguageChequeStudents:
         assert response.status_code == 200
         data = response.json()
         assert data["count"] >= 1
+
+
+class TestCreateTeacherValidatesInput:
+    """`Teacher.objects.create()` runs no validators — the documented trap — so
+    an address that is not an email persisted into an `EmailField`, and the
+    account it produced was unreachable: `ensure_user()` mirrors the address
+    onto the linked `auth.User`, and activation happens over `/password-reset/`,
+    which emails it.
+    """
+
+    def _create(self, client, **overrides):
+        payload = {"first_name": "Nuria", "last_name": "Vega", "email": "nuria@example.com"}
+        payload.update(overrides)
+        return client.post(reverse("create_teacher"), data=json.dumps(payload), content_type="application/json")
+
+    def test_an_invalid_address_is_refused_with_a_usable_message(self, authenticated_client):
+        response = self._create(authenticated_client, email="notanemail")
+
+        assert response.status_code == 400
+        body = json.loads(response.content)
+        assert body["success"] is False
+        # Django's own field text, not the catch-all's fixed string.
+        assert "No se pudo crear el profesor" not in body["message"]
+        assert not Teacher.objects.filter(email="notanemail").exists()
+
+    def test_a_valid_teacher_still_gets_a_login_awaiting_activation(self, authenticated_client):
+        assert self._create(authenticated_client).status_code == 200
+
+        teacher = Teacher.objects.get(email="nuria@example.com")
+        assert teacher.admin is False
+        assert teacher.user is not None
+        assert teacher.user.has_usable_password() is False
+
+    def test_the_duplicate_check_still_runs_before_validation(self, authenticated_client, teacher):
+        response = self._create(authenticated_client, email=teacher.email)
+
+        assert response.status_code == 400
+        assert "Ya existe" in json.loads(response.content)["message"]

@@ -46,7 +46,7 @@
                     <button type="button"
                             data-payment-id="{{ p.id }}"
                             data-url="{% url 'stripe_create_checkout_link' p.id %}"
-                            onclick="payOnline(this)"
+                            data-pay-online
                             class="px-3 py-1 bg-primary-500 hover:bg-primary-600 text-white rounded-md text-xs font-medium">
                         Pagar online
                     </button>
@@ -59,11 +59,15 @@
         </tbody>
     </table>
 </div>
-<script>
+<script nonce="{{ csp_nonce }}">
 function getCsrfToken() {
     const cookie = document.cookie.split(';').find(c => c.trim().startsWith('csrftoken='));
     return cookie ? cookie.split('=')[1] : '';
 }
+document.addEventListener('click', function (e) {
+    const btn = e.target.closest ? e.target.closest('[data-pay-online]') : null;
+    if (btn) payOnline(btn);
+});
 async function payOnline(btn) {
     btn.disabled = true;
     btn.textContent = 'Cargando...';

@@ -178,7 +178,7 @@
 {% endblock %}
 
 {% block extra_js %}
-<script>
+<script nonce="{{ csp_nonce }}">
 (function() {
     const page = document.getElementById('feature-detail-page');
     if (!page) return;

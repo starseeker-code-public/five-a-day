@@ -6,13 +6,15 @@ from unittest.mock import patch
 
 import pytest
 from django.test import override_settings
+from django.utils import timezone
 
 from billing.models import Expense
 from billing.tasks import (
     generate_monthly_payments_task,
     materialize_recurring_expenses_daily_task,
 )
-from comms.tasks import send_monthly_report_task
+from comms.tasks import send_birthday_emails_task, send_monthly_report_task, send_payment_reminders
+from students.models import Student
 
 pytestmark = pytest.mark.django_db
 
@@ -133,3 +135,72 @@ class TestSendMonthlyReportTask:
         from decimal import Decimal
 
         assert Decimal(result["outstanding"]) >= Decimal("0.00")
+
+
+class TestFanOutSurvivesAFailingItem:
+    """Production has no broker: `.delay()` runs INLINE and propagates
+    (`CELERY_TASK_ALWAYS_EAGER` + `CELERY_TASK_EAGER_PROPAGATES`), so a bare
+    fan-out loop stopped dead on its first bad item — measured: item 0 ran,
+    items 1-3 never did. `_dispatch` is what keeps the batch alive.
+    """
+
+    def test_birthday_batch_continues_past_a_failing_student(self, db, group):
+        today = timezone.localdate()
+        for i in range(3):
+            Student.objects.create(
+                first_name=f"Cumple{i}",
+                last_name="X",
+                group=group,
+                birth_date=today.replace(year=2015),
+                active=True,
+            )
+
+        sent = []
+
+        def flaky(student_id):
+            sent.append(student_id)
+            if len(sent) == 1:
+                raise RuntimeError("bad address")
+
+        with patch("comms.tasks.send_birthday_email_task") as task:
+            task.delay.side_effect = flaky
+            result = send_birthday_emails_task.apply().get()
+
+        assert len(sent) == 3, "the failure must not stop the remaining students"
+        assert result["tasks_queued"] == 2
+        assert result["tasks_failed"] == 1
+
+    def test_sms_failure_cannot_suppress_reminder_emails(self, db, student, parent, active_enrollment):
+        """The SMS dispatch used to sit inside the loop BEFORE the bulk email
+        send, so one Twilio failure raised first and no reminder email went out
+        at all — the comment on that line claimed the opposite."""
+        from datetime import timedelta as td
+
+        from billing.models import Payment as P
+
+        parent.sms_opt_in = True
+        parent.phone = "600000001"
+        parent.save()
+        P.objects.create(
+            student=student,
+            parent=parent,
+            enrollment=active_enrollment,
+            payment_type="monthly",
+            amount=Decimal("54.00"),
+            payment_status="pending",
+            due_date=date.today() + td(days=3),
+            concept="Mensualidad",
+        )
+
+        with (
+            patch("comms.tasks.send_payment_reminder_sms_task") as sms,
+            patch("comms.services.email_service.EmailService.send_bulk_emails") as bulk,
+        ):
+            sms.delay.side_effect = RuntimeError("twilio down")
+            bulk.return_value = {"sent": 1, "failed": 0}
+            result = send_payment_reminders.apply().get()
+
+        bulk.assert_called_once()
+        assert result["sent"] == 1, "email must go out regardless of SMS"
+        assert result["sms_failed"] == 1
+        assert result["sms_queued"] == 0

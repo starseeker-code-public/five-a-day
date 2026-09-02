@@ -9,8 +9,8 @@
     'use strict';
 
     function setIcon(btn, revealed) {
-        var masked = btn.querySelector('[data-pw-icon="masked"]');
-        var shown = btn.querySelector('[data-pw-icon="revealed"]');
+        const masked = btn.querySelector('[data-pw-icon="masked"]');
+        const shown = btn.querySelector('[data-pw-icon="revealed"]');
 
         if (masked && shown) {
             masked.hidden = revealed;
@@ -19,7 +19,7 @@
             // Fallback for a cached copy of the pre-SVG template, which drew the
             // icon with a Material Symbols glyph. Keeps the button usable rather
             // than throwing and leaving it dead.
-            var glyph = btn.querySelector('.material-symbols-outlined');
+            const glyph = btn.querySelector('.material-symbols-outlined');
             if (glyph) glyph.textContent = revealed ? 'visibility_off' : 'visibility';
         }
 
@@ -27,12 +27,12 @@
     }
 
     function bind(btn) {
-        var input = document.getElementById(btn.getAttribute('data-password-toggle'));
+        const input = document.getElementById(btn.getAttribute('data-password-toggle'));
         /* Only ever act on a real password field — pointed at anything else the
            button would silently convert that input into one. */
         if (!input || input.type !== 'password') return;
 
-        var maskedType = input.type;
+        const maskedType = input.type;
 
         function reveal(e) {
             if (e) e.preventDefault();   /* keep focus on the input */
@@ -68,8 +68,8 @@
     }
 
     function run() {
-        var buttons = document.querySelectorAll('[data-password-toggle]');
-        for (var i = 0; i < buttons.length; i++) bind(buttons[i]);
+        const buttons = document.querySelectorAll('[data-password-toggle]');
+        for (let i = 0; i < buttons.length; i++) bind(buttons[i]);
     }
 
     if (document.readyState === 'loading') {

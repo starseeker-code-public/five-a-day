@@ -20,10 +20,10 @@ import calendar
 from datetime import date
 
 from django.core.management.base import BaseCommand
+from django.db.models import Prefetch
 
 from billing.models import (
     Enrollment,
-    Payment,
     SiteConfiguration,
     academic_year_for_month,
 )
@@ -31,6 +31,7 @@ from billing.services.payment_service import (
     MONTH_NAMES_ES,
     PaymentService,
 )
+from students.models import Parent
 
 
 class Command(BaseCommand):
@@ -68,8 +69,19 @@ class Command(BaseCommand):
             # billed at its own hand-set price), so join it rather than paying a
             # query per student.
             .select_related("student", "student__group", "enrollment_type")
-            .prefetch_related("student__parents")
+            # Ordered explicitly: this prefetch decides which parent becomes the
+            # TITULAR on every payment created below, and the `.first()` it replaces
+            # sorted by pk. An unordered prefetch would hand that to DB row order.
+            .prefetch_related(Prefetch("student__parents", queryset=Parent.objects.order_by("id")))
         )
+
+        # Every enrollment's already-billed due months, in ONE query. Without this
+        # `pending_periods` spends a `SELECT payments` per enrollment — measured at
+        # exactly 1 each, so ~2,000 round trips per run at the roll this academy is
+        # sized for. `enrollments` is materialised first so the map covers precisely
+        # the rows the loop will visit.
+        enrollments = list(enrollments)
+        billed = PaymentService.billed_months_map({e.student_id for e in enrollments})
 
         created_count = 0
         skipped_count = 0
@@ -87,32 +99,52 @@ class Command(BaseCommand):
 
             parent = None
             if not student.is_adult:
-                parent = student.parents.first()
+                # NOT `.parents.first()`. `QuerySet.first()` on an unordered queryset
+                # calls `order_by("pk")`, which clones the queryset and drops
+                # `_result_cache` — so it re-queries and the
+                # `prefetch_related("student__parents")` above is thrown away, one
+                # round trip per enrollment (243 for 240 students, against 2). No
+                # model here sets `Meta.ordering`, so this is always the case.
+                parent = next(iter(student.parents.all()), None)
                 if not parent:
                     self.stdout.write(self.style.WARNING(f"  SKIP {student.full_name}: no parent found"))
                     skipped_count += 1
                     continue
 
             if dry_run:
-                existing = set(
-                    Payment.objects.filter(student=student, enrollment=enrollment).values_list("due_date", flat=True)
+                # Same selection the real run uses — PaymentService.pending_periods
+                # is the single decision point. Re-deriving it here is how the
+                # preview drifted from the run it was previewing: it dropped the
+                # "first period is always issued" rule and matched existing
+                # payments on the exact due date instead of the due month/year.
+                quarterly = enrollment.payment_modality == "quarterly"
+                periods = PaymentService.pending_periods(
+                    enrollment,
+                    as_of=as_of,
+                    billed_months=billed.setdefault(
+                        (enrollment.student_id, "quarterly" if quarterly else "monthly"), set()
+                    ),
                 )
-                for period in PaymentService.billing_periods(enrollment):
-                    if period["starts"] > as_of or period["due"] in existing:
-                        continue
+                for period in periods:
                     amount = PaymentService.calculate_period_amount(
                         enrollment,
                         config,
                         [m for m, _ in period["months"]],
                         period["fraction"],
-                        enrollment.payment_modality == "quarterly",
+                        quarterly,
                     )
-                    concept = PaymentService.period_concept(period, enrollment.payment_modality == "quarterly")
+                    concept = PaymentService.period_concept(period, quarterly)
                     self.stdout.write(f"  [DRY RUN] {student.full_name}: {concept} - EUR{amount:.2f}")
                     created_count += 1
                 continue
 
-            made = PaymentService.schedule_academic_year_payments(enrollment, parent, as_of=as_of)
+            payment_type = "quarterly" if enrollment.payment_modality == "quarterly" else "monthly"
+            made = PaymentService.schedule_academic_year_payments(
+                enrollment,
+                parent,
+                as_of=as_of,
+                billed_months=billed.setdefault((enrollment.student_id, payment_type), set()),
+            )
             created_count += made
             if made == 0:
                 skipped_count += 1

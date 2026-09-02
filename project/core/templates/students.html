@@ -134,6 +134,12 @@
 <!-- Students Table -->
 <div class="bg-white rounded-lg shadow-lg overflow-hidden">
     <div class="overflow-x-auto">
+        {% if result_truncated %}
+        <p class="text-sm mb-3" style="color:#d97706;">
+            <span class="material-symbols-outlined text-sm align-middle">warning</span>
+            Mostrando los {{ list_cap }} alumnos más recientes de {{ total_count }}. Usa el buscador para encontrar al resto.
+        </p>
+        {% endif %}
         <table class="w-full">
             <thead class="bg-primary-50 border-b border-primary-200">
                 <tr>

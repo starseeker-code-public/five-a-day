@@ -6,7 +6,9 @@
 # ============================================================================
 # STAGE 1: Builder - Install dependencies with UV
 # ============================================================================
-FROM python:3.12-slim AS builder
+# Digest-pinned: the tag is mutable, so a rebuild could silently pick up a
+# different image. Dependabot's docker ecosystem keeps this digest current.
+FROM python:3.12-slim@sha256:e5c9fa26ffb76e11e0f054f30dc2523a2f9693f0c36c0cf1e39b27e152d899fc AS builder
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1
@@ -35,7 +37,7 @@ RUN uv sync --frozen --no-dev --no-install-project
 # ============================================================================
 # STAGE 2: Runtime - Lean production image
 # ============================================================================
-FROM python:3.12-slim
+FROM python:3.12-slim@sha256:e5c9fa26ffb76e11e0f054f30dc2523a2f9693f0c36c0cf1e39b27e152d899fc
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -51,6 +53,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq-dev \
     git \
     && rm -rf /var/lib/apt/lists/*
+
+# Cloud Run ignores HEALTHCHECK (it probes the service), but on the Compose
+# testing VM this is what makes a wedged container show as unhealthy instead
+# of silently serving nothing. /health/ is the shallow probe: no DB touch.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3     CMD ["python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health/', timeout=4).status == 200 else 1)"]
 
 # Create non-root user. UID and GID are pinned so the numeric `USER 1000:1000`
 # below is unambiguous (hadolint DL3066 - a name-based USER can't be resolved by

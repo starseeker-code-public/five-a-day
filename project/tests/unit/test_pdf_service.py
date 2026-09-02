@@ -1,12 +1,16 @@
 """Unit tests for the reportlab PDF service (v1.3)."""
 
 from datetime import date
+from decimal import Decimal
+from unittest.mock import patch
 
 import pytest
 
+from billing.models import Payment
 from billing.services.pdf_service import (
     generate_payment_receipt,
     generate_quarterly_summary,
+    generate_student_payment_history,
     generate_tax_certificate,
 )
 
@@ -73,3 +77,48 @@ class TestGenerateTaxCertificate:
         assert _looks_like_pdf(pdf)
         # PDF should be non-trivial in size (has payment data)
         assert len(pdf) > 1000
+
+
+class TestTableCellsAreNotDoubleEscaped:
+    """reportlab draws a plain `Table` cell with `drawString` — no mini-HTML
+    parsing — so running the concept through `_md()` printed the entity itself
+    and "Clases & material" came out as "Clases &amp; material".
+
+    Only text reaching a `Paragraph` needs escaping. `generate_quarterly_summary`
+    and `generate_tax_certificate` already wrote this same field raw, which is
+    what made the payment history the odd one out.
+    """
+
+    def _payment(self, student, parent, enrollment, concept):
+        return Payment.objects.create(
+            student=student,
+            parent=parent,
+            enrollment=enrollment,
+            payment_type="monthly",
+            amount=Decimal("54.00"),
+            payment_status="pending",
+            due_date=date(2025, 10, 31),
+            concept=concept,
+        )
+
+    def test_an_ampersand_reaches_the_table_verbatim(self, student, parent, active_enrollment):
+        from reportlab.platypus import Table as RealTable
+
+        payment = self._payment(student, parent, active_enrollment, "Clases extra & material")
+        captured = []
+
+        def spy(rows, *args, **kwargs):
+            captured.append(rows)
+            return RealTable(rows, *args, **kwargs)
+
+        with patch("billing.services.pdf_service.Table", side_effect=spy):
+            generate_student_payment_history(student, [payment])
+
+        concepts = [row[0] for row in captured[0]]
+        assert "Clases extra & material" in concepts
+        assert "Clases extra &amp; material" not in concepts
+
+    def test_markup_characters_no_longer_reach_a_parser(self, student, parent, active_enrollment):
+        payment = self._payment(student, parent, active_enrollment, "Nivel <B2> & repaso")
+
+        assert generate_student_payment_history(student, [payment])[:4] == b"%PDF"

@@ -10,13 +10,17 @@ Beat job (v1.4) share the same code path.
 from __future__ import annotations
 
 import calendar
+import logging
 from datetime import date
 from decimal import Decimal
 
+from django.db import IntegrityError, transaction
 from django.db.models import DecimalField, Sum, Value
 from django.db.models.functions import Coalesce
 
 from billing.models import Expense, Payment
+
+logger = logging.getLogger(__name__)
 
 
 def monthly_totals(month: int, year: int) -> dict[str, Decimal | dict[str, Decimal]]:
@@ -76,15 +80,29 @@ def _create_if_absent(tpl: Expense, target_date: date) -> int:
     if already_exists:
         return 0
 
-    Expense.objects.create(
-        description=tpl.description,
-        category=tpl.category,
-        amount=tpl.amount,
-        expense_date=target_date,
-        notes=tpl.notes,
-        is_recurring=False,
-        generated_from=tpl,
-    )
+    # The check above is a read-then-write with nothing behind it, and the monthly
+    # and daily materialisers run on different cadences over overlapping templates,
+    # so both could pass it and each create a row.
+    # `expenses.unique_materialized_expense_per_date` is the real guarantee; losing
+    # the race means the row now exists, which is the outcome we wanted.
+    try:
+        with transaction.atomic():
+            Expense.objects.create(
+                description=tpl.description,
+                category=tpl.category,
+                amount=tpl.amount,
+                expense_date=target_date,
+                notes=tpl.notes,
+                is_recurring=False,
+                generated_from=tpl,
+            )
+    except IntegrityError:
+        logger.warning(
+            "Recurring expense from template %d for %s already existed; skipped.",
+            int(tpl.pk),
+            target_date.isoformat(),
+        )
+        return 0
     return 1
 
 

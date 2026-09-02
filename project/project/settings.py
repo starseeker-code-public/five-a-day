@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+from typing import Any
 
 import dj_database_url
 from dotenv import load_dotenv
@@ -167,6 +168,11 @@ TRUSTED_PROXY_COUNT = int(os.getenv("TRUSTED_PROXY_COUNT", "1"))
 # no migration. Do NOT point CACHE_URL at an unreachable host: `core.rate_limit`
 # calls `cache.add()` without a fallback, so an unreachable cache turns every
 # login into a 500.
+# Declared before the branches so mypy does not infer the value type from
+# whichever one it reads first. The Redis branch is all-string, so adding
+# `OPTIONS` (a nested dict) to the DatabaseCache branch below made it a
+# `dict-item` error. `Any` is what django-stubs uses for this setting.
+CACHES: dict[str, dict[str, Any]]
 if cache_url := os.getenv("CACHE_URL", "").strip():
     CACHES = {"default": {"BACKEND": "django.core.cache.backends.redis.RedisCache", "LOCATION": cache_url}}
 elif os.getenv("CACHE_DB", "False").lower() in ("true", "1", "t"):
@@ -174,6 +180,13 @@ elif os.getenv("CACHE_DB", "False").lower() in ("true", "1", "t"):
         "default": {
             "BACKEND": "django.core.cache.backends.db.DatabaseCache",
             "LOCATION": os.getenv("CACHE_DB_TABLE", "django_cache"),
+            # Django's default MAX_ENTRIES is 300, and DatabaseCache culls a third
+            # of the table once it is exceeded. The rate limiter's key space is
+            # tiny (one slot per client per window per action, for 3-10 users), so
+            # the default is never reached today — stated explicitly so that adding
+            # a second consumer of this cache does not silently start evicting
+            # throttle counters, which would open the login rate limit.
+            "OPTIONS": {"MAX_ENTRIES": 5000},
         }
     }
 
@@ -291,6 +304,7 @@ TEMPLATES = [
                 "django.contrib.auth.context_processors.auth",
                 "django.contrib.messages.context_processors.messages",
                 "core.context_processors.today_notifications",
+                "core.context_processors.csp_nonce",
             ],
         },
     },
@@ -316,6 +330,12 @@ if database_url := os.getenv("DATABASE_URL", "").strip():
             conn_health_checks=True,
             ssl_require=not DEBUG,
         )
+        | {
+            # Same statement ceiling as the POSTGRES_* branch below. Set after
+            # `config()` because dj_database_url has no argument for driver
+            # OPTIONS, and this is the branch production actually runs on.
+            "OPTIONS": {"options": f"-c statement_timeout={os.getenv('DB_STATEMENT_TIMEOUT_MS', '30000')}"},
+        }
     }
 else:
     DATABASES = {
@@ -327,7 +347,31 @@ else:
             "HOST": os.getenv("POSTGRES_HOST", "localhost"),
             "PORT": os.getenv("POSTGRES_PORT", "5432"),
             "CONN_MAX_AGE": 600,
-            "OPTIONS": {"connect_timeout": 10},
+            # `CONN_HEALTH_CHECKS` must accompany a non-zero CONN_MAX_AGE. The
+            # DATABASE_URL branch above passes `conn_health_checks=True`; this one
+            # did not, so it kept a connection for 10 minutes and never checked it
+            # was still alive. Postgres restarting, or a proxy dropping an idle
+            # socket, then surfaced as an OperationalError on the FIRST query of an
+            # unlucky request — served by the branch the testing VM and every dev
+            # container use. Django re-opens the connection instead when this is on.
+            "CONN_HEALTH_CHECKS": True,
+            "OPTIONS": {
+                "connect_timeout": 10,
+                # A ceiling on any single statement. There is no connection pooler
+                # in front of Cloud SQL and the instance's connection limit is
+                # small, so one pathological query (a missing predicate, an
+                # accidental cross join) could otherwise hold a connection
+                # indefinitely and starve the rest. 30s is far above every measured
+                # query in the app — the slowest page is a bounded aggregate.
+                #
+                # It applies to MIGRATIONS too, per statement: an `AddIndex` on a
+                # large table is a single statement and would abort at the ceiling.
+                # At this academy's ceiling (~2,000 students, so tens of thousands
+                # of payment rows) an index build is sub-second, but raise
+                # `DB_STATEMENT_TIMEOUT_MS` for the run if a future migration
+                # rewrites a big table.
+                "options": f"-c statement_timeout={os.getenv('DB_STATEMENT_TIMEOUT_MS', '30000')}",
+            },
         }
     }
 

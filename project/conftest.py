@@ -258,6 +258,22 @@ def cancelled_enrollment(db, student, enrollment_type_new_student, site_config):
 
 
 @pytest.fixture(autouse=True)
+def _reset_siteconfig_cache():
+    """`SiteConfiguration.get_config()` memoises per request via a ContextVar.
+
+    Tests have no request cycle and roll the database back between cases, so
+    without this the memo outlives the transaction and a later test reads a
+    config row that no longer exists (`objects.count() == 0` while
+    `get_config()` happily returns an instance).
+    """
+    from billing.models import _CONFIG_CACHE
+
+    _CONFIG_CACHE.set(None)
+    yield
+    _CONFIG_CACHE.set(None)
+
+
+@pytest.fixture(autouse=True)
 def _reset_dashboard_quote_cache():
     """Isolate the dashboard's module-level quote cache between tests.
 

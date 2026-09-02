@@ -1,6 +1,5 @@
 """Tests for core.services — business logic layer."""
 
-from datetime import date
 from decimal import Decimal
 
 import pytest
@@ -209,24 +208,6 @@ class TestPaymentService:
         # 54 * 3 = 162, minus 5% = 153.90
         assert amount == Decimal("153.90")
 
-    def test_complete_payment(self, pending_payment):
-        payment = PaymentService.complete_payment(pending_payment.id)
-        assert payment.payment_status == "completed"
-        assert payment.payment_date == date.today()
-
-    def test_should_generate_monthly(self):
-        # Academic months: Sep-Jun (9,10,11,12,1,2,3,4,5,6)
-        assert PaymentService.should_generate_monthly(9) is True
-        assert PaymentService.should_generate_monthly(6) is True
-        assert PaymentService.should_generate_monthly(7) is False
-        assert PaymentService.should_generate_monthly(8) is False
-
-    def test_should_generate_quarterly(self):
-        assert PaymentService.should_generate_quarterly(10) is True
-        assert PaymentService.should_generate_quarterly(1) is True
-        assert PaymentService.should_generate_quarterly(4) is True
-        assert PaymentService.should_generate_quarterly(2) is False
-
 
 # ── EnrollmentService error handling ────────────────────────────────────────
 
@@ -244,14 +225,6 @@ class TestEnrollmentServiceErrors:
         # No enrollment types created — should raise ValueError
         with pytest.raises(ValueError, match="EnrollmentType"):
             EnrollmentService.create_enrollment(student, data)
-
-    def test_payment_statistics(self, site_config, pending_payment, completed_payment):
-        stats = PaymentService.get_payment_statistics(
-            month=pending_payment.due_date.month,
-            year=pending_payment.due_date.year,
-        )
-        assert stats["pending_count"] >= 1
-        assert isinstance(stats["pending_total"], Decimal)
 
 
 # ============================================================================

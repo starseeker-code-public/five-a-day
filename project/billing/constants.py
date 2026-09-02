@@ -86,12 +86,6 @@ PAYMENT_MODALITY_CHOICES = [
     ("quarterly", "Trimestral"),
 ]
 
-# Quarters for quarterly payments
-QUARTERS = [
-    {"name": "Q1", "months": [10, 11, 12], "includes_sept": True, "due_month": 10},  # Oct-Dec (+Sept)
-    {"name": "Q2", "months": [1, 2, 3], "includes_sept": False, "due_month": 1},  # Jan-Mar
-    {"name": "Q3", "months": [4, 5, 6], "includes_sept": False, "due_month": 4},  # Apr-Jun
-]
 
 # Every label below is rendered directly to the user through
 # `get_<field>_display()` — the payment detail page, the payments list, the
@@ -136,6 +130,16 @@ PAYMENT_TYPE_CHOICES = [
 LIVE_PAYMENT_STATUSES = ("pending", "completed")
 
 
+# The payment types the recurring schedule issues, as opposed to the one-off
+# `enrollment` matrícula and ad-hoc `other` rows. Everything that reasons about
+# "the billing schedule" filters on these: `PaymentService.billed_months_map`,
+# `reconcile_payment_schedule`, and the
+# `unique_pending_periodic_payment_per_month` constraint (which cannot import
+# this — a constraint's deconstruction has to be a literal for migrations to
+# compare, so `billing/models.py` repeats the tuple; keep the two in step).
+PERIODIC_PAYMENT_TYPES = ("monthly", "quarterly")
+
+
 # ============================================================================
 # VALIDACIONES
 # ============================================================================
@@ -174,25 +178,6 @@ def calculate_discount(base_amount: Decimal, discount: tuple) -> Decimal:
         return base_amount * (value / Decimal("100"))
     else:
         raise ValueError(f"Tipo de descuento no válido: {discount_type}")
-
-
-def get_monthly_fee_by_schedule(schedule_type: str) -> Decimal:
-    """
-    Obtiene la mensualidad según el tipo de horario
-
-    Args:
-        schedule_type: 'full_time', 'part_time', o 'adult_group'
-
-    Returns:
-        Importe mensual correspondiente
-    """
-    fees = {
-        "full_time": FULL_TIME_MONTHLY_FEE,
-        "part_time": PART_TIME_MONTHLY_FEE,
-        "adult_group": ADULT_GROUP_MONTHLY_FEE,
-    }
-
-    return fees.get(schedule_type, FULL_TIME_MONTHLY_FEE)
 
 
 def get_enrollment_fee(is_adult: bool = False) -> Decimal:

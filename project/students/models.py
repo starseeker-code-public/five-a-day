@@ -49,6 +49,8 @@ class Teacher(models.Model):
 
     class Meta:
         db_table = "teachers"
+        verbose_name = "Profesor"
+        verbose_name_plural = "Profesores"
         indexes = [
             models.Index(fields=["email"]),
             models.Index(fields=["active"]),
@@ -173,6 +175,8 @@ class Group(models.Model):
 
     class Meta:
         db_table = "groups"
+        verbose_name = "Grupo"
+        verbose_name_plural = "Grupos"
         indexes = [
             models.Index(fields=["group_name"]),
             models.Index(fields=["teacher"]),
@@ -221,6 +225,8 @@ class Parent(models.Model):
 
     class Meta:
         db_table = "parents"
+        verbose_name = "Padre/Tutor"
+        verbose_name_plural = "Padres y tutores"
         indexes = [
             models.Index(fields=["dni"]),
             models.Index(fields=["email"]),
@@ -311,6 +317,8 @@ class Student(models.Model):
 
     class Meta:
         db_table = "students"
+        verbose_name = "Alumno"
+        verbose_name_plural = "Alumnos"
         indexes = [
             models.Index(fields=["group"]),
             models.Index(fields=["active"]),
@@ -361,6 +369,8 @@ class StudentParent(models.Model):
 
     class Meta:
         db_table = "student_parents"
+        verbose_name = "Vínculo alumno–familiar"
+        verbose_name_plural = "Vínculos alumno–familiar"
         constraints = [
             models.UniqueConstraint(fields=["student", "parent"], name="unique_student_parent"),
         ]
@@ -377,14 +387,31 @@ from students.parent_portal_models import ParentSessionToken  # noqa: E402
 
 @receiver(pre_save, sender=Student)
 def _capture_active_transition(sender, instance, **kwargs):
-    """Stash the DB value of `active` so post_save can detect True→False."""
+    """Stash the DB value of `active` so post_save can detect True→False.
+
+    Fetches the FULL row and publishes it as `instance._presave_db_obj`, which
+    `core.audit_signals._capture_pre_save_snapshot` reuses. Both are `pre_save`
+    receivers that needed the same row, and each was running its own
+    `objects.get()` — two round trips per Student save for one row. This receiver
+    is connected at model-import time and therefore fires first; if that order
+    ever changes the audit receiver simply fetches for itself, so correctness
+    does not depend on it.
+
+    A deferred `.only("active")` instance cannot be shared: the audit snapshot
+    reads a dozen fields off it and each one would trigger its own query.
+    """
     if instance.pk is None:
         instance._active_was = None
+        instance._presave_db_obj = None
         return
     try:
-        instance._active_was = Student.objects.only("active").get(pk=instance.pk).active
+        current = Student.objects.get(pk=instance.pk)
     except Student.DoesNotExist:
         instance._active_was = None
+        instance._presave_db_obj = None
+        return
+    instance._presave_db_obj = current
+    instance._active_was = current.active
 
 
 @receiver(post_save, sender=Student)

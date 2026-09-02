@@ -4,12 +4,17 @@ Extracted from generate_payments management command and views.
 """
 
 import calendar
+import logging
 from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
 
-from django.db import transaction
+from django.db import IntegrityError, transaction
+from django.db.models.functions import ExtractMonth, ExtractYear
 
+from billing.constants import PERIODIC_PAYMENT_TYPES
 from billing.models import Payment
+
+logger = logging.getLogger(__name__)
 
 MONTH_NAMES_ES = {
     9: "Septiembre",
@@ -25,12 +30,6 @@ MONTH_NAMES_ES = {
 }
 
 TEACHING_MONTHS = [9, 10, 11, 12, 1, 2, 3, 4, 5, 6]
-
-QUARTER_NAMES_ES = {
-    10: "1er Trimestre (Oct-Dic)",
-    1: "2do Trimestre (Ene-Mar)",
-    4: "3er Trimestre (Abr-Jun)",
-}
 
 
 class PaymentService:
@@ -129,8 +128,16 @@ class PaymentService:
         ``quarter_due_month`` names the quarter by its first month under the old
         FIXED calendar (10 = Oct-Dec, 1 = Jan-Mar, 4 = Apr-Jun). Since v1.22.0 the
         generator anchors quarters to the enrollment month instead, so this helper
-        is kept for the standard-price question "what does a full quarter cost?" —
-        the reminder email and the pricing preview still ask exactly that.
+        no longer describes anything the generator does: it answers the separate
+        standard-price question "what does a full quarter cost for this
+        enrollment?".
+
+        It needs an Enrollment, so the two callers that ask that question WITHOUT
+        one — the payment-reminder email and the pricing preview — cannot use it
+        and derive the same figures in ``PricingService``. That duplication is
+        pinned by ``tests/unit/test_pricing_matches_billing.py``; if you change
+        the discount order here, that test tells you the advertised prices moved
+        too.
         """
         months = [((quarter_due_month - 1 + i) % 12) + 1 for i in range(3)]
         return PaymentService.calculate_period_amount(enrollment, config, months, fraction, quarterly=True)
@@ -213,17 +220,100 @@ class PaymentService:
         return periods
 
     @staticmethod
-    def complete_payment(payment_id):
-        """Mark a payment as completed. Returns the updated Payment."""
-        with transaction.atomic():
-            payment = Payment.objects.select_related("student").get(id=payment_id)
-            payment.payment_status = "completed"
-            payment.payment_date = date.today()
-            payment.save()
-        return payment
+    def billed_months_map(student_ids):
+        """`{(student_id, payment_type): {(month, year), ...}}` in ONE query.
+
+        `pending_periods` resolves one enrollment's billed months with its own
+        query, which is correct but is called in a loop over EVERY active
+        enrollment by both `generate_payments` and `reconcile_payment_schedule`
+        — exactly one `SELECT payments` per enrollment, so ~2,000 round trips per
+        monthly run at the roll this academy is sized for. Passing the result of
+        this into `pending_periods` collapses that to one.
+
+        Keyed on `(student_id, payment_type)` and not on the enrollment, because
+        that is what the per-enrollment query matches on: a student's periodic
+        payments occupy their due month regardless of which enrollment row
+        issued them. Every status is included, cancelled ones too — a payment an
+        admin soft-deleted must not be silently re-created.
+        """
+        billed: dict[tuple[int, str], set[tuple[int, int]]] = {}
+        rows = (
+            Payment.objects.filter(student_id__in=list(student_ids), payment_type__in=PERIODIC_PAYMENT_TYPES)
+            .exclude(due_date__isnull=True)
+            .annotate(_m=ExtractMonth("due_date"), _y=ExtractYear("due_date"))
+            .values_list("student_id", "payment_type", "_m", "_y")
+        )
+        for student_id, payment_type, month, year in rows:
+            billed.setdefault((student_id, payment_type), set()).add((month, year))
+        return billed
 
     @staticmethod
-    def schedule_academic_year_payments(enrollment, parent=None, as_of=None):
+    def pending_periods(enrollment, as_of=None, billed_months=None):
+        """The billing periods that are due to be created for ``enrollment`` right now.
+
+        This is the single decision point for "should this period be billed
+        yet?", and both callers go through it: the real generator below and
+        ``generate_payments --dry-run``. They used to apply the rules
+        separately and had already drifted apart on both of them — the preview
+        skipped a first period opening in the future (the real run always
+        issues it) and keyed idempotency on ``enrollment`` + the exact due
+        date instead of ``payment_type`` + the due month/year, so a preview
+        could disagree with the run it was previewing.
+
+        Two rules, in order:
+
+        * The FIRST period is always offered, even when it opens in the future
+          — enrolling a student in August must put their September fee on the
+          ficha that day. Every later period waits for its own first day, and
+          because periods are ordered we can stop at the first one that has
+          not started.
+        * A period already carrying a payment of this type, due in the same
+          month, is skipped. Matching on month/year rather than the exact date
+          is what makes the generator and this call idempotent against each
+          other. Cancelled rows still count as existing, so a payment an admin
+          soft-deleted is not silently re-created.
+        """
+        today = as_of or date.today()
+        quarterly = enrollment.payment_modality == "quarterly"
+        payment_type = "quarterly" if quarterly else "monthly"
+
+        periods = PaymentService.billing_periods(enrollment)
+        if not periods:
+            return []
+
+        # One query for the whole schedule instead of an `.exists()` per period.
+        # The old loop cost up to 10 round trips per enrollment, and the cron
+        # walks every active enrollment in the academy.
+        #
+        # A caller iterating many enrollments can hand in the set it already
+        # resolved (see `billed_months_map`) and skip this query entirely — which
+        # is the difference between one query and one per enrollment across the
+        # whole roll. `None` and an empty set are NOT the same thing: a student
+        # with nothing billed yet has an empty set, so test for None.
+        if billed_months is None:
+            billed_months = {
+                (d.month, d.year)
+                for d in Payment.objects.filter(
+                    student=enrollment.student,
+                    payment_type=payment_type,
+                ).values_list("due_date", flat=True)
+                if d is not None
+            }
+
+        due_for_type = []
+        for index, period in enumerate(periods):
+            if index > 0 and period["starts"] > today:
+                break
+
+            due = period["due"]
+            if (due.month, due.year) in billed_months:
+                continue
+
+            due_for_type.append(period)
+        return due_for_type
+
+    @staticmethod
+    def schedule_academic_year_payments(enrollment, parent=None, as_of=None, billed_months=None):
         """Create every periodic payment whose period has STARTED, and no more.
 
         Payments are created on the first day of their period and fall due on its
@@ -240,6 +330,14 @@ class PaymentService:
         Idempotent — skips any (student, payment_type, due month/year) that already
         exists, which is what stops the cron and this call from double-creating.
         Returns the number of payments created.
+
+        `billed_months` is the already-resolved set for THIS student and payment
+        type (see `billed_months_map`); a caller looping over the whole roll passes
+        it so this does not spend a query per enrollment. It is MUTATED as rows are
+        created, so a second call for the same student in the same run sees what the
+        first one issued — without that the batched path would be less idempotent
+        than the unbatched one, which is the trap in caching a "what exists" set
+        across writes.
         """
         from billing.models import SiteConfiguration
 
@@ -253,38 +351,42 @@ class PaymentService:
         payment_type = "quarterly" if quarterly else "monthly"
 
         created = 0
-        for index, period in enumerate(PaymentService.billing_periods(enrollment)):
-            # The FIRST period is always issued, even when it opens in the future:
-            # enrolling a student in August for a course starting in September must
-            # still put their first fee on the ficha that day. Every later period
-            # waits for its own first day, when Celery creates it.
-            if index > 0 and period["starts"] > today:
-                break
-
-            due = period["due"]
-            if Payment.objects.filter(
-                student=student,
-                payment_type=payment_type,
-                due_date__month=due.month,
-                due_date__year=due.year,
-            ).exists():
-                continue
-
+        for period in PaymentService.pending_periods(enrollment, as_of=today, billed_months=billed_months):
             amount = PaymentService.calculate_period_amount(
                 enrollment, config, [m for m, _ in period["months"]], period["fraction"], quarterly
             )
 
-            Payment.objects.create(
-                student=student,
-                parent=parent,
-                enrollment=enrollment,
-                payment_type=payment_type,
-                payment_method="transfer",
-                amount=amount.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
-                payment_status="pending",
-                due_date=due,
-                concept=PaymentService.period_concept(period, quarterly),
-            )
+            # `pending_periods` already decided this period is unbilled, but that is
+            # a read-then-write: `payments.unique_pending_periodic_payment_per_month`
+            # is what actually guarantees it, and a concurrent run (Cloud Run Jobs retry
+            # on failure) can lose the race. Losing it means the payment now exists,
+            # which is the outcome we wanted — so swallow it and carry on rather than
+            # aborting the periods that follow. `atomic()` per create because an
+            # IntegrityError otherwise poisons the surrounding transaction.
+            try:
+                with transaction.atomic():
+                    Payment.objects.create(
+                        student=student,
+                        parent=parent,
+                        enrollment=enrollment,
+                        payment_type=payment_type,
+                        payment_method="transfer",
+                        amount=amount.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
+                        payment_status="pending",
+                        due_date=period["due"],
+                        concept=PaymentService.period_concept(period, quarterly),
+                    )
+            except IntegrityError:
+                logger.warning(
+                    "Periodic payment for student %d due %s already existed; skipped.",
+                    int(student.pk),
+                    period["due"].isoformat(),
+                )
+                if billed_months is not None:
+                    billed_months.add((period["due"].month, period["due"].year))
+                continue
+            if billed_months is not None:
+                billed_months.add((period["due"].month, period["due"].year))
             created += 1
 
         return created
@@ -309,40 +411,3 @@ class PaymentService:
         return (
             f"Trimestre {MONTH_NAMES_ES.get(first_month, '')}-{MONTH_NAMES_ES.get(last_month, '')} {last_year}{partial}"
         )
-
-    @staticmethod
-    def should_generate_monthly(month):
-        """Monthly payments are generated for Sep through Jun."""
-        return month in range(1, 7) or month in range(9, 13)
-
-    @staticmethod
-    def should_generate_quarterly(month):
-        """Quarterly payments are generated in Oct (Q1), Jan (Q2), Apr (Q3)."""
-        return month in (10, 1, 4)
-
-    @staticmethod
-    def get_payment_statistics(month, year):
-        """Calculate payment statistics for a given month/year."""
-        from django.db.models import Sum
-
-        pending = Payment.objects.filter(
-            payment_status="pending",
-            due_date__month=month,
-            due_date__year=year,
-        )
-        completed = Payment.objects.filter(
-            payment_status="completed",
-            payment_date__month=month,
-            payment_date__year=year,
-        )
-
-        pending_total = pending.aggregate(total=Sum("amount"))["total"] or Decimal("0.00")
-        completed_total = completed.aggregate(total=Sum("amount"))["total"] or Decimal("0.00")
-
-        return {
-            "pending_count": pending.count(),
-            "pending_total": pending_total,
-            "completed_count": completed.count(),
-            "completed_total": completed_total,
-            "expected_total": pending_total + completed_total,
-        }

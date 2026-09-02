@@ -168,3 +168,56 @@ class TestScoping:
         _run(apply=True, cancel_stale=True, academic_year="2099-2100")
 
         assert set(Payment.objects.values_list("id", flat=True)) == before
+
+
+class TestSoftDeletedPaymentsAreNotResurrected:
+    """`deactivate_payment` cancels rather than deletes.
+
+    Excluding cancelled rows from the "what already exists" set made their
+    period look like a gap, so the next `--apply` re-created exactly the row an
+    admin had removed. The generator's own idempotency check counts cancelled
+    payments; the two have to agree.
+    """
+
+    def _scheduled(self, enrollment, parent):
+        PaymentService.schedule_academic_year_payments(enrollment, parent, as_of=date(2026, 6, 30))
+        return list(Payment.objects.filter(enrollment=enrollment, payment_type="monthly").order_by("due_date"))
+
+    @pytest.fixture
+    def monthly_enrollment(self, student, enrollment_type_new_student, site_config):
+        return Enrollment.objects.create(
+            student=student,
+            enrollment_type=enrollment_type_new_student,
+            enrollment_period_start=date(2025, 9, 15),
+            enrollment_period_end=date(2026, 6, 27),
+            academic_year="2025-2026",
+            schedule_type="full_time",
+            payment_modality="monthly",
+            enrollment_amount=Decimal("54.00"),
+            discount_percentage=Decimal("0.00"),
+            final_amount=Decimal("54.00"),
+            status="active",
+            enrollment_date=date(2025, 9, 1),
+        )
+
+    def test_a_cancelled_payment_is_left_alone(self, monthly_enrollment, parent):
+        victim = self._scheduled(monthly_enrollment, parent)[2]
+        victim.payment_status = "cancelled"
+        victim.save(update_fields=["payment_status"])
+        before = Payment.objects.filter(enrollment=monthly_enrollment).count()
+
+        call_command("reconcile_payment_schedule", "--apply", stdout=StringIO())
+
+        assert Payment.objects.filter(enrollment=monthly_enrollment).count() == before
+        assert Payment.objects.filter(enrollment=monthly_enrollment, due_date=victim.due_date).count() == 1
+
+    def test_a_genuine_gap_is_still_filled(self, monthly_enrollment, parent):
+        removed = self._scheduled(monthly_enrollment, parent)[2]
+        gap_due = removed.due_date
+        removed.delete()
+
+        call_command("reconcile_payment_schedule", "--apply", stdout=StringIO())
+
+        assert Payment.objects.filter(
+            enrollment=monthly_enrollment, due_date=gap_due, payment_status="pending"
+        ).exists()
