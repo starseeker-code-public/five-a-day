@@ -20,6 +20,7 @@ from django.utils.text import get_valid_filename
 from django.views.decorators.http import require_http_methods
 
 from core.decorators import qa_access_required
+from core.github_dispatch import notify_github_qa_signoff
 from core.models import BacklogTask, QAConfiguration
 from core.utils import csv_safe
 
@@ -517,10 +518,20 @@ def api_mark_ready(request):
     config.ready_for_prod = True
     config.save()
 
+    # Tell GitHub so `Deploy production` re-evaluates NOW instead of on the next
+    # nightly run. Fail-soft on purpose: the flag above is the source of truth,
+    # and the nightly workflow_run re-trigger remains the fallback arming path,
+    # so a missing token or an unreachable API must never fail the sign-off.
+    dispatched = notify_github_qa_signoff()
+    message = f"Enviado a {support_email}. Versión desbloqueada para producción."
+    if dispatched:
+        message += " El despliegue a producción se está armando en GitHub."
+
     return JsonResponse(
         {
             "success": True,
             "ready_for_prod": True,
-            "message": f"Enviado a {support_email}. Versión desbloqueada para producción.",
+            "deploy_dispatched": dispatched,
+            "message": message,
         }
     )

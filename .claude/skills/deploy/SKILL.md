@@ -178,7 +178,7 @@ gcloud compute ssh $VM_NAME --zone=$VM_ZONE --project=$PROJECT --quiet \
     sudo git -c safe.directory=* -C $D pull --ff-only origin testing
     sudo git -c safe.directory=* -C $D log --oneline -1
     sudo docker system prune -f
-    sudo docker compose -f $D/docker-compose.yml -f $D/docker-compose.testing.yml up -d --build
+    sudo docker compose -f $D/docker-compose.yml -f $D/docker-compose.testing.yml up -d --build --renew-anon-volumes
 
     # HARD GATE: prove the testing overlay actually took effect. A one-file
     # bring-up starts a valid stack on the WRONG volume and exits 0, so the
@@ -655,7 +655,7 @@ gcloud sql backups restore <BACKUP_ID> --restore-instance=$SQL_INSTANCE --projec
 gcloud compute ssh $VM_NAME --zone=$VM_ZONE --project=$PROJECT --quiet --command='
   D=/home/Proye/five-a-day
   sudo git -c safe.directory=* -C $D checkout <PREVIOUS_SHA>
-  sudo docker compose -f $D/docker-compose.yml -f $D/docker-compose.testing.yml up -d --build
+  sudo docker compose -f $D/docker-compose.yml -f $D/docker-compose.testing.yml up -d --build --renew-anon-volumes
 '
 ```
 
@@ -761,7 +761,7 @@ gcloud compute ssh $VM_NAME --zone=$VM_ZONE --project=$PROJECT --quiet --command
   sudo docker volume create testing_pg_backup
   sudo docker run --rm -v five-a-day_testing_postgres_data:/from:ro \
     -v testing_pg_backup:/to alpine sh -c "cp -a /from/. /to/"
-  sudo docker compose -f $D/docker-compose.yml -f $D/docker-compose.testing.yml up -d --build
+  sudo docker compose -f $D/docker-compose.yml -f $D/docker-compose.testing.yml up -d --build --renew-anon-volumes
 '
 ```
 

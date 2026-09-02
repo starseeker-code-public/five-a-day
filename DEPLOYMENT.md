@@ -1097,7 +1097,7 @@ production is never deployed by a timer.
 | | `Deploy testing` | `Deploy production` |
 |---|---|---|
 | File | `.github/workflows/deploy-testing.yml` | `.github/workflows/deploy-production.yml` |
-| Trigger | cron, 02:00 Europe/Madrid | `Deploy testing` finishing without issues (`workflow_run`) |
+| Trigger | cron, 02:00 Europe/Madrid | QA's sign-off (`repository_dispatch`), the release PR merge (`push` to `main`), or `Deploy testing` finishing without issues (`workflow_run`, the strict watchdog) |
 | Human in the loop | no | **yes — required reviewer** |
 | Target | Compute Engine VM | Cloud Run + Cloud SQL |
 | Credential | SSH deploy key (repo secret) | Workload Identity Federation (no stored key) |
@@ -1111,10 +1111,11 @@ Both deploy workflows are additions to the pipeline, not replacements: the `/dep
 still the by-hand path when you need to ship right now, and it is the documented fallback if a
 workflow is broken.
 
-> **Neither workflow does anything until it is on `main`.** `on: schedule` and
-> `on: workflow_run` only ever fire from the workflow file on the repository's default branch.
-> A change to either file takes effect only after it has travelled
-> `development → testing → main` through the normal release path.
+> **Neither workflow does anything until it is on `main`.** `on: schedule`, `on: workflow_run`
+> and `on: repository_dispatch` only ever fire from the workflow file on the repository's
+> default branch (`on: push` runs the file as of the pushed commit — same conclusion). A change
+> to either file takes effect only after it has travelled `development → testing → main`
+> through the normal release path.
 
 ### Nightly testing deploy
 
@@ -1169,17 +1170,35 @@ the exact version it was given on; it can never silently cover a later, untested
 Manual repair (both directions): `python manage.py set_ready_for_prod on|off` inside the
 `fiveaday_django` container.
 
+**The sign-off also arms production immediately.** Setting the flag to `true` — via the button
+or via `set_ready_for_prod on` — fires a GitHub `repository_dispatch` event
+(`qa-ready-for-prod`, `core/github_dispatch.py`) that re-runs `Deploy production`'s preflight
+right away, instead of waiting for the next nightly re-trigger. The call is **fail-soft**: it
+needs `GITHUB_DISPATCH_TOKEN` in the VM's `.env` (a fine-grained PAT scoped to this repository
+with *contents: read and write* — what the `repository_dispatch` endpoint requires), and if the
+token is missing or GitHub is unreachable the sign-off still succeeds and the nightly run picks
+it up as before. The event carries no payload the workflow trusts — preflight re-derives
+everything from `main`'s `pyproject.toml` and testing's `/health/?deep=1` — so a leaked token
+can at worst re-run the credential-free preflight; every gate and the human approval still
+stand.
+
 ### Production deploy — armed automatically, shipped by hand
 
-Every time `Deploy testing` finishes without issues, the workflow re-evaluates whether a
-release is ready, arms itself when it is, and then stops:
+A release needs three events: the nightly deploy puts the version on the VM, QA signs it off,
+and the `testing → main` release PR merges. Because the testing deploy **resets** the sign-off,
+the last of the three is always the sign-off or the merge — so both are triggers, and the
+workflow arms itself the moment the last one lands. On every trigger the preflight re-evaluates
+the whole state, arms when everything is in place, and then stops:
 
 ```text
-Deploy testing   →  preflight   read pyproject.toml on main + /health/ on production
-completes cleanly               already the same version in production? stop — green
-(workflow_run)                  and silent, the normal outcome of a quiet night
-                                GATE: /health/?deep=1 on TESTING must be healthy,
-                                      serve this exact version, and report
+QA sign-off      →  preflight   read pyproject.toml on main + /health/ on production
+(repo_dispatch),                already the same version in production? stop — green
+release PR merge                and silent, the normal outcome of a quiet night
+(push to main),                 GATE 1: the version on main must carry the
+or Deploy testing                     testing-vX.Y.Z release tag in its history —
+completes                             i.e. it arrived via the release PR
+(workflow_run,                  GATE 2: /health/?deep=1 on TESTING must be healthy,
+the watchdog)                         serve this exact version, and report
                                       ready_for_prod=true (the QA sign-off)
                                 WAIT for CI to go green on main's tip (45 min budget;
                                       named required checks, external apps' check
@@ -1190,17 +1209,16 @@ completes cleanly               already the same version in production? stop —
                                 (required reviewer + 5-minute wait timer)
 ```
 
-Merging the `testing → main` release PR fires **nothing** by itself. It used to trigger this
-workflow directly, which raced the pipeline it depends on: the QA gate demands that testing
-serve the release version, but the VM only picks a version up on the next nightly deploy, so
-a same-day merge always failed the gate. Chaining off `Deploy testing` means every arming
-attempt happens right after testing's state changed — the only moment the gate can pass.
-The resulting cadence: **night 1** deploys the release to the VM and resets
-`ready_for_prod`; **QA signs off during the day**; **night 2's no-op testing run** (versions
-already match, so the flag survives) re-triggers production, which arms and waits for
-approval. To ship the same day, dispatch `Deploy production` by hand after signing off.
-While a merged release sits unsigned, every nightly attempt fails the gate loudly and emails
-— deliberate insistence; an unshipped release is a state to resolve, not to sit in.
+The two day-time triggers are **soft**: each fires when its own condition just became true, so
+an unmet gate means "the other event has not happened yet" — those runs end **green** with a
+"not armed" summary, never a red run or an alarm email. That is what makes firing on the merge
+safe again (it used to be the only trigger, and a same-day merge always failed the QA gate
+loudly because the VM only picks a version up at night). The nightly `workflow_run` re-trigger
+is the **strict watchdog**: while a merged release sits unsigned, every nightly attempt fails
+the gate loudly and emails — deliberate insistence; an unshipped release is a state to resolve,
+not to sit in. The resulting cadence: **the night** deploys the release to the VM and resets
+`ready_for_prod`; then **the last of {QA's sign-off, the PR merge} arms production the moment
+it happens** — same day, nothing to dispatch by hand.
 
 So a release clears **two human gates**: QA's sign-off on the testing dashboard (phase 1,
 checked automatically) and the required reviewer's approval on the run (phase 2). A
@@ -1293,6 +1311,16 @@ changes nothing). Re-run it after rotating anything.
 | `HEALTH_PROBE_TOKEN` | production | **optional.** Without it `/health/?deep=1` reports connectivity and migration state but no row counts, so a deploy cannot prove the data survived |
 | `EMAIL_HOST_USER`, `EMAIL_SECRET`, `TESTING_NOTIFY_EMAILS`, `SUPPORT_EMAIL`, `TESTING_URL`, `PRODUCTION_URL` | both | pre-existing; shared with the other workflows |
 
+One credential lives **outside** GitHub: `GITHUB_DISPATCH_TOKEN` in the testing VM's `.env`
+(plus optional `GITHUB_DISPATCH_REPO`, defaulting to this repository). It is a **fine-grained
+PAT** scoped to this repository only, with *contents: read and write* — the permission the
+`repository_dispatch` endpoint requires — and it is what lets the "¿Listo para desplegar?"
+button arm `Deploy production` the moment QA signs off. Create it under *Settings → Developer
+settings → Fine-grained tokens*, add the line to `.env` on the VM, and restart the web
+container. **Optional by design**: without it the sign-off works exactly as before and the
+nightly re-trigger arms the deploy. Its blast radius if leaked is one re-run of the
+credential-free preflight — no gate and no approval is bypassed.
+
 **Why the testing pipeline uses a stored SSH key and production does not.** The nightly job is
 the only unattended pipeline in this repo, so it is given no Google Cloud credential of any
 kind — it cannot reach production even if it is compromised, and its blast radius is one
@@ -1343,8 +1371,10 @@ loses the row-count comparison and says so.
 ```bash
 gh workflow run "Deploy testing" --ref main                      # check + deploy now
 gh workflow run "Deploy testing" --ref main -f force=true        # redeploy the same version
-gh workflow run "Deploy production" --ref main                   # re-arm; still needs approval
-gh workflow run "Deploy production" --ref main -f force=true     # bypass version compare AND QA sign-off
+gh workflow run "Deploy production" --ref main                   # re-arm (strict); still needs approval
+gh workflow run "Deploy production" --ref main -f force=true     # bypass provenance + version compare + QA sign-off
+gh api repos/starseeker-code-public/five-a-day/dispatches \
+  -f event_type=qa-ready-for-prod                                # simulate the sign-off button's arming event (soft)
 gh workflow run "Rollback production" --ref main                 # roll back to the previous image
 gh workflow run "Rollback production" --ref main -f image_tag=<sha>  # …or to an exact build
 gh run list --workflow="Deploy production" --limit 5
