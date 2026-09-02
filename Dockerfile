@@ -54,12 +54,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     && rm -rf /var/lib/apt/lists/*
 
-# Create non-root user. UID and GID are pinned so the numeric `# Cloud Run ignores HEALTHCHECK (it probes the service), but on the Compose
+# Cloud Run ignores HEALTHCHECK (it probes the service), but on the Compose
 # testing VM this is what makes a wedged container show as unhealthy instead
 # of silently serving nothing. /health/ is the shallow probe: no DB touch.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3     CMD ["python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health/', timeout=4).status == 200 else 1)"]
 
-USER 1000:1000`
+# Create non-root user. UID and GID are pinned so the numeric `USER 1000:1000`
 # below is unambiguous (hadolint DL3066 - a name-based USER can't be resolved by
 # the host, which matters for Cloud Run / K8s runAsNonRoot checks).
 RUN groupadd -g 1000 django && \

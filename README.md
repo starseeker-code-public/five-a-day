@@ -20,7 +20,7 @@ Built to centralize student records, automate billing cycles, and streamline par
 ### Project Status
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v1.26.1-brightgreen?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-v1.26.2-brightgreen?style=flat-square" alt="Version">
   &nbsp;|&nbsp;
   <a href="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml?query=branch%3Amain"><img src="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml/badge.svg?branch=main&style=flat-square" alt="CI main"></a>
   &nbsp;|&nbsp;
@@ -41,9 +41,9 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 | Version | Date | Description |
 |---------|------|-------------|
-| **v1.26.1** | 2026-09-02 | Query-cost sweep: N+1 fixes, billing idempotency constraints |
+| **v1.26.2** | 2026-09-02 | Dockerfile build fix, DRF CVE bump |
+| v1.26.1 | 2026-09-02 | Query-cost sweep: N+1 fixes, billing idempotency constraints |
 | v1.26.0 | 2026-09-01 | Full code review, admin hardening, dead code removed |
-| v1.23.1 | 2026-09-01 | Fix invalid workflow files that blocked every CI/CD deploy |
 
 ---
 
@@ -150,8 +150,25 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 ## Version History & Roadmap
 
-<details id="v1261" open>
-<summary><strong>v1.26.1 — Query-cost sweep, and billing idempotency moved into the database (current)</strong></summary>
+<details id="v1262" open>
+<summary><strong>v1.26.2 — Dockerfile build fix + djangorestframework CVE bump (current)</strong></summary>
+
+**CI unblock**
+
+- The v1.26.1 merge spliced the `HEALTHCHECK` block into the middle of the Dockerfile's
+  "create non-root user" comment, turning the comment's inline `USER 1000:1000` fragment
+  into a real instruction (stray backtick included) before the user existed — every image
+  build failed with `unable to find group 1000`. Comment and instruction order restored;
+  full build verified locally.
+- `djangorestframework` raised from 3.17.1 to 3.18.0: pip-audit failed CI on
+  CVE-2026-73228 / CVE-2026-73229 (both fixed upstream in 3.17.2). The package is an
+  unused dependency here — it was removed from `INSTALLED_APPS` in v1.23.0 — so the bump
+  carries no runtime risk.
+
+</details>
+
+<details id="v1261">
+<summary><strong>v1.26.1 — Query-cost sweep, and billing idempotency moved into the database</strong></summary>
 
 **N+1 queries — the request path**
 
