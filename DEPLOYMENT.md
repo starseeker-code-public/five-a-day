@@ -487,6 +487,10 @@ harmless when unset. Add them to the same `gcloud run deploy` invocation:
   # Google Sheets export (v1.2) — inline JSON is the Secret Manager-friendly form
   --set-secrets="GOOGLE_SHEETS_SERVICE_ACCOUNT_JSON=GOOGLE_SHEETS_SERVICE_ACCOUNT_JSON:latest" \
   --set-env-vars="GOOGLE_SHEETS_SPREADSHEET_ID=<doc-id>" \
+  # GCP billing export (v1.26.5) — real spend for the QA card + monthly Software expense.
+  # Optional; credentials fall back to the Sheets SA, then ADC (the runtime SA — see the
+  # archive_gcp_costs note in the Scheduler section for the IAM grants it needs).
+  --set-env-vars="GCP_BILLING_EXPORT_TABLE=<project.dataset.gcp_billing_export_v1_XXXXXX>" \
   # Needed only behind a proxy or a custom domain
   --set-env-vars="CSRF_TRUSTED_ORIGINS=https://fiveaday-332600671945.europe-southwest1.run.app" \
   # Cloud Run puts exactly one proxy in front of the app. The rate limiter reads the
@@ -615,6 +619,7 @@ run inline):
 | `generate_monthly_payments_task` | `generate_payments` | 1st of month, 06:00 | `0 6 1 * *` |
 | `materialize_recurring_expenses_daily_task` | `materialize_recurring_expenses --daily` | daily, 06:15 | `15 6 * * *` |
 | `materialize_recurring_expenses_task` | `materialize_recurring_expenses` | 1st of month, 06:30 | `30 6 1 * *` |
+| `archive_gcp_costs_task` | `archive_gcp_costs` | 3rd of month, 06:45 | `45 6 3 * *` |
 | `send_birthday_emails_task` | `send_birthday_emails` | daily, 08:00 | `0 8 * * *` |
 | `send_payment_reminders` | `send_payment_reminders` | Mondays, 09:00 | `0 9 * * 1` |
 | `send_due_fun_friday_emails_task` | `send_due_fun_friday_emails` | daily, 14:30 | `30 14 * * *` |
@@ -625,7 +630,10 @@ run inline):
 | — (ops only, no Beat task) | `backup_retention --apply` | daily, 05:30 | `30 5 * * *` |
 
 > **Provisioning status (verified 2026-09-01).** 11 Cloud Run Jobs, 9 Cloud Scheduler
-> entries. `fiveaday-migrate` has no schedule by design (deploy-time only). Note the
+> entries — 12 and 10 once v1.26.5 deploys: `fiveaday-archive-gcp-costs` + its
+> 3rd-of-month schedule are created at that release deploy (see the `archive_gcp_costs`
+> note below for the BigQuery export + IAM prerequisites).
+> `fiveaday-migrate` has no schedule by design (deploy-time only). Note the
 > **schedulers live in `europe-west1`**, not the service's `europe-southwest1` — Cloud
 > Scheduler is not available in that region, so `gcloud scheduler jobs list --location`
 > must say `europe-west1` or it silently returns nothing.
@@ -675,6 +683,49 @@ run inline):
 > table, and rows outlived their cookies indefinitely. `parent_session_tokens` likewise kept
 > every magic link ever issued. Neither was purged before this release. Schedule it in
 > production like the others; skipping it is not a no-op.
+>
+> **`archive_gcp_costs` needs the BigQuery billing export + env vars before it does
+> anything.** The task stores the PREVIOUS month's real GCP spend as a `software` Expense
+> row (the running month is read live by the expenses page and the QA dashboard, never
+> persisted). GCP only exposes actual costs through the **standard billing export to
+> BigQuery** (Billing → Facturación → Exportación de datos), so provisioning is: enable
+> that export once, then set `GCP_BILLING_EXPORT_TABLE=project.dataset.gcp_billing_export_v1_XXXXXX`
+> (plus optionally `GCP_BILLING_PROJECT_ID` / `GCP_BILLING_PROJECT_FILTER` /
+> `GCP_BILLING_SERVICE_ACCOUNT_JSON`) on the service AND the new `fiveaday-archive-gcp-costs`
+> Cloud Run Job. The credential falls back to the Sheets service account, then to the
+> runtime SA — whichever is used needs **BigQuery Data Viewer** on the export dataset and
+> **BigQuery Job User** on the project. Unconfigured, everything degrades to "—" in the UI
+> and the command exits 0 reporting `unconfigured`. It runs on the **3rd**, not the 1st,
+> because the export lags up to ~2 days behind usage; the command exits non-zero when
+> BigQuery is unreachable so a failed run is retried, and it is idempotent (an archived
+> month is never re-created — delete the row and re-run with `--month/--year` to rebuild it).
+>
+> **Provisioning status (2026-09-02).** Done: dataset `five-a-day-evolution:billing_export`
+> (EU) created; the **Standard usage cost** export is enabled in the console pointing at it
+> (Detailed + Pricing deliberately OFF — free tier; the `gcp_billing_export_v1_…` table is
+> created by Google's FIRST export write, a few hours to ~a day after enablement, and there
+> is no backfill, so August 2026 will never appear — the first archived Software expense is
+> September's, created 3 Oct); `fiveaday-run@` granted `roles/bigquery.dataViewer` +
+> `roles/bigquery.jobUser`;
+> `GCP_BILLING_EXPORT_TABLE=five-a-day-evolution.billing_export.gcp_billing_export_v1_010D7C_DF2EDA_0B0E10`
+> set on the production service (revision `fiveaday-00024-j9x`, verified healthy — inert until
+> the image carrying `gcp_cost_service` deploys) and pre-set in all local `.env*` files.
+> Billing account: `010D7C-DF2EDA-0B0E10`. Still pending, in order:
+>
+> ```bash
+> # 1. The TESTING VM cannot reach BigQuery via ADC yet: it runs as the Compute default SA
+> #    (332600671945-compute@) with legacy scopes that exclude BigQuery. Its IAM is already
+> #    sufficient (the SA holds roles/editor) — only the SCOPES need fixing, brief stop/start:
+> gcloud compute instances stop fiveaday-testing --zone=us-east1-c
+> gcloud compute instances set-service-account fiveaday-testing --zone=us-east1-c --service-account=332600671945-compute@developer.gserviceaccount.com --scopes=https://www.googleapis.com/auth/bigquery.readonly,https://www.googleapis.com/auth/devstorage.read_only,https://www.googleapis.com/auth/logging.write,https://www.googleapis.com/auth/monitoring.write,https://www.googleapis.com/auth/pubsub,https://www.googleapis.com/auth/service.management.readonly,https://www.googleapis.com/auth/servicecontrol,https://www.googleapis.com/auth/trace.append
+> gcloud compute instances start fiveaday-testing --zone=us-east1-c
+> #    ...then append the GCP_BILLING_EXPORT_TABLE line (same value as above) to the VM's .env
+> #    and restart the stack (BOTH compose files, per the two-file gotcha).
+>
+> # 2. At the release deploy: clone the fiveaday-archive-gcp-costs Cloud Run Job (YAML replace,
+> #    like the others) — the cloned env must include GCP_BILLING_EXPORT_TABLE — and create its
+> #    Cloud Scheduler entry (45 6 3 * *, europe-west1), PAUSED until the release is live.
+> ```
 
 > **Fun Friday announcements** are NOT sent with `apply_async(eta=...)` (the ETA is silently
 > ignored in eager mode, which would send immediately). The form persists a

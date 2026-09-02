@@ -116,12 +116,19 @@ def _git_info():
 @qa_access_required
 def testing_tools_view(request):
     """Render the QA testing tools page."""
+    # Lazy import — keeps the billing→core direction out of module load order.
+    from billing.services.gcp_cost_service import qa_card_amounts
+
     git = _git_info()
     qa_config = QAConfiguration.get_config()
     tasks = _backlog_tasks_qs()[:50]
 
     context = {
         "git": git,
+        # Real GCP spend: previous month (archived row when it exists) + current
+        # month live from the BigQuery billing export, cached. Amounts are None
+        # when the export isn't configured/reachable — rendered as "—".
+        "gcp_costs": qa_card_amounts(),
         "qa_config": qa_config,
         "tasks": tasks,
         "app_version": settings.APP_VERSION,

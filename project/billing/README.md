@@ -72,6 +72,28 @@ The `billing` app owns all financial logic: pricing configuration, enrollment pl
 - `materialize_recurring_for_date(target_date)` — spawns rows from **weekly** (`recurring_weekdays`) and **yearly** templates (Beat: daily 06:15)
 - Both are idempotent — they match on `generated_from` + the exact `expense_date`, so a re-run never double-creates
 
+### GcpCostService (`billing/services/gcp_cost_service.py`)
+
+Real Google Cloud spend, month by month — GCP only exposes actual costs through the **BigQuery
+billing export**, so this queries that table over BigQuery's REST API with the google-auth stack
+gspread already pulls in (no new dependency). Gated on `GCP_BILLING_EXPORT_TABLE`; unconfigured or
+unreachable means `None` everywhere (the UI renders "—") and never an exception.
+
+- `month_cost(year, month)` — live net cost (cost + credits) for an invoice month, cached in the
+  Django cache (6 h for the running month, 24 h for closed ones, 10 min for failures so a broken
+  export cannot add a BigQuery timeout to every page render)
+- `archive_month(year, month)` — persists a **finished** month as a real `category="software"`
+  Expense row dated the month's last day. Idempotent (matches on the fixed description
+  `"Google Cloud Platform"`); a `cache.add()` slot guards the read-then-create against overlapping
+  runs. Skips months under 0.01 € (`Expense.amount` has `MinValueValidator(0.01)`)
+- `archived_gcp_expense(year, month)` / `previous_month(today)` — lookup helpers
+- `qa_card_amounts(today)` — the `/testing/` "Gastos GCP" line: previous month (archived row
+  preferred, live fallback) + current month (always live)
+
+The design split: the **running** month is dynamic (read live, never persisted — the expenses page
+folds it into the displayed totals as a read-only "(mes en curso)" row), a **finished** month is a
+saved value (the archived row is the source of truth for every calculation from then on).
+
 ### PdfService (`billing/services/pdf_service.py`)
 
 - `generate_payment_receipt(payment)` — single-payment receipt PDF (v1.3, reportlab)
@@ -155,6 +177,18 @@ python manage.py materialize_recurring_expenses --daily --date 2027-03-15
 
 Wraps the two recurring-expense Celery tasks (`materialize_recurring_expenses_task` / `_daily_task`) so external schedulers (Cloud Scheduler → Cloud Run Jobs in production) can run them without Celery Beat. Both paths are idempotent.
 
+### `archive_gcp_costs`
+
+```bash
+python manage.py archive_gcp_costs                     # The month before today
+python manage.py archive_gcp_costs --month 8 --year 2026   # Backfill a specific month
+```
+
+Wraps `archive_gcp_costs_task`: stores a finished month's real Google Cloud spend as a concrete
+`software` Expense row (see `GcpCostService`). Idempotent — an already-archived month is reported
+and skipped; exits non-zero when BigQuery is unreachable so Cloud Run Jobs retry the run, and 0
+with a warning when the feature is unconfigured.
+
 ## Celery Tasks (billing/tasks.py)
 
 | Task | Beat schedule | Command wrapper |
@@ -162,6 +196,7 @@ Wraps the two recurring-expense Celery tasks (`materialize_recurring_expenses_ta
 | `generate_monthly_payments_task` | 1st of month, 06:00 | `manage.py generate_payments` |
 | `materialize_recurring_expenses_task` | 1st of month, 06:30 | `manage.py materialize_recurring_expenses` |
 | `materialize_recurring_expenses_daily_task` | daily, 06:15 | `manage.py materialize_recurring_expenses --daily` |
+| `archive_gcp_costs_task` | 3rd of month, 06:45 | `manage.py archive_gcp_costs` |
 
 Production runs no Beat process (Cloud Run, `CELERY_TASK_ALWAYS_EAGER=True`) — Cloud Scheduler
 triggers Cloud Run Jobs that call the management-command wrappers instead. Never schedule with

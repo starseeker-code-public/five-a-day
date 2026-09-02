@@ -70,6 +70,39 @@ class TestTestingToolsView:
         assert "python_version" in ctx
 
     @QA_SETTINGS
+    # Forced off — the local .env may legitimately set GCP_BILLING_EXPORT_TABLE.
+    @override_settings(GCP_BILLING_EXPORT_TABLE="")
+    def test_gcp_costs_in_context(self, qa_client):
+        """Unconfigured — placeholders, no network, no 500."""
+        response = qa_client.get(reverse("testing_tools"))
+        assert response.status_code == 200
+        card = response.context["gcp_costs"]
+        assert card["previous"] is None
+        assert card["current"] is None
+        assert card["previous_label"] and card["current_label"]
+
+    @QA_SETTINGS
+    @override_settings(GCP_BILLING_EXPORT_TABLE="")
+    def test_gcp_costs_show_archived_previous_month(self, qa_client):
+        """A finished month reads from its archived Expense row, never live."""
+        from datetime import date
+        from decimal import Decimal
+
+        from billing.models import Expense
+        from billing.services.gcp_cost_service import GCP_EXPENSE_DESCRIPTION, previous_month
+
+        prev_year, prev_month = previous_month()
+        Expense.objects.create(
+            description=GCP_EXPENSE_DESCRIPTION,
+            category="software",
+            amount=Decimal("10.15"),
+            expense_date=date(prev_year, prev_month, 1),
+        )
+        response = qa_client.get(reverse("testing_tools"))
+        assert response.context["gcp_costs"]["previous"] == Decimal("10.15")
+        assert b"Gastos GCP" in response.content
+
+    @QA_SETTINGS
     def test_git_subprocess_failure_is_handled(self, qa_client):
         """If the git subprocess call throws, _git_info returns {} without raising."""
         import subprocess
