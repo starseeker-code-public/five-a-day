@@ -143,7 +143,10 @@ def _query_month(year: int, month: int) -> Decimal | None:
     """
     table = getattr(settings, "GCP_BILLING_EXPORT_TABLE", "")
     if not _TABLE_ID_RE.match(table):
-        logger.warning("GCP_BILLING_EXPORT_TABLE does not look like project.dataset.table: %r", table)
+        # Deliberately not echoing the value: CodeQL taints it as sensitive
+        # (py/clear-text-logging-sensitive-data) and the operator can read the
+        # env var directly — the setting name is enough to locate the problem.
+        logger.warning("GCP_BILLING_EXPORT_TABLE does not look like project.dataset.table; check the env var.")
         return None
 
     creds = _credentials()
