@@ -6,7 +6,8 @@ from decimal import Decimal, InvalidOperation
 
 from django.contrib import messages
 from django.core.exceptions import ValidationError
-from django.db.models import Case, DecimalField, Q, Sum, Value, When
+from django.db import IntegrityError
+from django.db.models import Case, DecimalField, Max, Min, Q, Sum, Value, When
 from django.http import HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_http_methods
@@ -15,7 +16,7 @@ from billing import constants
 from billing.models import Payment
 from core.constants import MESES_ES
 from core.models import HistoryLog
-from core.utils import csv_safe_row
+from core.utils import csv_safe_row, safe_int
 from students.models import Parent, Student
 
 logger = logging.getLogger(__name__)
@@ -69,20 +70,13 @@ def _validated_choice(value, choices, default):
 
 
 def _safe_int(raw, *, default, low=None, high=None):
-    """Parse a query-string int, clamped to [low, high]. Never raises.
+    """Parse a query-string int, rejected to `default` outside [low, high].
 
-    Query params are hand-editable; a bare `int()` on them is how
-    `?year=-1` and `?month=abc` turned into 500s elsewhere in the app.
+    Thin alias for `core.utils.safe_int` — this helper existed here, in
+    `app_forms` and in `reports` as three separate copies, and two other views
+    were still missing it entirely.
     """
-    try:
-        value = int(raw)
-    except (TypeError, ValueError):
-        return default
-    if low is not None and value < low:
-        return default
-    if high is not None and value > high:
-        return default
-    return value
+    return safe_int(raw, default=default, low=low, high=high)
 
 
 def payments_list(request):
@@ -120,10 +114,18 @@ def payments_list(request):
 
     # Years that actually have payments, so the dropdown never offers an
     # empty year. Always includes the current one.
-    year_choices = sorted(
-        {current_year} | {y for y in Payment.objects.values_list("due_date__year", flat=True).distinct() if y},
-        reverse=True,
-    )
+    #
+    # Min/Max over `due_date` rather than `DISTINCT EXTRACT(YEAR FROM due_date)`:
+    # the latter cannot use the `due_date` index and sequentially scanned the whole
+    # payments table on every page load. Min/Max are index-only lookups. The span
+    # between the first and last payment is contiguous in practice, and offering a
+    # year with no rows is harmless — it renders an empty table, which is exactly
+    # what the old query was avoiding at the cost of a full scan.
+    span = Payment.objects.aggregate(first=Min("due_date"), last=Max("due_date"))
+    years = {current_year}
+    if span["first"] and span["last"]:
+        years |= set(range(span["first"].year, span["last"].year + 1))
+    year_choices = sorted(years, reverse=True)
 
     # Summary figures describe the SELECTED period, not "today", so the totals
     # always match the rows on screen. Previously "Esperado"/"Cobrado" were
@@ -317,6 +319,23 @@ def create_payment(request):
             logger.exception("Invalid amount submitted when creating a payment")
             messages.error(request, "El importe introducido no es válido.")
             return redirect("payments_list")
+        except IntegrityError as e:
+            # `full_clean()` above validates the constraint and raises ValidationError
+            # with its own Spanish message, so this branch only catches the RACE: two
+            # requests that both passed validation before either inserted. Matched on
+            # the constraint name so a genuinely different IntegrityError still gets
+            # the generic message rather than a confidently wrong one. Nothing from
+            # the exception is echoed to the client.
+            logger.exception("IntegrityError while creating a payment")
+            if "unique_pending_periodic_payment_per_month" in str(e):
+                messages.error(
+                    request,
+                    "Ya existe un pago pendiente de ese tipo para ese alumno en ese mes. "
+                    "Edita o cancela el pago existente en lugar de crear otro.",
+                )
+            else:
+                messages.error(request, "Error al crear el pago. Revisa los datos e inténtalo de nuevo.")
+            return redirect("payments_list")
         except Exception:
             # Never echo str(e): on an IntegrityError it leaks the table and
             # column names, on a DataError the column width.
@@ -325,54 +344,6 @@ def create_payment(request):
             return redirect("payments_list")
 
     return render(request, "payments/payment_create.html", {})
-
-
-def payment_detail(request, payment_id):
-    """
-    Get payment details as JSON for editing
-    """
-    payment = get_object_or_404(Payment, id=payment_id)
-
-    data = {
-        "id": payment.id,
-        "student": {
-            "id": payment.student.id,
-            "full_name": payment.student.full_name,
-            "school": payment.student.school or "",
-        },
-        # Adult students have no parent — Payment.parent is nullable.
-        "parent": (
-            {
-                "id": payment.parent.id,
-                "full_name": payment.parent.full_name,
-                "email": payment.parent.email,
-            }
-            if payment.parent
-            else None
-        ),
-        "enrollment": (
-            {
-                "id": payment.enrollment.id if payment.enrollment else None,
-                "enrollment_type": (payment.enrollment.enrollment_type.display_name if payment.enrollment else None),
-            }
-            if payment.enrollment
-            else None
-        ),
-        "payment_type": payment.payment_type,
-        "payment_method": payment.payment_method,
-        "amount": str(payment.amount),
-        "currency": payment.currency,
-        "payment_status": payment.payment_status,
-        "due_date": payment.due_date.isoformat() if payment.due_date else None,
-        "payment_date": (payment.payment_date.isoformat() if payment.payment_date else None),
-        "concept": payment.concept,
-        "reference_number": payment.reference_number,
-        "observations": payment.observations,
-        "is_overdue": payment.is_overdue,
-        "days_overdue": payment.days_overdue if payment.is_overdue else 0,
-    }
-
-    return JsonResponse(data)
 
 
 def payment_detail_view(request, payment_id):
@@ -878,9 +849,16 @@ def validate_student_parent(request):
                 response_data["enrollment"] = {
                     "id": active_enrollment.id,
                     "enrollment_type": active_enrollment.enrollment_type.display_name,
-                    "remaining_amount": str(active_enrollment.remaining_amount),
+                    # Renamed with the model properties: the old `is_paid` /
+                    # `remaining_amount` pair compared a year of collected money
+                    # against the price of one period. Nothing consumes these —
+                    # the create-payment form stopped calling this endpoint (see
+                    # the note in payments.js) — so the shape is free to be
+                    # honest rather than frozen.
+                    "outstanding_amount": str(active_enrollment.outstanding_amount),
+                    "overdue_amount": str(active_enrollment.overdue_amount),
                     "schedule_type": active_enrollment.get_schedule_type_display(),
-                    "is_paid": active_enrollment.is_paid,
+                    "is_up_to_date": active_enrollment.is_up_to_date,
                 }
 
         return JsonResponse(response_data)

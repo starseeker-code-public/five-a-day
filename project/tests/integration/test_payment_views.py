@@ -2,7 +2,7 @@
 endpoints (list, create, detail, update, delete, deactivate, quick-complete,
 search, validate, get-details, export).
 
-Helper-function unit tests (parse_date_value, payment_detail AJAX direct
+Helper-function unit tests (parse_date_value, direct
 call) live in unit/test_payment_helpers.py.
 """
 

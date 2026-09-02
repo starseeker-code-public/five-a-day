@@ -20,6 +20,7 @@ from django.views.decorators.http import require_http_methods
 
 from billing.models import Payment
 from core.rate_limit import rate_limit
+from core.utils import MAX_QUERY_YEAR, MIN_QUERY_YEAR, safe_int
 from students.models import Parent, ParentSessionToken
 
 logger = logging.getLogger(__name__)
@@ -131,7 +132,9 @@ def parent_portal_dashboard(request):
     if redirect_resp:
         return redirect_resp
 
-    children = parent.children.select_related("group").prefetch_related("enrollments").order_by("first_name")
+    # No `prefetch_related("enrollments")`: dashboard.html renders only the name, age
+    # and group, so it was one wasted query per page load.
+    children = parent.children.select_related("group").order_by("first_name")
     today = date.today()
     upcoming = (
         Payment.objects.filter(parent=parent, payment_status="pending", due_date__gte=today)
@@ -156,12 +159,11 @@ def parent_portal_payments(request):
     if redirect_resp:
         return redirect_resp
 
-    # Never trust query-string ints — a malformed `?year=foo` used to crash
-    # the view with a 500.
-    try:
-        year = int(request.GET.get("year") or date.today().year)
-    except (TypeError, ValueError):
-        year = date.today().year
+    # Never trust query-string ints. Parsing alone was not enough: `?year=foo`
+    # was caught, but `?year=-5` and `?year=99999999999` still reached the
+    # `due_date__year` lookup, where Django builds date bounds and raises
+    # ValueError / OverflowError — a 500 from a hand-edited URL.
+    year = safe_int(request.GET.get("year"), default=date.today().year, low=MIN_QUERY_YEAR, high=MAX_QUERY_YEAR)
 
     payments = (
         Payment.objects.filter(parent=parent, due_date__year=year)
@@ -203,10 +205,7 @@ def parent_portal_tax_certificate(request):
     if redirect_resp:
         return redirect_resp
 
-    try:
-        year = int(request.GET.get("year") or date.today().year)
-    except (TypeError, ValueError):
-        year = date.today().year
+    year = safe_int(request.GET.get("year"), default=date.today().year, low=MIN_QUERY_YEAR, high=MAX_QUERY_YEAR)
 
     from billing.services.pdf_service import generate_tax_certificate
 

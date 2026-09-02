@@ -11,7 +11,6 @@ All four URLs are exempt from `SimpleAuthMiddleware` (see core/middleware.py),
 because a teacher who can't log in still needs to be able to reach them.
 """
 
-from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth.forms import PasswordResetForm
 from django.contrib.auth.tokens import default_token_generator
@@ -23,8 +22,6 @@ from django.contrib.auth.views import (
 )
 from django.urls import reverse_lazy
 from django.utils.decorators import method_decorator
-from django.utils.encoding import force_bytes
-from django.utils.http import urlsafe_base64_encode
 
 from core.rate_limit import rate_limit
 
@@ -95,16 +92,3 @@ class BrandedPasswordResetCompleteView(PasswordResetCompleteView):
     """Success page — confirms the password was changed."""
 
     template_name = "registration/password_reset_complete.html"
-
-
-def build_reset_link(request, user) -> str:
-    """
-    Build a password-reset link for a given user. Useful for tests and for the
-    'send-invite' flow after admin creates a new Teacher.
-    """
-    uid = urlsafe_base64_encode(force_bytes(user.pk))
-    token = default_token_generator.make_token(user)
-    path = reverse_lazy("password_reset_confirm", kwargs={"uidb64": uid, "token": token})
-    scheme = "https" if request.is_secure() else "http"
-    host = request.get_host() if hasattr(request, "get_host") else getattr(settings, "DEFAULT_DOMAIN", "localhost:8000")
-    return f"{scheme}://{host}{path}"

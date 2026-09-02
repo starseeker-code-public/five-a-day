@@ -2,7 +2,7 @@
 // Expects window.SCHEDULE_CONFIG = { groups, students, slots }
 
 // ── Global edit-mode flag (must be global for onclick= to work) ──
-var scheduleEditMode = false;
+let scheduleEditMode = false;
 function toggleEditMode() {
     const btn = document.getElementById('edit-toggle-btn');
     if (!btn) return;  // non-admin teachers: read-only schedule, no edit control
@@ -13,6 +13,17 @@ function toggleEditMode() {
     if (window._scheduleRenderTable) window._scheduleRenderTable();
 }
 window.toggleEditMode = toggleEditMode;
+
+// The edit button used inline onclick/onmouseover attributes (CSP blockers).
+(function () {
+    const btn = document.getElementById('edit-toggle-btn');
+    if (!btn) return;
+    btn.addEventListener('click', toggleEditMode);
+    btn.addEventListener('mouseover', function () { btn.style.background = '#f3f4f6'; });
+    btn.addEventListener('mouseout', function () {
+        if (!scheduleEditMode) btn.style.background = '#fff';
+    });
+})();
 
 document.addEventListener('DOMContentLoaded', function () {
     const groups = window.SCHEDULE_CONFIG.groups;

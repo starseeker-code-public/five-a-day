@@ -9,6 +9,7 @@ import openpyxl
 from openpyxl.styles import Alignment, Font, PatternFill
 
 from billing.models import Enrollment, Payment
+from core.utils import xlsx_safe_append
 from students.models import Student
 
 _HEADER_FONT = Font(bold=True, color="FFFFFF")
@@ -17,7 +18,7 @@ _CENTER = Alignment(horizontal="center", vertical="center")
 
 
 def _style_header(ws, headers):
-    ws.append(headers)
+    xlsx_safe_append(ws, headers)
     for cell in ws[1]:
         cell.font = _HEADER_FONT
         cell.fill = _HEADER_FILL
@@ -61,7 +62,8 @@ def build_students_sheet(ws):
     qs = Student.objects.select_related("group").prefetch_related("parents").order_by("last_name", "first_name")
     for s in qs:
         parents = list(s.parents.all())
-        ws.append(
+        xlsx_safe_append(
+            ws,
             [
                 s.id,
                 s.first_name,
@@ -81,7 +83,7 @@ def build_students_sheet(ws):
                 " / ".join(p.email for p in parents),
                 " / ".join(p.iban for p in parents),
                 _d(s.created_at),
-            ]
+            ],
         )
     _auto_width(ws)
 
@@ -110,7 +112,8 @@ def build_enrollments_sheet(ws):
     )
     qs = Enrollment.objects.select_related("student", "enrollment_type").order_by("-enrollment_date")
     for e in qs:
-        ws.append(
+        xlsx_safe_append(
+            ws,
             [
                 e.id,
                 e.student.first_name,
@@ -128,7 +131,7 @@ def build_enrollments_sheet(ws):
                 e.document_url,
                 e.notes,
                 _d(e.created_at),
-            ]
+            ],
         )
     _auto_width(ws)
 
@@ -158,7 +161,8 @@ def build_payments_sheet(ws):
     )
     qs = Payment.objects.select_related("student", "parent").order_by("-due_date")
     for p in qs:
-        ws.append(
+        xlsx_safe_append(
+            ws,
             [
                 p.id,
                 p.student.first_name,
@@ -177,7 +181,7 @@ def build_payments_sheet(ws):
                 p.reference_number,
                 p.observations,
                 _d(p.created_at),
-            ]
+            ],
         )
     _auto_width(ws)
 

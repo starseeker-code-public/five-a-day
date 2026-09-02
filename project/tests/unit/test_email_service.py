@@ -243,15 +243,6 @@ class TestEmailServiceExtra:
         assert results == {"sent": 2, "failed": 1}
 
 
-class TestGetEmailConfig:
-    def test_returns_dict(self):
-        from comms.services.email_service import get_email_config
-
-        cfg = get_email_config()
-        assert "host_user" in cfg
-        assert "from_email" in cfg
-
-
 class TestInlineImageDjango6:
     """Regression: Django 6.0 removed EmailMessage.mixed_subtype. Sending an
     email with a real inline image must not raise and must produce an image

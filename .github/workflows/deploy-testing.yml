@@ -11,10 +11,14 @@ name: Deploy testing
 # It still reads the *testing* branch for the target version (see `ref:` below).
 
 on:
-  # GitHub cron is UTC and has no DST. Two ticks plus a local-hour gate give an
-  # exact 02:00 Europe/Madrid all year: 00:00 UTC is 02:00 CEST (summer) and
-  # 01:00 UTC is 02:00 CET (winter). The gate discards whichever tick is not
-  # 02:00 locally, so exactly one deploy check runs per night.
+  # GitHub cron is UTC and has no DST, and the scheduler itself is best-effort:
+  # a tick routinely fires 10-90+ min late (2026-09-02 saw 108 min and 269 min).
+  # So do NOT pin an exact local hour. Both ticks are real attempts -- 00:00 UTC
+  # is 02:00 CEST / 01:00 CET, 01:00 UTC is 03:00 CEST / 02:00 CET -- and the
+  # gate below accepts whichever lands inside the 02:00-04:59 Europe/Madrid
+  # sleeping window. That is two chances a night in either DST regime; if the
+  # first one already deployed, the second is a no-op because the version
+  # compare finds nothing to do.
   schedule:
     - cron: '0 0 * * *'
     - cron: '0 1 * * *'
@@ -52,22 +56,31 @@ jobs:
       reason: ${{ steps.compare.outputs.reason }}
 
     steps:
-      - name: Gate on 02:00 Europe/Madrid
+      - name: Gate on the 02:00-05:00 Europe/Madrid window
         id: gate
         env:
           EVENT_NAME: ${{ github.event_name }}
         run: |
           if [ "$EVENT_NAME" != "schedule" ]; then
-            echo "Manual run — hour gate skipped."
+            echo "Manual run — window gate skipped."
             echo "proceed=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          # Gate on a WINDOW, never on an exact hour. Demanding `date +%H` = 02
+          # assumed the tick that RUNS is the tick that was SCHEDULED. On
+          # 2026-09-02 GitHub delivered 00:00 UTC at 01:48 and 01:00 UTC at
+          # 05:29, so both read a later Madrid hour, both were discarded, and
+          # the nightly deploy silently never ran — green, because the check job
+          # legitimately reported should_deploy=false. The VM sat on v1.20.0
+          # while testing was on v1.23.1. A window absorbs the scheduler drift.
           HOUR=$(TZ=Europe/Madrid date +%H)
           echo "Local time in Madrid: $(TZ=Europe/Madrid date '+%Y-%m-%d %H:%M %Z')"
-          if [ "$HOUR" = "02" ]; then
+          # 10# forces base 10 — "08" and "09" are invalid octal and would abort
+          # the step under $(( )), skipping the deploy for two hours every night.
+          if [ "$((10#$HOUR))" -ge 2 ] && [ "$((10#$HOUR))" -lt 5 ]; then
             echo "proceed=true" >> "$GITHUB_OUTPUT"
           else
-            echo "Not 02:00 in Madrid (hour=$HOUR) — this is the off-DST cron tick. Nothing to do."
+            echo "Outside the 02:00-04:59 Madrid window (hour=$HOUR) — too far off schedule to deploy the VM unattended. Nothing to do."
             echo "proceed=false" >> "$GITHUB_OUTPUT"
           fi
 
@@ -118,9 +131,9 @@ jobs:
 
       - name: Compare
         id: compare
-        # No `if:` — the implicit success() is exactly right. On the off-DST tick
-        # the gate succeeds and the steps in between are *skipped*, so this still
-        # runs and reports "nothing to do". But if the health probe FAILED (a
+        # No `if:` — the implicit success() is exactly right. On a tick outside
+        # the window the gate succeeds and the steps in between are *skipped*, so
+        # this still runs and reports "nothing to do". But if the probe FAILED (a
         # non-testing `environment`, say), success() is false, this is skipped,
         # should_deploy stays empty and the deploy job cannot fire. `always()`
         # here would have turned that abort into a deploy.
@@ -138,7 +151,7 @@ jobs:
         run: |
           if [ "$PROCEED" != "true" ]; then
             echo "should_deploy=false" >> "$GITHUB_OUTPUT"
-            echo "reason=off-schedule cron tick" >> "$GITHUB_OUTPUT"
+            echo "reason=tick landed outside the 02:00-05:00 Madrid window" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 

@@ -13,19 +13,18 @@ from decimal import Decimal
 from typing import Any
 
 from django.db.models import Count, DecimalField, Q, Sum, Value
-from django.db.models.functions import Coalesce
+from django.db.models.functions import Coalesce, ExtractMonth
 
 from billing.constants import LIVE_PAYMENT_STATUSES
 from billing.models import Expense, Payment
 from students.models import Group, Student
 
 _ZERO = Decimal("0.00")
+_MONEY = DecimalField(max_digits=12, decimal_places=2)
 
 
 def _sum(qs, field: str = "amount") -> Decimal:
-    result = qs.aggregate(
-        t=Coalesce(Sum(field), Value(_ZERO), output_field=DecimalField(max_digits=12, decimal_places=2))
-    )
+    result = qs.aggregate(t=Coalesce(Sum(field), Value(_ZERO), output_field=_MONEY))
     return result["t"]
 
 
@@ -39,15 +38,16 @@ def financial_summary_month(month: int, year: int) -> dict[str, Any]:
         Payment.objects.filter(payment_status="completed", payment_date__month=month, payment_date__year=year)
     )
     pending = _sum(Payment.objects.filter(payment_status="pending", due_date__month=month, due_date__year=year))
-    expenses = _sum(Expense.objects.filter(is_recurring=False, expense_date__month=month, expense_date__year=year))
+    # The per-category breakdown already sums to the month total, so the separate
+    # `Sum` that used to run alongside it was a second scan of the same rows for
+    # a figure we were about to compute anyway.
     by_category = dict(
         Expense.objects.filter(is_recurring=False, expense_date__month=month, expense_date__year=year)
         .values("category")
-        .annotate(
-            total=Coalesce(Sum("amount"), Value(_ZERO), output_field=DecimalField(max_digits=12, decimal_places=2))
-        )
+        .annotate(total=Coalesce(Sum("amount"), Value(_ZERO), output_field=_MONEY))
         .values_list("category", "total")
     )
+    expenses = sum(by_category.values(), _ZERO)
     return {
         "month": month,
         "year": year,
@@ -59,9 +59,71 @@ def financial_summary_month(month: int, year: int) -> dict[str, Any]:
     }
 
 
+def _months_by_month(year: int) -> list[dict[str, Any]]:
+    """The 12 monthly rows of `year`, resolved in THREE queries rather than 48.
+
+    `financial_summary_year` used to call `financial_summary_month` twelve times,
+    and each of those runs four separate aggregates — so the /reports/ page fired
+    48 queries for the chart alone (57 for the whole page), independently of how
+    much data the academy actually has. The work is the same aggregation twelve
+    times over disjoint slices of one table, which is what GROUP BY is for.
+
+    Three queries and not one because the buckets key on different columns:
+    collected income is attributed to `payment_date`, receivables to `due_date`,
+    and expenses live in another table. Grouping expenses by (month, category)
+    also yields the month total, so the separate `Sum` that used to run beside
+    the per-category breakdown is gone.
+    """
+    income: dict[int, Decimal] = {
+        row["m"]: row["total"]
+        for row in Payment.objects.filter(payment_status="completed", payment_date__year=year)
+        .annotate(m=ExtractMonth("payment_date"))
+        .values("m")
+        .annotate(total=Coalesce(Sum("amount"), Value(_ZERO), output_field=_MONEY))
+        .values("m", "total")
+    }
+    pending: dict[int, Decimal] = {
+        row["m"]: row["total"]
+        for row in Payment.objects.filter(payment_status="pending", due_date__year=year)
+        .annotate(m=ExtractMonth("due_date"))
+        .values("m")
+        .annotate(total=Coalesce(Sum("amount"), Value(_ZERO), output_field=_MONEY))
+        .values("m", "total")
+    }
+    by_category: dict[int, dict[str, Decimal]] = {m: {} for m in range(1, 13)}
+    expenses: dict[int, Decimal] = {}
+    for row in (
+        Expense.objects.filter(is_recurring=False, expense_date__year=year)
+        .annotate(m=ExtractMonth("expense_date"))
+        .values("m", "category")
+        .annotate(total=Coalesce(Sum("amount"), Value(_ZERO), output_field=_MONEY))
+        .values("m", "category", "total")
+    ):
+        month = row["m"]
+        by_category.setdefault(month, {})[row["category"]] = row["total"]
+        expenses[month] = expenses.get(month, _ZERO) + row["total"]
+
+    rows = []
+    for m in range(1, 13):
+        month_income = income.get(m, _ZERO)
+        month_expenses = expenses.get(m, _ZERO)
+        rows.append(
+            {
+                "month": m,
+                "year": year,
+                "income": month_income,
+                "pending": pending.get(m, _ZERO),
+                "expenses": month_expenses,
+                "net": month_income - month_expenses,
+                "by_category": by_category.get(m, {}),
+            }
+        )
+    return rows
+
+
 def financial_summary_year(year: int) -> dict[str, Any]:
     """Yearly aggregate plus 12 monthly rows for chart-friendly rendering."""
-    months = [financial_summary_month(m, year) for m in range(1, 13)]
+    months = _months_by_month(year)
     return {
         "year": year,
         "income": sum((m["income"] for m in months), _ZERO),
@@ -165,9 +227,13 @@ def dashboard_report(month: int | None = None, year: int | None = None) -> dict[
     today = date.today()
     m = month or today.month
     y = year or today.year
+    # One pass over the year, then pick the requested month out of it. Calling
+    # `financial_summary_month(m, y)` here as well re-ran four aggregates for a
+    # row `financial_summary_year` had already computed.
+    year_totals = financial_summary_year(y)
     return {
-        "current_month": financial_summary_month(m, y),
-        "year_totals": financial_summary_year(y),
+        "current_month": year_totals["months"][m - 1],
+        "year_totals": year_totals,
         "collection": collection_rate(m, y),
         "retention": retention_snapshot(today),
         "groups": group_utilisation(),

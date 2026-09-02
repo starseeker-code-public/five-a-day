@@ -21,38 +21,9 @@ logger = logging.getLogger(__name__)
 # ============================================================================
 
 
-def send_birthday_email(recipient: str, name: str) -> bool:
-    """Envia email de cumpleanos"""
-    return email_service.send_email(
-        template_name="happy_birthday",
-        recipients=recipient,
-        subject=f"🎉 ¡Feliz Cumpleaños {name}!",
-        context={"name": name},
-    )
-
-
 # ============================================================================
 # 2. PAYMENT REMINDER (simple) - Recordatorio de pago pendiente
 # ============================================================================
-
-
-def send_payment_reminder(recipient: str, student_name: str, amount, due_date: str) -> bool:
-    """
-    Envia un recordatorio de pago pendiente para un único estudiante.
-
-    Usa el template ligero `payment_reminder_simple` (solo requiere
-    student_name / amount / due_date). El template `payment_reminder`
-    completo se emplea desde el formulario de admin que dispone del
-    contexto financiero (IBAN, tarifas, rango de días…).
-
-    `amount` acepta Decimal o str; float queda desaconsejado.
-    """
-    return email_service.send_email(
-        template_name="payment_reminder_simple",
-        recipients=recipient,
-        subject=f"Recordatorio de Pago - {student_name}",
-        context={"student_name": student_name, "amount": str(amount), "due_date": due_date},
-    )
 
 
 # ============================================================================

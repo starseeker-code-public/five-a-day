@@ -40,6 +40,38 @@
     }
     window.escapeHtml = escapeHtml;
 
+
+    /* ── Declarative handlers (CSP) ─────────────────────────────────────────
+       Inline on*="" attributes are what forces 'unsafe-inline' into script-src.
+       These three delegated listeners replace the recurring patterns:
+         data-confirm="msg"        on a <form>  -> confirm() before submit
+         data-autosubmit           on a <select> -> submit its form on change
+         data-close-modal="id"     on a <button> -> hide that modal + restore scroll
+       They are delegated on document so content injected later still works. */
+    document.addEventListener('submit', function (e) {
+        const msg = e.target && e.target.getAttribute && e.target.getAttribute('data-confirm');
+        if (msg && !window.confirm(msg)) {
+            e.preventDefault();
+        }
+    });
+
+    document.addEventListener('change', function (e) {
+        const t = e.target;
+        if (t && t.matches && t.matches('[data-autosubmit]') && t.form) {
+            t.form.submit();
+        }
+    });
+
+    document.addEventListener('click', function (e) {
+        const btn = e.target && e.target.closest ? e.target.closest('[data-close-modal]') : null;
+        if (!btn) return;
+        const modal = document.getElementById(btn.getAttribute('data-close-modal'));
+        if (modal) {
+            modal.style.display = 'none';
+            document.body.style.overflow = '';
+        }
+    });
+
     /* ── Notifications dropdown toggle ────────────────────────────────────── */
     const notifBtn = document.getElementById('notif-btn');
     const notifDropdown = document.getElementById('notif-dropdown');

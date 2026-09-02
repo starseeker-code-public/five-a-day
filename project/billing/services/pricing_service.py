@@ -43,8 +43,13 @@ class PricingService:
         """Monthly fee with the sibling discount applied.
 
         Same percentage and order of operations as
-        ``PaymentService.calculate_monthly_amount`` so the figure advertised in
+        ``PaymentService.calculate_period_amount``, so the figure advertised in
         the payment-reminder email matches what the sibling is actually billed.
+
+        It is a deliberate re-derivation rather than a call: the billing helpers
+        price a period *for an Enrollment*, and this answers the standard-price
+        question with no enrollment in hand. The two are held together by
+        ``tests/unit/test_pricing_matches_billing.py`` instead of by comment.
         """
         if config is None:
             config = PricingService.get_config()

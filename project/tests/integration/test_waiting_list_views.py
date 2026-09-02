@@ -311,3 +311,32 @@ class TestFullStudentFormStillNeedsASurname:
         from students.forms import StudentForm
 
         assert StudentForm().fields["last_name"].required is True
+
+
+class TestWaitingEntryWithoutAGroup:
+    """`StudentCreateView`'s `is_waiting` branch logged
+    `student.group.group_name` unguarded. `Student.group` has been nullable
+    since v1.15 and the form field is optional, so a waiting entry with no group
+    raised AttributeError inside the atomic block and the whole creation failed
+    with the generic "Error al crear el estudiante".
+
+    This branch runs after the parent check, so it needs a `parent_id`; the
+    parentless route is the dedicated `waiting_list_create` view.
+    """
+
+    def _post(self, client, parent, **extra):
+        data = {"first_name": "Marta", "last_name": "Gil", "is_waiting": "on", "parent_id": parent.id}
+        data.update(extra)
+        return client.post(reverse("student_create"), data)
+
+    def test_an_entry_without_a_group_is_created(self, authenticated_client, parent):
+        assert self._post(authenticated_client, parent).status_code == 302
+
+        student = Student.objects.get(first_name="Marta")
+        assert student.is_waiting is True
+        assert student.group_id is None
+
+    def test_a_chosen_group_is_still_recorded(self, authenticated_client, parent, group):
+        self._post(authenticated_client, parent, group=group.id)
+
+        assert Student.objects.get(first_name="Marta").group_id == group.id

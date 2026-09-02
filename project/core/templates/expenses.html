@@ -212,7 +212,10 @@
                     <td class="px-6 py-3 text-sm text-neutral-600">{{ e.expense_date|date:"d/m/Y" }}</td>
                     <td class="px-6 py-3 text-sm text-neutral-800">
                         {{ e.description }}
-                        {% if e.generated_from %}
+                        {# `generated_from_id`, NOT `generated_from`: touching the FK
+                           descriptor fetches the related row, one query per generated
+                           expense (61 for 60 rows). We only need "is there one?". #}
+                        {% if e.generated_from_id %}
                             <span class="text-xs text-neutral-400">(recurrente)</span>
                         {% endif %}
                         {% if e.notes %}
@@ -236,7 +239,7 @@
                                 data-recurring-weekdays="{{ e.recurring_weekdays }}">
                             <span class="material-symbols-outlined text-sm">edit</span>
                         </button>
-                        <form method="post" action="{% url 'delete_expense' e.id %}" onsubmit="return confirm('¿Eliminar este gasto?')" class="inline">
+                        <form method="post" action="{% url 'delete_expense' e.id %}" data-confirm="¿Eliminar este gasto?" class="inline">
                             {% csrf_token %}
                             <button type="submit" class="text-red-500 hover:text-red-700" title="Eliminar">
                                 <span class="material-symbols-outlined text-sm">delete</span>
@@ -291,7 +294,7 @@
                             data-recurring-weekdays="{{ t.recurring_weekdays }}">
                         <span class="material-symbols-outlined text-sm">edit</span>
                     </button>
-                    <form method="post" action="{% url 'delete_expense' t.id %}" onsubmit="return confirm('¿Eliminar plantilla?')" class="inline">
+                    <form method="post" action="{% url 'delete_expense' t.id %}" data-confirm="¿Eliminar plantilla?" class="inline">
                         {% csrf_token %}
                         <button type="submit" class="text-red-500 hover:text-red-700"><span class="material-symbols-outlined text-sm">delete</span></button>
                     </form>
@@ -307,7 +310,8 @@
 <!-- Edit modal. One form for both a concrete expense and a recurring template;
      the row's data-* attributes fill it, and it posts to update_expense. -->
 <div id="expense-edit-modal" class="fixed inset-0 z-50 hidden items-center justify-center p-4" style="background:rgba(0,0,0,.5);"
-     data-update-url-template="{% url 'update_expense' 0 %}">
+     data-update-url-template="{% url 'update_expense' 0 %}"
+         role="dialog" aria-modal="true" aria-label="Editar gasto">
     <div class="bg-white rounded-lg shadow-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
         <form method="post" id="expense-edit-form" class="p-6">
             {% csrf_token %}

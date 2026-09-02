@@ -105,3 +105,27 @@ class TestPortalPages:
         response = client.get(reverse("parent_portal_logout"))
         assert response.status_code == 302
         assert "parent_id" not in client.session
+
+
+class TestPortalQueryStringIsRangeChecked:
+    """`?year=foo` was already handled; `?year=-5` and `?year=99999999999` were
+    not. They parse as ints and then blow up where Django builds the bounds for
+    the `due_date__year` lookup — a 500 from a hand-edited URL."""
+
+    @pytest.fixture
+    def portal(self, client, parent):
+        session = client.session
+        session["parent_id"] = parent.id
+        session.save()
+        return client
+
+    @pytest.mark.parametrize("year", ["-5", "99999999999"])
+    def test_the_payments_page_survives(self, portal, year):
+        assert portal.get(reverse("parent_portal_payments"), {"year": year}).status_code == 200
+
+    @pytest.mark.parametrize("year", ["-5", "99999999999"])
+    def test_the_tax_certificate_survives(self, portal, year):
+        response = portal.get(reverse("parent_portal_tax_certificate"), {"year": year})
+
+        assert response.status_code == 200
+        assert response["Content-Type"] == "application/pdf"

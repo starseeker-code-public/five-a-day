@@ -12,6 +12,12 @@ function toggleSection(sectionId) {
 }
 
 // Mostrar/ocultar modal
+// Accordion headers use data-toggle-section instead of inline onclick (CSP).
+document.addEventListener('click', function (e) {
+    const hdr = e.target.closest ? e.target.closest('[data-toggle-section]') : null;
+    if (hdr) toggleSection(hdr.getAttribute('data-toggle-section'));
+});
+
 function openModal(modalId) {
     document.getElementById(modalId).style.display = 'flex';
     document.body.style.overflow = 'hidden';

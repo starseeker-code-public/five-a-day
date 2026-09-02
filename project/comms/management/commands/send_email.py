@@ -15,6 +15,7 @@ from datetime import date, datetime
 
 from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
+from django.db.models import Prefetch
 
 from comms.services.email_functions import (
     send_all_tax_certificates,
@@ -120,15 +121,26 @@ class Command(BaseCommand):
 
     def send_birthday_emails(self):
         today = date.today()
-        birthday_students = Student.objects.filter(
-            birth_date__month=today.month, birth_date__day=today.day, active=True
-        ).prefetch_related("parents")
-        if not birthday_students.exists():
+        # The email filter goes INSIDE the prefetch: `parents.exclude(...).first()` on
+        # the prefetched manager built a new queryset and re-queried per student,
+        # making the `prefetch_related` above dead weight.
+        birthday_students = list(
+            Student.objects.filter(
+                birth_date__month=today.month, birth_date__day=today.day, active=True
+            ).prefetch_related(
+                Prefetch(
+                    "parents",
+                    queryset=Parent.objects.exclude(email="").exclude(email__isnull=True),
+                    to_attr="emailable_parents",
+                )
+            )
+        )
+        if not birthday_students:
             self.stdout.write(self.style.WARNING("No hay cumpleaños hoy"))
             return
         sent, failed = 0, 0
         for student in birthday_students:
-            parent = student.parents.exclude(email="").exclude(email__isnull=True).first()
+            parent = next(iter(student.emailable_parents), None)
             if not parent:
                 failed += 1
                 continue
@@ -143,19 +155,32 @@ class Command(BaseCommand):
         self.stdout.write(self.style.SUCCESS(f"Resultado: {sent} enviados, {failed} fallidos"))
 
     def send_monthly_reports(self):
-        parents = Parent.objects.filter(email__isnull=False).exclude(email="")
-        if not parents.exists():
+        # Was three queries per parent: `children.filter(active=True)`, then `s.group`
+        # for every child (no select_related), then `students.count()` re-running the
+        # same queryset. All of it now rides on one prefetch.
+        parents = list(
+            Parent.objects.filter(email__isnull=False)
+            .exclude(email="")
+            .prefetch_related(
+                Prefetch(
+                    "children",
+                    queryset=Student.objects.filter(active=True).select_related("group"),
+                    to_attr="active_children",
+                )
+            )
+        )
+        if not parents:
             self.stdout.write(self.style.WARNING("No hay padres con email"))
             return
         sent, failed = 0, 0
         for parent in parents:
-            students = parent.children.filter(active=True)
+            students = parent.active_children
             context = {
                 "parent_name": parent.full_name,
                 "students": [
                     {"name": s.full_name, "group": s.group.group_name if s.group else "Sin grupo"} for s in students
                 ],
-                "total_students": students.count(),
+                "total_students": len(students),
             }
             success = email_service.send_email(
                 template_name="monthly_report",

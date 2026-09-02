@@ -195,7 +195,7 @@
                             {% with today=entry.date %}
                             {% endwith %}
                         </div>
-                        <button onclick="removeFunFriday('{{ entry.date|date:'Y-m-d' }}')"
+                        <button data-ff-remove="{{ entry.date|date:'Y-m-d' }}"
                             class="text-neutral-400 hover:text-red-500 transition-colors p-1 rounded">
                             <span class="material-symbols-outlined text-sm">delete</span>
                         </button>
@@ -212,7 +212,7 @@
                 <div class="flex items-center gap-2">
                     <input type="date" id="ff-new-date"
                         class="px-3 py-1.5 border border-neutral-300 rounded-md text-sm focus:ring-2 focus:ring-pink-300 focus:border-pink-400">
-                    <button onclick="addFunFriday()"
+                    <button data-ff-add
                         class="px-3 py-1.5 rounded-md font-semibold transition-colors"
                         style="background:#ddd6fe;color:#2e1065;font-size:0.8125rem;">
                         Añadir
@@ -276,7 +276,7 @@
 
 {% block extra_js %}
 {% load static %}
-<script>
+<script nonce="{{ csp_nonce }}">
 window.STUDENT_ID = {{ student.id }};
 </script>
 <script src="{% static 'js/student-detail.js' %}"></script>

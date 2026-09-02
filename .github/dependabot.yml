@@ -38,3 +38,11 @@ updates:
     labels:
       - dependencies
       - github-actions
+
+  # Keeps the digest-pinned base image in the Dockerfile current. Without this
+  # nothing watches python:3.12-slim at all — pip and github-actions were
+  # covered, the container base was not.
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly

@@ -83,9 +83,11 @@ document.addEventListener('DOMContentLoaded', function () {
         setTimeout(() => todoError.classList.add('hidden'), 3000);
     }
 
-    function escapeHtml(str) {
-        return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    }
+    // One escaping primitive for the whole app: base.js owns window.escapeHtml,
+    // which also escapes quotes. A local copy that skipped quotes was safe in
+    // the text-node position it was used in, but two implementations of a
+    // security function is how the weaker one eventually lands in an attribute.
+    const escapeHtml = window.escapeHtml;
 
     function buildTodoRow(todo) {
         const overdue = todo.is_overdue;

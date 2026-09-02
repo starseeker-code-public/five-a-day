@@ -104,14 +104,15 @@
 
 {% block modals %}
 <!-- Modal: Listas de asistencia -->
-<div id="modal-ff-lists" style="display:none; position:fixed; inset:0; background-color:rgba(0,0,0,0.5); z-index:50; align-items:center; justify-content:center; padding:1rem;">
+<div id="modal-ff-lists" style="display:none; position:fixed; inset:0; background-color:rgba(0,0,0,0.5); z-index:50; align-items:center; justify-content:center; padding:1rem;"
+         role="dialog" aria-modal="true" aria-label="Listas de Fun Friday">
     <div class="bg-white rounded-lg shadow-xl w-full max-w-2xl overflow-hidden" style="max-height:90vh;">
         <div class="px-6 py-4 flex justify-between items-center" style="border-bottom:1px solid #f3f4f6;">
             <h3 class="text-lg font-semibold text-neutral-800 flex items-center gap-2">
                 <span class="material-symbols-outlined" style="color:#8b5cf6;">groups</span>
                 Listas de Asistencia
             </h3>
-            <button type="button" onclick="document.getElementById('modal-ff-lists').style.display='none';document.body.style.overflow='';" class="p-1.5 rounded-full transition-colors" style="color:#9ca3af;">
+            <button type="button" data-close-modal="modal-ff-lists" class="p-1.5 rounded-full transition-colors" style="color:#9ca3af;">
                 <span class="material-symbols-outlined text-xl">close</span>
             </button>
         </div>

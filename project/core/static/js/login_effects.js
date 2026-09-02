@@ -3,7 +3,7 @@
     'use strict';
 
     /* ── Inject all animation CSS ───────────────────────────── */
-    var styleEl = document.createElement('style');
+    const styleEl = document.createElement('style');
     styleEl.textContent =
 
         /* Bienvenida: quill reveal left-to-right */
@@ -34,14 +34,14 @@
     document.head.appendChild(styleEl);
 
     /* ── Timing (ms) ────────────────────────────────────────── */
-    var HEADING_MS  = 1400;   // bridgertonBloom duration
-    var QUOTE_MS    = 300;    // quoteReveal duration
-    var QUOTE_DELAY = 1000;   // quote appears 1s after page load
+    const HEADING_MS  = 1400;   // bridgertonBloom duration
+    const QUOTE_MS    = 300;    // quoteReveal duration
+    const QUOTE_DELAY = 1000;   // quote appears 1s after page load
 
     /* ── Sequence ───────────────────────────────────────────── */
     function run() {
-        var heading = document.querySelector('.card-heading');
-        var quote   = document.getElementById('login-quote');
+        const heading = document.querySelector('.card-heading');
+        const quote   = document.getElementById('login-quote');
 
         /* Step 1 — Bienvenida, immediately on load */
         if (heading) heading.classList.add('fx-heading');

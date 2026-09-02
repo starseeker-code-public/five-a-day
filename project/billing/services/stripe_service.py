@@ -139,10 +139,16 @@ class StripeService:
         except ValueError:
             return False
 
-        signed = f"{timestamp}.{payload.decode('utf-8')}"
+        # HMAC over the RAW bytes. This used to decode the body to str and
+        # re-encode it, which is a no-op for the UTF-8 Stripe actually sends but
+        # raised UnicodeDecodeError on anything else — an unhandled 500 on a
+        # public, csrf_exempt endpoint that any unauthenticated caller can POST
+        # to. Signing the bytes is also what Stripe itself does, so a body that
+        # is not valid UTF-8 now simply fails the comparison.
+        signed = timestamp.encode("utf-8") + b"." + payload
         expected = hmac.new(
             self.webhook_secret.encode("utf-8"),
-            signed.encode("utf-8"),
+            signed,
             hashlib.sha256,
         ).hexdigest()
 

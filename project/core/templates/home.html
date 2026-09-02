@@ -19,6 +19,9 @@
 
 {% block extra_css %}
 <style>
+/* Replaces the inline onmouseover/out on the pending-modal close button (CSP). */
+.pending-x-hover:hover { background: rgba(255,255,255,0.35) !important; }
+
 .stat-number {
     font-size: 3.25rem;
     font-weight: 800;
@@ -319,14 +322,15 @@
 
 <!-- Pending Students Modal (admin only — financial data) -->
 {% if is_admin_user %}
-<div id="pending-modal" style="display:none;position:fixed;inset:0;background-color:rgba(0,0,0,0.5);z-index:50;align-items:center;justify-content:center;padding:1rem;">
+<div id="pending-modal" style="display:none;position:fixed;inset:0;background-color:rgba(0,0,0,0.5);z-index:50;align-items:center;justify-content:center;padding:1rem;"
+         role="dialog" aria-modal="true" aria-label="Pagos pendientes">
     <div class="bg-white rounded-xl shadow-2xl overflow-hidden" style="width:fit-content;min-width:240px;max-width:min(380px,90vw);">
         <div class="px-6 text-white flex justify-between items-center" style="background:linear-gradient(to right,#c4b5fd,#8b5cf6);padding-top:16px;padding-bottom:16px;gap:2rem;">
             <h3 class="text-lg font-semibold flex items-center gap-2">
                 <span class="material-symbols-outlined">schedule</span>
                 Pagos pendientes este mes
             </h3>
-            <button type="button" id="pending-close-btn" style="padding:0.4rem;border-radius:9999px;background:rgba(255,255,255,0.2);border:none;cursor:pointer;transition:background 0.2s;display:flex;align-items:center;justify-content:center;" onmouseover="this.style.background='rgba(255,255,255,0.35)'" onmouseout="this.style.background='rgba(255,255,255,0.2)'">
+            <button type="button" id="pending-close-btn" class="pending-x-hover" style="padding:0.4rem;border-radius:9999px;background:rgba(255,255,255,0.2);border:none;cursor:pointer;transition:background 0.2s;display:flex;align-items:center;justify-content:center;">
                 <span class="material-symbols-outlined">close</span>
             </button>
         </div>
@@ -345,6 +349,6 @@
 {% endif %}
 
 {% load static %}
-<script>document.body.dataset.createTodoUrl = '{% url "create_todo" %}';</script>
+<script nonce="{{ csp_nonce }}">document.body.dataset.createTodoUrl = '{% url "create_todo" %}';</script>
 <script src="{% static 'js/home.js' %}"></script>
 {% endblock %}

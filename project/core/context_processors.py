@@ -1,3 +1,4 @@
+import logging
 from datetime import date
 
 from django.conf import settings
@@ -5,14 +6,20 @@ from django.conf import settings
 from .constants import SCHEDULED_APPS
 from .models import HistoryLog, TodoItem
 
+logger = logging.getLogger(__name__)
+
 
 def today_notifications(request):
     today = date.today()
 
     # Todos due today
+    # This runs on EVERY page, so it degrades rather than 500s — but it used to
+    # degrade silently, which meant a database problem showed up only as an
+    # empty sidebar that looked like "no todos today".
     try:
         todos = list(TodoItem.objects.filter(due_date=today).values("id", "text"))
     except Exception:
+        logger.exception("Could not load today's todos; rendering the sidebar without them")
         todos = []
 
     # Scheduled apps that run today
@@ -31,6 +38,7 @@ def today_notifications(request):
     try:
         history_count = HistoryLog.objects.count()
     except Exception:
+        logger.exception("Could not count history entries; rendering the badge as 0")
         history_count = 0
 
     # Teacher-role flags for template-level gating of admin-only UI.
@@ -57,3 +65,13 @@ def today_notifications(request):
         "is_admin_user": is_admin_user,
         "is_non_admin_teacher": is_non_admin_teacher,
     }
+
+
+def csp_nonce(request):
+    """Expose the per-request CSP nonce minted by SecurityHeadersMiddleware.
+
+    Every inline `<script>` block in the templates carries
+    `nonce="{{ csp_nonce }}"`; a block without it shows up as a violation
+    report while `CSP_ENFORCE` is off, and will not execute once it is on.
+    """
+    return {"csp_nonce": getattr(request, "csp_nonce", "")}

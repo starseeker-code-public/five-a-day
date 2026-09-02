@@ -54,20 +54,26 @@ def waiting_list_view(request):
             pass
 
     students = list(qs)
-    groups = Group.objects.filter(active=True).select_related("teacher").order_by("group_name")
 
-    groups_summary = []
-    for group in groups:
-        groups_summary.append(
-            {
-                "group": group,
-                "enrolled": group.enrolled_count,
-                "waiting": group.waiting_count,
-                "max_students": group.max_students,
-                "available_spots": group.available_spots,
-                "is_full": group.is_full,
-            }
-        )
+    # `group_capacity_summary()` resolves every group's enrolled/waiting counts in
+    # ONE annotated query. This loop used to read `group.enrolled_count`,
+    # `waiting_count`, `available_spots` and `is_full` off each Group — four
+    # uncached `.count()` properties, and `available_spots`/`is_full` each
+    # recompute `enrolled_count`, so it cost FOUR queries per group (53 for 13
+    # groups) on the one page whose entire purpose is showing capacity. The
+    # helper existed precisely to avoid this and simply was not called here.
+    groups_summary = group_capacity_summary()
+
+    # Per-student capacity comes out of the same rows. `student.group.is_full` in
+    # the template was another four queries per student row.
+    #
+    # A student whose preferred group is INACTIVE gets `None` here, so their row
+    # shows no capacity hint and the Matricular button is not greyed out. That is
+    # cosmetic only: `assign_from_waiting_list` re-checks `target_group.is_full`
+    # server side, and that check is the authoritative one.
+    capacity_by_group = {row["id"]: row for row in groups_summary}
+    for student in students:
+        student.group_capacity = capacity_by_group.get(student.group_id)
 
     return render(
         request,
@@ -75,7 +81,8 @@ def waiting_list_view(request):
         {
             "waiting_students": students,
             "waiting_count": len(students),
-            "groups": groups,
+            # The filter dropdown reuses the groups already fetched above.
+            "groups": [row["group"] for row in groups_summary],
             "groups_summary": groups_summary,
             "selected_group_id": group_filter,
         },
@@ -260,12 +267,16 @@ def group_capacity_summary():
         summary.append(
             {
                 "id": group.id,
+                # The Group itself, so a caller needing colour/teacher/name does not
+                # re-query. `waiting_list_view` renders all three.
+                "group": group,
                 "name": group.group_name,
                 "color": group.color,
                 "enrolled": group.enrolled,
                 "waiting": group.waiting,
                 "max_students": group.max_students,
                 "available": available,
+                "is_full": bool(group.max_students) and group.enrolled >= group.max_students,
                 "has_room_for_waiters": bool(group.waiting) and (available is None or available > 0),
             }
         )

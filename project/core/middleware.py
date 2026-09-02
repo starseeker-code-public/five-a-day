@@ -3,6 +3,7 @@ Middleware — authentication, QA error reporting, and teacher view whitelisting
 """
 
 import logging
+import secrets
 import traceback
 
 from django.conf import settings
@@ -346,11 +347,18 @@ class SecurityHeadersMiddleware:
     *consequences* of the next one is worth having even though the escaping
     discipline currently holds.
 
-    Report-only by default. The app loads Tailwind from a CDN and carries inline
-    `<script>` config blocks and inline `style=` attributes, so an enforcing
-    policy needs `'unsafe-inline'` for both — which weakens it considerably
-    against injected markup. Run report-only first, watch the console, then set
-    `CSP_ENFORCE=True` once the reports are clean.
+    Report-only by default. Since v1.24.0 `script-src` is **nonce-based**: the
+    middleware mints a per-request nonce, exposes it as `request.csp_nonce`
+    (templates read it via the `csp_nonce` context processor), and every inline
+    `<script>` block carries `nonce="{{ csp_nonce }}"`. There are no inline
+    event handlers left anywhere in the templates, so a browser that honours
+    the nonce executes ONLY our own script blocks and the allowlisted CDN —
+    injected markup cannot run. `'unsafe-inline'` stays in the list purely as a
+    legacy fallback: CSP2+ browsers ignore it whenever a nonce is present.
+    `style-src` keeps `'unsafe-inline'` for real — the templates use inline
+    `style=""` attributes throughout and Tailwind's CDN injects `<style>`.
+    Run report-only first, watch the console, then set `CSP_ENFORCE=True` once
+    the reports are clean.
 
     `frame-ancestors`, `base-uri` and `object-src` are the parts that carry real
     weight here and cost nothing: they cannot be bypassed by inline script and
@@ -358,11 +366,13 @@ class SecurityHeadersMiddleware:
     """
 
     #: Kept as a tuple of (directive, value) so the order is stable in tests.
+    #: `{nonce}` in script-src is filled per request in __call__.
     DIRECTIVES = (
         ("default-src", "'self'"),
-        # 'unsafe-inline' is required by the inline config blocks in base.html
-        # and the pre-paint theme script. Tailwind is served from its CDN.
-        ("script-src", "'self' 'unsafe-inline' https://cdn.tailwindcss.com"),
+        # The nonce authorises exactly our own inline blocks. 'unsafe-inline'
+        # is dead weight to any browser that understands nonces (they ignore
+        # it when one is present) and only serves pre-2016 browsers.
+        ("script-src", "'self' 'nonce-{nonce}' 'unsafe-inline'"),
         ("style-src", "'self' 'unsafe-inline' https://fonts.googleapis.com"),
         ("font-src", "'self' https://fonts.gstatic.com data:"),
         ("img-src", "'self' data: blob:"),
@@ -379,9 +389,14 @@ class SecurityHeadersMiddleware:
 
     def __init__(self, get_response):
         self.get_response = get_response
-        self.policy = "; ".join(f"{name} {value}" for name, value in self.DIRECTIVES)
+        self.policy_template = "; ".join(f"{name} {value}" for name, value in self.DIRECTIVES)
 
     def __call__(self, request):
+        # Minted BEFORE the view runs so templates can stamp it onto their
+        # inline <script> blocks. Safe to vary per response because
+        # NoHtmlCacheMiddleware already marks every HTML response no-store —
+        # a cached page with yesterday's nonce can never be served.
+        request.csp_nonce = secrets.token_urlsafe(16)
         response = self.get_response(request)
 
         # HTML only. Adding a CSP to a PDF or a CSV download achieves nothing
@@ -392,7 +407,7 @@ class SecurityHeadersMiddleware:
         enforce = getattr(settings, "CSP_ENFORCE", False)
         header = "Content-Security-Policy" if enforce else "Content-Security-Policy-Report-Only"
         if not response.has_header(header):
-            response[header] = self.policy
+            response[header] = self.policy_template.format(nonce=request.csp_nonce)
         if not response.has_header("Permissions-Policy"):
             response["Permissions-Policy"] = self.PERMISSIONS_POLICY
         return response
