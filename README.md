@@ -1,4 +1,4 @@
-# Five a Day eVolution
+# Five a Day Evolution
 
 <p align="center">
   <img src="project/core/static/images/logo_white_bg.png" alt="Five a Day Logo" width="320">
@@ -8,11 +8,6 @@
   <em>Albacete, Spain</em>
 </p>
 
-<p align="center">
-  <a href="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml"><img src="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
-  <img src="https://img.shields.io/badge/coverage-95.30%25-brightgreen" alt="Coverage">
-</p>
-
 ---
 
 Built to centralize student records, automate billing cycles, and streamline parent communication for a small and lovely English academy.
@@ -20,7 +15,7 @@ Built to centralize student records, automate billing cycles, and streamline par
 ### Project Status
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v1.26.2-brightgreen?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-v1.26.3-brightgreen?style=flat-square" alt="Version">
   &nbsp;|&nbsp;
   <a href="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml?query=branch%3Amain"><img src="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml/badge.svg?branch=main&style=flat-square" alt="CI main"></a>
   &nbsp;|&nbsp;
@@ -41,19 +36,18 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 | Version | Date | Description |
 |---------|------|-------------|
-| **v1.26.2** | 2026-09-02 | Dockerfile build fix, DRF CVE bump |
+| **v1.26.3** | 2026-09-02 | Restore Cloud SQL socket path clobbered by timeout merge |
+| v1.26.2 | 2026-09-02 | Dockerfile build fix, DRF CVE bump |
 | v1.26.1 | 2026-09-02 | Query-cost sweep: N+1 fixes, billing idempotency constraints |
-| v1.26.0 | 2026-09-01 | Full code review, admin hardening, dead code removed |
-
+| v1
 ---
 
 ## Table of Contents
 
-- [Five a Day eVolution](#five-a-day-evolution)
+- [Five a Day Evolution](#five-a-day-evolution)
     - [Project Status](#project-status)
   - [Table of Contents](#table-of-contents)
-  - [Version History \& Roadmap](#version-history--roadmap)
-    - [Roadmap](#roadmap)
+  - [Version History](#version-history)
   - [Tech Stack](#tech-stack)
     - [Backend](#backend)
     - [Frontend](#frontend)
@@ -69,7 +63,6 @@ Built to centralize student records, automate billing cycles, and streamline par
     - [Make Commands](#make-commands)
     - [Environment Configuration](#environment-configuration)
     - [Environment Variables Reference](#environment-variables-reference)
-    - [App Versioning](#app-versioning)
   - [Project Structure \& Architecture](#project-structure--architecture)
     - [Architecture Overview](#architecture-overview)
     - [App Dependency Flow](#app-dependency-flow)
@@ -132,10 +125,7 @@ Built to centralize student records, automate billing cycles, and streamline par
     - [Branch Strategy](#branch-strategy)
     - [Workflows](#workflows)
     - [Automated Flows](#automated-flows)
-    - [Branch Protection — `main`](#branch-protection--main)
-    - [Branch Protection — `testing`](#branch-protection--testing)
     - [Public Repository Hardening](#public-repository-hardening)
-    - [Required GitHub Secrets](#required-github-secrets)
     - [Email Notifications](#email-notifications)
     - [Dependabot](#dependabot)
     - [CodeQL Security Scanning](#codeql-security-scanning)
@@ -148,10 +138,30 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 ---
 
-## Version History & Roadmap
+## Version History
 
-<details id="v1262" open>
-<summary><strong>v1.26.2 — Dockerfile build fix + djangorestframework CVE bump (current)</strong></summary>
+<details id="v1263" open>
+<summary><strong>v1.26.3 — Restore the Cloud SQL socket path clobbered by the statement-timeout merge (current)</strong></summary>
+
+**Production hotfix**
+
+- The v1.26.2 production deploy failed at the migrate step: v1.26.1 added the
+  statement-timeout to the `DATABASE_URL` branch with a dict-union that **replaced**
+  the whole driver `OPTIONS` — and for a Cloud SQL URL the Unix-socket path travels as
+  `OPTIONS["host"]` (with `sslmode` beside it), so psycopg2 fell back to the default
+  local socket. Invisible everywhere else: dev and the testing VM use the `POSTGRES_*`
+  TCP branch, and the isolation test probed a TCP-shaped URL whose `OPTIONS` are empty.
+  The timeout now **merges** into the OPTIONS `dj_database_url.config()` builds, and a
+  regression test asserts the socket path survives.
+- Docs: deploy workflows integrated into the README pipeline diagram and Automated
+  Flows; Roadmap, App Versioning, Branch Protection and Required GitHub Secrets
+  sections removed; title renamed to "Five a Day Evolution"; Dependabot security-fix
+  auto-PRs documented as disabled.
+
+</details>
+
+<details id="v1262">
+<summary><strong>v1.26.2 — Dockerfile build fix + djangorestframework CVE bump</strong></summary>
 
 **CI unblock**
 
@@ -2346,22 +2356,6 @@ All tools configured in `pyproject.toml` — single source of truth.
 
 </details>
 
-### Roadmap
-
-<details id="roadmap">
-<summary><strong>Click to expand roadmap (all shipped)</strong></summary>
-
-All v1.1 – v1.14 milestones are shipped, and production went live on Cloud Run
-in v1.14.7. Post-v1.12 evolution happens in directly-scoped work rather than the
-numbered roadmap; add new items here when they're planned and dated.
-
-Two pieces of work are tracked but deliberately deferred (see [CLAUDE.md](CLAUDE.md)):
-
-- **`comms` reaches up into `core` twice** — `comms/tasks.py` lazily imports `core.schedule_utils` and `core.models.FunFridayScheduledSend`, which reverses the documented dependency flow. Both imports are function-body, so there is no cycle today; the cost is coupling.
-- **Django 6.1 email deprecations** — the whole `EMAIL_*` settings family is superseded by `MAILERS`, and `EmailMessage.send(fail_silently=...)` is deprecated (56 `RemovedInDjango70Warning`s in the suite). Nothing breaks before Django 7.0, but this must land before the `<7` bound is lifted.
-
-</details>
-
 ---
 
 ## Tech Stack
@@ -2383,9 +2377,9 @@ Two pieces of work are tracked but deliberately deferred (see [CLAUDE.md](CLAUDE
 
 | Technology | Purpose |
 |-----------|---------|
-| [Tailwind CSS](https://tailwindcss.com/) (CDN) | Utility-first CSS with custom violet primary palette |
+| [Tailwind CSS](https://tailwindcss.com/) (vendored Play build, v1.26.0) | Utility-first CSS with custom violet primary palette — self-hosted `js/vendor/tailwindcss-play-3.4.17.js`, no CDN, no build tools |
 | [Google Fonts](https://fonts.google.com/) | Material Symbols Outlined (icons), Montserrat Alternates (login), Parisienne (login accent) |
-| Vanilla JavaScript | 16 static modules — zero build tools, no framework |
+| Vanilla JavaScript | 17 static modules — zero build tools, no framework |
 
 ### Infrastructure & Deployment
 
@@ -3143,25 +3137,6 @@ The table below describes every variable in the [.env template](#env-template) a
 | `TEST_DB_HOST` | Postgres host for the test database — `make test` sets `db` inside Docker | No | `localhost` |
 | `TEST_DB_ENGINE` | Set to `sqlite` for a Docker-free local fallback. Not for CI or normal use — always prefer `make test` against Postgres | No | postgres |
 | `SESSION_COOKIE_AGE` | Session duration (seconds) — sessions expire after this much inactivity, since `SESSION_SAVE_EVERY_REQUEST` is on | No | `21600` (6 h) |
-
-### App Versioning
-
-**`pyproject.toml` is the single source of truth.** `make version x.y.z` updates it plus the two places that cannot read it themselves:
-
-1. **`pyproject.toml`** — `version = "x.y.z"` — **the source**
-2. **`README.md`** — the header version badge URL (static markdown; nothing can derive it)
-3. **`uv.lock`** — regenerated via `uv lock --quiet` so the lockfile's own `[[package]]` entry stays in sync
-
-**`settings.py` holds no copy.** `APP_VERSION` reads `pyproject.toml` at import time via `tomllib`, so it cannot lag. (`importlib.metadata` is unusable here: the Docker build runs `uv sync --no-install-project`, so the app is never installed as a distribution — but `COPY . .` does place `pyproject.toml` one level above `BASE_DIR`.) If the file is unreadable the value becomes the literal `"unknown"` rather than a plausible-looking stale number, so a broken deploy is obvious on `/health/`.
-
-This used to be four hand-maintained places, and the copies drifted: v1.20.0 shipped with the `settings.py` bump missing and needed a follow-up commit purely to repair it. [`tests/unit/test_version_consistency.py`](project/tests/unit/test_version_consistency.py) now fails the build if the badge, the lockfile, or the Recent Versions table falls out of step with `pyproject.toml`.
-
-`make version x.y.z` prompts `Version A will become the new version B, are you sure?` before writing. Running `make version` with no argument prints both the pyproject and README badge values side-by-side and warns if they've drifted. `make pc-run` also auto-bumps the patch digit on successful pre-commit (y/N prompt) and stages the regenerated `uv.lock` automatically.
-
-The version appears in:
-- `/health/` endpoint response
-- Support ticket emails
-- Can be overridden at runtime via the `APP_VERSION` environment variable (do **not** leave a legacy value like `0.x.y` in `.env` — remove the line so the value derived from `pyproject.toml` takes effect)
 
 ---
 
@@ -4235,10 +4210,19 @@ git merge development → testing
 (commit: "YYYY-MM-DD - <last commit message>")
         │
         ├── CI re-runs on testing
-        └── PR created: testing → main
+        ├── staging tag testing-vX.Y.Z pushed
+        ├── PR created: testing → main
+        └── Email to owners (OWNER_EMAILS)
         │
+        │  nightly window 02:00-05:00 Europe/Madrid
         ▼
-Email to owners (OWNER_EMAILS)
+Deploy testing  (deploy-testing.yml)
+  • /health/ on the VM ≠ version on origin/testing?
+  • dirty-tree gate + DB-volume gate on the VM
+        │ versions differ
+        ▼
+Testing VM updated (git pull + two-file compose stack)
+→ post-deploy verification + result email
         │
         ▼
 Manual review + Code Owner approval
@@ -4246,9 +4230,19 @@ Manual review + Code Owner approval
         ▼
 Merge to main (protected — all checks required)
         │
+        ├── release tag vX.Y.Z + email to hellofiveaday@gmail.com
+        │   (notify-production.yml — informational; deploying is
+        │    the next workflow's job, the email is the paper trail)
         ▼
-Email to hellofiveaday@gmail.com
-(production deploy ready)
+Deploy production  (deploy-production.yml) — arms itself on the push
+  • waits for CI to go green on the merge commit
+  • lists the migrations the release carries
+  • BLOCKS on the `production` environment's required reviewer
+        │ you approve (nothing deploys production on a timer)
+        ▼
+Verified Cloud SQL backup → repoint ALL Cloud Run jobs to the
+new image → migrate → roll out the service → /health/?deep=1
+verification + row-count delta check
 ```
 
 ### Branch Strategy
@@ -4293,66 +4287,30 @@ Concurrent CI runs on the same branch cancel each other automatically — new pu
 - Opens PR `testing → main` if one is not already open (title matches the merge commit)
 - Sends an HTML email to `TESTING_NOTIFY_EMAILS` (falling back to `OWNER_EMAILS`) with version bump, staging tag, and a "Review PR" button
 
-**2b. You merge the PR → release tag on main**
+**3. The nightly testing deploy picks it up (deploy-testing.yml)**
 
+- Runs in a 02:00-05:00 Europe/Madrid window (two UTC cron ticks + an hour-window gate — GitHub cron is best-effort, so a window absorbs late ticks; a second tick finds nothing to do)
+- Deploys **only when** `/health/` on the VM disagrees with `pyproject.toml` on `origin/testing` — a green run that deployed nothing is normal
+- On the VM: dirty-tree gate, `git pull`, the **two-file** compose stack (`-f docker-compose.yml -f docker-compose.testing.yml`), a DB-volume assertion, then post-deploy verification and a result email
+- Holds an SSH deploy key and **no GCP credential at all** — the one unattended pipeline cannot reach production
+- `workflow_dispatch` bypasses the window gate for an off-schedule deploy
+
+**4. You merge the PR → release tag on main**
+
+- All required checks must pass first, and you cannot approve your own PR — the second owner account approves. Merge with a **merge commit**, not a squash (a squash re-orphans `testing`'s history and revives the six-file release conflicts)
 - `notify-production.yml` reads `version` from `pyproject.toml` on `main`'s new HEAD
 - **Creates and pushes an annotated release tag `vX.Y.Z`** on that commit (skipped if tag already exists)
 - Sends an HTML email to `hellofiveaday@gmail.com` with the release tag and `gcloud` deploy steps
 
 The two tag namespaces (`testing-vX.Y.Z` and `vX.Y.Z`) are fully independent — the `testing → main` PR can use any merge strategy (merge commit, squash, or rebase) because the release tag is derived from `pyproject.toml`, not from commit SHA continuity.
 
-**3. You review and merge the PR**
+**5. Production deploy arms itself (deploy-production.yml)**
 
-- All required checks must pass (Lint, Type check, Tests, CodeQL alerts, Code Owner approval)
-- You cannot approve your own PR — the second owner account approves
-- On merge, `main` is updated
-
-**4. Production notification fires**
-
-- `notify-production.yml` sends an email to `hellofiveaday@gmail.com` (plus `SUPPORT_EMAIL` when set)
-- Email contains commit info, file-change summary, and the exact `gcloud` commands to deploy to Cloud Run
-
-### Branch Protection — `main`
-
-Configure at **Settings → Branches → Add ruleset**, target `main`:
-
-**Required status checks** (names must match CI job names exactly):
-
-| Check | Workflow |
-|-------|----------|
-| `Lint` | ci.yml |
-| `Type check` | ci.yml |
-| `Tests` | ci.yml |
-| `Analyze Python` | codeql.yml |
-
-**Protection rules** (every item below enabled):
-
-| Rule | Setting |
-|------|---------|
-| Require a pull request before merging | ✓ |
-| Required approvals | **1** (higher if you add collaborators) |
-| Dismiss stale reviews when new commits are pushed | ✓ |
-| Require review from Code Owners | ✓ |
-| Require status checks to pass | ✓ |
-| Require branches to be up to date before merging | ✓ |
-| Require conversation resolution before merging | ✓ |
-| Require signed commits | ✓ (strongly recommended for a public repo) |
-| Require linear history | ✓ (enforces squash/rebase merges) |
-| Restrict who can push to matching branches | ✓ |
-| Do not allow bypassing the above settings | ✓ (admins follow the same rules) |
-| Allow force pushes | ✗ |
-| Allow deletions | ✗ |
-
-### Branch Protection — `testing`
-
-`testing` needs direct pushes from the auto-merge workflow, so PR requirements are **not** enforced. Apply only safety rails:
-
-| Rule | Setting |
-|------|---------|
-| Require a pull request before merging | ✗ |
-| Allow force pushes | ✗ |
-| Allow deletions | ✗ |
-| Require status checks to pass (optional) | ✓ — lets CI block a broken auto-merge from polluting `testing` further |
+- Triggers on the push to `main` — no timer is ever involved
+- A credential-free **preflight** waits for CI to go green on the merge commit and lists the migrations the release carries
+- Then it **blocks on the `production` GitHub environment's required reviewer** — your approval is the deploy button
+- On approval (via Workload Identity Federation scoped to the `production` environment): verified Cloud SQL backup → **every** Cloud Run job repointed to the new image (enumerated, not hard-coded) → migrations → service rollout → `/health/?deep=1` verification and a row-count delta check
+- `notify-production.yml` separately emails `hellofiveaday@gmail.com` (plus `SUPPORT_EMAIL` when set) with commit info and the by-hand `gcloud` steps — informational paper trail and manual fallback (`/deploy` skill); the workflow above is the deploy
 
 ### Public Repository Hardening
 
@@ -4376,29 +4334,6 @@ Because this repository is **public**, extra care is taken to prevent accidental
 
 The `.env` file is gitignored and **never** committed. Production secrets live in GCP Secret Manager (see [DEPLOYMENT.md](DEPLOYMENT.md)), not in the repository or in GitHub Secrets. GitHub Secrets are used only for CI operations (sending notification emails, uploading coverage).
 
-### Required GitHub Secrets
-
-Configure at **Settings → Secrets and variables → Actions**:
-
-| Secret | Required by | Purpose |
-|--------|-------------|---------|
-| `GH_PAT` | auto-merge.yml | Fine-grained Personal Access Token. Pushes to `testing` and creates PRs *while triggering downstream CI* (which the default `GITHUB_TOKEN` cannot do). Permissions: Contents RW, Pull requests RW, Checks R, Metadata R |
-| `EMAIL_HOST_USER` | auto-merge.yml, notify-production.yml | Gmail address used to send notification emails |
-| `EMAIL_SECRET` | auto-merge.yml, notify-production.yml | Gmail App Password — can be the same one the application uses for transactional email |
-| `OWNER_EMAILS` | auto-merge.yml | Comma-separated fallback recipient list for the `development → testing` merge notification (used when `TESTING_NOTIFY_EMAILS` is unset) |
-| `TESTING_NOTIFY_EMAILS` | auto-merge.yml | Comma-separated recipients for the `development → testing` deploy email — support + the two admin teachers. Preferred over `OWNER_EMAILS` |
-| `TESTING_URL` | auto-merge.yml | Base URL of the testing environment, used for the "Open testing environment" button (falls back to the testing VM IP) |
-| `SUPPORT_EMAIL` | notify-production.yml | Support address added (alongside `hellofiveaday@gmail.com`) to the production deploy email |
-| `PRODUCTION_URL` | notify-production.yml | Base URL of production — adds the "Abrir producción" button to the production email. **Set** (v1.14.7) to `https://fiveaday-332600671945.europe-southwest1.run.app` |
-| `TESTING_VM_SSH_KEY` | deploy-testing.yml | ed25519 private key for the VM's `fiveaday-ci` user. The nightly deploy holds **no** GCP credential, so its blast radius is one rebuildable VM. Provisioned by `scripts/setup_cicd.sh` |
-| `TESTING_VM_KNOWN_HOSTS` | deploy-testing.yml | Pinned host key for the testing VM. If unset the workflow falls back to `StrictHostKeyChecking=accept-new` and warns |
-| `TESTING_VM_HOST` / `TESTING_VM_USER` | deploy-testing.yml | Default to `34.26.130.187` / `fiveaday-ci` when unset |
-| `GCP_WIF_PROVIDER` | deploy-production.yml | Workload Identity Federation provider resource. No key is stored — and the service-account binding is scoped to `attribute.environment/production`, so only an approved job can mint a token |
-| `GCP_DEPLOY_SA` | deploy-production.yml | `fiveaday-deploy@five-a-day-evolution.iam.gserviceaccount.com` |
-| `HEALTH_PROBE_TOKEN` | deploy-production.yml | **Set** (2026-08-31). Unlocks row counts on `/health/?deep=1` so a production deploy can prove the release landed on the right database. Must match the Secret Manager secret of the same name that Cloud Run reads |
-
-**Rotate `GH_PAT` annually.** Without it, the auto-merge falls back to the default `GITHUB_TOKEN`, which cannot trigger CI on PRs it creates — breaking the pipeline silently.
-
 ### Email Notifications
 
 | Event | Recipient | Sent by |
@@ -4419,6 +4354,8 @@ Dependabot opens **weekly PRs on `development`** (Mondays, 08:00 Europe/Madrid) 
 - **Docker** (v1.26.0) — the digest-pinned `python:3.12-slim` base image in the `Dockerfile`. Without this entry nothing watched the container base at all.
 
 PRs are labelled `dependencies` + `python` or `github-actions` for easy filtering. **Every Dependabot PR is reviewed and merged by hand — nothing merges them automatically.** CI runs on PRs into `development`, so a bump's checks are visible before you merge it. Once merged, the normal 24 h cycle carries the update to `testing` and then to `main`.
+
+**Automatic security-fix PRs are disabled (2026-09-02).** GitHub hard-wires that PR flavour to the default branch (`main`) and no config retargets it, which conflicts with the development → testing → main release path. Dependabot **alerts** remain enabled in the Security tab; enforcement is `pip-audit` failing CI on `development` the moment a CVE is published (proven with DRF CVE-2026-73228/73229, fixed in v1.26.2 before Dependabot's own PR could have been merged). If a stray security PR against `main` ever appears, close it — merging it plants a commit on `main` that is not an ancestor of `testing`.
 
 ### CodeQL Security Scanning
 
