@@ -422,3 +422,120 @@ class TestBacklogOrdering:
         response = qa_client.get(reverse("export_backlog_tasks"), {"format": "json", "scope": "all"})
         ids = [row["id"] for row in json.loads(response.content)["tasks"]]
         assert ids.index(still_open.id) < ids.index(done.id)
+
+
+# ============================================================================
+# api_mark_ready — the QA sign-off that unlocks the production deploy
+# ============================================================================
+
+
+class TestApiMarkReady:
+    """The '¿Listo para desplegar?' button: emails support AND sets
+    QAConfiguration.ready_for_prod, the flag deploy-production.yml's preflight
+    reads through /health/?deep=1. The flag is set only when the email actually
+    went out, so success always means both happened."""
+
+    @override_settings(IS_TESTING_ENV=True, SUPPORT_EMAIL="sup@test.com")
+    def test_success_sends_email_and_opens_the_production_gate(self, qa_client, mailoutbox):
+        from core.models import QAConfiguration
+
+        assert QAConfiguration.get_config().ready_for_prod is False
+
+        response = qa_client.post(reverse("api_mark_ready"), data="{}", content_type="application/json")
+
+        body = response.json()
+        assert response.status_code == 200
+        assert body["success"] is True
+        assert body["ready_for_prod"] is True
+        assert len(mailoutbox) == 1
+        assert mailoutbox[0].to == ["sup@test.com"]
+        assert QAConfiguration.get_config().ready_for_prod is True
+
+    @override_settings(IS_TESTING_ENV=True, SUPPORT_EMAIL="sup@test.com")
+    def test_email_failure_keeps_the_gate_closed(self, qa_client):
+        from core.models import QAConfiguration
+
+        with patch("core.views.testing_tools.send_mail", side_effect=RuntimeError("smtp down")):
+            response = qa_client.post(reverse("api_mark_ready"), data="{}", content_type="application/json")
+
+        assert response.status_code == 500
+        assert response.json()["success"] is False
+        assert QAConfiguration.get_config().ready_for_prod is False
+
+    @override_settings(IS_TESTING_ENV=True, SUPPORT_EMAIL=None)
+    def test_missing_support_email_keeps_the_gate_closed(self, qa_client):
+        from core.models import QAConfiguration
+
+        response = qa_client.post(reverse("api_mark_ready"), data="{}", content_type="application/json")
+
+        assert response.status_code == 500
+        assert QAConfiguration.get_config().ready_for_prod is False
+
+    def test_404_for_non_qa_user(self, authenticated_client):
+        response = authenticated_client.post(reverse("api_mark_ready"), data="{}", content_type="application/json")
+        assert response.status_code == 404
+
+
+# ============================================================================
+# /health/?deep=1 — ready_for_prod exposure (testing environment only)
+# ============================================================================
+
+
+class TestReadyForProdInHealth:
+    """The flag rides the DEEP probe only: the shallow /health/ response must
+    never touch the database, and the flag is a database row."""
+
+    @override_settings(IS_TESTING_ENV=True)
+    def test_deep_probe_reports_the_flag(self, client):
+        from core.models import QAConfiguration
+
+        response = client.get(reverse("health_check"), {"deep": "1"})
+        assert response.status_code == 200
+        assert response.json()["ready_for_prod"] is False
+
+        config = QAConfiguration.get_config()
+        config.ready_for_prod = True
+        config.save()
+
+        assert client.get(reverse("health_check"), {"deep": "1"}).json()["ready_for_prod"] is True
+
+    @override_settings(IS_TESTING_ENV=True)
+    def test_shallow_response_never_carries_it(self, client):
+        response = client.get(reverse("health_check"))
+        assert response.status_code == 200
+        assert "ready_for_prod" not in response.json()
+
+    @override_settings(IS_TESTING_ENV=False)
+    def test_absent_outside_the_testing_environment(self, client):
+        response = client.get(reverse("health_check"), {"deep": "1"})
+        assert response.status_code == 200
+        assert "ready_for_prod" not in response.json()
+
+
+# ============================================================================
+# manage.py set_ready_for_prod — the nightly deploy's reset hook
+# ============================================================================
+
+
+class TestSetReadyForProdCommand:
+    def test_off_locks_and_on_unlocks(self):
+        from django.core.management import call_command
+
+        from core.models import QAConfiguration
+
+        config = QAConfiguration.get_config()
+        config.ready_for_prod = True
+        config.save()
+
+        call_command("set_ready_for_prod", "off")
+        assert QAConfiguration.get_config().ready_for_prod is False
+
+        call_command("set_ready_for_prod", "on")
+        assert QAConfiguration.get_config().ready_for_prod is True
+
+    def test_rejects_unknown_state(self):
+        from django.core.management import call_command
+        from django.core.management.base import CommandError
+
+        with pytest.raises(CommandError):
+            call_command("set_ready_for_prod", "maybe")

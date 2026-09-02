@@ -42,7 +42,7 @@
 <p>El interruptor <strong>Reporte de errores</strong> activa o desactiva el envío automático de errores por email al soporte. Úsalo para no inundar de correos mientras haces pruebas ruidosas.</p>
 
 <h4 style="font-weight:700;margin-top:1rem;">¿Listo para desplegar?</h4>
-<p>El botón de tick verde envía —tras confirmar— un aviso por email al soporte y a los profesores administradores de que <strong>esta versión está validada y lista para desplegar</strong>.</p>
+<p>El botón de tick verde envía —tras confirmar— un aviso por email al soporte y a los profesores administradores de que <strong>esta versión está validada y lista para desplegar</strong>. Además <strong>desbloquea el despliegue a producción</strong>: el workflow de producción no se arma hasta que este entorno marca la versión como lista (<code>ready_for_prod</code> en <code>/health/?deep=1</code>). Cada despliegue nocturno a pruebas vuelve a bloquearla.</p>
 
 <h4 style="font-weight:700;margin-top:1rem;">Accesos rápidos</h4>
 <p>Enlaces directos a Admin de Django, Google Drive, Google Cloud, la documentación en GitHub y un servicio de correo temporal (útil para probar altas y emails con direcciones desechables).</p>
@@ -103,11 +103,9 @@
                     <div class="qa-info-row"><span class="qa-info-label">Version</span><span class="qa-info-value">v{{ app_version }}</span></div>
                     <div class="qa-info-row"><span class="qa-info-label">Entorno</span><span class="qa-info-value">{{ environment }}</span></div>
                     <div class="qa-info-row"><span class="qa-info-label">Debug</span><span class="qa-info-value">{{ debug }}</span></div>
-                    <div class="qa-info-row"><span class="qa-info-label">Python</span><span class="qa-info-value">{{ python_version }}</span></div>
-                    <div class="qa-info-row"><span class="qa-info-label">Django</span><span class="qa-info-value">{{ django_version }}</span></div>
+                    <div class="qa-info-row"><span class="qa-info-label">Python y Django</span><span class="qa-info-value">PY: {{ python_version }} | DJ: {{ django_version }}</span></div>
                     <div class="qa-info-row"><span class="qa-info-label">Base de datos</span><span class="qa-info-value">{{ database_name }}</span></div>
-                    <div class="qa-info-row"><span class="qa-info-label">Hora del servidor</span><span class="qa-info-value">{{ server_time }}</span></div>
-                    <div class="qa-info-row"><span class="qa-info-label">Zona horaria</span><span class="qa-info-value">{{ timezone }}</span></div>
+                    <div class="qa-info-row"><span class="qa-info-label">Hora (server)</span><span class="qa-info-value">{{ server_time }} | {{ timezone }}</span></div>
                 </div>
                 <div>
                     <p class="text-xs font-semibold text-neutral-400 uppercase tracking-wider mb-1">Ultimo commit</p>
@@ -196,13 +194,20 @@
                         </div>
                         <div>
                             <h2 class="text-sm font-bold text-neutral-800">¿Listo para desplegar?</h2>
-                            <p class="text-xs text-neutral-500">Avisa al soporte que esta versión está lista</p>
+                            <p class="text-xs text-neutral-500">Avisa al soporte y desbloquea el despliegue a producción</p>
                         </div>
                     </div>
                     <button id="ready-ship-btn" class="circle-btn bg-emerald-600 hover:bg-emerald-700" title="Marcar como listo y enviar aviso">
                         <span class="material-symbols-outlined text-[22px]">check</span>
                     </button>
                 </div>
+                <p class="text-xs mt-2 text-neutral-500">Estado:
+                    {% if qa_config.ready_for_prod %}
+                    <span id="ready-ship-state" style="color:#16a34a;font-weight:600;">lista para producción</span>
+                    {% else %}
+                    <span id="ready-ship-state" style="color:#d97706;font-weight:600;">pendiente de validar</span>
+                    {% endif %}
+                </p>
                 <p id="ready-ship-msg" class="text-xs mt-2 hidden"></p>
             </div>
 
@@ -321,7 +326,7 @@
                         class="verify-btn backlog-verify-btn{% if task.verified %} is-verified{% endif %}"
                         data-task-id="{{ task.id }}"
                         aria-pressed="{% if task.verified %}true{% else %}false{% endif %}"
-                        title="{% if task.verified %}Verificado por QA — pulsa para desmarcar{% else %}Marcar como verificado por QA{% endif %}">
+                        title="{% if task.verified %}desarrollado — pulsa para desmarcar{% else %}Marcar como desarrollado{% endif %}">
                     <span class="material-symbols-outlined text-[20px]">check_circle</span>
                 </button>
                 <div class="flex-1 min-w-0">
@@ -356,7 +361,7 @@
             <span class="material-symbols-outlined text-emerald-600">rocket_launch</span>
         </div>
         <h2 class="text-lg font-bold text-neutral-800 mb-1">¿Marcar esta versión como lista?</h2>
-        <p class="text-sm text-neutral-500 mb-5">Se enviará un correo al soporte y a los profesores administradores avisando de que <strong>v{{ app_version }}</strong> está lista para desplegar.</p>
+        <p class="text-sm text-neutral-500 mb-5">Se enviará un correo al soporte y a los profesores administradores avisando de que <strong>v{{ app_version }}</strong> está lista para desplegar, y se <strong>desbloqueará el despliegue a producción</strong> de esta versión.</p>
         <div class="flex gap-3 justify-center">
             <button type="button" id="ready-cancel-btn" class="px-5 py-2 rounded-full text-sm font-semibold bg-primary-100 text-primary-700 hover:bg-primary-200">Cancelar</button>
             <button type="button" id="ready-confirm-btn" class="px-5 py-2 rounded-full text-sm font-semibold text-white bg-emerald-600 hover:bg-emerald-700">Sí, marcar como lista</button>
@@ -448,6 +453,10 @@
             .then(data => {
                 readyMsg.style.color = data.success ? '#16a34a' : '#dc2626';
                 readyMsg.textContent = data.success ? ('✓ ' + data.message) : ('Error: ' + data.message);
+                if (data.success && data.ready_for_prod) {
+                    const state = document.getElementById('ready-ship-state');
+                    if (state) { state.textContent = 'lista para producción'; state.style.color = '#16a34a'; }
+                }
             })
             .catch(err => { readyMsg.style.color = '#dc2626'; readyMsg.textContent = 'Error: ' + err; })
             .finally(() => { readyBtn.disabled = false; });
@@ -510,7 +519,7 @@
                 item.dataset.taskId = t.id;
                 item.innerHTML = `
                     <span class="priority-badge priority-${escapeHtml(t.priority)}">${escapeHtml(t.priority)}</span>
-                    <button type="button" class="verify-btn backlog-verify-btn" data-task-id="${t.id}" aria-pressed="false" title="Marcar como verificado por QA">
+                    <button type="button" class="verify-btn backlog-verify-btn" data-task-id="${t.id}" aria-pressed="false" title="Marcar como desarrollado">
                         <span class="material-symbols-outlined text-[20px]">check_circle</span>
                     </button>
                     <div class="flex-1 min-w-0">
@@ -548,8 +557,8 @@
                     btn.classList.toggle('is-verified', data.verified);
                     btn.setAttribute('aria-pressed', data.verified ? 'true' : 'false');
                     btn.title = data.verified
-                        ? 'Verificado por QA — pulsa para desmarcar'
-                        : 'Marcar como verificado por QA';
+                        ? 'desarrollado — pulsa para desmarcar'
+                        : 'Marcar como desarrollado';
                 }
             })
             .finally(() => { btn.disabled = false; });

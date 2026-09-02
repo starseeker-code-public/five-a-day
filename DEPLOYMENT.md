@@ -812,12 +812,20 @@ OLD_SHA=$(gcloud run services describe fiveaday --region=$REGION \
 git diff --name-only $OLD_SHA..$(git rev-parse --short origin/main) -- '*/migrations/*.py'
 ```
 
-Rollback is a traffic shift, no rebuild needed:
+Rollback: prefer the **Rollback production** workflow (Actions tab), which repoints the
+service AND all Cloud Run jobs at a previous image and verifies `/health/` afterwards. By
+hand, redeploy the previous image tag rather than shifting traffic to a named revision:
 
 ```bash
 gcloud run revisions list --service=fiveaday --region=$REGION
-gcloud run services update-traffic fiveaday --region=$REGION --to-revisions=<PREVIOUS>=100
+gcloud run deploy fiveaday --image=$IMAGE_BASE:<PREVIOUS_SHA> --region=$REGION
+# and repoint every job (gcloud run jobs list … | gcloud run jobs update … --image=…)
 ```
+
+> `gcloud run services update-traffic --to-revisions=<X>=100` also works, but it PINS
+> traffic to that revision: every later `gcloud run deploy` then lands with **0 % traffic**
+> and its verify step fails while production silently keeps serving the pinned revision.
+> If you ever use it, undo the pin afterwards with `--to-latest`.
 
 ### One-off: reconciling the billing schedule (v1.22.0)
 
@@ -1043,9 +1051,13 @@ production is never deployed by a timer.
 | Credential | SSH deploy key (repo secret) | Workload Identity Federation (no stored key) |
 | Manual run | `workflow_dispatch`, with a `force` input | `workflow_dispatch`, with a `force` input |
 
-Both are additions to the pipeline, not replacements: the `/deploy` skill is still the
-by-hand path when you need to ship right now, and it is the documented fallback if a workflow
-is broken.
+A third workflow, **`Rollback production`** (`rollback-production.yml`), is dispatch-only: it
+rolls the service and every Cloud Run job back to a previous image tag behind the same
+`production` approval gate. See [Rollback](#rollback--automatic-on-failure-on-demand-by-workflow).
+
+Both deploy workflows are additions to the pipeline, not replacements: the `/deploy` skill is
+still the by-hand path when you need to ship right now, and it is the documented fallback if a
+workflow is broken.
 
 > **Neither workflow does anything until it is on `main`.** `on: schedule` only ever fires for
 > the repository's default branch, and the production workflow triggers on `push` to `main`.
@@ -1068,6 +1080,7 @@ when they differ, so a quiet night costs one `curl`.
                   gate: db mounted *_testing_postgres_data
                   gate: no dangling testing volume
                   wait for /health/ to report the new version (10 min budget)
+                  reset ready_for_prod=false (locks the new version for production)
                   re-read row counts and diff against the baseline
        →  email   success or failure, to TESTING_NOTIFY_EMAILS
 ```
@@ -1094,19 +1107,38 @@ Three details that are load-bearing:
 
 An unreachable VM counts as a reason to deploy: a stack that is not answering gets rebuilt.
 
+**Every fresh deploy locks the version for production.** The deploy's last remote action runs
+`manage.py set_ready_for_prod off` in the web container and asserts through
+`/health/?deep=1` that `ready_for_prod` reads `false`. Only the **¿Listo para desplegar?**
+button on `/testing/` (admin teacher, QA dashboard) sets it back to `true` — that click is
+QA's sign-off, and the production workflow's preflight refuses to arm a release without it.
+Because the nightly deploy resets the flag on every new version, a sign-off always refers to
+the exact version it was given on; it can never silently cover a later, untested build.
+Manual repair (both directions): `python manage.py set_ready_for_prod on|off` inside the
+`fiveaday_django` container.
+
 ### Production deploy — armed automatically, shipped by hand
 
 When the `testing → main` release PR merges, the workflow arms itself and then stops:
 
 ```text
 push to main  →  preflight   read pyproject.toml on main + /health/ on production
-                             already the same version? stop
+                             GATE: /health/?deep=1 on TESTING must be healthy,
+                                   serve this exact version, and report
+                                   ready_for_prod=true (the QA sign-off)
+                             already the same version in production? stop
                              WAIT for CI to go green on this exact commit (45 min budget)
                              list the migrations in this release
                              write it all to the run summary
               →  deploy      ⏸ BLOCKED on the `production` environment
                              (required reviewer + 5-minute wait timer)
 ```
+
+So a release clears **two human gates**: QA's sign-off on the testing dashboard (phase 1,
+checked automatically) and the required reviewer's approval on the run (phase 2). A
+`workflow_dispatch` with `force=true` bypasses the sign-off gate as well as the version
+compare — it exists for emergencies (e.g. redeploying the same version after an env-var
+repair) and says so loudly in the log.
 
 Nothing touches GCP until somebody opens the run and clicks **Review deployments →
 production → Approve and deploy**. The automation does the waiting and the reporting; the
@@ -1145,6 +1177,38 @@ Two places the workflow is stricter than the by-hand procedure:
 - **Migrations run when they cannot be ruled out.** If the deployed image tag is not a commit
   in the repo the diff is impossible, so `fiveaday-migrate` runs anyway — `manage.py migrate`
   on an up-to-date schema is a no-op, whereas a skipped migration is not.
+
+### Rollback — automatic on failure, on-demand by workflow
+
+**Automatic.** If the deploy job fails *after* it has started changing production (the job
+repoint is the first write), a rollback step repoints every Cloud Run job back at the
+previous image and — when the rollout had already run — redeploys the service from that
+image and re-verifies `/health/`. Its outcome (`revertido` / `fallido` / `manual` /
+`inconcluso`) is reported in the run summary and the failure email. A failure *before* the
+first write (backup checks, build) triggers no rollback because production was never touched.
+
+**On-demand.** `.github/workflows/rollback-production.yml` (Actions → **Rollback
+production**) is for the breakage discovered after a green deploy, or for finishing a failed
+automatic rollback. Left empty, `image_tag` resolves to the most recent revision image that
+differs from the serving one; passing a git short SHA targets exactly that build. It runs
+under `environment: production`, so it needs the same approval click as a deploy (and could
+not mint a WIF token otherwise), shares the deploy concurrency group so it can never race
+one, and verifies `/health/` reports the version recorded in that commit's `pyproject.toml`.
+
+Three rules both paths obey:
+
+- **The database is never rolled back.** Migrations applied by the retired release stay
+  applied — old code on the new schema is the same state every deploy passes through, since
+  migrate runs before the rollout. Restoring the pre-deploy backup (its id is in the failure
+  email) discards everything written since, so it stays a manual decision.
+- **Rollback = redeploy the old image, never a traffic pin.** `update-traffic` to a named
+  revision makes every future deploy land at 0 % traffic and silently fail its verify step.
+- **Jobs and service move together.** A rollback that only touched the service would leave
+  the 11 cron jobs running the retired release's code indefinitely — the same silent split
+  the forward deploy guards against, inverted.
+
+After any rollback, production reports the old version again, so re-shipping the fixed
+release later needs no `force` — the preflight version compare arms itself normally.
 
 ### Credentials
 
@@ -1212,6 +1276,9 @@ loses the row-count comparison and says so.
 gh workflow run "Deploy testing" --ref main                      # check + deploy now
 gh workflow run "Deploy testing" --ref main -f force=true        # redeploy the same version
 gh workflow run "Deploy production" --ref main                   # re-arm; still needs approval
+gh workflow run "Deploy production" --ref main -f force=true     # bypass version compare AND QA sign-off
+gh workflow run "Rollback production" --ref main                 # roll back to the previous image
+gh workflow run "Rollback production" --ref main -f image_tag=<sha>  # …or to an exact build
 gh run list --workflow="Deploy production" --limit 5
 gh run watch                                                     # follow the active run
 ```

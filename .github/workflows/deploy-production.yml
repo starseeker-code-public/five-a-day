@@ -1,9 +1,15 @@
 name: Deploy production
 
 # Arms itself automatically when a release lands on main (the testing → main PR
-# merge), then STOPS and waits for a human.
+# merge), then STOPS and waits for a human. Two-phase by design:
 #
-#   push to main  →  preflight: wait for CI green, read versions, list migrations
+#   PHASE 1 (automatic, credential-free)
+#   push to main  →  preflight: the QA sign-off gate (testing's /health/?deep=1
+#                    must be healthy, serve THIS version, and report
+#                    ready_for_prod=true — set by the "¿Listo para desplegar?"
+#                    button on /testing/ and reset by every nightly testing
+#                    deploy), wait for CI green, read versions, list migrations
+#   PHASE 2 (manual approval)
 #                 →  deploy: BLOCKED on the `production` environment's required
 #                    reviewer. Nothing touches GCP until somebody clicks
 #                    "Review deployments → Approve".
@@ -11,6 +17,12 @@ name: Deploy production
 # So the automation does all the waiting and all the reporting, and the only
 # manual act left is the decision itself. Production is never deployed by a
 # timer. The `/deploy` skill remains the by-hand path for emergencies.
+#
+# If the deploy job fails AFTER it has started changing production (jobs
+# repointed / service rolled), a rollback step automatically restores the
+# previous image on the service and all Cloud Run jobs. It never touches the
+# database — schema/data recovery is a human decision (the pre-deploy backup id
+# is in the failure email). rollback-production.yml is the on-demand variant.
 
 on:
   push:
@@ -18,7 +30,7 @@ on:
   workflow_dispatch:
     inputs:
       force:
-        description: 'Deploy even when production already serves this version'
+        description: 'Deploy even when production already serves this version, bypassing the testing sign-off gate (emergencies only)'
         type: boolean
         default: false
 
@@ -37,6 +49,7 @@ env:
   SQL_INSTANCE: fiveaday-db
   IMAGE_BASE: europe-southwest1-docker.pkg.dev/five-a-day-evolution/fiveaday/web
   PROD_URL: ${{ secrets.PRODUCTION_URL || 'https://fiveaday-332600671945.europe-southwest1.run.app' }}
+  TEST_URL: ${{ secrets.TESTING_URL || 'http://34.26.130.187:8000' }}
 
 jobs:
   # ============================================================
@@ -92,6 +105,57 @@ jobs:
 
           echo "main pyproject: $NEW_VERSION"
           echo "live on prod:   ${LIVE_VERSION:-unreachable}"
+
+      - name: 'Phase 1 gate: testing must be healthy and signed off for THIS version'
+        env:
+          NEW: ${{ steps.versions.outputs.new_version }}
+          FORCE: ${{ inputs.force }}
+        run: |
+          # The QA sign-off gate. Testing's deep health probe must (a) answer and
+          # be healthy, (b) serve exactly the version this release ships, and
+          # (c) report ready_for_prod=true — which only the "¿Listo para
+          # desplegar?" button on /testing/ sets, and which every nightly
+          # testing deploy resets to false. A sign-off therefore always refers
+          # to the version it was given on, never to an older build.
+          if [ "$FORCE" = "true" ]; then
+            echo "::warning::force=true — the testing sign-off gate is BYPASSED. This ships without QA validation."
+            exit 0
+          fi
+
+          # Deliberately no -f: a 503 (degraded deep probe) still carries a JSON
+          # body naming what is wrong, which beats "curl: (22)".
+          BODY=$(curl -sS --max-time 25 --retry 3 --retry-delay 5 "$TEST_URL/health/?deep=1" || echo '')
+          if [ -z "$BODY" ] || ! printf '%s' "$BODY" | jq -e . > /dev/null 2>&1; then
+            echo "::error::Testing did not answer /health/?deep=1 — cannot confirm the QA sign-off. Fix the testing VM (or use force for an emergency)."
+            exit 1
+          fi
+          printf '%s' "$BODY" | jq .
+
+          STATUS=$(printf '%s' "$BODY" | jq -r '.status // empty')
+          ENVIRONMENT=$(printf '%s' "$BODY" | jq -r '.environment // empty')
+          TEST_VERSION=$(printf '%s' "$BODY" | jq -r '.version // empty')
+          CONNECTED=$(printf '%s' "$BODY" | jq -r '.database.connected // false')
+          READY=$(printf '%s' "$BODY" | jq -r '.ready_for_prod // false')
+
+          FAILED=0
+          if [ "$ENVIRONMENT" != "testing" ]; then
+            echo "::error::$TEST_URL reports environment='$ENVIRONMENT', expected 'testing' — the URL points somewhere else."
+            FAILED=1
+          fi
+          if [ "$STATUS" != "healthy" ] || [ "$CONNECTED" != "true" ]; then
+            echo "::error::Testing is not healthy (status='$STATUS', database.connected='$CONNECTED')."
+            FAILED=1
+          fi
+          if [ "$TEST_VERSION" != "$NEW" ]; then
+            echo "::error::Testing serves v$TEST_VERSION but this release is v$NEW — the sign-off (if any) does not apply to this version."
+            FAILED=1
+          fi
+          if [ "$READY" != "true" ]; then
+            echo "::error::ready_for_prod is '$READY'. QA has not signed off v$NEW — press '¿Listo para desplegar?' on /testing/ first."
+            FAILED=1
+          fi
+          [ "$FAILED" -eq 0 ] || exit 1
+          echo "Gate passed: testing is healthy, serves v$TEST_VERSION, and QA signed it off."
 
       - name: Wait for CI to go green on this commit
         id: ci
@@ -424,6 +488,7 @@ jobs:
           fi
 
       - name: Repoint every Cloud Run job at the new image
+        id: repoint
         run: |
           IMAGE="$IMAGE_BASE:$NEW_SHA"
 
@@ -475,6 +540,7 @@ jobs:
             --project="$GCP_PROJECT" --region="$GCP_REGION" --wait
 
       - name: Roll out the service
+        id: rollout
         run: |
           # --image and NOTHING else. The service carries ~30 env vars plus 6
           # Secret Manager refs; adding --set-env-vars replaces the entire set
@@ -554,9 +620,104 @@ jobs:
             echo "::warning::Row counts unavailable (no HEALTH_PROBE_TOKEN) — this deploy cannot prove the data survived."
           fi
 
+      - name: Roll back on failure
+        id: rollback
+        # Fires only when production was actually MUTATED: the repoint step is
+        # the first write, so a failure before it (backup checks, build) leaves
+        # production untouched and needs no rollback. `steps.repoint.outcome` is
+        # 'skipped' in that case; 'success' or 'failure' both mean writes began.
+        if: >-
+          failure() &&
+          (steps.repoint.outcome == 'success' || steps.repoint.outcome == 'failure')
+        env:
+          OLD_SHA: ${{ steps.diff.outputs.old_sha }}
+          ROLLOUT_OUTCOME: ${{ steps.rollout.outcome }}
+        run: |
+          # Written FIRST and overwritten at the end (last assignment wins), so
+          # if this step itself dies mid-way the failure email never claims a
+          # clean state it cannot prove.
+          {
+            echo "state=inconcluso"
+            echo "detail=El rollback se inició pero no llegó a informar su resultado — revisa el run y el estado real de los jobs y el servicio."
+          } >> "$GITHUB_OUTPUT"
+
+          # CODE ONLY. Never the database: restoring the backup discards every
+          # row written since it was taken — that is a human decision, and the
+          # backup id is already in the failure email. Rolling code back is
+          # schema-safe in the same sense the deploy itself is: migrations run
+          # BEFORE the rollout, so the old code already served against the new
+          # schema during every deploy's rollout window.
+          if [ -z "$OLD_SHA" ]; then
+            echo "::error::The previously deployed image tag is unknown — cannot roll back automatically."
+            {
+              echo "state=manual"
+              echo "detail=No se conoce la imagen anterior. Los jobs y/o el servicio pueden estar apuntando a la imagen nueva: hace falta intervención manual (rollback-production.yml con un tag explícito)."
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          IMAGE="$IMAGE_BASE:$OLD_SHA"
+          FAILED=0
+
+          echo "--- repoint every Cloud Run job back to $OLD_SHA ---"
+          mapfile -t JOBS < <(gcloud run jobs list --project="$GCP_PROJECT" --region="$GCP_REGION" \
+            --format='value(metadata.name)' | sort)
+          for JOB in "${JOBS[@]}"; do
+            gcloud run jobs update "$JOB" --image="$IMAGE" \
+              --project="$GCP_PROJECT" --region="$GCP_REGION" || FAILED=1
+          done
+          for JOB in "${JOBS[@]}"; do
+            TAG=$(gcloud run jobs describe "$JOB" --project="$GCP_PROJECT" --region="$GCP_REGION" \
+              --format='value(spec.template.spec.template.spec.containers[0].image)' | sed 's/.*://')
+            [ "$TAG" = "$OLD_SHA" ] || { echo "::error::$JOB is still pinned to '$TAG'"; FAILED=1; }
+          done
+
+          if [ "$ROLLOUT_OUTCOME" = "success" ] || [ "$ROLLOUT_OUTCOME" = "failure" ]; then
+            echo "--- restore the service by redeploying the previous image ---"
+            # Redeploy rather than update-traffic to a named revision: pinning
+            # traffic makes every FUTURE `gcloud run deploy` land at 0% traffic
+            # and silently fail its verify step. A fresh revision from the old
+            # image keeps the normal traffic-follows-latest behaviour. --image
+            # alone, as always — anything else clobbers the env set.
+            gcloud run deploy "$SERVICE" --image="$IMAGE" \
+              --project="$GCP_PROJECT" --region="$GCP_REGION" || FAILED=1
+
+            LIVE=''
+            for i in $(seq 1 12); do
+              LIVE=$(curl -fsS --max-time 20 "$PROD_URL/health/" 2>/dev/null | jq -r '.version // empty' || true)
+              if [ -n "$LIVE" ] && { [ -z "$LIVE_VERSION" ] || [ "$LIVE" = "$LIVE_VERSION" ]; }; then break; fi
+              echo "attempt $i: live='${LIVE:-<no reply>}' want='${LIVE_VERSION:-any response}'"
+              sleep 15
+            done
+            if [ -z "$LIVE" ] || { [ -n "$LIVE_VERSION" ] && [ "$LIVE" != "$LIVE_VERSION" ]; }; then
+              echo "::error::After the rollback /health/ reports '${LIVE:-unreachable}', expected '${LIVE_VERSION:-a response}'."
+              FAILED=1
+            else
+              echo "rollback verified: /health/ reports v$LIVE"
+            fi
+            SERVICE_MSG="servicio restaurado y verificado en v${LIVE:-?}"
+          else
+            SERVICE_MSG="servicio no tocado (el fallo ocurrió antes del rollout)"
+          fi
+
+          if [ "$FAILED" -eq 0 ]; then
+            {
+              echo "state=revertido"
+              echo "detail=Los ${#JOBS[@]} jobs vuelven a apuntar a la imagen $OLD_SHA y el $SERVICE_MSG. La base de datos NO se ha tocado: las migraciones de la versión fallida siguen aplicadas."
+            } >> "$GITHUB_OUTPUT"
+          else
+            {
+              echo "state=fallido"
+              echo "detail=El rollback automático NO se completó — revisa el run: algún job o el servicio puede seguir en la imagen nueva ($NEW_SHA en vez de $OLD_SHA)."
+            } >> "$GITHUB_OUTPUT"
+          fi
+          exit "$FAILED"
+
       - name: Summary
         if: always()
         env:
+          ROLLBACK_STATE: ${{ steps.rollback.outputs.state }}
+          ROLLBACK_DETAIL: ${{ steps.rollback.outputs.detail }}
           OLD_SHA: ${{ steps.diff.outputs.old_sha }}
           MIGRATIONS: ${{ steps.diff.outputs.migrations }}
           BACKUP_ID: ${{ steps.backup.outputs.backup_id }}
@@ -572,6 +733,7 @@ jobs:
             echo "| Image | \`${OLD_SHA:-unknown}\` → \`$NEW_SHA\` |"
             echo "| Backup | \`${BACKUP_ID:-not taken}\` |"
             echo "| Migrate job | $([ "$MIGRATE_RAN" = "true" ] && echo executed || echo 'skipped (no migrations)') |"
+            echo "| Auto-rollback | ${ROLLBACK_STATE:-no aplicado} |"
             # `github.actor` on a push event is whoever merged the release PR, NOT
             # whoever clicked Approve — GitHub exposes no approver variable. The
             # approval itself is recorded in the environment's deployment log.
@@ -585,9 +747,13 @@ jobs:
             fi
             echo "### Rollback"
             echo ""
-            echo "Traffic: \`gcloud run services update-traffic $SERVICE --to-revisions=<previous>=100 --project=$GCP_PROJECT --region=$GCP_REGION\`"
+            if [ -n "$ROLLBACK_STATE" ]; then
+              echo "Automatic rollback: **$ROLLBACK_STATE** — $ROLLBACK_DETAIL"
+              echo ""
+            fi
+            echo "On demand: run the **Rollback production** workflow (defaults to the previous image, or pass an explicit tag)."
             echo ""
-            echo "Data: restore backup \`${BACKUP_ID:-n/a}\` — see DEPLOYMENT.md."
+            echo "Data: restore backup \`${BACKUP_ID:-n/a}\` — see DEPLOYMENT.md. Never automated."
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Notify success
@@ -648,15 +814,19 @@ jobs:
               <h2 style="color:#b91c1c;">🚨 Fallo en el despliegue a producción</h2>
               <p style="font-size:15px; line-height:1.6;">
                 El despliegue de <strong>v${{ needs.preflight.outputs.new_version }}</strong>
-                se ha detenido. Producción sigue sirviendo
-                <strong>v${{ needs.preflight.outputs.live_version || 'la versión anterior' }}</strong>
-                salvo que el fallo ocurriera después del <em>rollout</em> — revisa el run.
+                se ha detenido.
+              </p>
+              <p style="font-size:14px; line-height:1.6;">
+                <strong>Rollback automático:</strong>
+                ${{ steps.rollback.outputs.state || 'no aplicado — el fallo ocurrió antes de tocar producción, que sigue sirviendo la versión anterior' }}.<br>
+                ${{ steps.rollback.outputs.detail || '' }}
               </p>
               <p style="font-size:14px; color:#4b5563; line-height:1.6;">
                 Copia de seguridad previa:
                 <code>${{ steps.backup.outputs.backup_id || 'no llegó a crearse' }}</code>.
-                Cloud Run mantiene la revisión anterior, así que el <em>rollback</em> de código es
-                <code>gcloud run services update-traffic</code> hacia la revisión previa.
+                La base de datos nunca se revierte automáticamente; si hay que restaurarla,
+                es una decisión manual (ver DEPLOYMENT.md). Para un rollback a un tag
+                concreto, usa el workflow <em>Rollback production</em>.
               </p>
               <p style="margin-top:16px;">
                 <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
@@ -697,7 +867,9 @@ jobs:
                 Producción sigue intacta.
               </p>
               <p style="font-size:14px; color:#4b5563; line-height:1.6;">
-                Causas habituales: CI está en rojo en ese commit, un check obligatorio
+                Causas habituales: el entorno de pruebas <strong>no ha validado esta versión</strong>
+                (falta pulsar <em>¿Listo para desplegar?</em> en <code>/testing/</code>, o pruebas
+                sirve otra versión o no responde), CI está en rojo en ese commit, un check obligatorio
                 (<code>Lint</code>, <code>Type check</code>, <code>Tests</code>,
                 <code>Docker build</code>) no llegó a ejecutarse, o CI no terminó en 45 minutos.
                 Arréglalo y vuelve a lanzar el workflow <em>Deploy production</em> a mano.

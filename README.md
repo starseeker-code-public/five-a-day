@@ -15,11 +15,11 @@ Built to centralize student records, automate billing cycles, and streamline par
 ### Project Status
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v1.26.3-brightgreen?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-v1.26.4-brightgreen?style=flat-square" alt="Version">
   &nbsp;|&nbsp;
   <a href="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml?query=branch%3Amain"><img src="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml/badge.svg?branch=main&style=flat-square" alt="CI main"></a>
   &nbsp;|&nbsp;
-  <img src="https://img.shields.io/badge/coverage-95.30%25-brightgreen?style=flat-square" alt="Coverage">
+  <img src="https://img.shields.io/badge/coverage-95.57%25-brightgreen?style=flat-square" alt="Coverage">
   &nbsp;|&nbsp;
   <a href="https://github.com/starseeker-code-public/five-a-day/actions/workflows/scorecard.yml"><img src="https://img.shields.io/badge/OpenSSF%20Scorecard-monitored-blueviolet?style=flat-square" alt="OSSF Scorecard"></a>
   &nbsp;|&nbsp;
@@ -36,10 +36,10 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 | Version | Date | Description |
 |---------|------|-------------|
-| **v1.26.3** | 2026-09-02 | Restore Cloud SQL socket path clobbered by timeout merge |
+| **v1.26.4** | 2026-09-02 | QA sign-off gate + automatic production rollback |
+| v1.26.3 | 2026-09-02 | Restore Cloud SQL socket path clobbered by timeout merge |
 | v1.26.2 | 2026-09-02 | Dockerfile build fix, DRF CVE bump |
-| v1.26.1 | 2026-09-02 | Query-cost sweep: N+1 fixes, billing idempotency constraints |
-| v1
+
 ---
 
 ## Table of Contents
@@ -140,8 +140,67 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 ## Version History
 
-<details id="v1263" open>
-<summary><strong>v1.26.3 — Restore the Cloud SQL socket path clobbered by the statement-timeout merge (current)</strong></summary>
+<details id="v1264" open>
+<summary><strong>v1.26.4 — QA sign-off gate for production + automatic rollback (current)</strong></summary>
+
+**Release gating (ready_for_prod)**
+
+- New `QAConfiguration.ready_for_prod` flag (migration `core/0012`): QA's sign-off that the
+  version deployed on testing may ship to production. Exposed on `/health/?deep=1` in the
+  testing environment only — the shallow `/health/` never touches the database, and the flag
+  is a database row.
+- The **¿Listo para desplegar?** button on `/testing/` now sets the flag as well as sending
+  its notification email — the flag is set only after the email goes out, so success always
+  means both. The card shows the current state ("lista para producción" / "pendiente de
+  validar") and the confirmation modal explains the unlock.
+- `deploy-testing.yml` **locks every fresh deploy**: after the version answers, it runs the
+  new `manage.py set_ready_for_prod off` command in the container and asserts through
+  `/health/?deep=1` that the flag reads false. A sign-off therefore always refers to the
+  exact version it was given on and can never cover a later, untested build.
+- `deploy-production.yml`'s preflight gained a **Phase 1 gate** ahead of the existing human
+  approval: testing must answer `/health/?deep=1` healthy, serve exactly the version being
+  released, and report `ready_for_prod: true` — otherwise the release refuses to arm and the
+  preflight-failure email names the missing sign-off. `force=true` bypasses the gate and the
+  version compare (emergencies only, loudly logged).
+
+**Automatic + on-demand production rollback**
+
+- If the production deploy fails **after its first write** (the Cloud Run job repoint), a
+  rollback step restores the previous image on all jobs and — when the rollout had run —
+  redeploys the service from it and re-verifies `/health/`. Rollback is by **redeploy, never
+  `update-traffic` to a named revision** (pinning traffic makes every future deploy land at
+  0 % and silently fail its verify). Its outcome (`revertido` / `fallido` / `manual` /
+  `inconcluso`) is written to the run summary and the failure email; the step records an
+  "inconclusive" status first and overwrites it at the end, so a rollback that dies mid-way
+  can never claim a clean state.
+- The **database is never rolled back automatically**: migrations run before the rollout, so
+  old code on the new schema is a state every deploy already passes through; restoring the
+  pre-deploy backup (id in the failure email) discards data written since and stays a human
+  decision.
+- New `rollback-production.yml` (**Rollback production**, dispatch-only): rolls the service
+  and every Cloud Run job back to a previous image tag — empty input auto-resolves the
+  previous image, or pass a git short SHA. Runs behind the same `production` environment
+  approval (the WIF binding requires it anyway), shares the deploy concurrency group so it
+  can never race a deploy, and verifies `/health/` against the version in that commit's
+  `pyproject.toml`.
+
+**Testing**
+
+- Nine new tests in `test_testing_tools.py`: `api_mark_ready` (gate opens only when the
+  email sends; failure and missing `SUPPORT_EMAIL` keep it closed; non-QA 404),
+  `ready_for_prod` in the deep probe only and only in the testing environment, and the
+  `set_ready_for_prod` command. Suite at **1,685 tests, 95.57 % coverage**.
+
+**Misc**
+
+- `BacklogTask.verified` verbose_name renamed to "desarrollado" (admin label only).
+- DEPLOYMENT.md: two-phase deploy + rollback documented; the manual rollback snippet no
+  longer recommends the traffic-pin trap.
+
+</details>
+
+<details id="v1263">
+<summary><strong>v1.26.3 — Restore the Cloud SQL socket path clobbered by the statement-timeout merge</strong></summary>
 
 **Production hotfix**
 
@@ -3267,7 +3326,7 @@ five-a-day/
 │   │   └── management/commands/  send_email, test_all_emails, plus 4 Beat-task wrappers
 │   │                             (v1.14.2 — birthday, reminders, report, Fun Friday drain)
 │   │
-│   ├── tests/                    pytest suite (1,675 tests, 95.30 % coverage) — unit/ + integration/
+│   ├── tests/                    pytest suite (1,685 tests, 95.57 % coverage) — unit/ + integration/
 │   ├── templates/registration/   Password-reset templates (form, done, confirm, complete + email body)
 │   ├── templates/admin/          Django admin overrides (branded theme)
 │   └── conftest.py               Shared fixtures (models + authenticated_client)
@@ -3276,8 +3335,9 @@ five-a-day/
 │   ├── workflows/
 │   │   ├── ci.yml                     Lint + typecheck + tests + Docker build + CVE scan on every push/PR
 │   │   ├── auto-merge.yml             Hourly development → testing merge + PR to main
-│   │   ├── deploy-testing.yml         Nightly 02:00-05:00 Madrid — deploys testing when versions differ
-│   │   ├── deploy-production.yml      Arms on push to main, deploys only after reviewer approval
+│   │   ├── deploy-testing.yml         Nightly 02:00-05:00 Madrid — deploys testing when versions differ, locks ready_for_prod
+│   │   ├── deploy-production.yml      Arms on push to main (needs QA sign-off on testing), deploys after reviewer approval, auto-rollback on failure
+│   │   ├── rollback-production.yml    Dispatch-only — rolls service + all Cloud Run jobs back to a previous image
 │   │   ├── codeql.yml                 Weekly Python security scan
 │   │   ├── notify-production.yml      Email on push to main
 │   │   ├── dependency-review.yml      Block PRs introducing HIGH/CRITICAL CVEs
@@ -3586,9 +3646,9 @@ Public flow at `/password-reset/...` that lets a teacher recover access without 
 
 | Metric | Value |
 |--------|-------|
-| **Total tests** | 1,675 |
+| **Total tests** | 1,685 |
 | **Test files** | 88 (56 unit + 32 integration) |
-| **Coverage** | 95% (95.30% — 5,729 statements, 269 uncovered) |
+| **Coverage** | 96% (95.57% — 5,736 statements, 254 uncovered) |
 | **Coverage thresholds** | **≥ 90%** (target, no warning) / **75-89%** (CI warning, pre-commit still blocks below 75) / **< 75%** (CI fails, pre-commit rejects the commit) |
 | **Runtime** | ~65 seconds (parallel workers via `pytest-xdist -n auto`) |
 | **Database** | PostgreSQL (same as production) — **always use `make test`** |
@@ -3710,7 +3770,7 @@ Within each file, related tests are grouped into classes. Where a large file abs
 | [`integration/test_payment_views.py`](project/tests/integration/test_payment_views.py) | 38 | All HTTP payment endpoints: list (search, stats), create (+ invalid parent + unexpected exception), detail-view (+ 404), update (JSON + FormData + all error branches), delete (success + exception 500), deactivate (success + exception 400), quick-complete (success + invalid method + broken JSON), get-details (success + exception), search payments/parents (short query + hits), validate student-parent (all branches), export DB to Excel |
 | [`integration/test_v1175_fixes.py`](project/tests/integration/test_v1175_fixes.py) | 19 | Regression locks for the v1.20.0 fix round, one class per reported problem: Spanish choice labels (`get_<field>_display()` for every payment type/status and enrollment status), every email template defining its own `{% block title %}`, unfiltered dates rendering `dd/mm/yyyy` via `FORMAT_MODULE_PATH`, `search_students` carrying the parent (and reporting no parent for an adult), `update_expense` (amount raise, cadence change, already-generated rows untouched, weekly-without-weekdays rejected, unknown category coerced, zero amount rejected), the create-expense date default, the surname-free waiting-list form, `waiting_priority` ordering, and `StudentForm` still requiring a surname |
 | [`integration/test_features.py`](project/tests/integration/test_features.py) | 47 | Desarrollos, the QA epic board (v1.21.0). Model: `deadline` null by default, `is_overdue` only when the date passed **and** the epic is not done, `days_left`, the progress counters, Spanish status labels, and `SET_NULL` keeping the tasks when the epic is deleted. Views: both pages render, done epics sort last, the Jira template reaches the board, non-QA users get 404. Endpoints: create (with / without / invalid deadline), update (status, deadline, clearing it with `null`, title + description, and a status-only payload not clobbering the deadline), break-out-a-task (lands in the backlog linked to its epic, priority default, shows up on `/testing/`), and the JSON/CSV export in both scopes. Emails: creation reaches `SUPPORT_EMAIL`, done notifies the admin teachers exactly once, and a task email names its development |
-| [`integration/test_testing_tools.py`](project/tests/integration/test_testing_tools.py) | 28 | QA dashboard `/testing/` gated by `@qa_access_required` (via `override_settings`): dashboard renders + git failure handled, `api_seed_database` (success + reset + command error 500 + non-QA 404), `api_create_backlog_task` (all branches + screenshot attached to the email but never stored + send/swallow), `api_update_backlog_task` (success + invalid status + 404), the v1.20.0 `verified` QA tick (defaults off, toggles on/off, never touches `status` nor fires the done email, `done` still works alongside it) and the unfinished-first ordering shared by the dashboard and the export, `api_toggle_error_email` (on + off + bad JSON) |
+| [`integration/test_testing_tools.py`](project/tests/integration/test_testing_tools.py) | 37 | QA dashboard `/testing/` gated by `@qa_access_required` (via `override_settings`): dashboard renders + git failure handled, `api_seed_database` (success + reset + command error 500 + non-QA 404), `api_create_backlog_task` (all branches + screenshot attached to the email but never stored + send/swallow), `api_update_backlog_task` (success + invalid status + 404), the v1.20.0 `verified` QA tick (defaults off, toggles on/off, never touches `status` nor fires the done email, `done` still works alongside it) and the unfinished-first ordering shared by the dashboard and the export, `api_toggle_error_email` (on + off + bad JSON), the v1.26.4 QA sign-off gate — `api_mark_ready` opens the production gate only when the email sends (send failure and missing `SUPPORT_EMAIL` keep it closed, non-QA 404), `ready_for_prod` rides `/health/?deep=1` only and only in the testing environment, and `set_ready_for_prod on|off` toggles the flag (unknown state rejected) |
 | [`integration/test_waiting_list_views.py`](project/tests/integration/test_waiting_list_views.py) | 29 | Waiting List & Group Capacity views (v1.1): waiting-list page, `assign_from_waiting_list` (capacity checks, and since v1.17.2 a redirect into the normal parent-then-student flow rather than an in-place promotion), `add_to_waiting_list`, student list excludes waiting students, dashboard waiting widget. v1.20.0 adds the short create form (no surname asked for, entry created without one, `waiting_priority` off by default, saved when ticked, flagged in the history line), the priority ordering (`-waiting_priority` first, FIFO within each band) and `StudentForm` still demanding a surname |
 | [`integration/test_student_views.py`](project/tests/integration/test_student_views.py) | 31 | `StudentListView` (search, exclude inactive, context), `StudentDetailView` (parents visible, 404), `StudentCreateView` (form + adult mode + success + full POST + error paths including invalid parent, existing-parent mode, create_sibling flag, email-task swallow), `search_students` JSON endpoint (results + short-query empty), and the v1.20.0 pricing surface: `price_config` exposing `quarterly_gross`, both hand-set prices reaching the payments, the matrícula falling back to the standard fee when left blank, and a special matrícula fee rejected without "Precio especial" ticked. v1.22.0 adds the first-period proration the creation form previews, asserting the context fraction comes from the same `PaymentService` helper the generator bills with. v1.26.0 adds the 500-row list cap: the context reports totals + truncation state and the queryset is actually capped |
 | [`integration/test_management_views.py`](project/tests/integration/test_management_views.py) | 27 | `gestion_view` + `update_site_config` (all fields + bad JSON), `create_teacher` (success + duplicate + missing field + bad JSON), `create_group` (success + missing fields + duplicate + nonexistent teacher + bad JSON), `api_get_teachers`, `update_enrollment_modality` (success + invalid + no enrollment + student not found), `language_cheque_students` |
@@ -3750,7 +3810,7 @@ Within each file, related tests are grouped into classes. Where a large file abs
 | `core/audit_signals.py` | 94 | 6 | 94% | 109, 115, 131, 142-143, 148 |
 | `core/context_processors.py` | 37 | 1 | 97% | 29 |
 | `core/middleware.py` | 126 | 6 | 95% | 122, 133-138, 254, 299-300 |
-| `core/models.py` | 177 | 2 | 99% | 329, 354 |
+| `core/models.py` | 178 | 2 | 99% | 329, 362 |
 | `core/services/google_sheets_service.py` | 99 | 9 | 91% | 74-76, 112-118 |
 | `core/tasks.py` | 30 | 5 | 83% | 42-47 |
 | `core/views/app_forms.py` | 620 | 45 | 93% | 96, 182-184, 198-201, 218-219, 312-313, 336-337, 385-387, 416, 577-587, 593, 729, 756, 775, 861, 865, 887, 898, 982, 1012, 1025, 1050, 1062, 1093-1096, 1211, 1267, 1293-1297, 1325-1328 |
@@ -3762,14 +3822,14 @@ Within each file, related tests are grouped into classes. Where a large file abs
 | `core/views/parents.py` | 51 | 1 | 98% | 47 |
 | `core/views/payments.py` | 322 | 20 | 94% | 59-60, 255-260, 310, 316-317, 329-338, 425, 472-473, 495-496, 510-511 |
 | `core/views/students.py` | 293 | 16 | 95% | 124-126, 229, 283-284, 450, 473, 481, 499-505, 510-512 |
-| `core/views/testing_tools.py` | 214 | 35 | 84% | 70-71, 75-77, 182, 246, 253, 255, 285-287, 392-396, 409, 427-428, 455-503 |
+| `core/views/testing_tools.py` | 217 | 20 | 91% | 70-71, 75-77, 182, 246, 253, 255, 285-287, 392-396, 409, 427-428 |
 | `core/views/two_factor.py` | 87 | 8 | 91% | 38, 49-50, 170-172, 177-178 |
 | `core/views/waiting_list.py` | 105 | 1 | 99% | 295 |
 | `students/forms.py` | 69 | 2 | 97% | 188-189 |
 | `students/models.py` | 230 | 4 | 98% | 409-412 |
 | `students/parent_portal_models.py` | 41 | 1 | 98% | 44 |
 
-**57 files** have 100% coverage (skipped above). Total coverage: **95.30%** across 5,729 statements. Coverage is **very good**. Coverage is enforced at three levels: pre-commit hook (>= 75%), CI hard floor (>= 75%), and CI warning (< 90%).
+**57 files** have 100% coverage (skipped above). Total coverage: **95.57%** across 5,736 statements. Coverage is **very good**. Coverage is enforced at three levels: pre-commit hook (>= 75%), CI hard floor (>= 75%), and CI warning (< 90%).
 
 ---
 
@@ -4222,7 +4282,13 @@ Deploy testing  (deploy-testing.yml)
         │ versions differ
         ▼
 Testing VM updated (git pull + two-file compose stack)
-→ post-deploy verification + result email
+→ post-deploy verification + ready_for_prod reset to false
+  (the new version is LOCKED for production) + result email
+        │
+        ▼
+QA validates on the VM and presses "¿Listo para desplegar?"
+(/testing/ — sets ready_for_prod=true, the sign-off the
+production preflight requires)
         │
         ▼
 Manual review + Code Owner approval
@@ -4235,6 +4301,8 @@ Merge to main (protected — all checks required)
         │    the next workflow's job, the email is the paper trail)
         ▼
 Deploy production  (deploy-production.yml) — arms itself on the push
+  • GATE: /health/?deep=1 on testing is healthy, serves THIS
+    version, and reports ready_for_prod=true (QA sign-off)
   • waits for CI to go green on the merge commit
   • lists the migrations the release carries
   • BLOCKS on the `production` environment's required reviewer
@@ -4243,6 +4311,9 @@ Deploy production  (deploy-production.yml) — arms itself on the push
 Verified Cloud SQL backup → repoint ALL Cloud Run jobs to the
 new image → migrate → roll out the service → /health/?deep=1
 verification + row-count delta check
+(a failure after the first write auto-rolls the code back —
+jobs + service to the previous image; the database is never
+reverted automatically)
 ```
 
 ### Branch Strategy
@@ -4261,8 +4332,9 @@ Feature branches off `development` are welcome for non-trivial work, but the exp
 |----------|------|----------|---------|
 | **CI** | [`ci.yml`](.github/workflows/ci.yml) | Push to `development`/`testing`/`main`; PRs to `development`/`testing`/`main` | Six jobs — **Lint** (Ruff + Bandit + pip-audit + Hadolint), **Type check** (mypy), **Tests** (pytest + PostgreSQL 16 + coverage artifact), **Docker build** (validates Dockerfile), **Trivy** (filesystem CVE scan → Security tab), **Docker publish** (GHCR push + image scan, on `main`/`testing` only) |
 | **Auto-merge** | [`auto-merge.yml`](.github/workflows/auto-merge.yml) | Hourly cron + manual dispatch | Merges `development` → `testing` when conditions pass, creates PR to `main`, emails owners |
-| **Deploy testing** | [`deploy-testing.yml`](.github/workflows/deploy-testing.yml) | Daily, 02:00-05:00 Europe/Madrid window + manual dispatch | Compares `/health/` on the VM against `pyproject.toml` on `origin/testing`; deploys only when they differ. Gates the DB volume and diffs row counts, then emails the result |
-| **Deploy production** | [`deploy-production.yml`](.github/workflows/deploy-production.yml) | Push to `main` + manual dispatch | Waits for CI to go green, lists the migrations, then **blocks on the `production` environment's required reviewer**. On approval: verified backup → repoint every Cloud Run job → migrate → roll out → verify |
+| **Deploy testing** | [`deploy-testing.yml`](.github/workflows/deploy-testing.yml) | Daily, 02:00-05:00 Europe/Madrid window + manual dispatch | Compares `/health/` on the VM against `pyproject.toml` on `origin/testing`; deploys only when they differ. Gates the DB volume, resets `ready_for_prod` to false (locking the new version for production until QA signs it off), diffs row counts, then emails the result |
+| **Deploy production** | [`deploy-production.yml`](.github/workflows/deploy-production.yml) | Push to `main` + manual dispatch | Two-phase: preflight **requires testing's QA sign-off** (`/health/?deep=1` healthy + same version + `ready_for_prod=true`), waits for CI to go green and lists the migrations; then **blocks on the `production` environment's required reviewer**. On approval: verified backup → repoint every Cloud Run job → migrate → roll out → verify. A failure after the first write **auto-rolls the code back** (jobs + service to the previous image; the database is never reverted) |
+| **Rollback production** | [`rollback-production.yml`](.github/workflows/rollback-production.yml) | Manual dispatch only | Rolls the service **and** every Cloud Run job back to a previous image tag (empty input = previous image; or an explicit git short SHA), behind the same `production` approval gate and concurrency group as a deploy. Code only — restoring the database stays a manual decision |
 | **CodeQL** | [`codeql.yml`](.github/workflows/codeql.yml) | Push to `main`/`testing`/`development`; PRs to `main`; Monday 04:30 UTC | Python static security analysis (OWASP Top 10, Django-specific queries) |
 | **Notify production** | [`notify-production.yml`](.github/workflows/notify-production.yml) | Push to `main` | Emails `hellofiveaday@gmail.com` with commit info and `gcloud` deploy instructions |
 | **Dependency review** | [`dependency-review.yml`](.github/workflows/dependency-review.yml) | Pull request | Blocks PRs that introduce a HIGH/CRITICAL CVE dependency |
@@ -4292,6 +4364,7 @@ Concurrent CI runs on the same branch cancel each other automatically — new pu
 - Runs in a 02:00-05:00 Europe/Madrid window (two UTC cron ticks + an hour-window gate — GitHub cron is best-effort, so a window absorbs late ticks; a second tick finds nothing to do)
 - Deploys **only when** `/health/` on the VM disagrees with `pyproject.toml` on `origin/testing` — a green run that deployed nothing is normal
 - On the VM: dirty-tree gate, `git pull`, the **two-file** compose stack (`-f docker-compose.yml -f docker-compose.testing.yml`), a DB-volume assertion, then post-deploy verification and a result email
+- **Locks the fresh version for production**: runs `manage.py set_ready_for_prod off` in the container and asserts `/health/?deep=1` reads `ready_for_prod: false`. Only the **¿Listo para desplegar?** button on `/testing/` unlocks it — that click is QA's sign-off, and it always refers to the exact version it was given on
 - Holds an SSH deploy key and **no GCP credential at all** — the one unattended pipeline cannot reach production
 - `workflow_dispatch` bypasses the window gate for an off-schedule deploy
 
@@ -4307,9 +4380,11 @@ The two tag namespaces (`testing-vX.Y.Z` and `vX.Y.Z`) are fully independent —
 **5. Production deploy arms itself (deploy-production.yml)**
 
 - Triggers on the push to `main` — no timer is ever involved
-- A credential-free **preflight** waits for CI to go green on the merge commit and lists the migrations the release carries
+- A credential-free **preflight** first enforces the **QA sign-off gate**: `/health/?deep=1` on testing must be healthy, serve exactly the version being released, and report `ready_for_prod: true`. Since every nightly testing deploy resets the flag, a sign-off can never silently cover a later, untested build. `force=true` on a manual dispatch bypasses the gate (emergencies only)
+- The preflight then waits for CI to go green on the merge commit and lists the migrations the release carries
 - Then it **blocks on the `production` GitHub environment's required reviewer** — your approval is the deploy button
 - On approval (via Workload Identity Federation scoped to the `production` environment): verified Cloud SQL backup → **every** Cloud Run job repointed to the new image (enumerated, not hard-coded) → migrations → service rollout → `/health/?deep=1` verification and a row-count delta check
+- **If the deploy fails after its first write to production**, a rollback step automatically restores the previous image on all Cloud Run jobs and (when the rollout had run) redeploys the service from it, re-verifying `/health/`. It never touches the database — the pre-deploy backup id is in the failure email and restoring it is a human decision. For breakage found *after* a green deploy, the **Rollback production** workflow does the same on demand
 - `notify-production.yml` separately emails `hellofiveaday@gmail.com` (plus `SUPPORT_EMAIL` when set) with commit info and the by-hand `gcloud` steps — informational paper trail and manual fallback (`/deploy` skill); the workflow above is the deploy
 
 ### Public Repository Hardening
@@ -4341,9 +4416,10 @@ The `.env` file is gitignored and **never** committed. Production secrets live i
 | `development → testing` merged + PR opened to `main` | `TESTING_NOTIFY_EMAILS`, falling back to `OWNER_EMAILS` | auto-merge.yml |
 | Nightly deploy to testing succeeded or failed | `TESTING_NOTIFY_EMAILS`, falling back to `OWNER_EMAILS` | deploy-testing.yml |
 | New commit on `main` (production ready to deploy) | `hellofiveaday@gmail.com` (hardcoded) + `SUPPORT_EMAIL` when set | notify-production.yml |
-| Production deploy succeeded or failed | `hellofiveaday@gmail.com` + `SUPPORT_EMAIL` when set | deploy-production.yml |
+| Production deploy succeeded or failed (failure email includes the auto-rollback outcome) | `hellofiveaday@gmail.com` + `SUPPORT_EMAIL` when set | deploy-production.yml |
+| Production rolled back (or the rollback failed) | `hellofiveaday@gmail.com` + `SUPPORT_EMAIL` when set | rollback-production.yml |
 
-Both use Gmail SMTP via the `dawidd6/action-send-mail@v18` action. Emails include HTML formatting, links to the commit/PR, and actionable next steps.
+All use Gmail SMTP via the `dawidd6/action-send-mail@v18` action. Emails include HTML formatting, links to the commit/PR, and actionable next steps.
 
 ### Dependabot
 
@@ -4379,7 +4455,7 @@ make up                        # Start Docker (PostgreSQL + Redis + Django + Cel
 1. Work on `development` (or a short-lived branch off `development`)
 2. Make changes following the conventions below
 3. Run `make pc-run` — Ruff + mypy + bandit all pass, offers to auto-bump the patch version on success, and auto-stages `uv.lock` if regenerated
-4. Run `make test` — all 1,675 tests must pass (PostgreSQL via Docker, parallel, with coverage)
+4. Run `make test` — all 1,685 tests must pass (PostgreSQL via Docker, parallel, with coverage)
 5. `git commit` with a message like `v1.14.7 — Short description` (version first, em dash — matches every other release commit in the project)
 6. `git push origin development`
 7. CI runs automatically on your push (see [CI/CD](#cicd--github-actions))
