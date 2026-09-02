@@ -267,6 +267,13 @@ def google_oauth_redirect(request):
         prompt="select_account",
     )
     request.session["google_oauth_state"] = state
+    # google-auth-oauthlib >=1.3 enables PKCE by default: authorization_url()
+    # generates a one-time code_verifier and stores it on THIS Flow instance,
+    # sending only the code_challenge to Google. The callback builds a fresh
+    # Flow (a new request, a new object) that has no verifier, so the token
+    # exchange fails with "invalid_grant: Missing code verifier". Carry it
+    # across the same way `state` is carried — same session, same browser.
+    request.session["google_oauth_code_verifier"] = flow.code_verifier
     return redirect(authorization_url)
 
 
@@ -309,6 +316,10 @@ def google_oauth_callback(request):
     callback_uri = _google_callback_uri(request)
     _oauth_log.info("OAuth callback → callback_uri=%s", callback_uri)
     flow = _build_flow(client_id, client_secret, callback_uri, state=state)
+    # Restore the PKCE verifier generated at redirect time (see
+    # google_oauth_redirect). Without it, fetch_token sends no code_verifier and
+    # Google rejects the grant. pop() so a replayed callback cannot reuse it.
+    flow.code_verifier = request.session.pop("google_oauth_code_verifier", None)
 
     # Reconstruct authorization_response using the configured base URI so it
     # matches exactly the redirect_uri registered in Google Console.

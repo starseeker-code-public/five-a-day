@@ -61,7 +61,7 @@ For every staged path, the table below tells you which docs are candidates for u
 | `project/billing/models.py`, `project/billing/services/**`, `project/billing/constants.py`, `project/billing/exports.py`, `project/billing/admin.py`, `project/billing/urls.py` | `project/billing/README.md` **+** main README (Database Schema, Features by View → Payments) **+** `project/ENROLLMENT_PAYMENT_SYSTEM.md` if pricing, discounts, or enrollment rules changed |
 | `project/comms/services/**`, `project/comms/tasks.py`, `project/comms/management/commands/**`, `project/comms/urls.py` | `project/comms/README.md` **+** main README (Features by View → Apps) |
 | `project/tests/**` | Main README (Testing section — test counts, per-file tables) **+** the app README whose logic the new test covers |
-| `project/project/settings*.py` | Main README (Env Variables Reference, `.env template` code block, App Versioning) **+** `DEPLOYMENT.md` if a new env var |
+| `project/project/settings*.py` | Main README (Env Variables Reference, `.env template` code block) **+** `DEPLOYMENT.md` if a new env var |
 | Any other Python file using `os.getenv(...)` | Main README (Env Variables Reference + `.env template` code block) **+** `DEPLOYMENT.md` Secret Manager list if the var carries a secret |
 | `Makefile` | Main README (Make Commands table, Contributing → Make Commands Developer Tooling) **+** `CLAUDE.md` Gotchas if a command was renamed or removed |
 | `pyproject.toml` | Main README (Tech Stack → Python Dependencies, Developer Tooling) **+** `docs/UV.md` if tooling-related **+** version badge and tables if version bumped |
@@ -133,7 +133,7 @@ If a roadmap item shipped, move its content to the Version History block for the
 - `make help` command count changed? Update "60+ commands" (check with `grep -c '^[a-z].*:$' Makefile`)
 - Quick Start commands still valid?
 - Env Variables Reference: any new `os.getenv(...)` in `settings.py` → add a row
-- App Versioning paragraph reflects the current `make version` syntax
+- (The App Versioning section was removed 2026-09-02 — do not re-add it; versioning is documented in CLAUDE.md)
 
 #### i. Project Structure & Architecture → Directory Layout
 

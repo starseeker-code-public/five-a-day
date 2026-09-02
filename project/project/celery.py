@@ -54,6 +54,14 @@ app.conf.beat_schedule = {
         "schedule": crontab(hour=6, minute=15),
         "options": {"queue": "celery"},
     },
+    # Archive the previous month's real GCP spend as a Software expense — on the
+    # 3rd at 06:45, because the BigQuery billing export lags up to ~2 days and on
+    # the 1st the closed month is still incomplete. Idempotent.
+    "archive-gcp-costs": {
+        "task": "billing.tasks.archive_gcp_costs_task",
+        "schedule": crontab(hour=6, minute=45, day_of_month=3),
+        "options": {"queue": "celery"},
+    },
     # v1.4 — Monthly report on the 28th at 20:00
     "send-monthly-report": {
         "task": "comms.tasks.send_monthly_report_task",

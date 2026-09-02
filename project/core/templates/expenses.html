@@ -207,6 +207,24 @@
                 </tr>
             </thead>
             <tbody class="divide-y divide-neutral-100">
+                {% if gcp_live %}
+                {# Mes en curso: gasto GCP dinámico (facturación real, aún sin archivar).
+                   Solo lectura — al cerrar el mes, archive_gcp_costs lo convierte en
+                   un gasto normal de la categoría Software. #}
+                <tr class="hover:bg-neutral-50">
+                    <td class="px-6 py-3 text-sm text-neutral-600">{{ gcp_live_date|date:"d/m/Y" }}</td>
+                    <td class="px-6 py-3 text-sm text-neutral-800">
+                        {{ gcp_live_description }}
+                        <span class="text-xs text-neutral-400">(mes en curso)</span>
+                        <div class="text-xs text-neutral-500">Importe dinámico — se archivará automáticamente al cerrar el mes.</div>
+                    </td>
+                    <td class="px-6 py-3 text-center text-sm">Software / Suscripciones</td>
+                    <td class="px-6 py-3 text-right font-medium text-red-500">-{{ gcp_live|floatformat:2 }} €</td>
+                    <td class="px-6 py-3 text-center whitespace-nowrap">
+                        <span class="material-symbols-outlined text-sm text-neutral-400" title="Gasto dinámico de GCP — no editable">sync</span>
+                    </td>
+                </tr>
+                {% endif %}
                 {% for e in expenses %}
                 <tr class="hover:bg-neutral-50">
                     <td class="px-6 py-3 text-sm text-neutral-600">{{ e.expense_date|date:"d/m/Y" }}</td>
@@ -248,11 +266,13 @@
                     </td>
                 </tr>
                 {% empty %}
+                {% if not gcp_live %}
                 <tr>
                     <td colspan="5" class="px-6 py-8 text-center text-neutral-400">
                         No hay gastos registrados para este período.
                     </td>
                 </tr>
+                {% endif %}
                 {% endfor %}
             </tbody>
         </table>

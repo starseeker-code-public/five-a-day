@@ -39,6 +39,14 @@ class TestBeatSchedule:
         assert entry["task"] == "comms.tasks.send_monthly_report_task"
         assert 28 in entry["schedule"].day_of_month
 
+    def test_gcp_cost_archive_runs_on_day_3(self):
+        # Day 3, not day 1 — the BigQuery billing export lags up to ~2 days,
+        # so on the 1st the just-closed month is still incomplete.
+        entry = app.conf.beat_schedule["archive-gcp-costs"]
+        assert entry["task"] == "billing.tasks.archive_gcp_costs_task"
+        assert 3 in entry["schedule"].day_of_month
+        assert 1 not in entry["schedule"].day_of_month
+
     def test_timezone_is_europe_madrid(self):
         assert app.conf.timezone == "Europe/Madrid"
 
@@ -48,6 +56,7 @@ class TestTaskDiscovery:
         "task_name",
         [
             "billing.tasks.generate_monthly_payments_task",
+            "billing.tasks.archive_gcp_costs_task",
             "comms.tasks.send_monthly_report_task",
             "comms.tasks.send_birthday_emails_task",
             "comms.tasks.send_payment_reminders",

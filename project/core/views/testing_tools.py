@@ -116,12 +116,19 @@ def _git_info():
 @qa_access_required
 def testing_tools_view(request):
     """Render the QA testing tools page."""
+    # Lazy import — keeps the billing→core direction out of module load order.
+    from billing.services.gcp_cost_service import qa_card_amounts
+
     git = _git_info()
     qa_config = QAConfiguration.get_config()
     tasks = _backlog_tasks_qs()[:50]
 
     context = {
         "git": git,
+        # Real GCP spend: previous month (archived row when it exists) + current
+        # month live from the BigQuery billing export, cached. Amounts are None
+        # when the export isn't configured/reachable — rendered as "—".
+        "gcp_costs": qa_card_amounts(),
         "qa_config": qa_config,
         "tasks": tasks,
         "app_version": settings.APP_VERSION,
@@ -451,7 +458,13 @@ def api_toggle_error_email(request):
 @require_http_methods(["POST"])
 def api_mark_ready(request):
     """Email SUPPORT_EMAIL that an admin marked this version as ready to ship,
-    with a full snapshot of the version / environment / last-commit info."""
+    with a full snapshot of the version / environment / last-commit info.
+
+    Since the QA sign-off gate this ALSO sets QAConfiguration.ready_for_prod,
+    which /health/?deep=1 exposes and deploy-production.yml's preflight requires
+    before a release can be armed for approval. The flag is set only after the
+    email goes out, so "success" always means both happened; the nightly testing
+    deploy resets it to False for every new version (set_ready_for_prod off)."""
     support_email = getattr(settings, "SUPPORT_EMAIL", None)
     if not support_email:
         return JsonResponse({"success": False, "message": "SUPPORT_EMAIL no está configurado."}, status=500)
@@ -500,4 +513,14 @@ def api_mark_ready(request):
             status=500,
         )
 
-    return JsonResponse({"success": True, "message": f"Enviado a {support_email}"})
+    config = QAConfiguration.get_config()
+    config.ready_for_prod = True
+    config.save()
+
+    return JsonResponse(
+        {
+            "success": True,
+            "ready_for_prod": True,
+            "message": f"Enviado a {support_email}. Versión desbloqueada para producción.",
+        }
+    )

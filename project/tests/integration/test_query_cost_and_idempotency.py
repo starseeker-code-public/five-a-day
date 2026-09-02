@@ -950,3 +950,20 @@ class TestDatabaseConnectionSettings:
 
     def test_the_postgres_branch_keeps_its_connect_timeout(self, postgres_branch):
         assert postgres_branch["OPTIONS"]["connect_timeout"] == 10
+
+    def test_the_cloud_sql_socket_path_survives_the_timeout_merge(self):
+        """The v1.26.2 production outage. For a Cloud SQL URL the Unix-socket
+        path travels as OPTIONS["host"] (dj_database_url parses the ?host=
+        query param into driver OPTIONS; ssl_require adds "sslmode" the same
+        way), and the statement-timeout used to be added with a dict-union
+        that REPLACED the whole OPTIONS dict - leaving HOST empty and psycopg2
+        dialing /var/run/postgresql. The TCP-shaped URL the other tests use
+        has empty OPTIONS, which is exactly why they never caught it."""
+        branch = self._load(
+            DATABASE_URL="postgres://u:p@/fiveaday_db?host=/cloudsql/five-a-day-evolution:europe-southwest1:fiveaday-db"
+        )
+        options = branch["OPTIONS"]
+        assert options.get("host") == "/cloudsql/five-a-day-evolution:europe-southwest1:fiveaday-db", (
+            "the socket path was clobbered - production cannot reach Cloud SQL without it"
+        )
+        assert "statement_timeout" in options.get("options", ""), "the merge must keep the ceiling too"

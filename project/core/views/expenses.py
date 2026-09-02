@@ -10,6 +10,7 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_http_methods
 
 from billing.models import Expense
+from billing.services import gcp_cost_service
 from billing.services.expense_service import monthly_totals
 from core.utils import MAX_QUERY_YEAR, MIN_QUERY_YEAR, safe_int
 
@@ -47,6 +48,25 @@ def expenses_list(request):
     templates = Expense.objects.filter(is_recurring=True).order_by("category", "description")
     totals = monthly_totals(month, year)
 
+    # The RUNNING month's GCP spend is dynamic — read live (cached) from the
+    # billing export and folded into the displayed totals, never persisted.
+    # Once the month closes, `archive_gcp_costs` stores it as a real `software`
+    # Expense row and this block goes quiet for that month (the archived-row
+    # check keeps a same-month row from ever being counted twice). Past months
+    # therefore show only saved values.
+    gcp_live = None
+    if (
+        (month, year) == (today.month, today.year)
+        and gcp_cost_service.is_configured()
+        and gcp_cost_service.archived_gcp_expense(year, month) is None
+    ):
+        gcp_live = gcp_cost_service.month_cost(year, month)
+        if gcp_live is not None and gcp_live > 0:
+            totals["expenses"] += gcp_live
+            totals["net"] -= gcp_live
+        else:
+            gcp_live = None
+
     return render(
         request,
         "expenses.html",
@@ -64,6 +84,12 @@ def expenses_list(request):
             "frequencies": Expense.RECURRING_FREQUENCY_CHOICES,
             "weekday_choices": Expense.WEEKDAY_CHOICES,
             "totals": totals,
+            # The pseudo-row only renders when the category filter allows it,
+            # but the figure is folded into `totals` regardless (the summary
+            # cards are month-wide, exactly like `monthly_totals`).
+            "gcp_live": gcp_live if category in ("", "software") else None,
+            "gcp_live_date": today,
+            "gcp_live_description": gcp_cost_service.GCP_EXPENSE_DESCRIPTION,
         },
     )
 
