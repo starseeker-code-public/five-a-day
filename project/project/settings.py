@@ -323,20 +323,24 @@ WSGI_APPLICATION = "project.wsgi.application"
 #                      Postgres reachable by TCP.
 # SQLite is intentionally not a fallback — the project always uses Postgres.
 if database_url := os.getenv("DATABASE_URL", "").strip():
-    DATABASES = {
-        "default": dj_database_url.config(
-            default=database_url,
-            conn_max_age=600,
-            conn_health_checks=True,
-            ssl_require=not DEBUG,
-        )
-        | {
-            # Same statement ceiling as the POSTGRES_* branch below. Set after
-            # `config()` because dj_database_url has no argument for driver
-            # OPTIONS, and this is the branch production actually runs on.
-            "OPTIONS": {"options": f"-c statement_timeout={os.getenv('DB_STATEMENT_TIMEOUT_MS', '30000')}"},
-        }
-    }
+    _default_db = dj_database_url.config(
+        default=database_url,
+        conn_max_age=600,
+        conn_health_checks=True,
+        ssl_require=not DEBUG,
+    )
+    # Same statement ceiling as the POSTGRES_* branch below. Set after
+    # `config()` because dj_database_url has no argument for driver OPTIONS —
+    # and it must MERGE into the OPTIONS `config()` built, never replace them:
+    # for a Cloud SQL URL the Unix-socket path travels as OPTIONS["host"]
+    # (ssl_require adds OPTIONS["sslmode"] too), so a dict-union that swapped
+    # the whole OPTIONS in left HOST empty and psycopg2 dialing the default
+    # local socket — which took down the v1.26.2 production migrate while the
+    # POSTGRES_* branch (dev, testing VM) worked fine.
+    _default_db.setdefault("OPTIONS", {})["options"] = (
+        f"-c statement_timeout={os.getenv('DB_STATEMENT_TIMEOUT_MS', '30000')}"
+    )
+    DATABASES = {"default": _default_db}
 else:
     DATABASES = {
         "default": {
