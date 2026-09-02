@@ -1,22 +1,29 @@
 name: Deploy production
 
-# Arms itself automatically when a release lands on main (the testing → main PR
-# merge), then STOPS and waits for a human. Two-phase by design:
+# Arms itself automatically every time the nightly testing deploy finishes
+# without issues, then STOPS and waits for a human. Two-phase by design:
 #
 #   PHASE 1 (automatic, credential-free)
-#   push to main  →  preflight: the QA sign-off gate (testing's /health/?deep=1
-#                    must be healthy, serve THIS version, and report
-#                    ready_for_prod=true — set by the "¿Listo para desplegar?"
-#                    button on /testing/ and reset by every nightly testing
-#                    deploy), wait for CI green, read versions, list migrations
+#   `Deploy testing` completes cleanly
+#                 →  preflight: exit green when production already serves
+#                    main's version (the common nightly case — silent, no
+#                    email); otherwise the QA sign-off gate (testing's
+#                    /health/?deep=1 must be healthy, serve THIS version, and
+#                    report ready_for_prod=true — set by the "¿Listo para
+#                    desplegar?" button on /testing/ and reset by every nightly
+#                    testing deploy), wait for CI green, list migrations
 #   PHASE 2 (manual approval)
 #                 →  deploy: BLOCKED on the `production` environment's required
 #                    reviewer. Nothing touches GCP until somebody clicks
 #                    "Review deployments → Approve".
 #
-# So the automation does all the waiting and all the reporting, and the only
-# manual act left is the decision itself. Production is never deployed by a
-# timer. The `/deploy` skill remains the by-hand path for emergencies.
+# The release cadence this produces: night 1 deploys the release to testing
+# and resets ready_for_prod, QA validates it during the day, and night 2's
+# no-op testing run re-triggers this workflow — which now finds everything in
+# place and arms. To ship the same day, dispatch this workflow by hand after
+# signing off. Production is still never deployed by a timer: the trigger only
+# ARMS the deploy, a human always approves. The `/deploy` skill remains the
+# by-hand path for emergencies.
 #
 # If the deploy job fails AFTER it has started changing production (jobs
 # repointed / service rolled), a rollback step automatically restores the
@@ -25,8 +32,21 @@ name: Deploy production
 # is in the failure email). rollback-production.yml is the on-demand variant.
 
 on:
-  push:
-    branches: [main]
+  # Chained to the nightly testing deploy, NOT to the push to main. Firing on
+  # the release PR merge raced the pipeline it depends on: preflight demands
+  # that TESTING serve the release version with QA's sign-off, but the VM only
+  # picks a version up on the next nightly deploy — so a same-day merge always
+  # failed the gate (v1.26.5: main merged at 13:36, testing still served
+  # v1.26.2). `workflow_run` fires this at the only moment the gate can pass:
+  # right after testing's state changed. The no-op nightly run (VM already on
+  # the target version) also completes successfully and re-triggers this — that
+  # is the run that ships a release, because a no-op does NOT reset
+  # ready_for_prod. Like `schedule`, workflow_run only ever fires from the
+  # workflow file on the DEFAULT branch (main): edits to this trigger travel
+  # development → testing → main before they change anything.
+  workflow_run:
+    workflows: ["Deploy testing"]
+    types: [completed]
   workflow_dispatch:
     inputs:
       force:
@@ -62,6 +82,10 @@ jobs:
   preflight:
     name: Preflight
     runs-on: ubuntu-latest
+    # `types: [completed]` fires on failure and cancellation too — there is no
+    # success-only event filter — so gate here. A broken testing deploy must
+    # never arm production; the whole run shows as skipped instead.
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     outputs:
       should_deploy: ${{ steps.compare.outputs.should_deploy }}
       sha: ${{ github.sha }}
@@ -106,7 +130,33 @@ jobs:
           echo "main pyproject: $NEW_VERSION"
           echo "live on prod:   ${LIVE_VERSION:-unreachable}"
 
+      - name: Anything to deploy?
+        id: precheck
+        env:
+          NEW: ${{ steps.versions.outputs.new_version }}
+          LIVE: ${{ steps.versions.outputs.live_version }}
+          FORCE: ${{ inputs.force }}
+        run: |
+          # This workflow runs after EVERY successful nightly testing run, so
+          # the common case is "production already serves main" and must exit
+          # green and silent BEFORE the QA gate — otherwise every night of an
+          # ordinary dev cycle (testing deliberately ahead of main) would end
+          # in a red run and an alarm email about a release nobody is shipping.
+          if [ "$NEW" = "$LIVE" ] && [ "$FORCE" != "true" ]; then
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+            {
+              echo "## Nothing to deploy"
+              echo ""
+              echo "Production already serves \`$NEW\`. Re-run this workflow with **force** if you"
+              echo "need to roll the same version again (for example after an env-var repair)."
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "Nothing to deploy: production already serves $NEW."
+          else
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: 'Phase 1 gate: testing must be healthy and signed off for THIS version'
+        if: steps.precheck.outputs.proceed == 'true'
         env:
           NEW: ${{ steps.versions.outputs.new_version }}
           FORCE: ${{ inputs.force }}
@@ -158,6 +208,7 @@ jobs:
           echo "Gate passed: testing is healthy, serves v$TEST_VERSION, and QA signed it off."
 
       - name: Wait for CI to go green on this commit
+        if: steps.precheck.outputs.proceed == 'true'
         id: ci
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b  # v7
         with:
@@ -165,9 +216,32 @@ jobs:
             const sha = context.sha;
 
             // Jobs of THIS workflow must never be waited on — that deadlocks.
-            const SELF = new Set(['Preflight', 'Deploy to production']);
-            // A failed notification email is not a reason to block a release.
-            const ADVISORY = new Set(['Send production notification']);
+            const SELF = new Set(['Preflight', 'Deploy to production',
+              'Notify preflight failure']);
+            // Not reasons to block a release: a failed notification email, and
+            // the nightly testing workflow's own jobs. Scheduled runs attach
+            // their check runs to the tip of main, and this workflow now runs
+            // right after Deploy testing, so those results are always present
+            // on the commit being polled — but the Phase 1 gate already judges
+            // testing's real state through /health/, which is authoritative.
+            const ADVISORY = new Set(['Send production notification',
+              'Check testing version', 'Deploy to testing VM',
+              'Notify check failure']);
+            // Check runs posted by these GitHub apps are outside this repo's
+            // CI: they cannot be re-run from GitHub, and there is no bypass
+            // when they misbehave (`force` skips the QA gate, never this
+            // wait). Concretely: the `fiveaday-build` Cloud Build trigger
+            // (europe-southwest1) PRE-BUILDS web:<short-sha> + web:latest on
+            // every push to main — deliberate, it is what usually lets the
+            // build step below skip itself — but it is an optimisation, not a
+            // gate: when its image is missing the build step builds inline,
+            // so its failure never makes a release undeployable. A transient
+            // ghcr.io TLS timeout in it blocked v1.26.5 (run 33636738113,
+            // attempt 3). These apps are dropped from the poll wholesale, so
+            // a stuck build cannot burn the 45-minute budget either. Checks
+            // from apps NOT listed here still wait and still block: the
+            // fail-closed default stays.
+            const IGNORED_APPS = new Set(['google-cloud-build']);
             // Must be PRESENT and successful. Naming them closes the hole where
             // "some check succeeded" is mistaken for "CI ran": CodeQL and
             // Scorecard also report on main.
@@ -186,7 +260,8 @@ jobs:
                 per_page: 100,
               });
 
-              const runs = data.check_runs.filter(r => !SELF.has(r.name));
+              const runs = data.check_runs.filter(
+                r => !SELF.has(r.name) && !IGNORED_APPS.has(r.app?.slug));
 
               // Fail CLOSED. Zero check runs is not "healthy", it is "unknown".
               if (runs.length === 0) {
@@ -245,6 +320,7 @@ jobs:
             }
 
       - name: List migrations the approver is about to authorise
+        if: steps.precheck.outputs.proceed == 'true'
         id: migrations
         # Via env, never interpolated into the body: the value comes from the
         # production /health/ response, i.e. off-box data.
@@ -265,26 +341,26 @@ jobs:
           echo "files=$FILES" >> "$GITHUB_OUTPUT"
           echo "migrations: ${FILES:-none}"
 
-      - name: Compare and arm
+      - name: Arm
         id: compare
+        # No `if:` — the implicit success() is exactly right: on a "nothing to
+        # deploy" night the gated steps above are *skipped* and this still runs
+        # to emit should_deploy=false; but if a gate FAILED, this is skipped,
+        # should_deploy stays empty and the deploy job cannot fire.
+        #
         # All values via env. `FILES='${{ ... }}'` in particular would be an
         # injection sink: it is a list of git paths, and a path may legally
         # contain a single quote, which breaks out of the shell literal.
         env:
+          PROCEED: ${{ steps.precheck.outputs.proceed }}
           NEW: ${{ steps.versions.outputs.new_version }}
           LIVE: ${{ steps.versions.outputs.live_version }}
           FILES: ${{ steps.migrations.outputs.files }}
-          FORCE: ${{ inputs.force }}
           SHORT_SHA: ${{ steps.versions.outputs.short_sha }}
         run: |
-          if [ "$NEW" = "$LIVE" ] && [ "$FORCE" != "true" ]; then
+          if [ "$PROCEED" != "true" ]; then
+            # The precheck already wrote the "Nothing to deploy" summary.
             echo "should_deploy=false" >> "$GITHUB_OUTPUT"
-            {
-              echo "## Nothing to deploy"
-              echo ""
-              echo "Production already serves \`$NEW\`. Re-run this workflow with **force** if you"
-              echo "need to roll the same version again (for example after an env-var repair)."
-            } >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
 
@@ -722,6 +798,7 @@ jobs:
           MIGRATIONS: ${{ steps.diff.outputs.migrations }}
           BACKUP_ID: ${{ steps.backup.outputs.backup_id }}
           MIGRATE_RAN: ${{ steps.diff.outputs.run_migrate }}
+          EVENT: ${{ github.event_name }}
           ACTOR: ${{ github.actor }}
         run: |
           {
@@ -734,10 +811,11 @@ jobs:
             echo "| Backup | \`${BACKUP_ID:-not taken}\` |"
             echo "| Migrate job | $([ "$MIGRATE_RAN" = "true" ] && echo executed || echo 'skipped (no migrations)') |"
             echo "| Auto-rollback | ${ROLLBACK_STATE:-no aplicado} |"
-            # `github.actor` on a push event is whoever merged the release PR, NOT
-            # whoever clicked Approve — GitHub exposes no approver variable. The
+            # On a workflow_run event `github.actor` is inherited from the
+            # triggering (testing) run, and on any event it is never whoever
+            # clicked Approve — GitHub exposes no approver variable. The
             # approval itself is recorded in the environment's deployment log.
-            echo "| Triggered by | $ACTOR |"
+            echo "| Trigger | $EVENT ($ACTOR) |"
             echo ""
             if [ -n "$MIGRATIONS" ]; then
               echo "### Migrations applied"
@@ -775,7 +853,7 @@ jobs:
                 La versión <strong>v${{ needs.preflight.outputs.new_version }}</strong>
                 (antes <strong>v${{ needs.preflight.outputs.live_version || 'desconocida' }}</strong>)
                 ya está publicada en <strong>producción</strong>. Se aprobó manualmente en GitHub;
-                el commit lo llevó a <code>main</code> <strong>${{ github.actor }}</strong>.
+                la aprobación queda registrada en el entorno <code>production</code> del repositorio.
               </p>
               <p style="text-align:center; margin:24px 0;">
                 <a href="${{ secrets.PRODUCTION_URL || 'https://fiveaday-332600671945.europe-southwest1.run.app' }}"
@@ -838,9 +916,14 @@ jobs:
   # JOB 3: A preflight failure means the release is NOT deployable
   #
   # The deploy job carries its own failure email, but it never starts when
-  # preflight fails — CI went red on main, a required check never ran, or the
-  # 45-minute wait expired. That is exactly the state somebody needs to know
-  # about, and without this it is only a red run in the Actions tab.
+  # preflight fails — QA has not signed off the release, testing serves another
+  # version, CI went red on main, a required check never ran, or the 45-minute
+  # wait expired. That is exactly the state somebody needs to know about, and
+  # without this it is only a red run in the Actions tab. Note this fires on
+  # every nightly re-trigger while a merged release sits unsigned — that
+  # insistence is deliberate: an unshipped release is a state to resolve, not
+  # to sit in. A quiet night (production already on main's version) never gets
+  # here: the precheck ends the run green before the gates.
   # ============================================================
   notify-preflight-failure:
     name: Notify preflight failure
@@ -862,17 +945,20 @@ jobs:
             <div style="font-family: sans-serif; color:#1f2937; max-width:640px;">
               <h2 style="color:#b91c1c;">⚠️ El despliegue a producción no se ha podido preparar</h2>
               <p style="font-size:15px; line-height:1.6;">
-                Ha llegado un commit a <code>main</code>, pero la comprobación previa ha fallado,
-                así que <strong>no hay ningún despliegue esperando aprobación</strong>.
-                Producción sigue intacta.
+                <code>main</code> lleva una versión que producción aún no sirve, pero la
+                comprobación previa ha fallado, así que <strong>no hay ningún despliegue
+                esperando aprobación</strong>. Producción sigue intacta.
               </p>
               <p style="font-size:14px; color:#4b5563; line-height:1.6;">
-                Causas habituales: el entorno de pruebas <strong>no ha validado esta versión</strong>
-                (falta pulsar <em>¿Listo para desplegar?</em> en <code>/testing/</code>, o pruebas
-                sirve otra versión o no responde), CI está en rojo en ese commit, un check obligatorio
-                (<code>Lint</code>, <code>Type check</code>, <code>Tests</code>,
-                <code>Docker build</code>) no llegó a ejecutarse, o CI no terminó en 45 minutos.
-                Arréglalo y vuelve a lanzar el workflow <em>Deploy production</em> a mano.
+                La causa más habitual: el entorno de pruebas <strong>no ha validado esta
+                versión</strong> — falta pulsar <em>¿Listo para desplegar?</em> en
+                <code>/testing/</code> (el despliegue nocturno a pruebas resetea ese visto
+                bueno con cada versión nueva). Tras pulsarlo, lanza <em>Deploy production</em>
+                a mano para desplegar hoy, o no hagas nada: el intento de la noche siguiente
+                se armará solo. Otras causas: pruebas sirve otra versión o no responde,
+                CI está en rojo en el commit, un check obligatorio (<code>Lint</code>,
+                <code>Type check</code>, <code>Tests</code>, <code>Docker build</code>)
+                no llegó a ejecutarse, o CI no terminó en 45 minutos.
               </p>
               <p style="margin-top:16px;">
                 <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"

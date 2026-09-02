@@ -15,7 +15,7 @@ Built to centralize student records, automate billing cycles, and streamline par
 ### Project Status
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v1.26.5-brightgreen?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-v1.26.6-brightgreen?style=flat-square" alt="Version">
   &nbsp;|&nbsp;
   <a href="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml?query=branch%3Amain"><img src="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml/badge.svg?branch=main&style=flat-square" alt="CI main"></a>
   &nbsp;|&nbsp;
@@ -36,9 +36,9 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 | Version | Date | Description |
 |---------|------|-------------|
-| **v1.26.5** | 2026-09-02 | Real GCP spend tracking + Google OAuth PKCE login fix |
+| **v1.26.6** | 2026-09-02 | Production deploys chained to nightly testing + apps restyle |
+| v1.26.5 | 2026-09-02 | Real GCP spend tracking + Google OAuth PKCE login fix |
 | v1.26.4 | 2026-09-02 | QA sign-off gate + automatic production rollback |
-| v1.26.3 | 2026-09-02 | Restore Cloud SQL socket path clobbered by timeout merge |
 
 ---
 
@@ -140,8 +140,74 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 ## Version History
 
-<details id="v1265" open>
-<summary><strong>v1.26.5 — Real GCP spend tracking + Google OAuth PKCE login fix (current)</strong></summary>
+<details id="v1266" open>
+<summary><strong>v1.26.6 — Production deploys chained to the nightly testing run + apps light-theme restyle (current)</strong></summary>
+
+**CI/CD — production deploy trigger rework**
+
+- `deploy-production.yml` no longer triggers on the push to `main`: it now fires via
+  `workflow_run` every time **`Deploy testing` finishes without issues**. The old trigger
+  raced the pipeline it depends on — the QA gate demands that testing serve the release
+  version, but the VM only picks a version up on the next nightly deploy, so a same-day
+  release merge always failed preflight (v1.26.5: main merged at 13:36 while testing still
+  served v1.26.2, run 33636738113).
+- New preflight ordering: an **"Anything to deploy?"** precheck exits green and silent when
+  production already serves `main`'s version — the common outcome of a quiet night —
+  *before* the QA sign-off gate, so ordinary dev nights (testing deliberately ahead of
+  `main`) no longer end in a red run and an alarm email. The release cadence: night 1
+  deploys to testing and resets `ready_for_prod`, QA signs off during the day, night 2's
+  no-op testing run re-triggers production and arms it for approval; manual dispatch ships
+  the same day.
+- The CI-green wait now **ignores check runs posted by external GitHub apps**
+  (`google-cloud-build`): the `fiveaday-build` trigger pre-builds `web:<short-sha>` +
+  `latest` on every push to `main` as an optimisation the deploy consumes, but a transient
+  ghcr.io timeout in it blocked v1.26.5's preflight with no bypass. The deploy job builds
+  inline whenever the tag is missing, so the pre-build's result can never make a release
+  undeployable. Fail-closed stays for every other unknown check.
+- Emails updated to match: the preflight-failure email now leads with the sign-off-pending
+  cause and both remedies (dispatch now, or wait for the next nightly attempt); the testing
+  deploy's success email explains when production will arm itself.
+
+**Apps section — light-theme homogenization**
+
+- All 9 app form pages (Fun Friday, Pago Mensual, Vacaciones, Certificado Renta, Informe
+  Mensual, Cumpleaños, Recibos, Nueva Matrícula, Newsletter) never defined
+  `page_title`/`page_subtitle`/`header_actions`, so the top bar showed the home-page
+  greeting ("¡Bienvenidas business women!") with a stray "Nuevo Estudiante" button, a
+  duplicated black in-content title, and flat `border-neutral-200` cards. The app name +
+  subtitle now render in the violet header bar like every other page, a "← Aplicaciones"
+  header button replaces the floating back arrow, and cards use the house
+  `rounded-lg` + shadow style (shared `_email_preview.html` included). Dark theme
+  unaffected — verified in both themes.
+
+**CodeQL fix**
+
+- Dependabot PR #53 bumped `codeql-action/init` to v4.37.9 but left `autobuild`/`analyze` on
+  the v3 SHA (their pin comments said bare `# v3`, which Dependabot doesn't rewrite), and v4
+  `init` writes a config the v3 steps refuse to load — every CodeQL run on `development`
+  failed. All three steps now share the v4.37.9 SHA, and pin comments must name exact
+  versions so Dependabot moves every line in lockstep.
+
+**Docker & dependencies**
+
+- The Dockerfile's `COPY --from=ghcr.io/astral-sh/uv:latest` (both stages) is now pinned to
+  `uv:0.11.32@sha256:df4cae8f…` — the one unpinned external image reference left, and the
+  exact line the transient ghcr.io timeout above failed on.
+- `dependabot.yml`'s `docker` ecosystem entry was missing `target-branch: development`, so
+  its scheduled PRs would have landed on `main` outside the release path; aligned with the
+  pip and github-actions entries (Monday 08:00 Madrid, limit 5, labels).
+
+**Deployment docs**
+
+- `DEPLOYMENT.md` provisioning status refreshed (verified 2026-09-02): all 12 Cloud Run
+  Jobs and 11 Cloud Scheduler entries exist, `fiveaday-archive-gcp-costs` + its paused
+  3rd-of-month schedule included; the testing VM's BigQuery scopes, `.env` and stack
+  recreation are done, leaving only the schedule resume once the release is live.
+
+</details>
+
+<details id="v1265">
+<summary><strong>v1.26.5 — Real GCP spend tracking + Google OAuth PKCE login fix</strong></summary>
 
 **Real GCP spend tracking (GcpCostService)**
 
@@ -3414,7 +3480,7 @@ five-a-day/
 │   │   ├── ci.yml                     Lint + typecheck + tests + Docker build + CVE scan on every push/PR
 │   │   ├── auto-merge.yml             Hourly development → testing merge + PR to main
 │   │   ├── deploy-testing.yml         Nightly 02:00-05:00 Madrid — deploys testing when versions differ, locks ready_for_prod
-│   │   ├── deploy-production.yml      Arms on push to main (needs QA sign-off on testing), deploys after reviewer approval, auto-rollback on failure
+│   │   ├── deploy-production.yml      Arms when the nightly testing deploy finishes cleanly (needs QA sign-off on testing), deploys after reviewer approval, auto-rollback on failure
 │   │   ├── rollback-production.yml    Dispatch-only — rolls service + all Cloud Run jobs back to a previous image
 │   │   ├── codeql.yml                 Weekly Python security scan
 │   │   ├── notify-production.yml      Email on push to main
@@ -4380,12 +4446,15 @@ Merge to main (protected — all checks required)
         │
         ├── release tag vX.Y.Z + email to hellofiveaday@gmail.com
         │   (notify-production.yml — informational; deploying is
-        │    the next workflow's job, the email is the paper trail)
+        │    another workflow's job, the email is the paper trail)
         ▼
-Deploy production  (deploy-production.yml) — arms itself on the push
+Deploy production  (deploy-production.yml) — arms itself when the
+next nightly Deploy testing run finishes cleanly (workflow_run;
+the merge to main fires nothing by itself)
+  • nothing new on main vs production? stop — green and silent
   • GATE: /health/?deep=1 on testing is healthy, serves THIS
     version, and reports ready_for_prod=true (QA sign-off)
-  • waits for CI to go green on the merge commit
+  • waits for CI to go green on main's tip
   • lists the migrations the release carries
   • BLOCKS on the `production` environment's required reviewer
         │ you approve (nothing deploys production on a timer)
@@ -4406,7 +4475,7 @@ reverted automatically)
 | `testing`     | Staging. Auto-merged from development.   | Minimal (no force/delete)| Only from auto-merge flow|
 | `development` | Active development. Day-to-day work.     | None                     | Yes                      |
 
-Feature branches off `development` are welcome for non-trivial work, but the expected flow is: work on `development` → wait 24 h → auto-promoted to `testing` → **auto-deployed to the testing VM overnight** → manual merge to `main` → production deploy **arms itself and waits for your approval**. See [DEPLOYMENT.md → CI/CD](DEPLOYMENT.md#4-cicd--automated-deploys).
+Feature branches off `development` are welcome for non-trivial work, but the expected flow is: work on `development` → wait 24 h → auto-promoted to `testing` → **auto-deployed to the testing VM overnight** → QA signs off on `/testing/` → manual merge to `main` → production deploy **arms itself on the next clean nightly testing run and waits for your approval** (or dispatch it by hand to ship the same day). See [DEPLOYMENT.md → CI/CD](DEPLOYMENT.md#4-cicd--automated-deploys).
 
 ### Workflows
 
@@ -4415,13 +4484,13 @@ Feature branches off `development` are welcome for non-trivial work, but the exp
 | **CI** | [`ci.yml`](.github/workflows/ci.yml) | Push to `development`/`testing`/`main`; PRs to `development`/`testing`/`main` | Six jobs — **Lint** (Ruff + Bandit + pip-audit + Hadolint), **Type check** (mypy), **Tests** (pytest + PostgreSQL 16 + coverage artifact), **Docker build** (validates Dockerfile), **Trivy** (filesystem CVE scan → Security tab), **Docker publish** (GHCR push + image scan, on `main`/`testing` only) |
 | **Auto-merge** | [`auto-merge.yml`](.github/workflows/auto-merge.yml) | Hourly cron + manual dispatch | Merges `development` → `testing` when conditions pass, creates PR to `main`, emails owners |
 | **Deploy testing** | [`deploy-testing.yml`](.github/workflows/deploy-testing.yml) | Daily, 02:00-05:00 Europe/Madrid window + manual dispatch | Compares `/health/` on the VM against `pyproject.toml` on `origin/testing`; deploys only when they differ. Gates the DB volume, resets `ready_for_prod` to false (locking the new version for production until QA signs it off), diffs row counts, then emails the result |
-| **Deploy production** | [`deploy-production.yml`](.github/workflows/deploy-production.yml) | Push to `main` + manual dispatch | Two-phase: preflight **requires testing's QA sign-off** (`/health/?deep=1` healthy + same version + `ready_for_prod=true`), waits for CI to go green and lists the migrations; then **blocks on the `production` environment's required reviewer**. On approval: verified backup → repoint every Cloud Run job → migrate → roll out → verify. A failure after the first write **auto-rolls the code back** (jobs + service to the previous image; the database is never reverted) |
+| **Deploy production** | [`deploy-production.yml`](.github/workflows/deploy-production.yml) | `Deploy testing` finishing without issues (`workflow_run`) + manual dispatch | Two-phase: preflight exits green when production already serves `main`'s version, otherwise **requires testing's QA sign-off** (`/health/?deep=1` healthy + same version + `ready_for_prod=true`), waits for CI to go green and lists the migrations; then **blocks on the `production` environment's required reviewer**. On approval: verified backup → repoint every Cloud Run job → migrate → roll out → verify. A failure after the first write **auto-rolls the code back** (jobs + service to the previous image; the database is never reverted) |
 | **Rollback production** | [`rollback-production.yml`](.github/workflows/rollback-production.yml) | Manual dispatch only | Rolls the service **and** every Cloud Run job back to a previous image tag (empty input = previous image; or an explicit git short SHA), behind the same `production` approval gate and concurrency group as a deploy. Code only — restoring the database stays a manual decision |
 | **CodeQL** | [`codeql.yml`](.github/workflows/codeql.yml) | Push to `main`/`testing`/`development`; PRs to `main`; Monday 04:30 UTC | Python static security analysis (OWASP Top 10, Django-specific queries) |
 | **Notify production** | [`notify-production.yml`](.github/workflows/notify-production.yml) | Push to `main` | Emails `hellofiveaday@gmail.com` with commit info and `gcloud` deploy instructions |
 | **Dependency review** | [`dependency-review.yml`](.github/workflows/dependency-review.yml) | Pull request | Blocks PRs that introduce a HIGH/CRITICAL CVE dependency |
 | **OSSF Scorecard** | [`scorecard.yml`](.github/workflows/scorecard.yml) | Push to `main`; weekly Monday 06:00 UTC; branch protection rule changes | Grades supply-chain security posture; uploads SARIF to GitHub Security tab |
-| **Dependabot** | [`dependabot.yml`](.github/dependabot.yml) | Weekly (Mondays 08:00 Madrid) | Grouped Python and GitHub Actions updates targeting `development`. PRs are **never merged automatically** — every one is reviewed and merged by hand |
+| **Dependabot** | [`dependabot.yml`](.github/dependabot.yml) | Weekly (Mondays 08:00 Madrid) | Grouped Python, GitHub Actions and Docker image updates targeting `development`. PRs are **never merged automatically** — every one is reviewed and merged by hand |
 
 Concurrent CI runs on the same branch cancel each other automatically — new pushes always produce a fresh run.
 
@@ -4461,9 +4530,10 @@ The two tag namespaces (`testing-vX.Y.Z` and `vX.Y.Z`) are fully independent —
 
 **5. Production deploy arms itself (deploy-production.yml)**
 
-- Triggers on the push to `main` — no timer is ever involved
-- A credential-free **preflight** first enforces the **QA sign-off gate**: `/health/?deep=1` on testing must be healthy, serve exactly the version being released, and report `ready_for_prod: true`. Since every nightly testing deploy resets the flag, a sign-off can never silently cover a later, untested build. `force=true` on a manual dispatch bypasses the gate (emergencies only)
-- The preflight then waits for CI to go green on the merge commit and lists the migrations the release carries
+- Triggers every time **`Deploy testing` finishes without issues** (`workflow_run`) — never on the push to `main`, and never on a timer of its own. The merge used to fire it directly, but a same-day merge always failed the QA gate: the VM only picks a version up on the next nightly deploy
+- A credential-free **preflight** first checks whether `main` differs from production at all — a quiet night (nothing merged, or the release already shipped) exits green and silent
+- It then enforces the **QA sign-off gate**: `/health/?deep=1` on testing must be healthy, serve exactly the version being released, and report `ready_for_prod: true`. Since every nightly testing deploy resets the flag, a sign-off can never silently cover a later, untested build. The resulting cadence: night 1 deploys the release to testing, QA signs off during the day, night 2's no-op testing run re-triggers production and arms it. Dispatch **Deploy production** by hand after signing off to ship the same day; `force=true` on a dispatch bypasses the gate (emergencies only). While a merged release sits unsigned, every nightly attempt fails loudly and emails — deliberate insistence
+- The preflight then waits for CI to go green on `main`'s tip and lists the migrations the release carries
 - Then it **blocks on the `production` GitHub environment's required reviewer** — your approval is the deploy button
 - On approval (via Workload Identity Federation scoped to the `production` environment): verified Cloud SQL backup → **every** Cloud Run job repointed to the new image (enumerated, not hard-coded) → migrations → service rollout → `/health/?deep=1` verification and a row-count delta check
 - **If the deploy fails after its first write to production**, a rollback step automatically restores the previous image on all Cloud Run jobs and (when the rollout had run) redeploys the service from it, re-verifying `/health/`. It never touches the database — the pre-deploy backup id is in the failure email and restoring it is a human decision. For breakage found *after* a green deploy, the **Rollback production** workflow does the same on demand
@@ -4509,9 +4579,9 @@ Dependabot opens **weekly PRs on `development`** (Mondays, 08:00 Europe/Madrid) 
 
 - **Python packages** — minor and patch updates grouped into a single PR. Django major version bumps are intentionally ignored (require manual upgrade planning).
 - **GitHub Actions** — updates to `actions/*`, `astral-sh/setup-uv`, `dawidd6/action-send-mail`, etc.
-- **Docker** (v1.26.0) — the digest-pinned `python:3.12-slim` base image in the `Dockerfile`. Without this entry nothing watched the container base at all.
+- **Docker** (v1.26.0) — the digest-pinned images in the `Dockerfile`: the `python:3.12-slim` base and, since v1.26.6, the `ghcr.io/astral-sh/uv` binary image (both `COPY --from` lines pinned to `0.11.32@sha256:…`). Since v1.26.6 this entry carries `target-branch: development` like the other two — it was missing, so its PRs would have targeted `main` outside the release path.
 
-PRs are labelled `dependencies` + `python` or `github-actions` for easy filtering. **Every Dependabot PR is reviewed and merged by hand — nothing merges them automatically.** CI runs on PRs into `development`, so a bump's checks are visible before you merge it. Once merged, the normal 24 h cycle carries the update to `testing` and then to `main`.
+PRs are labelled `dependencies` + `python`, `github-actions` or `docker` for easy filtering. **Every Dependabot PR is reviewed and merged by hand — nothing merges them automatically.** CI runs on PRs into `development`, so a bump's checks are visible before you merge it. Once merged, the normal 24 h cycle carries the update to `testing` and then to `main`.
 
 **Automatic security-fix PRs are disabled (2026-09-02).** GitHub hard-wires that PR flavour to the default branch (`main`) and no config retargets it, which conflicts with the development → testing → main release path. Dependabot **alerts** remain enabled in the Security tab; enforcement is `pip-audit` failing CI on `development` the moment a CVE is published (proven with DRF CVE-2026-73228/73229, fixed in v1.26.2 before Dependabot's own PR could have been merged). If a stray security PR against `main` ever appears, close it — merging it plants a commit on `main` that is not an ancestor of `testing`.
 

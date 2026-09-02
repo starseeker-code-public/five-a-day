@@ -3,16 +3,17 @@
 
 {% block title %}Nueva Matrícula{% endblock %}
 
+{% block page_title %}Nueva Matrícula{% endblock %}
+{% block page_subtitle %}Bienvenida y confirmación de matrícula{% endblock %}
+
+{% block header_actions %}
+<a href="{% url 'apps' %}" class="header-action-btn bg-primary-500 hover:bg-primary-600 text-white px-6 py-3 rounded-md flex items-center gap-2 transition-all duration-200 transform hover:scale-105 hover:shadow-md text-base font-semibold leading-none no-underline">
+    <span class="material-symbols-outlined text-xl">arrow_back</span> Aplicaciones
+</a>
+{% endblock %}
+
 {% block content %}
 <div class="max-w-4xl mx-auto">
-    <!-- Header -->
-    <div class="flex items-center justify-between mb-8">
-        <div>
-            <h1 class="text-2xl font-bold text-neutral-800">Nueva Matrícula</h1>
-            <p class="text-neutral-700">Bienvenida y confirmación de matrícula</p>
-        </div>
-        <a href="{% url 'apps' %}" class="text-primary-600 hover:text-primary-700" style="text-decoration: none;" title="Volver"><span class="material-symbols-outlined" style="font-size: 2rem; display: block;">arrow_back</span></a>
-    </div>
 
     {% if messages %}
     <div class="mb-6">
@@ -45,7 +46,7 @@
         <input type="hidden" name="email_type" id="email_type" value="welcome">
 
         <!-- Info banners -->
-        <div id="info-welcome" class="bg-pink-50 rounded-xl p-6 border border-pink-200">
+        <div id="info-welcome" class="bg-pink-50 rounded-lg p-6 border border-pink-200">
             <div class="flex items-start">
                 <span class="material-symbols-outlined text-pink-500 mr-3 mt-0.5">auto_awesome</span>
                 <div>
@@ -54,7 +55,7 @@
                 </div>
             </div>
         </div>
-        <div id="info-enrollment" class="hidden bg-sky-50 rounded-xl p-6 border border-sky-200">
+        <div id="info-enrollment" class="hidden bg-sky-50 rounded-lg p-6 border border-sky-200">
             <div class="flex items-start">
                 <span class="material-symbols-outlined text-sky-500 mr-3 mt-0.5">auto_awesome</span>
                 <div>
@@ -65,7 +66,7 @@
         </div>
 
         <!-- Estudiante (shared) -->
-        <div class="bg-white rounded-xl p-6 border border-neutral-200">
+        <div class="bg-white rounded-lg shadow-sm p-6">
             <h2 class="text-lg font-semibold text-neutral-700 mb-4 flex items-center">
                 <span class="material-symbols-outlined text-primary-500 mr-2">person</span>
                 Seleccionar Estudiante
@@ -85,7 +86,7 @@
         </div>
 
         <!-- Campos extra de matrícula (solo tab enrollment) -->
-        <div id="enrollment-fields" class="hidden bg-white rounded-xl p-6 border border-neutral-200">
+        <div id="enrollment-fields" class="hidden bg-white rounded-lg shadow-sm p-6">
             <h2 class="text-lg font-semibold text-neutral-700 mb-4 flex items-center">
                 <span class="material-symbols-outlined text-primary-500 mr-2">school</span>
                 Datos de Matrícula
