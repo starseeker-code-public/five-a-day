@@ -2,16 +2,17 @@
 
 {% block title %}Fun Friday - Enviar Invitación{% endblock %}
 
+{% block page_title %}Fun Friday{% endblock %}
+{% block page_subtitle %}Enviar invitación a todos los padres{% endblock %}
+
+{% block header_actions %}
+<a href="{% url 'apps' %}" class="header-action-btn bg-primary-500 hover:bg-primary-600 text-white px-6 py-3 rounded-md flex items-center gap-2 transition-all duration-200 transform hover:scale-105 hover:shadow-md text-base font-semibold leading-none no-underline">
+    <span class="material-symbols-outlined text-xl">arrow_back</span> Aplicaciones
+</a>
+{% endblock %}
+
 {% block content %}
 <div class="max-w-4xl mx-auto">
-    <!-- Header -->
-    <div class="flex items-center justify-between mb-8">
-        <div>
-            <h1 class="text-2xl font-bold text-neutral-800">Fun Friday</h1>
-            <p class="text-neutral-700">Enviar invitación a todos los padres</p>
-        </div>
-        <a href="{% url 'apps' %}" class="text-primary-600 hover:text-primary-700" style="text-decoration: none;" title="Volver"><span class="material-symbols-outlined" style="font-size: 2rem; display: block;">arrow_back</span></a>
-    </div>
 
     {% if messages %}
     <div class="mb-6">
@@ -27,7 +28,7 @@
         {% csrf_token %}
         
         <!-- Información del Evento -->
-        <div class="bg-white rounded-xl p-6 border border-neutral-200">
+        <div class="bg-white rounded-lg shadow-sm p-6">
             <h2 class="text-lg font-semibold text-neutral-700 mb-4 flex items-center">
                 <span class="material-symbols-outlined text-primary-500 mr-2">event</span>
                 Información del Evento
@@ -89,7 +90,7 @@
         </div>
 
         <!-- Edades -->
-        <div class="bg-white rounded-xl p-6 border border-neutral-200">
+        <div class="bg-white rounded-lg shadow-sm p-6">
             <h2 class="text-lg font-semibold text-neutral-700 mb-4 flex items-center">
                 <span class="material-symbols-outlined text-primary-500 mr-2">child_care</span>
                 Rango de Edades
@@ -127,7 +128,7 @@
         </div>
 
         <!-- Descripción de la Actividad (HTML) -->
-        <div class="bg-white rounded-xl p-6 border border-neutral-200">
+        <div class="bg-white rounded-lg shadow-sm p-6">
             <h2 class="text-lg font-semibold text-neutral-700 mb-4 flex items-center">
                 <span class="material-symbols-outlined text-primary-500 mr-2">edit_note</span>
                 Descripción de la Actividad
@@ -154,7 +155,7 @@
         {% include 'apps/_email_preview.html' %}
 
         <!-- Resumen antes de enviar -->
-        <div class="bg-amber-50 rounded-xl p-6 border border-amber-200">
+        <div class="bg-amber-50 rounded-lg p-6 border border-amber-200">
             <h2 class="text-lg font-semibold text-amber-800 mb-2 flex items-center">
                 <span class="material-symbols-outlined text-amber-600 mr-2">info</span>
                 Antes de enviar

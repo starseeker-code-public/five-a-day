@@ -422,7 +422,9 @@ jobs:
               <p style="font-size:13px; color:#4b5563; line-height:1.6;">
                 <strong>Esta versión queda bloqueada para producción</strong> hasta que alguien la
                 valide con el botón <em>¿Listo para desplegar?</em> del panel de pruebas. Hasta
-                entonces, el workflow de despliegue a producción no se armará.
+                entonces, el workflow de despliegue a producción no se armará. Una vez validada
+                (y con la release fusionada en <code>main</code>), se armará solo en la pasada
+                nocturna siguiente — o lanza <em>Deploy production</em> a mano para desplegar hoy.
               </p>
               <p style="margin-top:16px;">
                 <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
