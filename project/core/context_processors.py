@@ -22,12 +22,23 @@ def today_notifications(request):
     teacher = None
     if user is not None and getattr(user, "is_authenticated", False):
         teacher = getattr(user, "teacher", None)
+    session = getattr(request, "session", None)
+    session_authenticated = bool(session is not None and session.get("is_authenticated"))
     is_non_admin_teacher = _is_non_admin_teacher(request)
-    is_admin_user = not is_non_admin_teacher
+    # `not is_non_admin_teacher` FAILED OPEN: this context processor runs on
+    # EVERY render, including pages served to an anonymous visitor (the login
+    # page, the 403/404/500 handlers, anything rendered before a session
+    # exists), and for those `_is_non_admin_teacher` answers False — "not a
+    # non-admin teacher" — which the template then read as "is an admin" and
+    # rendered the admin UI to nobody in particular. Admin is a POSITIVE grant:
+    # it now requires an authenticated session first.
+    is_admin_user = session_authenticated and not is_non_admin_teacher
 
     # QA testing tools visibility — logged-in ADMIN Teacher in the testing
     # environment only (non-admin teachers must not see the dev tools).
-    show_testing_tools = settings.IS_TESTING_ENV and teacher is not None and teacher.admin
+    # `active` matters as much as `admin`: deactivating a Teacher is how this
+    # academy offboards somebody, and the dev tools include DB seed/reset.
+    show_testing_tools = settings.IS_TESTING_ENV and teacher is not None and teacher.admin and teacher.active
 
     # The header bell and the actions-history feed are admin-only, so a
     # non-admin teacher never renders either one — don't spend the queries.

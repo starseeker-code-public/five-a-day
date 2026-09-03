@@ -21,6 +21,7 @@ from datetime import date, timedelta
 from decimal import Decimal
 
 from django.conf import settings
+from django.contrib.auth.models import User
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 
@@ -48,7 +49,6 @@ from students.models import Group, Parent, Student, StudentParent, Teacher
 # admin teachers (seeded by `seed_teachers`) are looked up at runtime and never
 # touched. Any teacher whose email ends with this domain is considered
 # command-created and is safe to wipe on --reset.
-COMMAND_TEACHER_DOMAIN = "@fiveaday.test"
 
 ADDITIONAL_TEACHERS = [
     {
@@ -346,9 +346,31 @@ class Command(BaseCommand):
         Parent.objects.all().delete()
         Group.objects.all().delete()
         # Only delete teachers this command created — NEVER the seeded admins.
-        deleted, _ = Teacher.objects.filter(email__endswith=COMMAND_TEACHER_DOMAIN).delete()
+        #
+        # Matched on the exact addresses in ADDITIONAL_TEACHERS, not on the
+        # `@fiveaday.test` domain. The domain is shared: the QA VM gives each
+        # admin a second NON-ADMIN account at `@fiveaday.test` (seeds #4-#5, the
+        # `claudia` / `silvia` handles) and `seed_demo_parents` owns
+        # `demo.teacher@fiveaday.test`. An `email__endswith` filter therefore
+        # deleted teachers this command never created, which is exactly what the
+        # line above says must not happen.
+        #
+        # The linked `auth.User` has to go with them. `Teacher.user` is a
+        # OneToOneField pointing AT auth.User, so deleting the Teacher does not
+        # touch it, and `ensure_user()` mirrors `Teacher.admin` onto is_staff /
+        # is_superuser. An orphan therefore keeps working credentials and its
+        # superuser flags with no Teacher row left to explain it — it can still
+        # sign in to /admin/, and it accumulates on every QA reset.
+        command_teachers = Teacher.objects.filter(email__in=[spec["email"] for spec in ADDITIONAL_TEACHERS])
+        orphan_user_ids = [uid for uid in command_teachers.values_list("user_id", flat=True) if uid is not None]
+        deleted, _ = command_teachers.delete()
+        users_deleted = 0
+        if orphan_user_ids:
+            users_deleted, _ = User.objects.filter(id__in=orphan_user_ids).delete()
         # EnrollmentType + SiteConfiguration are intentionally preserved.
-        self.stdout.write(f"  Data deleted ({deleted} command-created teacher rows removed).")
+        self.stdout.write(
+            f"  Data deleted ({deleted} command-created teacher rows, {users_deleted} linked login account(s) removed)."
+        )
 
     # ------------------------------------------------------------------
     # Reference data
@@ -367,7 +389,10 @@ class Command(BaseCommand):
         """Return {'admin1','admin2','add1','add2'} -> Teacher."""
         admins = list(Teacher.objects.filter(admin=True).order_by("id")[:2])
         if len(admins) < 2:
-            raise RuntimeError(
+            # CommandError, not RuntimeError: this is a missing precondition the
+            # operator can fix, so it deserves a one-line message rather than a
+            # traceback that reads like a crash.
+            raise CommandError(
                 "Expected at least 2 admin teachers (seeded by `seed_teachers`). "
                 f"Found {len(admins)}. Run `seed_teachers` first."
             )

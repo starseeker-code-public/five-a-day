@@ -18,6 +18,7 @@ from django.core.management.base import BaseCommand, CommandError
 from django.db.models import Prefetch
 
 from comms.services.email_functions import (
+    cheque_idioma_fee,
     send_all_tax_certificates,
     send_fun_friday_email,
     send_payment_reminder_email,
@@ -28,6 +29,47 @@ from comms.services.email_functions import (
 from comms.services.email_service import email_service
 from core.constants import DIAS_ES, MESES_ES
 from students.models import Parent, Student
+
+
+def _mass_mail_parent_filters() -> dict:
+    """The filters every mass-mail recipient query in this command must carry.
+
+    Mirrors `core.views.app_forms._recipient_filters`: `is_waiting=False` is the
+    one that was missing. A waiting-list entry taken over the phone has no
+    `Parent` row, but a student MOVED BACK onto the list keeps their parents —
+    so `children__active=True` alone mailed families whose child is not
+    enrolled. Duplicated rather than imported because a management command in
+    `comms` importing `core.views` would be a layering inversion; the two are
+    two lines each and the docstring names its twin.
+    """
+    return {"children__active": True, "children__is_waiting": False}
+
+
+def _dedupe_emails(addresses) -> list[str]:
+    """Collapse addresses differing only by case/whitespace, keeping order.
+
+    `Parent.email` is not unique, so a couple sharing a mailbox is two rows and
+    got two copies of every batch.
+    """
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for raw in addresses:
+        address = (raw or "").strip()
+        if address and address.lower() not in seen:
+            seen.add(address.lower())
+            ordered.append(address)
+    return ordered
+
+
+def _mass_mail_recipients() -> list[str]:
+    """Deduplicated addresses of the parents of currently enrolled students."""
+    return _dedupe_emails(
+        Parent.objects.filter(**_mass_mail_parent_filters())
+        .exclude(email="")
+        .exclude(email__isnull=True)
+        .order_by("id")
+        .values_list("email", flat=True)
+    )
 
 
 class Command(BaseCommand):
@@ -132,7 +174,7 @@ class Command(BaseCommand):
         # making the `prefetch_related` above dead weight.
         birthday_students = list(
             Student.objects.filter(
-                birth_date__month=today.month, birth_date__day=today.day, active=True
+                birth_date__month=today.month, birth_date__day=today.day, active=True, is_waiting=False
             ).prefetch_related(
                 Prefetch(
                     "parents",
@@ -164,17 +206,31 @@ class Command(BaseCommand):
         # Was three queries per parent: `children.filter(active=True)`, then `s.group`
         # for every child (no select_related), then `students.count()` re-running the
         # same queryset. All of it now rides on one prefetch.
-        parents = list(
-            Parent.objects.filter(email__isnull=False)
+        # Only parents of ENROLLED students, deduplicated by address. This used
+        # to be every `Parent` row with an email — including families that have
+        # left, and waiting-list families — each of whom received a report
+        # listing zero students.
+        seen: set[str] = set()
+        parents = []
+        for parent in (
+            Parent.objects.filter(**_mass_mail_parent_filters())
             .exclude(email="")
+            .exclude(email__isnull=True)
+            .distinct()
+            .order_by("id")
             .prefetch_related(
                 Prefetch(
                     "children",
-                    queryset=Student.objects.filter(active=True).select_related("group"),
+                    queryset=Student.objects.filter(active=True, is_waiting=False).select_related("group"),
                     to_attr="active_children",
                 )
             )
-        )
+        ):
+            key = parent.email.strip().lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            parents.append(parent)
         if not parents:
             self.stdout.write(self.style.WARNING("No hay padres con email"))
             return
@@ -210,8 +266,7 @@ class Command(BaseCommand):
         except ValueError as err:
             raise CommandError("Formato de fecha inválido") from err
         start_time, end_time = options["time"].split("-")
-        parents = Parent.objects.filter(email__isnull=False, children__active=True).distinct()
-        recipient_emails = [p.email for p in parents if p.email]
+        recipient_emails = _mass_mail_recipients()
         # Send one email per parent. Previously the whole list was passed as
         # `recipients=...` which put every family's address in the `To:` header
         # of a single message — GDPR breach + enumeration leak. Loop instead.
@@ -250,12 +305,16 @@ class Command(BaseCommand):
         # number there (= the old hard-coded 613 481 141), and no
         # ACADEMY_BIZUM_PHONE var exists on the service.
         bizum_phone = options.get("bizum_phone") or os.getenv("ACADEMY_PHONE", "")
-        cheque_price = options.get("cheque_idioma_price")
-        if cheque_price is None:
-            cheque_price = f"{config.full_time_monthly_fee - config.language_cheque_discount:.0f}€"
+        # `emails/payment_reminder.html` prints "{{ reduced_price_cheque_idioma }}
+        # euros", so the "€" this used to append rendered as "34€ euros". One
+        # helper formats it now (the same one the app's four call sites use), and
+        # a "€" typed after `--cheque-idioma-price` is stripped rather than
+        # doubled up.
+        cheque_price = (options.get("cheque_idioma_price") or "").strip().removesuffix("€").strip()
+        if not cheque_price:
+            cheque_price = cheque_idioma_fee(config)
 
-        parents = Parent.objects.filter(email__isnull=False, children__active=True).exclude(email="").distinct()
-        recipient_emails = list(parents.values_list("email", flat=True))
+        recipient_emails = _mass_mail_recipients()
         # Per-parent loop — see send_fun_friday_emails for the "batch in To:"
         # bug this replaces.
         sent = 0
@@ -281,8 +340,7 @@ class Command(BaseCommand):
         start_date = datetime.strptime(options["start"], "%Y-%m-%d")
         end_date = datetime.strptime(options["end"], "%Y-%m-%d")
         reopen_date = datetime.strptime(options["reopen"], "%Y-%m-%d")
-        parents = Parent.objects.filter(email__isnull=False, children__active=True).exclude(email="").distinct()
-        recipient_emails = list(parents.values_list("email", flat=True))
+        recipient_emails = _mass_mail_recipients()
         # Per-parent loop — see send_fun_friday_emails for the "batch in To:"
         # bug this replaces.
         sent = 0
@@ -312,21 +370,27 @@ class Command(BaseCommand):
             raise CommandError("Se requiere --year")
         year = options["year"]
         if options.get("recipient"):
-            try:
-                # iexact + explicit ambiguity handling: Parent.email is not
-                # unique and Postgres compares it case-sensitively, so a bare
-                # `.get(email=...)` both missed a differently-cased address and
-                # raised an opaque MultipleObjectsReturned on a shared mailbox.
-                matches = list(Parent.objects.filter(email__iexact=options["recipient"])[:2])
-                if not matches:
-                    raise CommandError(f"No se encontró padre con email {options['recipient']}")
-                if len(matches) > 1:
-                    raise CommandError(
-                        f"Hay varios padres con el email {options['recipient']}; resuélvelo antes de enviar."
-                    )
-                parent = matches[0]
-            except Parent.DoesNotExist as err:
-                raise CommandError(f"No se encontró padre con email {options['recipient']}") from err
+            # iexact + explicit ambiguity handling: Parent.email is not unique
+            # and Postgres compares it case-sensitively, so a bare
+            # `.get(email=...)` both missed a differently-cased address and
+            # raised an opaque MultipleObjectsReturned on a shared mailbox.
+            # `[:2]` + refuse-if-not-exactly-one is the same call
+            # `core.views.auth._parent_by_email` makes, and for the same reason:
+            # picking whichever row came back first would mail one family's
+            # fiscal certificate — with the other family's payments and DNI on
+            # it — to the shared address. The local copy is deliberate; a comms
+            # command importing `core.views` would invert the layering.
+            #
+            # There is no `except Parent.DoesNotExist` here any more: nothing in
+            # this block can raise it (the `.get()` it guarded was replaced by
+            # the slice above), so it was dead code that read like a live path.
+            recipient = options["recipient"]
+            matches = list(Parent.objects.filter(email__iexact=recipient)[:2])
+            if not matches:
+                raise CommandError(f"No se encontró padre con email {recipient}")
+            if len(matches) > 1:
+                raise CommandError(f"Hay varios padres con el email {recipient}; resuélvelo antes de enviar.")
+            parent = matches[0]
             success = send_tax_certificate_email(parent=parent, year=year)
             self.stdout.write(
                 self.style.SUCCESS(f"Certificado enviado a {parent.email}") if success else self.style.ERROR("Error")

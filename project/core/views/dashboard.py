@@ -12,6 +12,7 @@ from django.shortcuts import render
 from billing.constants import LIVE_PAYMENT_STATUSES
 from billing.models import Payment
 from core.constants import SCHEDULED_APPS
+from core.decorators import admin_required
 from core.models import TodoItem
 from students.models import Group, Student
 
@@ -334,6 +335,7 @@ def home(request):
     return response
 
 
+@admin_required
 def all_info(request):
     from core.transactions import get_active_students, get_all_payments_unrestricted
 

@@ -101,10 +101,16 @@
                         {% if form.last_name.errors %}<p class="mt-1 text-sm" style="color:#dc2626;">{{ form.last_name.errors.0 }}</p>{% endif %}
                     </div>
                     <div>
+                        {# NO required asterisk: Student.birth_date is genuinely optional #}
+                        {# (blank=True, form required=False) — a waiting-list entry is    #}
+                        {# taken over the phone with a first name and a number. The red  #}
+                        {# `*` claimed a rule the model does not have. help_text comes   #}
+                        {# from the form so the wording cannot drift from the field.     #}
                         <label for="{{ form.birth_date.id_for_label }}" class="block text-sm font-medium text-neutral-700 mb-2">
-                            {{ form.birth_date.label }} <span style="color:#dc2626;">*</span>
+                            {{ form.birth_date.label }}
                         </label>
                         {{ form.birth_date }}
+                        {% if form.birth_date.help_text %}<p class="mt-1 text-xs text-neutral-500">{{ form.birth_date.help_text }}</p>{% endif %}
                         {% if form.birth_date.errors %}<p class="mt-1 text-sm" style="color:#dc2626;">{{ form.birth_date.errors.0 }}</p>{% endif %}
                     </div>
                 </div>
@@ -132,8 +138,11 @@
                 <h3 class="text-lg font-medium text-neutral-700 mb-4">Información Académica</h3>
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div>
-                        <label for="{{ form.group.id_for_label }}" class="block text-sm font-medium text-neutral-700 mb-2">{{ form.group.label }} <span style="color:#dc2626;">*</span></label>
+                        {# No asterisk: Student.group is nullable and the form field is #}
+                        {# required=False — same story as birth_date above.             #}
+                        <label for="{{ form.group.id_for_label }}" class="block text-sm font-medium text-neutral-700 mb-2">{{ form.group.label }}</label>
                         {{ form.group }}
+                        {% if form.group.help_text %}<p class="mt-1 text-xs text-neutral-500">{{ form.group.help_text }}</p>{% endif %}
                         {% if form.group.errors %}<p class="mt-1 text-sm" style="color:#dc2626;">{{ form.group.errors.0 }}</p>{% endif %}
                     </div>
                     {% if not is_adult_mode %}
@@ -220,6 +229,20 @@
                         </div>
                         <!-- Sibling search (shown when checkbox is checked) -->
                         <div id="sibling-search-container" class="hidden mt-2 ml-8">
+                            {% comment %}
+                               The picker is capped at 500 rows. `sibling_list_notice` is an
+                               empty string unless the cap actually truncated the list, so it
+                               only appears when it means something — and it has to appear:
+                               the box below filters the ROWS IT WAS GIVEN, so a sibling past
+                               the cap simply cannot be found, and a sibling nobody finds is a
+                               sibling discount the family never gets.
+                            {% endcomment %}
+                            {% if sibling_list_notice %}
+                            <p class="mb-2 p-2 rounded-md text-xs bg-amber-100 text-amber-800 border border-amber-200">
+                                <span class="material-symbols-outlined text-sm align-middle">warning</span>
+                                {{ sibling_list_notice }}
+                            </p>
+                            {% endif %}
                             <input type="text" id="siblingSearch" placeholder="Buscar hermano por nombre..."
                                    class="w-full px-3 py-2 border border-neutral-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500 text-sm mb-2">
                             <div id="siblingResults" class="space-y-1 max-h-40 overflow-y-auto">
@@ -270,6 +293,15 @@
             <div class="mb-6">
                 <h3 class="text-lg font-medium text-neutral-700 mb-4">Seleccionar Padre/Tutor</h3>
                 <div>
+                    {# Same cap, same reason: the search box filters only the rows rendered #}
+                    {# below, so a truncated list has to say so. Empty string when nothing  #}
+                    {# was dropped.                                                          #}
+                    {% if all_parents_notice %}
+                    <p class="mb-3 p-2 rounded-md text-xs bg-amber-100 text-amber-800 border border-amber-200">
+                        <span class="material-symbols-outlined text-sm align-middle">warning</span>
+                        {{ all_parents_notice }}
+                    </p>
+                    {% endif %}
                     <input type="text" id="parentSearch" placeholder="Buscar padre por nombre o email..."
                            class="w-full px-3 py-2 border border-neutral-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500 mb-3">
                     <div id="parentResults" class="space-y-2">

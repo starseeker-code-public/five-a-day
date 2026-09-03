@@ -1,6 +1,5 @@
 import json
 import logging
-from datetime import date
 from decimal import Decimal
 
 from django.core.exceptions import ValidationError
@@ -11,6 +10,8 @@ from django.views.decorators.http import require_http_methods
 
 from billing import constants
 from billing.models import Enrollment, SiteConfiguration, current_academic_year, relevant_academic_years
+from billing.services.enrollment_service import EnrollmentService
+from core.decorators import admin_required
 from core.models import HistoryLog
 from core.views.password_reset import can_change_own_password, send_password_setup_email
 from students.models import Group, Parent, Student, Teacher
@@ -46,6 +47,7 @@ def gestion_view(request):
 
 
 @require_http_methods(["POST"])
+@admin_required
 def update_site_config(request):
     """API para actualizar la configuración de precios del sitio."""
     try:
@@ -82,6 +84,23 @@ def update_site_config(request):
             if field in data:
                 setattr(config, field, Decimal(str(data[field])))
 
+        # Datos fiscales (v1.27). `academy_cif` is the one that matters: the tax
+        # certificate asserts IRPF validity and printed no CIF at all, because
+        # `pdf_service._get_academy_info()` read a field that did not exist. These
+        # are the only place in the app they can be corrected.
+        for field in [
+            "academy_name",
+            "academy_cif",
+            "academy_address",
+            "academy_phone",
+            "academy_website",
+        ]:
+            if field in data:
+                # Truncated to the column width rather than left to raise: these
+                # are free text and a 400 on a long address is unhelpful.
+                max_length = SiteConfiguration._meta.get_field(field).max_length
+                setattr(config, field, str(data[field] or "").strip()[:max_length])
+
         # Model.save() skips validators, so a negative fee (or a percentage over
         # 100) used to persist straight through and quietly break every price.
         config.full_clean()
@@ -115,6 +134,7 @@ def update_site_config(request):
 
 
 @require_http_methods(["POST"])
+@admin_required
 def create_teacher(request):
     """API para crear un nuevo profesor."""
     try:
@@ -202,6 +222,7 @@ def create_teacher(request):
 
 
 @require_http_methods(["POST"])
+@admin_required
 def create_group(request):
     """API para crear un nuevo grupo."""
     try:
@@ -292,6 +313,7 @@ def api_get_teachers(request):
 
 
 @require_http_methods(["POST"])
+@admin_required
 def update_enrollment_modality(request, student_id):
     """
     AJAX endpoint to change a student's payment modality (monthly/quarterly).
@@ -332,7 +354,7 @@ def update_enrollment_modality(request, student_id):
         # modality without renegotiating the figure turned a €25/month special
         # into €25 per QUARTER (the generator scales `final_amount` by the
         # period, as it must). That price change needs a human, not a toggle.
-        if enrollment.enrollment_type is not None and enrollment.enrollment_type.name == "special":
+        if enrollment.is_hand_priced:
             return JsonResponse(
                 {
                     "success": False,
@@ -344,34 +366,48 @@ def update_enrollment_modality(request, student_id):
                 status=400,
             )
 
-        enrollment.payment_modality = modality
-        # `Enrollment.save()` only derives `final_amount` when it is falsy, so a
-        # modality flip kept the OLD period price (monthly fee billed per
-        # quarter, or a whole quarter billed monthly). Clear both so save()
-        # recomputes them from SiteConfiguration for the new modality.
-        enrollment.final_amount = None
-        enrollment.enrollment_amount = None
-        enrollment.save()
+        # The cadence change SUPERSEDES the enrollment instead of mutating it.
+        # Flipping `payment_modality` in place kept the original
+        # `enrollment_date` anchor, so the new cadence's `billing_periods`
+        # reached back over months already COLLECTED under the old one — and the
+        # `(student, payment_type, due month)` idempotency cannot see them,
+        # because `payment_type` is one of its keys. See
+        # `EnrollmentService.change_payment_modality` for the full trace; the
+        # logic lives there because `StudentUpdateView` and `enroll_student` need
+        # the same transition.
+        replacement, effective_start = EnrollmentService.change_payment_modality(student, enrollment, modality)
+        if replacement is None:
+            return JsonResponse(
+                {
+                    "success": False,
+                    "error": (
+                        "No quedan meses sin facturar en este curso, así que el cambio de modalidad "
+                        "no puede aplicarse sin volver a cobrar un mes ya emitido. Cancela los cobros "
+                        "pendientes afectados y vuelve a intentarlo."
+                    ),
+                },
+                status=400,
+            )
 
-        # The pending rows of the old cadence would double-bill the months the
-        # new one re-bills (different payment_type: invisible to both the
-        # idempotency check and the unique-month constraint). Cancel them from
-        # this month on; past months stay owed. Row-by-row save so the audit
-        # signals fire, as everywhere else.
-        for payment in enrollment.payments.filter(
-            payment_status="pending",
-            payment_type="quarterly" if modality == "monthly" else "monthly",
-            due_date__gte=date.today().replace(day=1),
-        ):
-            payment.payment_status = "cancelled"
-            payment.save(update_fields=["payment_status", "updated_at"])
+        display = replacement.get_payment_modality_display()
+        HistoryLog.log(
+            "enrollment_modality_changed",
+            f"Modalidad cambiada a {display}: {student.full_name} (desde {effective_start.strftime('%d/%m/%Y')})",
+            icon="published_with_changes",
+        )
 
         return JsonResponse(
             {
                 "success": True,
-                "message": f"Modalidad cambiada a {enrollment.get_payment_modality_display()}.",
+                # The effective date is reported, never assumed: it is the first
+                # month not already invoiced, which is not always today's month.
+                "message": (
+                    f"Modalidad cambiada a {display}, con efecto desde el {effective_start.strftime('%d/%m/%Y')}."
+                ),
                 "payment_modality": modality,
-                "payment_modality_display": enrollment.get_payment_modality_display(),
+                "payment_modality_display": display,
+                "enrollment_id": replacement.id,
+                "effective_start": effective_start.isoformat(),
             }
         )
 

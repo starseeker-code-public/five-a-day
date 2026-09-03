@@ -6,12 +6,40 @@
 .PHONY: help setup build up down restart stop start rebuild dev logs \
         ps stats shell bash migrate makemigrations createsuperuser \
         collectstatic check dbshell backup restore reset-db \
-        test test-cov-gate \
+        test test-cov-gate smoke \
         clean clean-all health url generate-payments generate-payments-dry \
         sync lint format pre-commit-install pc-run \
         mypy bandit audit coverage-badge check-deploy \
         celery-logs celery-restart celery-status celery-test-task \
         connect-testing
+
+# ============================================================================
+# COMPOSE FILE SELECTION — every target goes through $(COMPOSE)
+# ============================================================================
+# The QA VM is a TWO-FILE stack: the overlay is what mounts
+# testing_postgres_data instead of the base file's dev volume. A one-file
+# bring-up there starts a different, valid, WRONG stack that exits 0 and even
+# reports the right version on /health/ — that is how a v1.16.0 deploy served a
+# months-old database and left the real volume orphaned.
+#
+# So the file list is derived from DJANGO_ENV in the active .env rather than
+# left to whoever types the command:
+#   DJANGO_ENV=testing  → -f docker-compose.yml -f docker-compose.testing.yml
+#   anything else       → bare `docker compose`, which auto-loads
+#                         docker-compose.override.yml (the dev source mount)
+# Override for one command with:  make <target> TESTING=1   (or FILES='-f …')
+DJANGO_ENV_ACTIVE := $(shell [ -f .env ] && grep -m1 '^DJANGO_ENV=' .env | cut -d= -f2 | tr -d "\"' \r")
+TESTING_FILES := -f docker-compose.yml -f docker-compose.testing.yml
+
+ifeq ($(TESTING),1)
+  FILES ?= $(TESTING_FILES)
+else ifeq ($(DJANGO_ENV_ACTIVE),testing)
+  FILES ?= $(TESTING_FILES)
+else
+  FILES ?=
+endif
+
+COMPOSE := docker compose $(FILES)
 
 # ============================================================================
 # HELP
@@ -60,7 +88,11 @@ help:
 	@echo "    make dbshell            PostgreSQL interactive shell"
 	@echo "    make backup             Dump LOCAL dev DB to backups/ (NOT production)"
 	@echo "    make restore FILE=x     Restore from SQL file"
-	@echo "    make reset-db           Drop and recreate DB (destructive!)"
+	@echo "    make reset-db           Drop and recreate DB (destructive! typed confirmation)"
+	@echo ""
+	@echo "  Compose files in use for every target above:"
+	@echo "    $(if $(FILES),docker compose $(FILES),docker compose  (base + docker-compose.override.yml))"
+	@echo "    DJANGO_ENV in .env: $(if $(DJANGO_ENV_ACTIVE),$(DJANGO_ENV_ACTIVE),<unset>)   (override with TESTING=1)"
 	@echo ""
 	@echo "  Testing:"
 	@echo "    make test               Run all tests (Docker + coverage)"
@@ -69,6 +101,7 @@ help:
 	@echo "    make test coverage      All tests + HTML coverage report"
 	@echo "    make test K=<keyword>   Filter by keyword  (e.g. K=payment)"
 	@echo "    make test ARGS='...'    Pass raw pytest flags through"
+	@echo "    make smoke              End-to-end smoke test vs the running stack (local dev only)"
 	@echo ""
 	@echo "  Payments:"
 	@echo "    make generate-payments          Generate current month"
@@ -95,7 +128,8 @@ help:
 	@echo ""
 	@echo "  Cleanup:"
 	@echo "    make clean              Remove stopped containers + prune"
-	@echo "    make clean-all          Remove everything including volumes"
+	@echo "    make clean-all          LOCAL DEV ONLY: remove this project's containers,"
+	@echo "                            named volumes and unused images (refused on testing/prod)"
 	@echo ""
 	@echo "  Remote:"
 	@echo "    make connect-testing    SSH into the GCP testing VM (auto-login if needed)"
@@ -119,68 +153,68 @@ setup:
 # DOCKER COMPOSE - LIFECYCLE
 # ============================================================================
 build:
-	docker compose build
+	$(COMPOSE) build
 
-# -V (--renew-anon-volumes): docker-compose.yml mounts an anonymous volume over
-# /app/.venv, and Compose reuses it on recreate — after a Python base-image bump
+# -V (--renew-anon-volumes): docker-compose.override.yml mounts an anonymous
+# volume over /app/.venv, and Compose reuses it on recreate — after a base bump
 # the stale venv shadows the image's and django crash-loops on ModuleNotFoundError
 # (this took down the testing VM on the v1.26.6 3.12→3.14 bump). -V only renews
 # anonymous volumes; named volumes (postgres_data, redis_data) are untouched.
 up:
-	docker compose up -d -V --remove-orphans
+	$(COMPOSE) up -d -V --remove-orphans
 	@echo "Started: http://localhost:8000"
 
 down:
-	docker compose down
+	$(COMPOSE) down
 
 # Rebuild with no cache. Without SERVICE rebuilds everything; with SERVICE=web
 # only that service is stopped/rebuilt/started.
 rebuild:
 	@if [ -z "$(SERVICE)" ]; then \
-		docker compose down; \
-		docker compose build --no-cache; \
-		docker compose up -d -V; \
+		$(COMPOSE) down; \
+		$(COMPOSE) build --no-cache; \
+		$(COMPOSE) up -d -V; \
 		echo "Rebuilt and started: http://localhost:8000"; \
 	else \
-		docker compose stop $(SERVICE); \
-		docker compose build --no-cache $(SERVICE); \
-		docker compose up -d -V $(SERVICE); \
+		$(COMPOSE) stop $(SERVICE); \
+		$(COMPOSE) build --no-cache $(SERVICE); \
+		$(COMPOSE) up -d -V $(SERVICE); \
 		echo "Rebuilt service: $(SERVICE)"; \
 	fi
 
 restart:
-	docker compose restart $(SERVICE)
+	$(COMPOSE) restart $(SERVICE)
 
 stop:
-	docker compose stop $(SERVICE)
+	$(COMPOSE) stop $(SERVICE)
 
 start:
-	docker compose start $(SERVICE)
+	$(COMPOSE) start $(SERVICE)
 
 dev:
-	docker compose up -V $(if $(BUILD),--build,) --remove-orphans
+	$(COMPOSE) up -V $(if $(BUILD),--build,) --remove-orphans
 
 # ============================================================================
 # MONITORING
 # ============================================================================
 logs:
-	docker compose logs -f $(SERVICE)
+	$(COMPOSE) logs -f $(SERVICE)
 
 ps:
-	docker compose ps
+	$(COMPOSE) ps
 
 stats:
 	docker stats
 
 health:
 	@echo "=== Services ==="
-	@docker compose ps
+	@$(COMPOSE) ps
 	@echo ""
 	@echo "=== Django check ==="
-	@docker compose exec web python project/manage.py check 2>/dev/null || echo "(web not running)"
+	@$(COMPOSE) exec web python project/manage.py check 2>/dev/null || echo "(web not running)"
 	@echo ""
 	@echo "=== PostgreSQL ==="
-	@docker compose exec db pg_isready -U fiveaday_user 2>/dev/null || echo "(db not running)"
+	@$(COMPOSE) exec db sh -c 'pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"' 2>/dev/null || echo "(db not running)"
 	@echo ""
 	@echo "=== Health endpoint ==="
 	@curl -sf http://localhost:8000/health/ 2>/dev/null || echo "(not reachable)"
@@ -194,57 +228,92 @@ url:
 # DJANGO COMMANDS
 # ============================================================================
 shell:
-	docker compose exec web python project/manage.py shell
+	$(COMPOSE) exec web python project/manage.py shell
 
 bash:
-	docker compose exec web bash
+	$(COMPOSE) exec web bash
 
 migrate:
-	docker compose exec web python project/manage.py migrate
+	$(COMPOSE) exec web python project/manage.py migrate
 
 makemigrations:
-	docker compose exec web python project/manage.py makemigrations students billing core comms
+	$(COMPOSE) exec web python project/manage.py makemigrations students billing core comms
 
 createsuperuser:
-	docker compose exec web python project/manage.py createsuperuser
+	$(COMPOSE) exec web python project/manage.py createsuperuser
 
 collectstatic:
-	docker compose exec web python project/manage.py collectstatic --noinput
+	$(COMPOSE) exec web python project/manage.py collectstatic --noinput
 
 check:
-	docker compose exec web python project/manage.py check
+	$(COMPOSE) exec web python project/manage.py check
 
 # ============================================================================
 # DATABASE
 # ============================================================================
+# Credentials are NEVER hard-coded here: they are read from the db container's
+# own environment ($POSTGRES_USER / $POSTGRES_DB, which Compose sets from .env
+# with a change_this_password-style default). The old literals
+# `-U fiveaday_user -d fiveaday_db` matched the compose DEFAULTS, not what any
+# real environment uses — so on the QA VM, or on any dev box that set its own
+# POSTGRES_USER, every one of these targets failed with "role does not exist"
+# (or, worse, connected to a different database than the app).
 dbshell:
-	docker compose exec db psql -U fiveaday_user -d fiveaday_db
+	$(COMPOSE) exec db sh -c 'psql -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"'
 
-# LOCAL DEVELOPMENT ONLY. Dumps the `db` container on this machine, never
-# production. Production backups are managed Cloud SQL backups; see the
-# "Backups and Recovery" section of DEPLOYMENT.md.
+# LOCAL DEVELOPMENT ONLY. Dumps the `db` container on THIS machine and never
+# contacts Cloud SQL. The production equivalent is the managed Cloud SQL backup
+# set (see "Backups and Recovery" in DEPLOYMENT.md) plus the gitignored
+# scripts/export_prod_db.sh — which must never be recreated, because the dump
+# contains personal data for real students, including minors.
 backup:
+	@if [ "$(DJANGO_ENV_ACTIVE)" = "production" ]; then \
+		echo "REFUSING: .env says DJANGO_ENV=production. 'make backup' is a local dev pg_dump,"; \
+		echo "not a production backup path. Use the Cloud SQL backups (DEPLOYMENT.md)."; \
+		exit 1; \
+	fi
 	@mkdir -p backups
-	docker compose exec db pg_dump -U fiveaday_user fiveaday_db > backups/backup_$$(date +%Y%m%d_%H%M%S).sql
-	@echo "Local dev DB dumped to backups/ (this is NOT a production backup)"
+	@if [ -n "$(DJANGO_ENV_ACTIVE)" ] && [ "$(DJANGO_ENV_ACTIVE)" != "development" ]; then \
+		echo "NOTE: .env says DJANGO_ENV=$(DJANGO_ENV_ACTIVE) — dumping THAT stack's db container."; \
+	fi
+	$(COMPOSE) exec -T db sh -c 'pg_dump -U "$$POSTGRES_USER" "$$POSTGRES_DB"' > backups/backup_$$(date +%Y%m%d_%H%M%S).sql
+	@echo "Local DB dumped to backups/ (this is NOT a production backup)"
 
 restore:
 	@if [ -z "$(FILE)" ]; then \
 		echo "Usage: make restore FILE=backups/backup.sql"; \
 		exit 1; \
 	fi
-	docker compose exec -T db psql -U fiveaday_user -d fiveaday_db < $(FILE)
+	$(COMPOSE) exec -T db sh -c 'psql -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"' < $(FILE)
 	@echo "Restored from $(FILE)"
 
+# DESTRUCTIVE. `down -v` removes the named volume of WHICHEVER stack the
+# selected compose files describe — which is why this target must never run
+# one-file on the QA VM: it would drop the dev `postgres_data` volume, then
+# bring the stack back up on it and leave the real testing_postgres_data
+# orphaned (a valid, wrong stack that answers /health/ with the right version).
+# $(COMPOSE) carries the testing overlay automatically when .env says
+# DJANGO_ENV=testing; production is refused outright.
 reset-db:
-	@echo "WARNING: This will destroy ALL data in the database."
-	@read -p "Type 'yes' to confirm: " confirm; \
-	if [ "$$confirm" = "yes" ]; then \
-		docker compose down -v; \
-		docker compose up -d; \
+	@if [ "$(DJANGO_ENV_ACTIVE)" = "production" ]; then \
+		echo "REFUSING: .env says DJANGO_ENV=production."; \
+		exit 1; \
+	fi
+	@echo "WARNING: this DESTROYS ALL DATA in the database of this stack."
+	@echo "  compose files : $(if $(FILES),$(FILES),(base + docker-compose.override.yml))"
+	@echo "  DJANGO_ENV    : $(if $(DJANGO_ENV_ACTIVE),$(DJANGO_ENV_ACTIVE),<unset>)"
+	@if [ "$(DJANGO_ENV_ACTIVE)" = "testing" ]; then \
+		echo ""; \
+		echo "  This is the QA/testing stack — the data QA has been entering."; \
+	fi
+	@echo ""
+	@read -p "Type 'reset $(if $(DJANGO_ENV_ACTIVE),$(DJANGO_ENV_ACTIVE),development)' to confirm: " confirm; \
+	if [ "$$confirm" = "reset $(if $(DJANGO_ENV_ACTIVE),$(DJANGO_ENV_ACTIVE),development)" ]; then \
+		$(COMPOSE) down -v; \
+		$(COMPOSE) up -d -V; \
 		sleep 15; \
 		echo "Database recreated."; \
-		docker compose ps; \
+		$(COMPOSE) ps; \
 	else \
 		echo "Cancelled."; \
 	fi
@@ -270,7 +339,7 @@ ifeq ($(firstword $(MAKECMDGOALS)),test)
 endif
 
 test:
-	docker compose exec web uv sync --frozen --no-install-project --quiet
+	$(COMPOSE) exec web uv sync --frozen --no-install-project --quiet
 	@SUITE="$(_SUITE)"; \
 	TEST_PATH="project/tests/"; \
 	EXTRA=""; \
@@ -280,7 +349,7 @@ test:
 	  coverage)    EXTRA="--cov-report=html" ;; \
 	esac; \
 	[ -n "$(K)" ] && EXTRA="$$EXTRA -k $(K)"; \
-	docker compose exec \
+	$(COMPOSE) exec \
 	  -e DJANGO_SETTINGS_MODULE=project.settings_test \
 	  -e TEST_DB_HOST=db \
 	  web python -m pytest $$TEST_PATH -v --tb=short -n auto \
@@ -290,32 +359,87 @@ test:
 # Pre-commit coverage gate: fails if coverage drops below 75%.
 # Invoked by the pytest-coverage pre-commit hook; safe to run manually.
 test-cov-gate:
-	@docker compose exec web uv sync --frozen --no-install-project --quiet
-	@docker compose exec -e DJANGO_SETTINGS_MODULE=project.settings_test -e TEST_DB_HOST=db web python -m pytest project/tests/ -q --tb=line -n auto --cov=core --cov=students --cov=billing --cov=comms --cov-fail-under=75
+	@$(COMPOSE) exec web uv sync --frozen --no-install-project --quiet
+	@$(COMPOSE) exec -e DJANGO_SETTINGS_MODULE=project.settings_test -e TEST_DB_HOST=db web python -m pytest project/tests/ -q --tb=line -n auto --cov=core --cov=students --cov=billing --cov=comms --cov-fail-under=75
+
+# ============================================================================
+# SMOKE TEST (end-to-end, against a RUNNING stack — not pytest)
+# ============================================================================
+# Drives the real HTTP paths (/students/create/ → enrollment + payments, then
+# /payments/create/) with django.test.Client against the LIVE dev database, so
+# it catches what the test suite cannot: a broken URL conf, missing
+# EnrollmentType reference data, a mis-scheduled first payment.
+#
+# LOCAL DEV ONLY, for one hard reason: `.dockerignore` excludes scripts/, so
+# the file does not exist in any BUILT image. It is reachable inside the
+# container solely through the docker-compose.override.yml source mount — i.e.
+# on a dev box, never on the QA VM or Cloud Run.
+#
+# PYTHONPATH=/app is required: manage.py lives at /app/project/manage.py, so
+# sys.path[0] is /app/project and the repo-root `scripts` package is otherwise
+# not importable.
+#
+# It WRITES rows (a Smoke Group, parent SMOKE1234A, "Alumno Smoke" + their
+# matrícula and mensualidad). Re-running is safe; the students accumulate.
+smoke:
+	$(COMPOSE) exec -e PYTHONPATH=/app web \
+	  python project/manage.py shell -c "from scripts.docker_smoke_test import run; run()"
 
 # ============================================================================
 # PAYMENTS
 # ============================================================================
 generate-payments:
-	docker compose exec web python project/manage.py generate_payments
+	$(COMPOSE) exec web python project/manage.py generate_payments
 
 generate-payments-dry:
-	docker compose exec web python project/manage.py generate_payments --dry-run
+	$(COMPOSE) exec web python project/manage.py generate_payments --dry-run
 
 # ============================================================================
 # CLEANUP
 # ============================================================================
 clean:
-	docker compose down
+	$(COMPOSE) down
 	docker system prune -f
 
+# DESTRUCTIVE, and guarded three ways.
+#
+# This target used to end in `docker system prune -af --volumes` — a
+# DAEMON-WIDE volume wipe, the exact operation the nightly deploy workflow
+# gates against and that CLAUDE.md says must never run on the testing VM,
+# where `docker volume prune` once orphaned the QA database. It also reached
+# far outside this project: every other container, image and volume on the
+# machine went with it.
+#
+#   1. it refuses outright on a testing/production .env, and refuses when a
+#      *_testing_postgres_data volume exists on this host at all (that volume
+#      is the QA database — its presence means this is not a throwaway box);
+#   2. the confirmation is a typed phrase, not "yes";
+#   3. `--volumes` is GONE from the prune. `$(COMPOSE) down -v` already removes
+#      this project's named volumes, which is the documented intent
+#      ("everything including volumes"); the daemon-wide flag only ever added
+#      collateral damage. Images/build cache are still reclaimed with -af.
 clean-all:
-	@echo "WARNING: This will remove ALL containers, images, and volumes."
-	@read -p "Type 'yes' to confirm: " confirm; \
-	if [ "$$confirm" = "yes" ]; then \
-		docker compose down -v; \
-		docker system prune -af --volumes; \
-		echo "Everything removed."; \
+	@if [ "$(DJANGO_ENV_ACTIVE)" = "testing" ] || [ "$(DJANGO_ENV_ACTIVE)" = "production" ]; then \
+		echo "REFUSING: .env says DJANGO_ENV=$(DJANGO_ENV_ACTIVE). 'make clean-all' is a local-dev"; \
+		echo "teardown; on the QA VM it would destroy the testing database. Use 'make down'."; \
+		exit 1; \
+	fi
+	@if docker volume ls --format '{{.Name}}' 2>/dev/null | grep -q 'testing_postgres_data'; then \
+		echo "REFUSING: a *_testing_postgres_data volume exists on this Docker host, so this"; \
+		echo "looks like the QA VM (or a machine holding a copy of the QA database)."; \
+		echo "That volume is the testing database and must never be pruned."; \
+		docker volume ls --format '  {{.Name}}' | grep 'testing_postgres_data'; \
+		exit 1; \
+	fi
+	@echo "WARNING: removes this project's containers AND its named volumes"
+	@echo "(postgres_data, redis_data — i.e. the local dev database), then prunes"
+	@echo "unused images and build cache for the whole Docker host."
+	@echo ""
+	@read -p "Type 'destroy local dev' to confirm: " confirm; \
+	if [ "$$confirm" = "destroy local dev" ]; then \
+		$(COMPOSE) down -v; \
+		docker system prune -af; \
+		echo "Local dev stack and unused images removed."; \
 	else \
 		echo "Cancelled."; \
 	fi
@@ -378,16 +502,16 @@ version:
 # CELERY (async tasks + scheduled jobs)
 # ============================================================================
 celery-logs:
-	docker compose logs -f celery_worker celery_beat
+	$(COMPOSE) logs -f celery_worker celery_beat
 
 celery-restart:
-	docker compose restart celery_worker celery_beat
+	$(COMPOSE) restart celery_worker celery_beat
 
 celery-status:
-	docker compose exec -w /app/project celery_worker celery -A project.celery inspect active
+	$(COMPOSE) exec -w /app/project celery_worker celery -A project.celery inspect active
 
 celery-test-task:
-	docker compose exec web python project/manage.py shell -c "from project.celery import debug_task; debug_task.delay(); print('Task queued - check celery-logs')"
+	$(COMPOSE) exec web python project/manage.py shell -c "from project.celery import debug_task; debug_task.delay(); print('Task queued - check celery-logs')"
 
 # ============================================================================
 # DEVELOPER TOOLING (UV, Ruff, pre-commit)
@@ -412,7 +536,7 @@ audit:
 
 coverage-badge:
 	@echo "Copying .coverage from Docker container..."
-	docker compose cp web:/app/.coverage .coverage
+	$(COMPOSE) cp web:/app/.coverage .coverage
 	uv run coverage-badge -o coverage.svg -f
 	@rm -f .coverage
 	@echo "coverage.svg updated - commit it to the repo"
@@ -448,7 +572,7 @@ pc-run:
 # PRODUCTION
 # ============================================================================
 check-deploy:
-	docker compose exec web python project/manage.py check --deploy
+	$(COMPOSE) exec web python project/manage.py check --deploy
 
 # ============================================================================
 # REMOTE (gcloud)

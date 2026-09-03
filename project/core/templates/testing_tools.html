@@ -91,7 +91,7 @@
                     <p class="text-xs text-neutral-500">Datos en tiempo real del servidor y git</p>
                 </div>
                 <a href="https://github.com/starseeker-code-public/five-a-day#five-a-day-evolution"
-                   target="_blank" rel="noopener" title="Documentación del proyecto (GitHub)"
+                   target="_blank" rel="noopener" title="Documentación del proyecto (GitHub)" aria-label="Documentación del proyecto en GitHub"
                    class="qa-card-icon bg-indigo-100 no-underline ml-auto" style="width:2.5rem;height:2.5rem;">
                     <span class="material-symbols-outlined text-indigo-600">code</span>
                 </a>
@@ -103,7 +103,7 @@
                     <div class="qa-info-row"><span class="qa-info-label">Version</span><span class="qa-info-value">v{{ app_version }}</span></div>
                     <div class="qa-info-row"><span class="qa-info-label">Entorno</span><span class="qa-info-value">{{ environment }}</span></div>
                     <div class="qa-info-row"><span class="qa-info-label">Debug</span><span class="qa-info-value">{{ debug }}</span></div>
-                    <div class="qa-info-row"><span class="qa-info-label">Python y Django</span><span class="qa-info-value">PY: {{ python_version }} | DJ: {{ django_version }}</span></div>
+                    <div class="qa-info-row"><span class="qa-info-label">Python y Django</span><span class="qa-info-value">Python: {{ python_version }} | Django: {{ django_version }}</span></div>
                     <div class="qa-info-row"><span class="qa-info-label">Base de datos</span><span class="qa-info-value">{{ database_name }}</span></div>
                     <div class="qa-info-row"><span class="qa-info-label">Hora (server)</span><span class="qa-info-value">{{ server_time }} | {{ timezone }}</span></div>
                 </div>
@@ -215,7 +215,7 @@
                             <p class="text-xs text-neutral-500">Avisa al soporte y desbloquea el despliegue a producción</p>
                         </div>
                     </div>
-                    <button id="ready-ship-btn" class="circle-btn bg-emerald-600 hover:bg-emerald-700" title="Marcar como listo y enviar aviso">
+                    <button id="ready-ship-btn" aria-label="Marcar la versión como lista y enviar el aviso" class="circle-btn bg-emerald-600 hover:bg-emerald-700" title="Marcar como listo y enviar aviso">
                         <span class="material-symbols-outlined text-[22px]">check</span>
                     </button>
                 </div>
@@ -245,10 +245,10 @@
                 <p class="text-xs text-neutral-500">Llena la base de datos con datos realistas para probar todas las funcionalidades</p>
             </div>
             <div class="flex items-center gap-3">
-                <button id="seed-btn" class="circle-btn bg-emerald-600 hover:bg-emerald-700" title="Sembrar datos">
+                <button id="seed-btn" aria-label="Sembrar datos de prueba" class="circle-btn bg-emerald-600 hover:bg-emerald-700" title="Sembrar datos">
                     <span class="material-symbols-outlined text-[22px]">play_arrow</span>
                 </button>
-                <button id="seed-reset-btn" class="circle-btn bg-rose-600 hover:bg-rose-700" title="Borrar todo y re-sembrar">
+                <button id="seed-reset-btn" aria-label="Borrar todos los datos y volver a sembrar" class="circle-btn bg-rose-600 hover:bg-rose-700" title="Borrar todo y re-sembrar">
                     <span class="material-symbols-outlined text-[22px]">restart_alt</span>
                 </button>
             </div>
@@ -319,7 +319,7 @@
                     <option value="medium" selected>Media</option>
                     <option value="high">Alta</option>
                 </select>
-                <button id="backlog-add-btn" title="Crear tarea"
+                <button id="backlog-add-btn" aria-label="Crear tarea en el backlog" title="Crear tarea"
                         class="md:col-span-1 justify-self-end w-9 h-9 bg-primary-500 text-white rounded-lg hover:bg-primary-600 transition-colors inline-flex items-center justify-center">
                     <span class="material-symbols-outlined text-[18px]">add</span>
                 </button>
@@ -344,7 +344,8 @@
                         class="verify-btn backlog-verify-btn{% if task.verified %} is-verified{% endif %}"
                         data-task-id="{{ task.id }}"
                         aria-pressed="{% if task.verified %}true{% else %}false{% endif %}"
-                        title="{% if task.verified %}desarrollado — pulsa para desmarcar{% else %}Marcar como desarrollado{% endif %}">
+                        title="{% if task.verified %}desarrollado — pulsa para desmarcar{% else %}Marcar como desarrollado{% endif %}"
+                        aria-label="{% if task.verified %}Desarrollado — pulsa para desmarcar{% else %}Marcar como desarrollado{% endif %}">
                     <span class="material-symbols-outlined text-[20px]">check_circle</span>
                 </button>
                 <div class="flex-1 min-w-0">
@@ -359,7 +360,7 @@
                 <span class="status-badge status-{{ task.status }}">{{ task.get_status_display }}</span>
                 <span class="text-xs text-neutral-400">{{ task.created_by }} &middot; {{ task.created_at|date:"d/m/Y" }}</span>
                 {% if task.status != 'done' %}
-                <button class="backlog-done-btn text-emerald-600 hover:text-emerald-800 transition-colors" data-task-id="{{ task.id }}" title="Marcar como hecho">
+                <button class="backlog-done-btn text-emerald-600 hover:text-emerald-800 transition-colors" data-task-id="{{ task.id }}" title="Marcar como hecho" aria-label="Marcar la tarea como hecha">
                     <span class="material-symbols-outlined text-[20px]">check_circle</span>
                 </button>
                 {% endif %}
@@ -394,25 +395,26 @@
     const page = document.getElementById('testing-page');
     if (!page) return;
 
-    function escapeHtml(s) {
-        const d = document.createElement('div');
-        d.textContent = s;
-        return d.innerHTML;
-    }
+    {% comment %}
+       escapeHtml, the CSRF token and the POST helper all come from base.js.
+       The two local copies that used to live here were both wrong:
 
-    function getCsrfToken() {
-        const cookie = document.cookie.split(';').find(c => c.trim().startsWith('csrftoken='));
-        if (cookie) return cookie.split('=')[1];
-        const el = document.querySelector('[name=csrfmiddlewaretoken]');
-        return el ? el.value : '';
-    }
+       • the escaper was `div.textContent = s; return div.innerHTML`, which
+         does NOT escape quotes (innerHTML serialisation leaves `"` and `'`
+         alone in a text node) — and it was used in an ATTRIBUTE position, so
+         a value containing `"` closed the attribute and injected markup.
+         window.escapeHtml escapes both quote characters.
+       • getCsrfToken read the COOKIE FIRST. CSRF_COOKIE_HTTPONLY is True
+         whenever DEBUG=False, so on the testing VM and in production —
+         which is exactly where /testing/ lives — document.cookie carries no
+         csrftoken and every POST on this page 403'd. window.CSRF_TOKEN reads
+         the hidden csrfmiddlewaretoken input first and only falls back to
+         the cookie.
+    {% endcomment %}
+    const escapeHtml = window.escapeHtml;
 
     function post(url, body) {
-        return fetch(url, {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json', 'X-CSRFToken': getCsrfToken()},
-            body: JSON.stringify(body),
-        }).then(r => r.json());
+        return window.apiFetch(url, { method: 'POST', body: JSON.stringify(body) });
     }
 
     // ── Toggle reporte de errores ───────────────────
@@ -426,7 +428,7 @@
                     if (data.success) label.textContent = data.enabled ? 'Activo' : 'Inactivo';
                     else { this.checked = !enabled; alert(data.message); }
                 })
-                .catch(() => { this.checked = !enabled; });
+                .catch(err => { this.checked = !enabled; alert(window.apiErrorMessage(err)); });
         });
     }
 
@@ -443,7 +445,9 @@
             .then(data => {
                 output.textContent = data.success ? data.message : 'Error: ' + data.message;
             })
-            .catch(err => { output.textContent = 'Error en la peticion: ' + err; })
+            // Never `+ err`: the exception text can carry internals. apiFetch
+            // separates "sesión caducada" from a real 500 from a dead network.
+            .catch(err => { output.textContent = window.apiErrorMessage(err); })
             .finally(() => { seedBtn.disabled = resetBtn.disabled = false; });
     }
     document.getElementById('seed-btn')?.addEventListener('click', () => seed(false));
@@ -476,7 +480,7 @@
                     if (state) { state.textContent = 'lista para producción'; state.style.color = '#16a34a'; }
                 }
             })
-            .catch(err => { readyMsg.style.color = '#dc2626'; readyMsg.textContent = 'Error: ' + err; })
+            .catch(err => { readyMsg.style.color = '#dc2626'; readyMsg.textContent = window.apiErrorMessage(err); })
             .finally(() => { readyBtn.disabled = false; });
     }
 
@@ -519,11 +523,7 @@
         fd.append('priority', priority);
         if (shot) fd.append('screenshot', shot);
 
-        fetch(page.dataset.backlogCreateUrl, {
-            method: 'POST',
-            headers: {'X-CSRFToken': getCsrfToken()},
-            body: fd,
-        }).then(r => r.json())
+        window.apiFetch(page.dataset.backlogCreateUrl, { method: 'POST', body: fd })
             .then(data => {
                 if (!data.success) {
                     errorEl.textContent = data.message;
@@ -535,18 +535,24 @@
                 const item = document.createElement('div');
                 item.className = 'backlog-item';
                 item.dataset.taskId = t.id;
+                // `*_display` comes from the server (get_priority_display() /
+                // get_status_display()), never from a label map built here: a
+                // freshly inserted row used to read "medium"/"Open" while every
+                // server-rendered row above it read "Media"/"Abierto", and a
+                // second copy of the model's choices in JS would drift the
+                // moment a label is renamed. The RAW key still drives the class.
                 item.innerHTML = `
-                    <span class="priority-badge priority-${escapeHtml(t.priority)}">${escapeHtml(t.priority)}</span>
-                    <button type="button" class="verify-btn backlog-verify-btn" data-task-id="${t.id}" aria-pressed="false" title="Marcar como desarrollado">
+                    <span class="priority-badge priority-${escapeHtml(t.priority)}">${escapeHtml(t.priority_display || t.priority)}</span>
+                    <button type="button" class="verify-btn backlog-verify-btn" data-task-id="${escapeHtml(t.id)}" aria-pressed="false" title="Marcar como desarrollado" aria-label="Marcar como desarrollado">
                         <span class="material-symbols-outlined text-[20px]">check_circle</span>
                     </button>
                     <div class="flex-1 min-w-0">
                         <p class="text-sm font-medium text-neutral-800 truncate">${escapeHtml(t.title)}</p>
                         ${description ? '<p class="text-xs text-neutral-500 truncate">' + escapeHtml(description) + '</p>' : ''}
                     </div>
-                    <span class="status-badge status-open">Open</span>
+                    <span class="status-badge status-${escapeHtml(t.status || 'open')}">${escapeHtml(t.status_display || '')}</span>
                     <span class="text-xs text-neutral-400">${escapeHtml(t.created_by)} &middot; ${escapeHtml(t.created_at)}</span>
-                    <button class="backlog-done-btn text-emerald-600 hover:text-emerald-800 transition-colors" data-task-id="${t.id}" title="Marcar como hecho">
+                    <button class="backlog-done-btn text-emerald-600 hover:text-emerald-800 transition-colors" data-task-id="${escapeHtml(t.id)}" title="Marcar como hecho" aria-label="Marcar como hecho">
                         <span class="material-symbols-outlined text-[20px]">check_circle</span>
                     </button>`;
                 backlogList.insertBefore(item, backlogList.firstChild);
@@ -554,8 +560,8 @@
                 descInput.value = '';
                 if (shotInput) shotInput.value = '';
             })
-            .catch(() => {
-                errorEl.textContent = 'Error en la peticion.';
+            .catch(err => {
+                errorEl.textContent = window.apiErrorMessage(err);
                 errorEl.classList.remove('hidden');
             });
     });
@@ -577,8 +583,10 @@
                     btn.title = data.verified
                         ? 'desarrollado — pulsa para desmarcar'
                         : 'Marcar como desarrollado';
+                    btn.setAttribute('aria-label', btn.title);
                 }
             })
+            .catch(err => alert(window.apiErrorMessage(err)))
             .finally(() => { btn.disabled = false; });
     });
 
@@ -593,12 +601,18 @@
                 if (data.success) {
                     const badge = item.querySelector('.status-badge');
                     badge.className = 'status-badge status-done';
-                    badge.textContent = 'Done';
+                    // Label from the server (get_status_display()), never a
+                    // Spanish map in JS. api_update_backlog_task currently
+                    // answers a bare {"success": true}; until it echoes
+                    // status_display the previous label is left in place rather
+                    // than replaced with the raw key "done".
+                    if (data.status_display) badge.textContent = data.status_display;
                     btn.remove();
                     // Las hechas van al final, igual que al recargar la pagina.
                     backlogList.appendChild(item);
                 }
-            });
+            })
+            .catch(err => alert(window.apiErrorMessage(err)));
     });
 })();
 </script>

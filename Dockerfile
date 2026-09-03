@@ -102,5 +102,9 @@ ENTRYPOINT ["/app/entrypoint.sh"]
 # package at /app/project/project/, so `project.wsgi` only resolves with /app/project as
 # the working directory. Without it Gunicorn dies with
 # `ModuleNotFoundError: No module named 'project.wsgi'` — which never showed up locally
-# because dev uses runserver and docker-compose.testing.yml overrides this command.
+# because dev swaps in runserver (docker-compose.override.yml) and the QA VM pins its own
+# 2-worker gunicorn line (docker-compose.testing.yml). Production is therefore still the
+# only environment that runs THIS command — the v1.14.7 broken deploy. Note that since
+# v1.27 the base docker-compose.yml no longer overrides `command` at all, so a bare
+# `docker compose -f docker-compose.yml up` does exercise this line.
 CMD ["gunicorn", "--chdir", "project", "--bind", "0.0.0.0:8000", "--workers", "4", "--timeout", "120", "--access-logfile", "-", "--error-logfile", "-", "project.wsgi:application"]

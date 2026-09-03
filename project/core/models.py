@@ -151,6 +151,13 @@ class HistoryLog(models.Model):
         ("waiting_list_spot_open", "Hueco disponible"),
         # v1.2 — Google Sheets integration
         ("sheets_exported", "Exportación a Google Sheets"),
+        # v1.27.1 — changing a student's payment cadence now SUPERSEDES the
+        # enrollment rather than mutating it, so it is its own event: reusing
+        # "student_enrolled" made the feed read as a fresh enrollment, which is
+        # exactly the kind of history nobody can reconstruct a billing dispute
+        # from. Declared here so `get_action_display()` does not fall through to
+        # the raw slug (see `email_scheduled` above for that same bug).
+        ("enrollment_modality_changed", "Modalidad de pago cambiada"),
     ]
 
     action = models.CharField(max_length=30, choices=ACTION_CHOICES)

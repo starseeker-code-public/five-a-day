@@ -89,7 +89,7 @@ class TestModalityChangeCancelsOldSchedule:
         future = date.today().replace(day=28)
         if future <= date.today():
             future = future.replace(day=1)
-        Payment.objects.create(
+        superseded = Payment.objects.create(
             student=student_with_parent,
             parent=student_with_parent.parents.first(),
             enrollment=active_enrollment,
@@ -106,13 +106,22 @@ class TestModalityChangeCancelsOldSchedule:
             content_type="application/json",
         )
         assert response.status_code == 200
+
+        # The change supersedes rather than mutating: the cadence moves to a new
+        # enrollment anchored past every already-covered month, so the old row
+        # stays finished on the cadence it actually billed.
         active_enrollment.refresh_from_db()
-        assert active_enrollment.payment_modality == "quarterly"
+        assert active_enrollment.status == "finished"
+        assert student_with_parent.enrollments.get(status="active").payment_modality == "quarterly"
+
         # The future monthly row is cancelled so it cannot double-bill against
-        # the new quarterly schedule.
-        assert not Payment.objects.filter(
-            student=student_with_parent, payment_type="monthly", payment_status="pending"
-        ).exists()
+        # the new quarterly schedule. Asserted on THAT row rather than on the
+        # absence of every pending monthly row: the handover also gap-fills the
+        # taught-but-unbilled current month as a pending monthly payment, which
+        # is the point — those days were taught under the old plan and billing
+        # them is what stops the switch leaving a silent revenue hole.
+        superseded.refresh_from_db()
+        assert superseded.payment_status == "cancelled"
 
     def test_special_enrollment_modality_change_refused(
         self, authenticated_client, student_with_parent, site_config, enrollment_type_special

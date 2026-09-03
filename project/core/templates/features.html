@@ -79,7 +79,7 @@
                 {# Vacía por defecto: la fecha límite es opcional y no se inventa. #}
                 <input type="date" id="feature-deadline" title="Fecha límite (opcional)"
                        class="md:col-span-3 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-primary-300 focus:border-primary-400 outline-none">
-                <button id="feature-add-btn" title="Crear desarrollo"
+                <button id="feature-add-btn" title="Crear desarrollo" aria-label="Crear desarrollo"
                         class="md:col-span-1 justify-self-end w-9 h-9 bg-primary-500 text-white rounded-lg hover:bg-primary-600 transition-colors inline-flex items-center justify-center">
                     <span class="material-symbols-outlined text-[18px]">add</span>
                 </button>
@@ -140,21 +140,12 @@
     const descInput = document.getElementById('feature-desc');
     const PRISTINE_TEMPLATE = descInput ? descInput.value : '';
 
-    // CSRF comes from the hidden input first: CSRF_COOKIE_HTTPONLY is True
-    // whenever DEBUG=False, so the cookie is unreadable in testing/production.
-    function getCsrfToken() {
-        const el = document.querySelector('[name=csrfmiddlewaretoken]');
-        if (el && el.value) return el.value;
-        const cookie = document.cookie.split(';').find(c => c.trim().startsWith('csrftoken='));
-        return cookie ? cookie.split('=')[1] : '';
-    }
-
+    // CSRF + status-checked POST come from base.js (window.CSRF_TOKEN reads the
+    // hidden input first: CSRF_COOKIE_HTTPONLY is True whenever DEBUG=False, so
+    // the cookie is unreadable in testing/production). This file's own copy was
+    // correct but was the fifth of six.
     function post(url, body) {
-        return fetch(url, {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json', 'X-CSRFToken': getCsrfToken()},
-            body: JSON.stringify(body),
-        }).then(r => r.json());
+        return window.apiFetch(url, { method: 'POST', body: JSON.stringify(body) });
     }
 
     const list = document.getElementById('feature-list');
@@ -236,7 +227,7 @@
                 deadlineInput.value = '';
                 descInput.value = PRISTINE_TEMPLATE;
             })
-            .catch(() => showError('Error en la peticion.'))
+            .catch(err => showError(window.apiErrorMessage(err)))
             .finally(() => { this.disabled = false; });
     });
 })();

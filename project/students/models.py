@@ -268,14 +268,77 @@ class Group(models.Model):
     def __str__(self):
         return self.group_name
 
+    #: Annotation aliases that already carry this group's occupancy, in
+    #: preference order. `core.views.waiting_list.group_capacity_summary()`
+    #: annotates `enrolled` / `waiting`; `GroupAdmin.get_queryset` annotates
+    #: `_enrolled`. Listed here so the properties below can be free when the
+    #: queryset already paid for the count, and still correct on a bare object.
+    ENROLLED_ANNOTATIONS = ("enrolled", "_enrolled")
+    WAITING_ANNOTATIONS = ("waiting", "_waiting")
+
+    def _annotated(self, names):
+        """First of `names` present on this INSTANCE, or None.
+
+        Reads `__dict__` rather than `getattr`: a queryset annotation lands
+        there, while `getattr` would walk the class and could hand back the
+        property itself or a related manager that happens to share the name.
+        """
+        for name in names:
+            value = self.__dict__.get(name)
+            if value is not None:
+                return value
+        return None
+
+    def occupied_count(self, exclude_student_pk=None) -> int:
+        """Fresh COUNT of the students occupying a place, ignoring annotations.
+
+        `exclude_student_pk` discounts the student currently being saved, which
+        is what lets an edit that keeps a student in an already-full group
+        through — they are one of the occupants being counted.
+        """
+        qs = self.students.filter(active=True, is_waiting=False)
+        if exclude_student_pk is not None:
+            qs = qs.exclude(pk=exclude_student_pk)
+        return qs.count()
+
+    def has_room_for(self, *, exclude_student_pk=None) -> bool:
+        """Whether one more student can take a place in this group.
+
+        THE capacity predicate. `students.forms` (and therefore both the app's
+        student forms and the admin's) validate against this one method, so the
+        cap cannot be enforced two different ways — the rule used to live in
+        `StudentForm.clean_group` only, which the admin never went through.
+        `max_students == 0` means "no cap", not "no room".
+        """
+        if not self.max_students:
+            return True
+        if exclude_student_pk is None:
+            occupied = self.enrolled_count
+        else:
+            occupied = self.occupied_count(exclude_student_pk=exclude_student_pk)
+        return occupied < self.max_students
+
     @property
     def enrolled_count(self):
-        """Active, non-waiting students currently occupying a spot in this group."""
-        return self.students.filter(active=True, is_waiting=False).count()
+        """Active, non-waiting students currently occupying a spot in this group.
+
+        Prefers an annotation the queryset already resolved (see
+        `ENROLLED_ANNOTATIONS`) so a page that went through
+        `group_capacity_summary()` pays nothing here. Without that, one template
+        row touching `enrolled_count`, `waiting_count`, `available_spots` and
+        `is_full` cost FOUR queries — the last two recompute this one.
+        """
+        annotated = self._annotated(self.ENROLLED_ANNOTATIONS)
+        if annotated is not None:
+            return annotated
+        return self.occupied_count()
 
     @property
     def waiting_count(self):
         """Students on the waiting list whose preferred group is this one."""
+        annotated = self._annotated(self.WAITING_ANNOTATIONS)
+        if annotated is not None:
+            return annotated
         return self.students.filter(active=True, is_waiting=True).count()
 
     @property
@@ -288,7 +351,7 @@ class Group(models.Model):
     @property
     def is_full(self):
         """True only when a cap is set and enrolled_count has reached it."""
-        return bool(self.max_students) and self.enrolled_count >= self.max_students
+        return not self.has_room_for()
 
 
 class Parent(models.Model):
@@ -362,7 +425,14 @@ class Parent(models.Model):
         indexes = [
             # No `Index(fields=["dni"])` — the field is `unique=True`, which is
             # already a b-tree index. See the note on `Payment.Meta.indexes`.
-            models.Index(fields=["email"]),
+            #
+            # No plain `Index(fields=["email"])` either. Every lookup on this
+            # column is `email__iexact` (`_parent_by_email`, the portal login,
+            # `send_email`, `seed_demo_parents`) or a non-indexable
+            # `exclude(email="")` / `email__icontains`, so a case-SENSITIVE
+            # b-tree answered none of them — it only added write cost to every
+            # Parent insert and update. The functional index below is the one
+            # that earns its keep.
             # Case-insensitive lookups need their own index: the parent-portal
             # login resolves a family by `email__iexact`, which Postgres renders
             # as `UPPER(email::text) = UPPER(%s)`. A plain b-tree on `email`
@@ -380,6 +450,42 @@ class Parent(models.Model):
     @property
     def full_name(self):
         return f"{self.first_name} {self.last_name}"
+
+    @property
+    def audit_label(self):
+        """PII-minimised label for `AuditLog` (see `core.audit_signals`).
+
+        `AuditLog.object_label` defaults to `str(instance)`, and this model's
+        `__str__` embeds the DNI — the one field the audit allow-list goes out
+        of its way to EXCLUDE from `changes`. Letting it back in through the
+        label meant the DNI of every parent was written into a searchable log
+        kept for two years, defeating the whole point of the allow-list. The
+        pk plus the name identifies the row just as well.
+        """
+        return f"{self.full_name} (#{self.pk})"
+
+    @classmethod
+    def other_families_sharing_email(cls, email, *, exclude_pk=None):
+        """Parents OTHER than `exclude_pk` that already use `email`.
+
+        `Parent.email` is not unique, and `_parent_by_email` deliberately
+        REFUSES an ambiguous match rather than serving one family another
+        family's payment history — so two rows carrying one address lock BOTH
+        of them out of portal login and out of password recovery.
+
+        The single predicate behind every write path's duplicate check
+        (`ParentForm` / `ParentCreateView` warn, `ParentAdminForm` refuses a new
+        collision), so the app UI and the admin cannot disagree about what a
+        collision is. Matched with `iexact` because that is how the login
+        resolves it — `Ana@x.com` and `ana@x.com` are the same lockout.
+        """
+        email = (email or "").strip()
+        if not email:
+            return cls.objects.none()
+        qs = cls.objects.filter(email__iexact=email)
+        if exclude_pk is not None:
+            qs = qs.exclude(pk=exclude_pk)
+        return qs
 
     # ── Portal credential ───────────────────────────────────────────────────
 

@@ -433,7 +433,12 @@ class TestVacationClosureCrossMonth:
                 "closure_reason": "Navidad",
             },
         )
-        req.session = {}
+        # `vacation_closure_form` carries @admin_required as of v1.27.1, so the
+        # view is called with an authenticated session. Without it the decorator
+        # redirects (this path is not under /api/, so it gets a 302 rather than
+        # 403 JSON) and the empty body fails as a JSON parse error rather than
+        # anything to do with the month being tested.
+        req.session = {"is_authenticated": True}
         html = json.loads(vacation_closure_form(req).content)["html"]
         # end date is 3 January → must read "3 de enero", never "3 de diciembre"
         assert "3 de enero por motivo" in html

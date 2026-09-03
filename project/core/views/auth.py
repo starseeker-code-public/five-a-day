@@ -10,6 +10,7 @@ from django.contrib.auth import login as _django_login
 from django.contrib.auth import logout as _django_logout
 from django.shortcuts import redirect, render
 from django.urls import reverse
+from django.views.decorators.http import require_http_methods
 
 from core.log_safe import safe_log
 from core.rate_limit import rate_limit
@@ -209,8 +210,17 @@ def login_view(request):
     )
 
 
+@require_http_methods(["POST"])
 def logout_view(request):
-    """Log out of both Django auth and the custom session flag."""
+    """Log out of both Django auth and the custom session flag.
+
+    POST only. A logout reachable by GET is a one-click CSRF: any page a
+    teacher visits can embed `<img src="/logout/">` and end their session
+    mid-task, and a prefetching browser or link scanner can do it by accident.
+    It is only a nuisance — nothing is destroyed — but the fix costs one
+    decorator and a `<form>`, so there is no reason to carry it. The sidebar
+    link in `base.html` has to become a POST form with `{% csrf_token %}`.
+    """
     _django_logout(request)
     request.session.flush()
     messages.success(request, "✅ Has cerrado sesión correctamente")

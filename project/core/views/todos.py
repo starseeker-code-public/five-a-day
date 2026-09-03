@@ -6,6 +6,7 @@ from django.http import JsonResponse
 from django.shortcuts import get_object_or_404
 from django.views.decorators.http import require_http_methods
 
+from core.decorators import admin_required
 from core.models import HistoryLog, TodoItem
 
 logger = logging.getLogger(__name__)
@@ -63,6 +64,7 @@ def complete_todo(request, todo_id):
     return JsonResponse({"success": True})
 
 
+@admin_required
 def history_list(request):
     from django.utils.timesince import timesince
 

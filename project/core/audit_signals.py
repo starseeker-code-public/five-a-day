@@ -158,6 +158,26 @@ def _snapshot_fields(instance) -> dict[str, Any]:
     return data
 
 
+def _object_label(instance) -> str:
+    """PII-minimised label for the audited row.
+
+    `AuditLog.object_label` defaults to `str(instance)`, which for most models
+    is exactly right. For `Parent` it was not: `__str__` renders
+    ``"Nombre Apellido (DNI)"``, so the DNI of every parent in the academy was
+    written into a searchable log retained for two years — the one field the
+    allow-list above goes out of its way to EXCLUDE from `changes`. Minimising
+    the payload and then leaking the same datum through the label defeats the
+    whole exercise.
+
+    A model opts out by exposing `audit_label` (see `Parent.audit_label`);
+    everything else keeps `str(instance)`, so no other label changes.
+    """
+    label = getattr(instance, "audit_label", None)
+    if label:
+        return str(label)
+    return str(instance)
+
+
 def _diff(old: dict[str, Any], new: dict[str, Any]) -> dict[str, list]:
     diff = {}
     for k, new_val in new.items():
@@ -200,6 +220,7 @@ def _record_save(sender, instance, created, **kwargs):
             changes={"created": True},
             actor=actor,
             actor_label=actor_label,
+            object_label=_object_label(instance),
         )
         return
 
@@ -213,6 +234,7 @@ def _record_save(sender, instance, created, **kwargs):
             changes=changes,
             actor=actor,
             actor_label=actor_label,
+            object_label=_object_label(instance),
         )
 
 
@@ -227,6 +249,7 @@ def _record_delete(sender, instance, **kwargs):
         instance=instance,
         actor=actor,
         actor_label=_actor_label(actor),
+        object_label=_object_label(instance),
     )
 
 

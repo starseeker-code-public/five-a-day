@@ -88,7 +88,10 @@
                     </div>
                     <div>
                         <div class="font-medium text-neutral-800">{{ payment.student.full_name }}</div>
+                        {# Student.birth_date is optional, so `age` can be None. #}
+                        {% if payment.student.age is not None %}
                         <div class="text-sm text-neutral-500">{{ payment.student.age }} años</div>
+                        {% endif %}
                     </div>
                 </div>
                 {% if payment.student.school %}

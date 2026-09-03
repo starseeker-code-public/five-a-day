@@ -1,10 +1,12 @@
 """Integration tests for the parent portal (v1.9, email+password auth in v1.27)."""
 
+from datetime import timedelta
 from unittest.mock import patch
 
 import pytest
 from django.urls import reverse
 
+from core.views.parent_portal import PORTAL_TEMPORARY_PASSWORD_COOLDOWN
 from students.models import PORTAL_AUTH_PASSWORD, PORTAL_AUTH_TEMPORARY, Parent
 
 pytestmark = pytest.mark.django_db
@@ -226,12 +228,32 @@ class TestForgotPassword:
         assert response.status_code == 200
         assert "Revisa tu email" in response.content.decode()
 
-    def test_requesting_twice_invalidates_the_first_password(self, client, parent):
+    def test_a_reissue_after_the_cooldown_invalidates_the_first_password(self, client, parent):
         """Three clicks must not leave three working credentials in the family's
-        mailbox — each issue overwrites the last."""
+        mailbox — each issue overwrites the last.
+
+        The two requests are separated by ageing `temporary_password_issued_at`
+        past `PORTAL_TEMPORARY_PASSWORD_COOLDOWN`. Back-to-back requests are now
+        deliberately coalesced into ONE issuance: this endpoint is
+        unauthenticated and takes nothing but an email address, so rotating the
+        credential on every hit let anyone replay the form to deny a family
+        their recovery path indefinitely (and the newest mail in their inbox was
+        dead before they could type it). The overwrite invariant this test
+        protects still holds — it just holds per cooldown window rather than per
+        request. `test_a_second_request_inside_the_cooldown_does_not_reissue`
+        covers the other half.
+        """
         with patch("comms.services.email_service.EmailService.send_email", return_value=True) as send:
             client.post(reverse("parent_portal_forgot_password"), {"email": parent.email})
             first = send.call_args[1]["context"]["temporary_password"]
+
+            parent.refresh_from_db()
+            Parent.objects.filter(pk=parent.pk).update(
+                temporary_password_issued_at=(
+                    parent.temporary_password_issued_at - PORTAL_TEMPORARY_PASSWORD_COOLDOWN - timedelta(minutes=1)
+                )
+            )
+
             client.post(reverse("parent_portal_forgot_password"), {"email": parent.email})
             second = send.call_args[1]["context"]["temporary_password"]
 
@@ -239,6 +261,30 @@ class TestForgotPassword:
         assert first != second
         assert parent.authenticate_portal(first) is None, "the superseded password must stop working"
         assert parent.authenticate_portal(second) == PORTAL_AUTH_TEMPORARY
+
+    def test_a_second_request_inside_the_cooldown_does_not_reissue(self, client, parent):
+        """Replaying the unauthenticated form must not destroy a live credential.
+
+        The family may be holding the first mail; rotating on the second hit is
+        what turned this endpoint into a denial of their own recovery path.
+        """
+        with patch("comms.services.email_service.EmailService.send_email", return_value=True) as send:
+            client.post(reverse("parent_portal_forgot_password"), {"email": parent.email})
+            first = send.call_args[1]["context"]["temporary_password"]
+            calls_after_first = send.call_count
+
+            response = client.post(reverse("parent_portal_forgot_password"), {"email": parent.email})
+
+        # Same reassuring page either way — the response must not reveal which
+        # branch ran, or it becomes an oracle for who has a pending recovery.
+        assert response.status_code == 200
+        assert "Revisa tu email" in response.content.decode()
+        assert send.call_count == calls_after_first, "the cooldown must suppress the second send"
+
+        parent.refresh_from_db()
+        assert parent.authenticate_portal(first) == PORTAL_AUTH_TEMPORARY, (
+            "the credential the family already received must still work"
+        )
 
 
 class TestTemporaryPasswordLogin:
@@ -550,7 +596,7 @@ class TestPortalPages:
 
     def test_logout_clears_session(self, client, parent):
         _login_as(client, parent)
-        response = client.get(reverse("parent_portal_logout"))
+        response = client.post(reverse("parent_portal_logout"))
         assert response.status_code == 302
         assert "parent_id" not in client.session
 

@@ -79,6 +79,10 @@ on:
         description: 'Deploy even when production already serves this version, bypassing the testing sign-off gate (emergencies only)'
         type: boolean
         default: false
+      ack_destructive:
+        description: 'I have read the destructive migrations in this release (DROP / RemoveField / DeleteModel) and accept the old-code/new-schema window'
+        type: boolean
+        default: false
 
 concurrency:
   group: deploy-production
@@ -91,11 +95,68 @@ permissions:
 env:
   GCP_PROJECT: five-a-day-evolution
   GCP_REGION: europe-southwest1
+  # Cloud Scheduler is NOT offered in europe-southwest1, so every schedule
+  # lives in europe-west1 and targets the jobs cross-region over the Admin API.
+  # `gcloud scheduler jobs list` given the service's region returns NOTHING,
+  # silently, which reads exactly like "nothing is scheduled" — hence an
+  # explicit variable and the empty-list-is-fatal check in the inventory step.
+  SCHEDULER_REGION: europe-west1
   SERVICE: fiveaday
   SQL_INSTANCE: fiveaday-db
   IMAGE_BASE: europe-southwest1-docker.pkg.dev/five-a-day-evolution/fiveaday/web
   PROD_URL: ${{ secrets.PRODUCTION_URL || 'https://fiveaday-332600671945.europe-southwest1.run.app' }}
   TEST_URL: ${{ secrets.TESTING_URL || 'http://34.26.130.187:8000' }}
+  # Alert recipient with a non-secret last resort. `SUPPORT_EMAIL ||
+  # OWNER_EMAILS` alone meant that with neither secret set the `to:` field was
+  # empty and the ALERT PATH ITSELF failed — on the one workflow whose failure
+  # email nobody can afford to lose. EMAIL_HOST_USER is the account these steps
+  # already authenticate as; the academy's real addresses stay out of this
+  # public file. Both alert paths below also assert it resolved.
+  ALERT_TO: ${{ secrets.SUPPORT_EMAIL || secrets.OWNER_EMAILS || secrets.EMAIL_HOST_USER }}
+
+  # ── Expected scheduled-work inventory (item: "a job that stopped running") ──
+  # The prune_audit_log lesson: the wrapper command, the Beat entry and the
+  # DEPLOYMENT.md schedule row all existed for eight versions while the Cloud
+  # Run Job itself had never been created — so in production nothing pruned
+  # anything, silently, and the only check was a human diffing `gcloud run jobs
+  # list` against a table in the docs. These two lists make that diff part of
+  # the deploy. Keep them in the SAME change that adds or removes a job or a
+  # schedule: the check fails on a missing AND on an unexpected entry, because
+  # an unexpected entry means this list is stale and can no longer be trusted.
+  EXPECTED_JOBS: >-
+    fiveaday-archive-gcp-costs
+    fiveaday-backup-retention
+    fiveaday-birthday-emails
+    fiveaday-expenses-daily
+    fiveaday-expenses-monthly
+    fiveaday-funfriday-emails
+    fiveaday-generate-payments
+    fiveaday-migrate
+    fiveaday-monthly-report
+    fiveaday-payment-reminders
+    fiveaday-prune-audit-log
+    fiveaday-purge-sessions
+  # 11 schedules for 12 jobs: fiveaday-migrate has none by design (the deploy
+  # pipeline executes it, a timer never should).
+  EXPECTED_SCHEDULES: >-
+    sched-fiveaday-archive-gcp-costs
+    sched-fiveaday-backup-retention
+    sched-fiveaday-birthday-emails
+    sched-fiveaday-expenses-daily
+    sched-fiveaday-expenses-monthly
+    sched-fiveaday-funfriday-emails
+    sched-fiveaday-generate-payments
+    sched-fiveaday-monthly-report
+    sched-fiveaday-payment-reminders
+    sched-fiveaday-prune-audit-log
+    sched-fiveaday-purge-sessions
+  # Deliberately-paused schedules are legitimate (a schedule is created PAUSED
+  # while the release carrying its management command is still rolling out).
+  # Listed here they warn; anything else PAUSED is an error, because a silently
+  # paused schedule is indistinguishable from the prune_audit_log gap.
+  PAUSED_OK_SCHEDULES: >-
+    sched-fiveaday-purge-sessions
+    sched-fiveaday-archive-gcp-costs
 
 jobs:
   # ============================================================
@@ -108,6 +169,10 @@ jobs:
   preflight:
     name: Preflight
     runs-on: ubuntu-latest
+    # 60, not less: the CI wait below has its own 45-minute deadline and must
+    # be allowed to reach it and report "timed out waiting for CI" rather than
+    # being killed by the job cap, which would look like an infra fault.
+    timeout-minutes: 60
     # `types: [completed]` fires on failure and cancellation too — there is no
     # success-only event filter — so gate here. A broken testing deploy must
     # never arm production; the whole run shows as skipped instead.
@@ -121,7 +186,7 @@ jobs:
       migrations: ${{ steps.migrations.outputs.files }}
 
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           fetch-depth: 0   # migration diff and provenance gate need history and tags
 
@@ -323,7 +388,7 @@ jobs:
       - name: Wait for CI to go green on this commit
         if: steps.qagate.outputs.proceed == 'true'
         id: ci
-        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b  # v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b  # v7.1.0
         with:
           script: |
             const sha = context.sha;
@@ -365,15 +430,23 @@ jobs:
             const sleep = ms => new Promise(r => setTimeout(r, ms));
 
             while (true) {
-              const { data } = await github.rest.checks.listForRef({
+              // PAGINATED. `per_page: 100` is a page size, not a limit: past
+              // 100 check runs on one commit the rest were simply absent from
+              // `data`, so a required check read as "never ran" and the
+              // fail-closed branch below refused to arm a release whose CI was
+              // in fact green. Release commits on main are exactly where that
+              // count is reached — six CI jobs, CodeQL, Scorecard, the
+              // notification workflows, plus one extra check run per re-run.
+              const all = await github.paginate(github.rest.checks.listForRef, {
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 ref: sha,
                 filter: 'latest',
                 per_page: 100,
               });
+              core.info(`check runs on ${sha}: ${all.length}`);
 
-              const runs = data.check_runs.filter(
+              const runs = all.filter(
                 r => !SELF.has(r.name) && !IGNORED_APPS.has(r.app?.slug));
 
               // Fail CLOSED. Zero check runs is not "healthy", it is "unknown".
@@ -454,6 +527,33 @@ jobs:
           echo "files=$FILES" >> "$GITHUB_OUTPUT"
           echo "migrations: ${FILES:-none}"
 
+          # ── Destructive-operation scan (advisory here, enforced in deploy) ──
+          # Migrations run BEFORE the rollout, so for the length of the rollout
+          # the OLD code serves against the NEW schema. That window is normally
+          # harmless and deliberately chosen; it is not harmless when the
+          # migration REMOVES something the old code still selects —
+          # students/0015 deleted a model's table and shipped straight through
+          # it. This makes the approver see it before clicking Approve, and the
+          # deploy job refuses to proceed without an explicit acknowledgement.
+          #
+          # Detected: DeleteModel, RemoveField, RenameField, RenameModel,
+          # RemoveConstraint/RemoveIndex on a name old code may still use, and
+          # raw DROP/TRUNCATE inside RunSQL. NOT detected (and worth a human
+          # look anyway): an AlterField that narrows a column, e.g. null=True →
+          # null=False, or a shortened max_length.
+          DESTRUCTIVE=''
+          for f in $FILES; do
+            [ -f "$f" ] || continue
+            if grep -nE 'DeleteModel|RemoveField|RenameField|RenameModel|DROP[[:space:]]+(TABLE|COLUMN)|TRUNCATE' "$f" > /dev/null; then
+              DESTRUCTIVE="$DESTRUCTIVE $f"
+              echo "--- destructive operations in $f ---"
+              grep -nE 'DeleteModel|RemoveField|RenameField|RenameModel|DROP[[:space:]]+(TABLE|COLUMN)|TRUNCATE' "$f"
+            fi
+          done
+          DESTRUCTIVE=$(printf '%s' "$DESTRUCTIVE" | sed 's/^ *//')
+          echo "destructive=$DESTRUCTIVE" >> "$GITHUB_OUTPUT"
+          echo "destructive migrations: ${DESTRUCTIVE:-none}"
+
       - name: Arm
         id: compare
         # No `if:` — the implicit success() is exactly right: on a "nothing to
@@ -473,6 +573,7 @@ jobs:
           NEW: ${{ steps.versions.outputs.new_version }}
           LIVE: ${{ steps.versions.outputs.live_version }}
           FILES: ${{ steps.migrations.outputs.files }}
+          DESTRUCTIVE: ${{ steps.migrations.outputs.destructive }}
           SHORT_SHA: ${{ steps.versions.outputs.short_sha }}
         run: |
           if [ "$PROCEED" != "true" ]; then
@@ -500,6 +601,22 @@ jobs:
               echo ""
               echo "Approving this deploy authorises applying them to the live database."
               echo "A verified Cloud SQL backup is taken first and the deploy aborts if it is not \`SUCCESSFUL\`."
+              if [ -n "$DESTRUCTIVE" ]; then
+                echo ""
+                echo "#### 🛑 DESTRUCTIVE operations detected"
+                echo ""
+                for f in $DESTRUCTIVE; do echo "- \`$f\`"; done
+                echo ""
+                echo "These drop or rename something. Migrations are applied BEFORE the service rolls,"
+                echo "so the **previous** code serves against the new schema for the whole rollout"
+                echo "window — if it still reads what this removes, it breaks for real users during"
+                echo "that window (this is how \`students/0015\` shipped)."
+                echo ""
+                echo "The deploy job will **refuse to run** unless it is started from"
+                echo "*Actions → Deploy production → Run workflow* with **ack_destructive** checked."
+                echo "That dispatch is a STRICT trigger: every other gate (provenance, QA sign-off,"
+                echo "CI) still applies, and \`force\` is NOT needed and should not be used."
+              fi
             else
               echo "### No schema migrations detected"
               echo ""
@@ -531,6 +648,12 @@ jobs:
       contents: read
       id-token: write   # required for Workload Identity Federation
 
+    # Counted from when the runner starts EXECUTING, not from when the run was
+    # queued — the wait for the `production` environment reviewer does not
+    # consume it. A Cloud Build plus migrate plus rollout plus verify is ~20
+    # min; 60 leaves room for a slow build and still bounds a hung gcloud call.
+    timeout-minutes: 60
+
     env:
       NEW_SHA: ${{ needs.preflight.outputs.short_sha }}
       NEW_VERSION: ${{ needs.preflight.outputs.new_version }}
@@ -541,7 +664,7 @@ jobs:
       # is what makes the image tag honest: `gcloud builds submit` uploads the
       # working tree, so building a moved `main` under this SHA's tag would
       # permanently break the SHA→image mapping the migration diff relies on.
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           ref: ${{ needs.preflight.outputs.sha }}
           fetch-depth: 0
@@ -572,7 +695,7 @@ jobs:
           workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
           service_account: ${{ secrets.GCP_DEPLOY_SA }}
 
-      - uses: google-github-actions/setup-gcloud@e427ad8a34f8676edf47cf7d7925499adf3eb74f  # v2
+      - uses: google-github-actions/setup-gcloud@e427ad8a34f8676edf47cf7d7925499adf3eb74f  # v2.2.1
         with:
           project_id: ${{ env.GCP_PROJECT }}
 
@@ -615,6 +738,149 @@ jobs:
           fi
           [ "$FAILED" -eq 0 ] || exit 1
 
+      # ----------------------------------------------------------
+      # PRE-MUTATION GATE 1 — the service must not self-migrate.
+      #
+      # entrypoint.sh honours RUN_MIGRATIONS_ON_START (default TRUE), so a
+      # service without it set to false runs `migrate` on every cold start.
+      # That silently bypasses this whole pipeline's ordering — the verified
+      # pre-deploy backup, the destructive-migration acknowledgement, and
+      # "migrate before the rollout" — because whichever container happens to
+      # cold-start first applies the schema change, unbacked and unannounced.
+      #
+      # Placed BEFORE anything mutates production (the first write is the job
+      # repoint) so a misconfiguration stops the deploy with production
+      # untouched and no rollback needed. `gcloud run deploy --image` alone
+      # never changes env vars, so the value read here is the value that will
+      # be live afterwards.
+      # ----------------------------------------------------------
+      - name: 'Assert the service does not self-migrate (RUN_MIGRATIONS_ON_START=false)'
+        run: |
+          JSON=$(gcloud run services describe "$SERVICE" --project="$GCP_PROJECT" --region="$GCP_REGION" --format=json)
+          VAL=$(printf '%s' "$JSON" | jq -r '
+            .spec.template.spec.containers[0].env // []
+            | map(select(.name == "RUN_MIGRATIONS_ON_START"))
+            | (.[0].value // "")' | tr '[:upper:]' '[:lower:]')
+          echo "RUN_MIGRATIONS_ON_START on the service: '${VAL:-<unset>}'"
+          case "$VAL" in
+            false|0|f|no)
+              echo "OK: the service leaves migrations to this pipeline." ;;
+            *)
+              echo "::error::RUN_MIGRATIONS_ON_START is '${VAL:-<unset>}' on the Cloud Run service, so the container migrates on every cold start — bypassing the pre-deploy backup, the destructive-migration acknowledgement and the migrate-before-rollout ordering this workflow exists to enforce."
+              echo "::error::Fix it with a MERGE, never a replace: PYTHONUTF8=1 gcloud run services update $SERVICE --region=$GCP_REGION --project=$GCP_PROJECT --update-env-vars=RUN_MIGRATIONS_ON_START=false   ( --set-env-vars would drop the other ~30 vars and 6 secret refs )"
+              exit 1 ;;
+          esac
+
+      # ----------------------------------------------------------
+      # PRE-MUTATION GATE 2 — scheduled-work inventory.
+      #
+      # Answers "has a scheduled job stopped running?", which until now was a
+      # human eyeballing `gcloud run jobs list` against a table in
+      # DEPLOYMENT.md. prune_audit_log had a wrapper command, a Beat entry and
+      # a docs row for eight versions while its Cloud Run Job had never been
+      # created — nothing pruned anything in production and nothing said so.
+      #
+      # Deploy-time is the ONLY place this check can live: it needs GCP
+      # credentials, and the one unattended pipeline (the nightly testing
+      # deploy) deliberately holds none, while WIF here is scoped to
+      # attribute.environment/production. A cron detector would require giving
+      # a timer a production credential — a worse trade than a weeks-late
+      # detection.
+      #
+      # Also pre-mutation on purpose: the expected lists live in this file, so
+      # a genuine addition arrives in the same commit as its list entry and
+      # never fails. A mismatch means the inventory is not what the release
+      # believes, which is exactly when NOT to start rolling. `force` downgrades
+      # it to a warning for a real emergency.
+      # ----------------------------------------------------------
+      - name: 'Inventory: Cloud Run jobs and Cloud Scheduler entries'
+        env:
+          FORCE: ${{ inputs.force }}
+        run: |
+          FAILED=0
+
+          echo "=== Cloud Run jobs ($GCP_REGION) ==="
+          mapfile -t FOUND_JOBS < <(gcloud run jobs list --project="$GCP_PROJECT" --region="$GCP_REGION" \
+            --format='value(metadata.name)' | sort)
+          printf '  %s\n' "${FOUND_JOBS[@]}"
+          if [ "${#FOUND_JOBS[@]}" -eq 0 ]; then
+            echo "::error::'gcloud run jobs list' returned NOTHING. Treat an empty list as a failed query (wrong region, lost permission), never as 'no jobs exist'."
+            FAILED=1
+          fi
+
+          for want in $EXPECTED_JOBS; do
+            printf '%s\n' "${FOUND_JOBS[@]}" | grep -qx "$want" \
+              || { echo "::error::Cloud Run job '$want' does NOT exist. Whatever it runs has not run since it disappeared (or was never created — the prune_audit_log shape). Create it, or remove it from EXPECTED_JOBS in this workflow."; FAILED=1; }
+          done
+          for got in "${FOUND_JOBS[@]}"; do
+            printf '%s\n' $EXPECTED_JOBS | grep -qx "$got" \
+              || { echo "::error::Cloud Run job '$got' exists but is not in EXPECTED_JOBS. Either it is unmanaged, or this list is stale — and a stale list cannot detect a missing job. Add it (with its schedule) or delete it."; FAILED=1; }
+          done
+
+          echo "=== Cloud Scheduler entries ($SCHEDULER_REGION — NOT the service region) ==="
+          # --location is explicit and deliberately a different region: asking
+          # for europe-southwest1 returns an empty list with exit 0, which reads
+          # exactly like "nothing is scheduled".
+          #
+          # The call's own exit status is captured separately from its output so
+          # a PERMISSION_DENIED (the deploy SA needs roles/cloudscheduler.viewer
+          # — scripts/setup_cicd.sh grants it, but an environment provisioned
+          # before that will not have it) cannot be mistaken for "the schedules
+          # are gone", which would send someone hunting the wrong problem.
+          SCHED=''
+          if SCHED=$(gcloud scheduler jobs list --project="$GCP_PROJECT" --location="$SCHEDULER_REGION" \
+               --format='value(name.basename(),state)' 2>&1); then
+            printf '%s\n' "$SCHED" | sed 's/^/  /'
+            if [ -z "$SCHED" ]; then
+              echo "::error::'gcloud scheduler jobs list --location=$SCHEDULER_REGION' succeeded but returned NOTHING. Treat that as a failed query, never as proof that nothing is scheduled — every periodic task in production is triggered from this region."
+              FAILED=1
+            fi
+          else
+            echo "$SCHED" | sed 's/^/  /'
+            echo "::error::Could not LIST Cloud Scheduler entries in $SCHEDULER_REGION (output above). If it is a permission error, grant the deploy service account roles/cloudscheduler.viewer (see scripts/setup_cicd.sh) and re-run — this is a gap in the CHECK, not evidence about the schedules themselves."
+            SCHED=''
+            FAILED=1
+          fi
+
+          # Only compare when the listing itself succeeded — otherwise every
+          # expected entry would be reported "missing", which is 11 misleading
+          # errors on top of the one real one.
+          if [ -n "$SCHED" ]; then
+            for want in $EXPECTED_SCHEDULES; do
+              LINE=$(printf '%s\n' "$SCHED" | awk -v w="$want" '$1 == w { print; exit }')
+              if [ -z "$LINE" ]; then
+                echo "::error::Cloud Scheduler entry '$want' is missing from $SCHEDULER_REGION — its job exists but nothing triggers it, so it has silently stopped running."
+                FAILED=1
+                continue
+              fi
+              STATE=$(printf '%s' "$LINE" | awk '{print $2}')
+              if [ "$STATE" != "ENABLED" ]; then
+                if printf '%s\n' $PAUSED_OK_SCHEDULES | grep -qx "$want"; then
+                  echo "::warning::'$want' is $STATE. It is in PAUSED_OK_SCHEDULES, so this is tolerated — but if the release that needed it is now live, resume it and drop it from that list."
+                else
+                  echo "::error::Cloud Scheduler entry '$want' is $STATE, not ENABLED. A paused schedule looks identical to a missing one from the outside: the task is not running."
+                  FAILED=1
+                fi
+              fi
+            done
+            while read -r name state; do
+              [ -n "$name" ] || continue
+              printf '%s\n' $EXPECTED_SCHEDULES | grep -qx "$name" \
+                || { echo "::error::Cloud Scheduler entry '$name' ($state) is not in EXPECTED_SCHEDULES — unmanaged, or the list is stale."; FAILED=1; }
+            done <<< "$SCHED"
+          fi
+
+          if [ "$FAILED" -ne 0 ]; then
+            if [ "$FORCE" = "true" ]; then
+              echo "::warning::force=true — inventory mismatches above are NOT blocking this deploy. Fix them straight after."
+            else
+              echo "::error::Scheduled-work inventory does not match this release. Nothing has been changed in production. Fix the inventory, or update EXPECTED_JOBS / EXPECTED_SCHEDULES / PAUSED_OK_SCHEDULES in .github/workflows/deploy-production.yml as part of the change that alters it."
+              exit 1
+            fi
+          else
+            echo "Inventory matches: ${#FOUND_JOBS[@]} jobs, all expected schedules ENABLED (or explicitly allowed to be paused)."
+          fi
+
       - name: Resolve the deployed image and the authoritative migration list
         id: diff
         run: |
@@ -646,13 +912,76 @@ jobs:
             echo "migrations=$MIGRATIONS"
           } >> "$GITHUB_OUTPUT"
 
+      # ----------------------------------------------------------
+      # PRE-MUTATION GATE 3 — destructive migrations need an explicit ack.
+      #
+      # The old-code/new-schema window is real and deliberate: migrate runs
+      # BEFORE the rollout, so the previous revision serves against the new
+      # schema for the whole rollout. That is safe for additive changes and
+      # unsafe when the migration REMOVES or RENAMES something the running code
+      # still touches — students/0015 deleted a model's table and went through
+      # this window unremarked.
+      #
+      # No amount of workflow code can decide whether a given removal is safe,
+      # so this does not try: it makes the situation impossible to ship by
+      # accident. Scanned against the AUTHORITATIVE diff (deployed image tag →
+      # this SHA), not preflight's advisory one.
+      #
+      # To ship one: Actions → Deploy production → Run workflow →
+      # ack_destructive ✅. workflow_dispatch is a STRICT trigger, so the
+      # provenance, QA sign-off and CI gates all still apply — `force` is NOT
+      # required and must not be used for this.
+      # ----------------------------------------------------------
+      - name: 'Destructive migrations require ack_destructive'
+        env:
+          MIGRATIONS: ${{ steps.diff.outputs.migrations }}
+          ACK: ${{ inputs.ack_destructive }}
+        run: |
+          DESTRUCTIVE=''
+          for f in $MIGRATIONS; do
+            [ -f "$f" ] || continue
+            if grep -nE 'DeleteModel|RemoveField|RenameField|RenameModel|DROP[[:space:]]+(TABLE|COLUMN)|TRUNCATE' "$f" > /dev/null; then
+              DESTRUCTIVE="$DESTRUCTIVE $f"
+              echo "--- $f ---"
+              grep -nE 'DeleteModel|RemoveField|RenameField|RenameModel|DROP[[:space:]]+(TABLE|COLUMN)|TRUNCATE' "$f"
+            fi
+          done
+
+          if [ -z "$DESTRUCTIVE" ]; then
+            echo "No destructive operations in this migration set (${MIGRATIONS:-none})."
+            exit 0
+          fi
+
+          {
+            echo "### 🛑 Destructive migrations in this release"
+            echo ""
+            for f in $DESTRUCTIVE; do echo "- \`$f\`"; done
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$ACK" = "true" ]; then
+            echo "::warning::Destructive migrations acknowledged (ack_destructive=true):$DESTRUCTIVE. They will be applied BEFORE the rollout, so the previous revision serves against the new schema until the rollout completes."
+            echo "Acknowledged — proceeding." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          echo "::error::This release drops or renames schema:$DESTRUCTIVE — and migrations are applied BEFORE the service rolls, so the CURRENT code will run against the new schema for the whole rollout window. Nothing has been changed in production."
+          echo "::error::To proceed deliberately: Actions → Deploy production → Run workflow, tick 'ack_destructive'. That dispatch keeps every other gate (release provenance, QA sign-off, CI green) — do NOT reach for 'force'. If the removal is not backward compatible, split it instead: ship the code that stops using the column first, then the migration that drops it."
+          echo "Blocked: re-run with **ack_destructive** ticked, or split the migration." >> "$GITHUB_STEP_SUMMARY"
+          exit 1
+
       - name: Take a backup and prove it succeeded
         id: backup
+        env:
+          # Via env — the last `${{ }}` that reached a run body in this file.
+          # A run id is numeric, so it was not exploitable; the rule is simply
+          # absolute, so there is nothing to audit case by case.
+          RUN_ID: ${{ github.run_id }}
         run: |
           # Hard rule: no migration and no rollout without a SUCCESSFUL backup id
           # in hand. An unverified backup is not a rollback plan.
           gcloud sql backups create --instance="$SQL_INSTANCE" --project="$GCP_PROJECT" \
-            --description="pre-deploy v$NEW_VERSION ($NEW_SHA) — GitHub Actions run ${{ github.run_id }}"
+            --description="pre-deploy v$NEW_VERSION ($NEW_SHA) — GitHub Actions run $RUN_ID"
 
           BACKUP_ID=$(gcloud sql backups list --instance="$SQL_INSTANCE" --project="$GCP_PROJECT" \
             --limit=1 --format='value(id)')
@@ -815,6 +1144,21 @@ jobs:
           fi
           echo "OK: DATABASE_URL is a secretKeyRef and no POSTGRES_* vars are present"
 
+          echo "--- the service must still leave migrations to the pipeline ---"
+          # Re-read after the rollout. Deliberately a WARNING here and a hard
+          # error in the pre-mutation gate: the deploy itself is fine, and
+          # failing this step would trip the auto-rollback and pull a good
+          # release back over a configuration detail. If this ever fires, the
+          # value changed underneath the deploy.
+          RUN_MIG=$(printf '%s' "$JSON" | jq -r '
+            .spec.template.spec.containers[0].env // []
+            | map(select(.name == "RUN_MIGRATIONS_ON_START"))
+            | (.[0].value // "")' | tr '[:upper:]' '[:lower:]')
+          case "$RUN_MIG" in
+            false|0|f|no) echo "OK: RUN_MIGRATIONS_ON_START=$RUN_MIG" ;;
+            *) echo "::warning::RUN_MIGRATIONS_ON_START is now '${RUN_MIG:-<unset>}' on the service — it was acceptable in the pre-deploy check, so it changed mid-deploy. The container will self-migrate on every cold start, bypassing the backup + acknowledgement ordering. Fix with --update-env-vars=RUN_MIGRATIONS_ON_START=false (never --set-env-vars)." ;;
+          esac
+
           echo "--- deep probe ---"
           AFTER=$(curl -fsS --max-time 30 -H "X-Probe-Token: $PROBE" "$PROD_URL/health/?deep=1" || echo '')
           printf '%s' "$AFTER" > after.json
@@ -836,14 +1180,24 @@ jobs:
             echo "::warning::Row counts unavailable (no HEALTH_PROBE_TOKEN) — this deploy cannot prove the data survived."
           fi
 
-      - name: Roll back on failure
+      - name: Roll back on failure or cancellation
         id: rollback
         # Fires only when production was actually MUTATED: the repoint step is
         # the first write, so a failure before it (backup checks, build) leaves
         # production untouched and needs no rollback. `steps.repoint.outcome` is
         # 'skipped' in that case; 'success' or 'failure' both mean writes began.
+        #
+        # cancelled() as well as failure(). A run cancelled after the repoint —
+        # somebody pressing "Cancel workflow" during the migrate or the
+        # rollout, or the job hitting timeout-minutes — used to leave all 12
+        # Cloud Run Jobs pinned to the NEW, unverified image with no rollback
+        # and no email: every Cloud Scheduler task would then run the
+        # unvalidated release indefinitely, silently, while the service still
+        # served the old one. A step whose condition holds under cancellation
+        # still runs (GitHub allows a grace period), which is what makes this
+        # work at all.
         if: >-
-          failure() &&
+          (failure() || cancelled()) &&
           (steps.repoint.outcome == 'success' || steps.repoint.outcome == 'failure')
         env:
           OLD_SHA: ${{ steps.diff.outputs.old_sha }}
@@ -878,6 +1232,26 @@ jobs:
           echo "--- repoint every Cloud Run job back to $OLD_SHA ---"
           mapfile -t JOBS < <(gcloud run jobs list --project="$GCP_PROJECT" --region="$GCP_REGION" \
             --format='value(metadata.name)' | sort)
+          printf 'found %d jobs:\n' "${#JOBS[@]}"
+          printf '  %s\n' "${JOBS[@]}"
+
+          # The SAME guard the forward repoint carries, which this path was
+          # missing. Without it an empty or short list meant the `for` loop
+          # simply did nothing, FAILED stayed 0, and the failure email reported
+          # "Los 0 jobs vuelven a apuntar a la imagen …" — a success-toned
+          # sentence for a state where every Cloud Run Job is still pinned to
+          # the image whose deploy just failed, so every Cloud Scheduler task
+          # keeps running it. Loud, and with the state written to the outputs
+          # the email reads, because exiting here skips the block at the end.
+          if [ "${#JOBS[@]}" -lt 8 ]; then
+            echo "::error::Rollback ABORTED: expected at least 8 Cloud Run jobs, 'gcloud run jobs list' returned ${#JOBS[@]}. Refusing to report a rollback based on a partial list."
+            {
+              echo "state=fallido"
+              echo "detail=El rollback NO se ejecutó: gcloud devolvió solo ${#JOBS[@]} jobs (se esperaban 8 o más), así que los jobs pueden seguir TODOS apuntando a la imagen fallida ($NEW_SHA) y Cloud Scheduler ejecutándola. Repúntalos a mano o lanza el workflow 'Rollback production' con image_tag=$OLD_SHA."
+            } >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+
           for JOB in "${JOBS[@]}"; do
             gcloud run jobs update "$JOB" --image="$IMAGE" \
               --project="$GCP_PROJECT" --region="$GCP_REGION" || FAILED=1
@@ -940,9 +1314,12 @@ jobs:
           MIGRATE_RAN: ${{ steps.diff.outputs.run_migrate }}
           EVENT: ${{ github.event_name }}
           ACTOR: ${{ github.actor }}
+          # Via env like everything else — `job.status` is a fixed enum, but the
+          # rule is "no ${{ }} in a run body", with nothing to remember.
+          JOB_STATUS: ${{ job.status }}
         run: |
           {
-            echo "## Production deploy — ${{ job.status }}"
+            echo "## Production deploy — $JOB_STATUS"
             echo ""
             echo "| Field | Value |"
             echo "|---|---|"
@@ -1018,8 +1395,12 @@ jobs:
               </table>
             </div>
 
-      - name: Notify failure
-        if: failure()
+      # A cancelled run gets this email too. Cancellation after the job repoint
+      # leaves production half-changed and triggers the rollback step above —
+      # exactly the state somebody must be told about — and `failure()` alone
+      # is false for a cancelled job, so this used to go out silent.
+      - name: Notify failure or cancellation
+        if: failure() || cancelled()
         uses: dawidd6/action-send-mail@94de994a9f6fffee200243214e17002e2920bb59  # v18
         with:
           server_address: smtp.gmail.com
@@ -1030,12 +1411,13 @@ jobs:
           from: "Five a Day CI <${{ secrets.EMAIL_HOST_USER }}>"
           # Failures go to dev/support only — the academy inbox (hellofiveaday)
           # is notified exclusively on successful deploys.
-          to: ${{ secrets.SUPPORT_EMAIL || secrets.OWNER_EMAILS }}
-          subject: "[Five a Day] 🚨 El despliegue a producción ha fallado"
+          to: ${{ env.ALERT_TO }}
+          subject: "[Five a Day] ${{ job.status == 'cancelled' && '🚨 El despliegue a producción se canceló a medias' || '🚨 El despliegue a producción ha fallado' }}"
           html_body: |
             <div style="font-family: sans-serif; color:#1f2937; max-width:640px;">
-              <h2 style="color:#b91c1c;">🚨 Despliegue a producción fallido</h2>
+              <h2 style="color:#b91c1c;">🚨 Despliegue a producción ${{ job.status == 'cancelled' && 'cancelado' || 'fallido' }}</h2>
               <table cellpadding="6" style="border-collapse:collapse; font-family:sans-serif; font-size:13px;">
+                <tr><td><strong>Estado del run</strong></td><td><strong>${{ job.status }}</strong></td></tr>
                 <tr><td><strong>Versión</strong></td><td>v${{ needs.preflight.outputs.new_version }} (detenido)</td></tr>
                 <tr><td><strong>Rollback automático</strong></td><td>${{ steps.rollback.outputs.state || 'no aplicado — el fallo ocurrió antes de tocar producción, que sigue en la versión anterior' }}</td></tr>
                 <tr><td><strong>Detalle</strong></td><td>${{ steps.rollback.outputs.detail || '—' }}</td></tr>
@@ -1070,7 +1452,19 @@ jobs:
     needs: preflight
     if: failure()
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
+      # This job exists ONLY to alert, so it can afford to fail loudly when it
+      # has nowhere to send. An empty `to:` (both secrets unset) silently lost
+      # the message that says a release is not deployable.
+      - name: Assert an alert recipient resolved
+        run: |
+          if [ -z "$ALERT_TO" ]; then
+            echo "::error::No alert recipient: none of SUPPORT_EMAIL, OWNER_EMAILS or EMAIL_HOST_USER is set, so the preflight-failure email cannot be addressed. Configure SUPPORT_EMAIL."
+            exit 1
+          fi
+          echo "alert recipient resolved"
+
       - uses: dawidd6/action-send-mail@94de994a9f6fffee200243214e17002e2920bb59  # v18
         with:
           server_address: smtp.gmail.com
@@ -1081,7 +1475,7 @@ jobs:
           from: "Five a Day CI <${{ secrets.EMAIL_HOST_USER }}>"
           # Gate alerts go to dev/support only — the academy inbox
           # (hellofiveaday) is notified exclusively on successful deploys.
-          to: ${{ secrets.SUPPORT_EMAIL || secrets.OWNER_EMAILS }}
+          to: ${{ env.ALERT_TO }}
           subject: "[Five a Day] ⚠️ La versión en main NO es desplegable"
           html_body: |
             <div style="font-family: sans-serif; color:#1f2937; max-width:640px;">

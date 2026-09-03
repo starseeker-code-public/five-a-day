@@ -26,6 +26,7 @@ from django.contrib import messages
 from django.shortcuts import redirect, render
 from django.views.decorators.http import require_http_methods
 
+from core.decorators import admin_required
 from core.rate_limit import rate_limit
 from core.services import two_factor_service as tfs
 
@@ -56,6 +57,7 @@ def _admin_only(view):
 # ── Setup / manage / disable (post-login) ──────────────────────────────────
 
 
+@admin_required
 @_admin_only
 def two_factor_setup(request, teacher):
     """
@@ -114,6 +116,7 @@ def _payload_from_existing(teacher) -> tfs.EnrolmentPayload:
     )
 
 
+@admin_required
 @_admin_only
 def two_factor_manage(request, teacher):
     """

@@ -127,7 +127,7 @@ On the QA VM the two admins have **two accounts each**: the EMAIL logins (`lope.
 
 **Enrollment-type seeding (every environment)** — `entrypoint.sh` also runs `manage.py seed_enrollment_types` on container start. It provisions the `EnrollmentType` reference table (`monthly`, `quarterly`, `adults`, `special`) from `SiteConfiguration`. This is **not** optional test data: nothing else creates these rows, and without them `EnrollmentService` raises and no student can be enrolled. The command is idempotent, so it is a no-op once the rows exist.
 
-**Parent-portal demo family (never production)** — `entrypoint.sh` runs `manage.py seed_demo_parents` when `DJANGO_ENV` is not `production`, and the QA dashboard's "Seed database" button runs it after `seed_testdata`. It reads `DEMO_PARENT_<N>_*` (`USERNAME`, `PASSWORD`, `EMAIL` required; `CHILDREN` a comma-separated list of first names), creates the parent, their children, enrollments and payments, and sets `PASSWORD` as the parent's real portal password (stored **hashed** on the `Parent` row). The demo family then signs in through the ordinary `/parent/login/` form — since v1.27 there is no demo-only login mode, so what QA exercises is exactly what a real family runs. On the VM the block is `fernando`; log in with `DEMO_PARENT_1_EMAIL`, not the username. **The command raises `CommandError` when `DJANGO_ENV=production`** and production's env has no `DEMO_PARENT_*` var in the first place. Do not add one — it would plant a fake family in the academy's real roll holding a password that also lives in the env set. Real families set their own password from the single-use link emailed once when their record is created, and recover it from `¿Has olvidado tu contraseña?`.
+**Parent-portal demo family (never production)** — `entrypoint.sh` runs `manage.py seed_demo_parents` when `DJANGO_ENV` is not `production`, and the QA dashboard's "Seed database" button runs it after `seed_testdata`. It reads `DEMO_PARENT_<N>_*` (`USERNAME`, `PASSWORD`, `EMAIL` required; `CHILDREN` a comma-separated list of first names), creates the parent, their children, enrollments and payments, and sets `PASSWORD` as the parent's real portal password (stored **hashed** on the `Parent` row). The demo family then signs in through the ordinary `/parent/login/` form — since v1.27 there is no demo-only login mode, so what QA exercises is exactly what a real family runs. On the VM the block is `fernando`; log in with `DEMO_PARENT_1_EMAIL`, not the username. **The command raises `CommandError` when `DJANGO_ENV=production`** and production's env has no `DEMO_PARENT_*` var in the first place. Do not add one — it would plant a fake family in the academy's real roll holding a password that also lives in the env set. Real families are emailed a **temporary password** once, when their record is created (`send_portal_invitation_once`, guarded by `Parent.portal_invite_sent_at` so a family with three children still gets exactly one invitation), and log in with it through the same ordinary form — there is no single-use link and no token table; `ParentSessionToken` was deleted in v1.27 precisely because an expiring link was the thing being removed. Logging in with a temporary password forces an immediate change. `¿Has olvidado tu contraseña?` issues a new temporary password into a **second** column, never over the family's real one, so an unauthenticated request cannot lock a family out of their own payment history; since v1.27.1 it is also rate-limited to 3 per 15 minutes and coalesces repeat requests inside a 15-minute cooldown, so replaying the form cannot keep rotating a credential the family is trying to type.
 
 Keep these vars directly in `.env.testing` (alongside the rest of the testing config). There is no overlay file system — `.env.testing` is self-contained and is renamed to `.env` on the VM before bringing the stack up. It's gitignored via `.env*`.
 
@@ -156,9 +156,18 @@ sudo docker system prune -f          # required — see below
 sudo docker compose -f $D/docker-compose.yml -f $D/docker-compose.testing.yml up -d --build
 ```
 
-> **Both `-f` files, every time.** `docker-compose.testing.yml` is not cosmetic: it overrides the
+> **Both `-f` files, every time — and naming them with `-f` is itself load-bearing.** There are now
+> THREE compose files (v1.27.1). `docker-compose.override.yml` holds the source mount (`.:/app`) and
+> `runserver`, and Compose loads it **automatically for a bare `docker compose …`** but **never when
+> files are named explicitly with `-f`**. That is what makes this command run the **built image**:
+> the mounts used to live in the base file, so this overlay inherited them and the VM served its own
+> git working tree — QA was signing off an artifact that was not the one production ran, and the
+> image's own `CMD` was exercised nowhere but production. So `-f` here is not just about picking the
+> testing overlay, it is what excludes the dev override.
+>
+> `docker-compose.testing.yml` is not cosmetic either: it overrides the
 > `db` service to mount `testing_postgres_data` instead of the base file's dev volume, and replaces
-> `runserver` with Gunicorn. Bringing the stack up with only the base file starts a **different,
+> the command with Gunicorn. Bringing the stack up with only the base file starts a **different,
 > valid, wrong** stack — the database attaches to the dev volume (a months-old snapshot on this
 > host) and nothing errors. `/health/` even reports the correct new version, because the code
 > really did deploy. Confirm the mount afterwards:
@@ -1497,9 +1506,16 @@ Cost: ~$0.02/GB/month. At this scale, effectively free.
 
 ### Sendgrid or Mailgun — high-volume email
 
-Gmail SMTP allows 500 emails/day via App Password. This covers the current workload comfortably.
-If you run large campaigns (announcements to all 1,000 students' families, bulk payment reminders),
-you will hit that limit.
+Gmail SMTP allows 500 emails/day via App Password. **This is no longer a comfortable margin — it is
+roughly ONE mass-mail run.** The `/apps/` email forms (Fun Friday, newsletter, payment reminders,
+vacation closure, monthly report, receipts, tax certificates) each send to every reachable family in
+one go, so at the documented 2,000-student ceiling a single announcement plus that month's reminders
+already exceeds the daily cap — and the failure is per-message and partial, so the operator sees a
+tally saying some families were not reached rather than a clear "quota exhausted".
+
+Two things make this survivable today rather than fixed: the recipient set is de-duplicated by
+address and excludes waiting-list families and parents with no email, and each batch now shares one
+SMTP connection instead of reconnecting per message. Neither raises the cap.
 
 Sendgrid free tier: 100 emails/day. Paid: from ~$20/month for 50K emails/month. No code changes
 needed — update `EMAIL_BACKEND` and credentials in Secret Manager.

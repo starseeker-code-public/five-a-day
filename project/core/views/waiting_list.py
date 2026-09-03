@@ -18,6 +18,7 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.views.decorators.http import require_http_methods
 
+from core.decorators import admin_required
 from core.models import HistoryLog
 from students.forms import WaitingListForm
 from students.models import Group, Student
@@ -119,6 +120,7 @@ def waiting_list_create(request):
 
 
 @require_http_methods(["GET", "POST"])
+@admin_required
 def assign_from_waiting_list(request, student_id):
     """
     Start the real enrollment for a waiting-list entry.
@@ -204,6 +206,7 @@ def discard_waiting_entry(waiting, new_student=None):
 
 
 @require_http_methods(["POST"])
+@admin_required
 def add_to_waiting_list(request, student_id):
     """Flip an existing student back onto the waiting list (rare — usually used on
     admin's request when a spot needs to be freed without deleting the student)."""
@@ -258,6 +261,11 @@ def group_capacity_summary():
     """
     from django.db.models import Count, Q
 
+    # The annotation aliases are load-bearing: `Group.ENROLLED_ANNOTATIONS` /
+    # `WAITING_ANNOTATIONS` name them, so `enrolled_count`, `waiting_count`,
+    # `available_spots` and `is_full` all read these values instead of issuing a
+    # `.count()` each. Rename them here and the properties silently fall back to
+    # four queries per row.
     qs = (
         Group.objects.filter(active=True)
         .annotate(
@@ -278,9 +286,11 @@ def group_capacity_summary():
 
     summary = []
     for group in qs:
-        available = None
-        if group.max_students:
-            available = max(group.max_students - group.enrolled, 0)
+        # Read through the model properties rather than re-deriving them: they
+        # now prefer the annotations above (so this stays one query), and
+        # "max_students == 0 means no cap" is then defined in exactly one place
+        # instead of being spelled out again here.
+        available = group.available_spots
         summary.append(
             {
                 "id": group.id,
@@ -289,12 +299,12 @@ def group_capacity_summary():
                 "group": group,
                 "name": group.group_name,
                 "color": group.color,
-                "enrolled": group.enrolled,
-                "waiting": group.waiting,
+                "enrolled": group.enrolled_count,
+                "waiting": group.waiting_count,
                 "max_students": group.max_students,
                 "available": available,
-                "is_full": bool(group.max_students) and group.enrolled >= group.max_students,
-                "has_room_for_waiters": bool(group.waiting) and (available is None or available > 0),
+                "is_full": group.is_full,
+                "has_room_for_waiters": bool(group.waiting_count) and (available is None or available > 0),
             }
         )
     return summary

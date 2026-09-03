@@ -13,15 +13,31 @@ name: Deploy testing
 on:
   # GitHub cron is UTC and has no DST, and the scheduler itself is best-effort:
   # a tick routinely fires 10-90+ min late (2026-09-02 saw 108 min and 269 min).
-  # So do NOT pin an exact local hour. Both ticks are real attempts -- 00:00 UTC
-  # is 02:00 CEST / 01:00 CET, 01:00 UTC is 03:00 CEST / 02:00 CET -- and the
-  # gate below accepts whichever lands inside the 02:00-04:59 Europe/Madrid
-  # sleeping window. That is two chances a night in either DST regime; if the
-  # first one already deployed, the second is a no-op because the version
-  # compare finds nothing to do.
+  # So do NOT pin an exact local hour; the gate below accepts whichever tick
+  # lands inside a WINDOW.
+  #
+  # THREE ticks, because two did not cover both DST regimes. With a
+  # 02:00-04:59 window the old pair produced:
+  #   CEST (summer, UTC+2)  00:00→02:00 ✓   01:00→03:00 ✓   = 2 chances
+  #   CET  (winter, UTC+1)  00:00→01:00 ✗   01:00→02:00 ✓   = 1 chance
+  # so all winter a single late tick (the norm, not the exception) meant NO
+  # deploy check ran at all — and that failure is silent and GREEN: the check
+  # job legitimately reports should_deploy=false and the deploy job is
+  # *skipped*, so the run succeeds while the VM drifts. That is how the VM sat
+  # on v1.20.0 against testing's v1.23.1.
+  #
+  # Now, with the window widened to 01:00-05:59 Madrid (still the sleeping
+  # hours — nobody at the academy is awake, and the QA VM is not user-facing
+  # overnight):
+  #   CEST  00:00→02:00 ✓  01:00→03:00 ✓  02:00→04:00 ✓   = 3 chances
+  #   CET   00:00→01:00 ✓  01:00→02:00 ✓  02:00→03:00 ✓   = 3 chances
+  # and the wider window absorbs the observed 108/269-minute scheduler drift
+  # instead of discarding the tick. Deploying twice is impossible: the second
+  # and third ticks find the versions already equal and no-op.
   schedule:
     - cron: '0 0 * * *'
     - cron: '0 1 * * *'
+    - cron: '0 2 * * *'
   workflow_dispatch:
     inputs:
       force:
@@ -41,6 +57,13 @@ permissions:
 
 env:
   TEST_URL: ${{ secrets.TESTING_URL || 'http://34.26.130.187:8000' }}
+  # Alert recipient with a non-secret last resort: `SUPPORT_EMAIL ||
+  # OWNER_EMAILS` alone meant that with neither secret set the `to:` field was
+  # empty and the ALERT PATH ITSELF failed. EMAIL_HOST_USER is the account
+  # these steps already authenticate as, so it is deliverable whenever mail
+  # works at all, and the academy's real addresses stay out of this public
+  # file. The dedicated alert job below also asserts it resolved.
+  ALERT_TO: ${{ secrets.SUPPORT_EMAIL || secrets.OWNER_EMAILS || secrets.EMAIL_HOST_USER }}
 
 jobs:
   # ============================================================
@@ -49,6 +72,7 @@ jobs:
   check:
     name: Check testing version
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     outputs:
       should_deploy: ${{ steps.compare.outputs.should_deploy }}
       target_version: ${{ steps.target.outputs.version }}
@@ -56,7 +80,7 @@ jobs:
       reason: ${{ steps.compare.outputs.reason }}
 
     steps:
-      - name: Gate on the 02:00-05:00 Europe/Madrid window
+      - name: Gate on the 01:00-06:00 Europe/Madrid window
         id: gate
         env:
           EVENT_NAME: ${{ github.event_name }}
@@ -72,21 +96,30 @@ jobs:
           # 05:29, so both read a later Madrid hour, both were discarded, and
           # the nightly deploy silently never ran — green, because the check job
           # legitimately reported should_deploy=false. The VM sat on v1.20.0
-          # while testing was on v1.23.1. A window absorbs the scheduler drift.
+          # while testing was on v1.23.1.
+          #
+          # 01:00-05:59 rather than 02:00-04:59: three ticks (see the cron
+          # block) now land inside it in BOTH DST regimes, and the extra hour
+          # each side is what absorbs the routine 1-4 h scheduler drift instead
+          # of throwing the tick away. Still the sleeping hours; do NOT narrow
+          # this back towards an exact hour.
+          WINDOW_START=1
+          WINDOW_END=6   # exclusive
           HOUR=$(TZ=Europe/Madrid date +%H)
           echo "Local time in Madrid: $(TZ=Europe/Madrid date '+%Y-%m-%d %H:%M %Z')"
           # 10# forces base 10 — "08" and "09" are invalid octal and would abort
           # the step under $(( )), skipping the deploy for two hours every night.
-          if [ "$((10#$HOUR))" -ge 2 ] && [ "$((10#$HOUR))" -lt 5 ]; then
+          if [ "$((10#$HOUR))" -ge "$WINDOW_START" ] && [ "$((10#$HOUR))" -lt "$WINDOW_END" ]; then
             echo "proceed=true" >> "$GITHUB_OUTPUT"
           else
-            echo "Outside the 02:00-04:59 Madrid window (hour=$HOUR) — too far off schedule to deploy the VM unattended. Nothing to do."
+            echo "Outside the 01:00-05:59 Madrid window (hour=$HOUR) — too far off schedule to deploy the VM unattended. Nothing to do."
+            echo "::warning::Scheduled tick landed at $(TZ=Europe/Madrid date '+%H:%M %Z'), outside the 01:00-05:59 deploy window, so no deploy check ran. If this repeats every night the VM will silently drift — verify with /health/ against pyproject.toml on origin/testing."
             echo "proceed=false" >> "$GITHUB_OUTPUT"
           fi
 
       # Check out the TESTING branch: its pyproject.toml is the target version.
       # The workflow file itself still comes from main, which is what runs.
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         if: steps.gate.outputs.proceed == 'true'
         with:
           ref: testing
@@ -151,7 +184,7 @@ jobs:
         run: |
           if [ "$PROCEED" != "true" ]; then
             echo "should_deploy=false" >> "$GITHUB_OUTPUT"
-            echo "reason=tick landed outside the 02:00-05:00 Madrid window" >> "$GITHUB_OUTPUT"
+            echo "reason=tick landed outside the 01:00-05:59 Madrid window" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
@@ -191,6 +224,10 @@ jobs:
     needs: check
     if: needs.check.outputs.should_deploy == 'true'
     runs-on: ubuntu-latest
+    # The e2-micro rebuild plus the 10-min /health/ wait fits in ~25 min; 45
+    # is the cap that turns a wedged `docker compose up` into a red run with a
+    # failure email instead of a runner held for the 6-hour default.
+    timeout-minutes: 45
     environment:
       name: testing
       # Hard-coded literal: the `secrets` context is not allowed in
@@ -285,15 +322,25 @@ jobs:
 
           # BOTH -f files, every time. The overlay is what mounts
           # testing_postgres_data instead of the base file's dev volume, and what
-          # swaps runserver for Gunicorn. A one-file bring-up starts a
+          # pins the QA-tuned Gunicorn flags. A one-file bring-up starts a
           # different, valid, WRONG stack and exits 0.
           #
-          # --renew-anon-volumes: the base compose file mounts an anonymous
-          # volume over /app/.venv, and Compose REUSES anonymous volumes on
-          # recreate — so without this flag a rebuilt image keeps the previous
-          # image's venv. The v1.26.6 python 3.12→3.14 base bump crash-looped
-          # every app container on ModuleNotFoundError('django') this way.
-          # Only anonymous volumes are renewed; named volumes (the DB) are safe.
+          # Naming the files explicitly has a second effect now: Compose
+          # auto-loads docker-compose.override.yml ONLY for a bare
+          # `docker compose`, so this invocation deliberately excludes it —
+          # which is what keeps the development `.:/app` source mount out of
+          # the QA stack and makes the container run the built image.
+          #
+          # --renew-anon-volumes: kept, and now belt-and-braces. The `.:/app`
+          # source mount and its companion anonymous volume over /app/.venv
+          # moved to docker-compose.override.yml (development only, and NOT
+          # loaded when files are named with -f), so this two-file stack runs
+          # the code COPYied into the image and has no anonymous venv volume
+          # left to go stale. Before that split, Compose reused the anonymous
+          # volume across a rebuild and a new image kept the previous image's
+          # venv — the v1.26.6 python 3.12→3.14 bump crash-looped every app
+          # container on ModuleNotFoundError('django') exactly that way. Only
+          # anonymous volumes are renewed; named volumes (the DB) are safe.
           sudo docker compose \
             -f $D/docker-compose.yml \
             -f $D/docker-compose.testing.yml \
@@ -386,9 +433,13 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
           REASON: ${{ needs.check.outputs.reason }}
+          # Via env like everything else. `job.status` is a fixed enum so it was
+          # not exploitable, but the rule is "no ${{ }} in a run body" with no
+          # per-value exceptions to remember.
+          JOB_STATUS: ${{ job.status }}
         run: |
           {
-            echo "## Testing deploy — ${{ job.status }}"
+            echo "## Testing deploy — $JOB_STATUS"
             echo ""
             echo "| Field | Value |"
             echo "|---|---|"
@@ -486,7 +537,7 @@ jobs:
           from: "Five a Day CI <${{ secrets.EMAIL_HOST_USER }}>"
           # Dev/support only — the academy inbox is notified exclusively on
           # successful deploys.
-          to: ${{ secrets.SUPPORT_EMAIL || secrets.OWNER_EMAILS }}
+          to: ${{ env.ALERT_TO }}
           subject: "[Five a Day] ⚠️ El despliegue a pruebas ha fallado"
           html_body: |
             <div style="font-family: sans-serif; color:#1f2937; max-width:640px;">
@@ -515,7 +566,19 @@ jobs:
     needs: check
     if: failure()
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
+      # This job exists ONLY to alert, so it can afford to fail loudly when it
+      # has nowhere to send. Without this the empty `to:` produced by two unset
+      # secrets would swallow the one message nobody can afford to miss.
+      - name: Assert an alert recipient resolved
+        run: |
+          # ALERT_TO is a workflow-level env var, so it is already exported here.
+          if [ -z "$ALERT_TO" ]; then
+            echo "::error::No alert recipient: none of SUPPORT_EMAIL, OWNER_EMAILS or EMAIL_HOST_USER is set, so the testing-deploy alert email cannot be addressed. Configure SUPPORT_EMAIL."
+            exit 1
+          fi
+          echo "alert recipient resolved"
       - uses: dawidd6/action-send-mail@94de994a9f6fffee200243214e17002e2920bb59  # v18
         with:
           server_address: smtp.gmail.com
@@ -526,7 +589,7 @@ jobs:
           from: "Five a Day CI <${{ secrets.EMAIL_HOST_USER }}>"
           # Dev/support only — the academy inbox is notified exclusively on
           # successful deploys.
-          to: ${{ secrets.SUPPORT_EMAIL || secrets.OWNER_EMAILS }}
+          to: ${{ env.ALERT_TO }}
           subject: "[Five a Day] ⚠️ No se pudo comprobar la versión del entorno de pruebas"
           html_body: |
             <div style="font-family: sans-serif; color:#1f2937; max-width:640px;">

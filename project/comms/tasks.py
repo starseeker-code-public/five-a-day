@@ -12,8 +12,6 @@ Usage:
     send_birthday_emails_task.delay()
 """
 
-from datetime import date
-
 from celery import shared_task
 from celery.utils.log import get_task_logger
 
@@ -90,7 +88,11 @@ def send_welcome_email_task(self, parent_id: int, student_id: int, enrollment_id
         from core.schedule_utils import get_group_schedule_lines
 
         enrollment_type = enrollment.enrollment_type
-        is_special = bool(enrollment_type and enrollment_type.name == "special")
+        # `Enrollment.is_hand_priced` — the shared predicate. This task inlined
+        # `enrollment_type and enrollment_type.name == "special"`, one of five
+        # copies of the same question; one copy disagreeing means a family is
+        # told a cadence they never agreed to.
+        is_special = enrollment.is_hand_priced
 
         # Spanish "Mensual" / "Trimestral" — parents were shown the English
         # EnrollmentType label and had no explicit payment frequency. A `special`
@@ -121,6 +123,12 @@ def send_welcome_email_task(self, parent_id: int, student_id: int, enrollment_id
             recipients=recipient_email,
             subject=f"🎓 ¡Bienvenido/a {student.full_name} a Five a Day!",
             context=context,
+            # `fail_silently=True` like every other task in this file: without it
+            # an SMTP error escaped as the raw backend exception instead of the
+            # `RuntimeError` below, which is what `autoretry_for` and the
+            # student-creation caller are written against. The retry behaviour is
+            # unchanged — `send_email` returns False and the raise still happens.
+            fail_silently=True,
         )
 
         if success:
@@ -234,9 +242,13 @@ def send_birthday_emails_task(self):
     # `timezone.localdate()` so we always work in `settings.TIME_ZONE`.
     today = timezone.localdate()
 
-    # Find active students with a birthday today
+    # Find active students with a birthday today. `is_waiting=False` matches
+    # every other mass mail (see `core.views.app_forms._recipient_filters`): a
+    # student moved back onto the waiting list keeps their parents, and the
+    # manual `birthday_form` makes the same call — the cron and the button must
+    # not disagree about who gets a card.
     birthday_students = Student.objects.filter(
-        birth_date__month=today.month, birth_date__day=today.day, active=True
+        birth_date__month=today.month, birth_date__day=today.day, active=True, is_waiting=False
     ).values_list("id", flat=True)
 
     if not birthday_students:
@@ -275,6 +287,7 @@ def send_monthly_report_task(self, recipient_email: str | None = None):
 
     from django.conf import settings
     from django.db.models import Case, DecimalField, Sum, Value, When
+    from django.utils import timezone
 
     from billing.models import Payment
     from comms.services.email_service import email_service
@@ -295,7 +308,12 @@ def send_monthly_report_task(self, recipient_email: str | None = None):
         )
         return {"status": "skipped", "reason": "no recipient"}
 
-    today = date.today()
+    # `timezone.localdate()`, not `date.today()`: the container runs UTC, so a
+    # Beat/Cloud Scheduler run at 00:xx or a late-evening run in CEST reads the
+    # WRONG MONTH and the "informe mensual" then aggregates a month the operator
+    # did not ask for. `send_birthday_emails_task` was fixed for exactly this and
+    # the other three call sites in this file were left behind.
+    today = timezone.localdate()
     zero = Decimal("0.00")
     stats = Payment.objects.aggregate(
         expected=Sum(
@@ -372,16 +390,23 @@ def send_payment_reminders(self):
     """
     from datetime import timedelta
 
+    from django.utils import timezone
+
     from billing.models import Payment
     from comms.services.email_service import email_service
 
-    due_date_limit = date.today() + timedelta(days=7)
+    # `timezone.localdate()`, not `date.today()` — see `send_monthly_report_task`.
+    # Read ONCE: the old code called `date.today()` twice, so a run straddling
+    # midnight built a window whose lower bound was the day AFTER its upper
+    # bound's reference and silently reminded nobody.
+    today = timezone.localdate()
+    due_date_limit = today + timedelta(days=7)
 
     # `list()` once: this was `.exists()`, then `.count()`, then the loop below —
     # three executions of the same query for one pass over the rows.
     pending_payments = list(
         Payment.objects.filter(
-            payment_status="pending", due_date__lte=due_date_limit, due_date__gte=date.today()
+            payment_status="pending", due_date__lte=due_date_limit, due_date__gte=today
         ).select_related("student", "parent")
     )
 
@@ -665,22 +690,14 @@ def send_enrollment_confirmation_task(self, enrollment_id: int, attachments_path
 
     from billing.models import Enrollment
     from comms.services.email_functions import send_enrollment_confirmation_email
-    from students.models import Parent
 
-    MONTHS_ES = [
-        "enero",
-        "febrero",
-        "marzo",
-        "abril",
-        "mayo",
-        "junio",
-        "julio",
-        "agosto",
-        "septiembre",
-        "octubre",
-        "noviembre",
-        "diciembre",
-    ]
+    # `core.constants.MESES_ES` is the one list of Spanish month names — this
+    # task carried its own copy under a different name, which is how two
+    # spellings of a month end up in the same product. Imported in the function
+    # body like the other core imports in this module (see the "known debt" note
+    # in CLAUDE.md); `comms/management/commands/send_email.py` already reads it.
+    from core.constants import MESES_ES
+    from students.models import Parent
 
     try:
         # The email filter goes INSIDE the prefetch, same as
@@ -727,7 +744,7 @@ def send_enrollment_confirmation_task(self, enrollment_id: int, attachments_path
             student_name=student.full_name,
             gender=student.gender,
             academic_year=academic_year,
-            month=MONTHS_ES[enrollment.enrollment_date.month - 1],
+            month=MESES_ES[enrollment.enrollment_date.month - 1],
             attachments=attachments if attachments else None,
         )
 
@@ -763,27 +780,50 @@ def _send_fun_friday_batch(
     maximum_age=None,
     meeting_point=None,
 ) -> dict:
-    """Send one Fun Friday announcement batch. Shared by the direct task and the drain task."""
+    """Send one Fun Friday announcement batch. Shared by the direct task and the drain task.
+
+    ONE SMTP session for the whole announcement: this loop is the academy's
+    largest single batch (every family), and it was paying a TCP+TLS+AUTH
+    handshake per address. Opening the connection is wrapped because `open()`
+    is not `fail_silently` — an unwrapped failure here would abort a drain whose
+    row is already CLAIMED, i.e. lose the announcement outright.
+    """
     from comms.services.email_functions import send_fun_friday_email
+    from comms.services.email_service import email_service
+
+    connection = None
+    try:
+        connection = email_service.open_connection()
+        connection.open()
+    except Exception:
+        logger.exception("Fun Friday batch: SMTP connection could not be opened")
+        return {"status": "failed", "sent": 0, "total": len(recipients)}
 
     sent = 0
-    for email in recipients:
+    try:
+        for email in recipients:
+            try:
+                if send_fun_friday_email(
+                    recipients=email,
+                    day_name=day_name,
+                    day_number=day_number,
+                    month=month,
+                    start_time=start_time,
+                    end_time=end_time,
+                    activity_description=activity_description,
+                    minimum_age=minimum_age,
+                    maximum_age=maximum_age,
+                    meeting_point=meeting_point,
+                    connection=connection,
+                ):
+                    sent += 1
+            except Exception:  # noqa: BLE001 — one bad recipient must not abort the batch
+                logger.exception("Fun Friday email failed for %s", email)
+    finally:
         try:
-            if send_fun_friday_email(
-                recipients=email,
-                day_name=day_name,
-                day_number=day_number,
-                month=month,
-                start_time=start_time,
-                end_time=end_time,
-                activity_description=activity_description,
-                minimum_age=minimum_age,
-                maximum_age=maximum_age,
-                meeting_point=meeting_point,
-            ):
-                sent += 1
-        except Exception:  # noqa: BLE001 — one bad recipient must not abort the batch
-            logger.exception("Fun Friday email failed for %s", email)
+            connection.close()
+        except Exception:
+            logger.exception("Fun Friday batch: SMTP connection could not be closed")
 
     logger.info("Fun Friday emails sent: %d/%d", sent, len(recipients))
     return {"status": "success", "sent": sent, "total": len(recipients)}

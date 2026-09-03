@@ -5,6 +5,7 @@ from datetime import date
 from django.http import HttpResponse
 from django.shortcuts import render
 
+from core.decorators import admin_required
 from core.services.analytics_service import dashboard_report
 from core.utils import MAX_QUERY_YEAR, MIN_QUERY_YEAR, safe_int
 
@@ -25,6 +26,7 @@ def _parse_month_year(request):
     return month, year
 
 
+@admin_required
 def reports_view(request):
     """Full-page report dashboard with month/year controls."""
     month, year = _parse_month_year(request)
@@ -40,6 +42,7 @@ def reports_view(request):
     )
 
 
+@admin_required
 def reports_pdf(request):
     """Download the current report as a reportlab-rendered PDF.
 

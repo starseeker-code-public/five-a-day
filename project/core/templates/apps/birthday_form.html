@@ -41,7 +41,10 @@
                     <span class="material-symbols-outlined text-amber-500 mr-3">cake</span>
                     <div>
                         <p class="font-medium text-neutral-800">{{ student.first_name }} {{ student.last_name }}</p>
-                        <p class="text-sm text-neutral-500">{{ student.group.group_name }} - Cumple {{ student.age }} años</p>
+                        {# `group` and `birth_date` are both optional on Student, so guard #}
+                        {# both: without a birth date, Student.age is None and this line   #}
+                        {# read "Cumple None años".                                        #}
+                        <p class="text-sm text-neutral-500">{{ student.group.group_name|default:"Sin grupo" }}{% if student.age is not None %} - Cumple {{ student.age }} años{% endif %}</p>
                     </div>
                 </div>
             </div>

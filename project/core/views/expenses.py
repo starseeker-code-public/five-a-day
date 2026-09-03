@@ -12,6 +12,7 @@ from django.views.decorators.http import require_http_methods
 from billing.models import Expense
 from billing.services import gcp_cost_service
 from billing.services.expense_service import monthly_totals
+from core.decorators import admin_required
 from core.utils import MAX_QUERY_YEAR, MIN_QUERY_YEAR, safe_int
 
 
@@ -30,6 +31,7 @@ def _default_expense_date(month: int, year: int, today: date) -> date:
         return today
 
 
+@admin_required
 def expenses_list(request):
     """Table of every expense with a month/category filter."""
     today = date.today()
@@ -199,6 +201,7 @@ def _expense_fields_from(request):
 
 
 @require_http_methods(["POST"])
+@admin_required
 def create_expense(request):
     fields, error = _expense_fields_from(request)
     if error:
@@ -221,6 +224,7 @@ def create_expense(request):
 
 
 @require_http_methods(["POST"])
+@admin_required
 def update_expense(request, expense_id):
     """Edit an existing expense or recurring template.
 
@@ -256,6 +260,7 @@ def update_expense(request, expense_id):
 
 
 @require_http_methods(["POST"])
+@admin_required
 def delete_expense(request, expense_id):
     expense = get_object_or_404(Expense, id=expense_id)
     expense.delete()

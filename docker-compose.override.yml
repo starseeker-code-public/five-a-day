@@ -1,0 +1,52 @@
+# ============================================================================
+# DOCKER COMPOSE — Development override (LOCAL DEV ONLY)
+# ============================================================================
+# Compose loads this file AUTOMATICALLY whenever you run a bare
+# `docker compose …` (which is what every Makefile target does), and does NOT
+# load it when the files are named explicitly with `-f` — which is exactly how
+# the QA VM brings the stack up:
+#
+#   local dev   docker compose up -d
+#                 → docker-compose.yml + THIS FILE   (source mount, runserver)
+#   QA VM       docker compose -f docker-compose.yml -f docker-compose.testing.yml up -d
+#                 → base + testing overlay only      (the built image, gunicorn)
+#
+# That asymmetry is the whole point. These mounts used to live in
+# docker-compose.yml, so the testing overlay inherited them and QA ran the VM's
+# git working tree instead of the image that was built and scanned — meaning
+# the artifact QA signed off was not the artifact production ran, and anything
+# `.dockerignore` drops or `COPY` misses could only ever be discovered in
+# production. A Compose override cannot REMOVE an inherited volume (lists are
+# merged; `volumes: []` is a no-op), so the mount had to move down here.
+#
+# Do not add anything to this file that testing or production also needs — it
+# is invisible to both.
+# ============================================================================
+
+services:
+
+  web:
+    # Auto-reload for local work: runserver instead of the image's gunicorn CMD.
+    command: python project/manage.py runserver 0.0.0.0:8000
+
+    # Live-mount the source so template/CSS/Python edits are visible without a
+    # rebuild. The anonymous volume over /app/.venv keeps the image's installed
+    # packages from being shadowed by a host .venv (and `make up` passes
+    # -V/--renew-anon-volumes so a base-image bump cannot leave a stale one).
+    #
+    # This mount is also the only reason scripts/ is reachable inside the
+    # container: .dockerignore excludes it, so `scripts/docker_smoke_test.py`
+    # (see `make smoke`) exists in dev containers and in no built image.
+    volumes:
+      - .:/app
+      - /app/.venv
+
+  celery_worker:
+    volumes:
+      - .:/app
+      - /app/.venv
+
+  celery_beat:
+    volumes:
+      - .:/app
+      - /app/.venv

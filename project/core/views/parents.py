@@ -3,15 +3,18 @@ import logging
 from django.contrib import messages
 from django.http import HttpResponseRedirect
 from django.urls import reverse_lazy
+from django.utils.decorators import method_decorator
 from django.views.generic import CreateView
 
+from core.decorators import admin_required
 from core.views.parent_portal import send_portal_invitation_once
-from students.forms import ParentForm
+from students.forms import PORTAL_EMAIL_COLLISION_WARNING, ParentForm
 from students.models import Parent
 
 logger = logging.getLogger(__name__)
 
 
+@method_decorator(admin_required, name="dispatch")
 class ParentCreateView(CreateView):
     model = Parent
     form_class = ParentForm
@@ -73,14 +76,13 @@ class ParentCreateView(CreateView):
             # an address lock BOTH families out of login and recovery. Warn the
             # admin at creation, where it can still be fixed, rather than leaving
             # it to surface as a mystery "email o contraseña incorrectos".
-            email = (form.cleaned_data.get("email") or "").strip()
-            if email and Parent.objects.filter(email__iexact=email).exists():
-                messages.warning(
-                    self.request,
-                    "Aviso: ya existe otro padre/tutor con ese email. El portal de familias identifica "
-                    "a cada familia por su email, así que dos cuentas con el mismo email no podrán acceder. "
-                    "Usa un email distinto para cada tutor si ambos van a usar el portal.",
-                )
+            #
+            # Detected by `ParentForm.clean_email` and worded in `students.forms`,
+            # so this screen, the admin form and the admin's post-save warning
+            # all agree on what a collision is. Non-blocking here on purpose:
+            # see that method's docstring.
+            if form.email_collides_with_other_family:
+                messages.warning(self.request, PORTAL_EMAIL_COLLISION_WARNING)
 
             self.object = form.save()
 

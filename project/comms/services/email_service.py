@@ -34,16 +34,16 @@ class EmailService:
         )
     """
 
-    # Ruta al logo de la academia (relativa a BASE_DIR)
-    LOGO_PATH = "core/static/images/logo.png"
+    # NOTE: `LOGO_PATH` / `_get_logo_path()` used to live here and were dead —
+    # nothing referenced either, and `core/static/images/logo.png` was never
+    # attached to a message. An email image has to be a `cid:` inline part
+    # (`inline_images=`, see `send_email`), so a path helper nobody passes to
+    # that argument could not render anything. Removed rather than kept "just
+    # in case": it read like the logo was already being embedded.
 
     def __init__(self):
         self.from_email = settings.DEFAULT_FROM_EMAIL
         self.templates_path = "emails/"
-
-    def _get_logo_path(self) -> str:
-        """Obtiene la ruta absoluta al logo de la academia"""
-        return os.path.join(settings.BASE_DIR, self.LOGO_PATH)
 
     @staticmethod
     def open_connection():
@@ -53,6 +53,13 @@ class EmailService:
         connection=conn)` for every message in the batch, so a mass send opens
         one TCP+TLS+AUTH session instead of one per recipient. Honours
         EMAIL_TIMEOUT, so a stalled server cannot wedge the request forever.
+
+        CAREFUL: opening it FAILS LOUDLY. `with connection:` calls `open()`
+        with `fail_silently=False`, so a TCP/TLS/AUTH failure propagates — in a
+        request path that is a 500 where the per-message loop would have
+        reported "N no pudieron enviarse". Any view-side batch must wrap the
+        open in its own try/except; `core.views.app_forms._mass_send` is the one
+        place that does it for every mass mail in the app.
         """
         from django.core.mail import get_connection
 
@@ -160,7 +167,18 @@ class EmailService:
             # toda la app informara de un envío correcto durante una caída de
             # correo (contadores "0 fallidos", tickets de HistoryLog, el portal
             # diciendo a una familia que revise un buzón al que no llegó nada).
-            sent = email.send(fail_silently=fail_silently)
+            #
+            # `fail_silently` goes to send() ONLY when this message is opening
+            # its own connection. Django refuses both at once —
+            # "fail_silently cannot be used with a connection. Pass
+            # fail_silently to get_connection() instead." — and that TypeError
+            # was raised for EVERY message of EVERY mass send the moment the
+            # shared-connection batching landed: the exception was swallowed by
+            # the except below, so each send merely "returned False" and the
+            # operator got a tally of failures with no idea why. When a batch
+            # supplies the connection, IT owns the policy (see
+            # `open_connection`), which is why the batch helper wraps the open.
+            sent = email.send() if connection is not None else email.send(fail_silently=fail_silently)
             if not sent:
                 logger.error("Email '%s' NO se envió (backend aceptó 0 mensajes)", safe_log(template_name))
                 return False

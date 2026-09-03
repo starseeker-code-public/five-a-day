@@ -8,11 +8,13 @@ from django.db.models import Prefetch, Q
 from django.http import HttpResponseRedirect, JsonResponse
 from django.shortcuts import get_object_or_404
 from django.urls import reverse, reverse_lazy
+from django.utils.decorators import method_decorator
 from django.views.decorators.http import require_http_methods
 from django.views.generic import CreateView, DetailView, ListView, UpdateView
 
 from billing.forms import EnrollmentForm
 from billing.models import Enrollment, Payment, SiteConfiguration, relevant_academic_years
+from core.decorators import admin_required
 from core.models import FunFridayAttendance, HistoryLog
 from students.forms import StudentForm
 from students.models import Group, Parent, Student
@@ -102,52 +104,44 @@ def _first_day_of_next_month(today=None):
     return date(today.year, today.month + 1, 1)
 
 
-def _supersede_enrollment(student, current, enrollment_form):
-    """Close the active enrollment ahead of the replacement `enrollment_form` will issue.
+#: Spanish notice the create page shows when a picker list was capped. The
+#: message lives here rather than in the template so both pickers word it
+#: identically and the cap cannot be stated as one number and applied as another.
+_PICKER_TRUNCATION_NOTICE = "Mostrando solo los primeros {shown} de {total}. Usa el buscador para encontrar el resto."
 
-    Shared by ``StudentUpdateView`` (plan change) and ``enroll_student`` (the
-    "Nueva matrícula" modal), because the two hazards it manages are identical:
+#: Max rows sent to the sibling picker and the "padre existente" select. Both are
+#: rendered as plain `<option>`/`<div>` lists that filter client-side, so a cap is
+#: the only bound on the response — but an unannounced cap is worse than a big one:
+#: a sibling who falls off the end is simply unfindable, and the family loses the
+#: sibling discount with nothing on screen to explain it. `_PICKER_TRUNCATION_NOTICE`
+#: is what makes the cap honest, and `search_students` is the searchable escape
+#: hatch for a roster past it.
+_PICKER_CAP = 500
 
-    * **The gap.** A future-dated re-enrollment (today, starting 1 November)
-      used to finish the old enrollment immediately — so the cron, which only
-      visits ACTIVE enrollments, never opened October, and no back-fill could
-      repair it because the new enrollment's schedule starts in November. The
-      old enrollment's remaining periods up to the day before the new start are
-      issued here, before it is closed.
-    * **The overlap.** The old enrollment's pending periodic rows for months the
-      new schedule will re-bill are cancelled — under a modality switch they
-      carry a different `payment_type`, so neither the month-level idempotency
-      nor the DB constraint would stop the same month being billed twice.
-      Same-type rows are kept (the month-level idempotency already covers them,
-      and a cancelled row still occupies its month so it could not be re-billed
-      at the new price). Months before the new start stay owed.
 
-    A pending QUARTER that spans the switch date is cancelled with the rest —
-    re-billing its already-taught head months is `reconcile_payment_schedule`'s
-    job, not something to improvise here.
+def _superseding_start(student, current, enrollment_form, parent=None):
+    """Close `current` and return the date the replacement must start on, or None.
+
+    A one-line bridge to ``EnrollmentService.supersede_enrollment``, which owns
+    the transition for all three call sites (this view's plan change,
+    ``enroll_student`` and the modality endpoint). It used to be a private helper
+    HERE, and being a view helper is precisely how it went wrong: it reached for
+    ``schedule_academic_year_payments(current, as_of=new_start - 1 day)`` to
+    close out the old plan, which always issues an enrollment's first period —
+    so the transition month was invoiced in FULL at the old price and the
+    replacement's prorated first period was then silently dropped by the
+    billed-month check. Read the service method for the rule that replaced it.
+
+    The returned date is NOT necessarily the one the admin typed, so the caller
+    must write it back onto the form before creating the replacement.
     """
-    from datetime import timedelta
-
     from billing.services.enrollment_service import EnrollmentService
-    from billing.services.payment_service import PaymentService
 
-    data = enrollment_form.cleaned_data
-    new_start = data.get("start_date") or date.today()
-    new_type = "quarterly" if data.get("enrollment_plan") == "quarterly" else "monthly"
-
-    if current is not None and new_start > date.today():
-        parent = None if student.is_adult else student.parents.order_by("id").first()
-        PaymentService.schedule_academic_year_payments(current, parent, as_of=new_start - timedelta(days=1))
-
-    EnrollmentService.close_active_enrollments(
-        student,
-        "finished",
-        cancel_pending_periodic=True,
-        keep_payment_type=new_type,
-        cancel_from=date(new_start.year, new_start.month, 1),
-    )
+    requested_start = enrollment_form.cleaned_data.get("start_date") or date.today()
+    return EnrollmentService.supersede_enrollment(student, current, requested_start=requested_start, parent=parent)
 
 
+@method_decorator(admin_required, name="dispatch")
 class StudentCreateView(CreateView):
     """
     Vista para crear un nuevo estudiante.
@@ -157,6 +151,28 @@ class StudentCreateView(CreateView):
     model = Student
     form_class = StudentForm
     template_name = "student_create.html"
+
+    def get_form_kwargs(self):
+        """Tell `StudentForm` this is a waiting-list save, because it cannot see it.
+
+        `GroupCapacityMixin.clean()` exempts a waiting-list entry from
+        `Group.max_students`, and it reads the exemption off `is_waiting` in
+        `cleaned_data`. This view is the one caller where that flag is not in the
+        submitted data at all: the waiting mode arrives as `?mode=waiting` in the
+        QUERY STRING and `student_create.html` never renders the checkbox. So the
+        form saw `is_waiting=False`, applied the cap, and refused to create the
+        entry — for a group being full, which is the normal reason a student goes
+        on the list in the first place.
+
+        The POST value is checked too, and first, because `form_valid` derives
+        `is_waiting_mode` from the same pair: a mismatch between the two would
+        mean the form validated one intent and the view saved the other.
+        """
+        kwargs = super().get_form_kwargs()
+        kwargs["waiting"] = (
+            self.request.POST.get("is_waiting") in ("on", "true", "1") or self.request.GET.get("mode") == "waiting"
+        )
+        return kwargs
 
     def get_waiting_entry(self):
         """Waiting-list entry this enrollment came from (`?from_waiting=<id>`), if any."""
@@ -204,7 +220,23 @@ class StudentCreateView(CreateView):
                 messages.error(self.request, "El padre especificado no existe")
 
         if mode == "existing_parent":
-            context["all_parents"] = Parent.objects.all().order_by("last_name", "first_name")
+            # Was an unbounded `Parent.objects.all()`: one edit away from
+            # rendering every family on a 2,000-student roll into a single
+            # `<select>`. `.only()` names EXACTLY what `student_create.html` reads
+            # (`full_name` from the two name columns, plus email and phone) —
+            # deferring a field the template touches would cost one query per
+            # parent, which is the opposite of the point.
+            parents = Parent.objects.only("id", "first_name", "last_name", "email", "phone").order_by(
+                "last_name", "first_name"
+            )
+            total_parents = parents.count()
+            context["all_parents"] = list(parents[:_PICKER_CAP])
+            context["all_parents_total"] = total_parents
+            context["all_parents_notice"] = (
+                _PICKER_TRUNCATION_NOTICE.format(shown=_PICKER_CAP, total=total_parents)
+                if total_parents > _PICKER_CAP
+                else ""
+            )
 
         waiting_entry = self.get_waiting_entry()
         if "enrollment_form" not in context:
@@ -268,9 +300,24 @@ class StudentCreateView(CreateView):
             context["first_period_label"] = ""
             context["first_period_is_partial"] = False
 
-        # Students for sibling search (active, current year)
-        context["all_students_for_sibling"] = (
-            Student.objects.filter(active=True).select_related("group").order_by("first_name", "last_name")[:200]
+        # Students for sibling search (active). The list was silently capped at
+        # 200 with nothing said about it: past that roster size a sibling simply
+        # could not be found in the picker, the admin left "Descuento hermano"
+        # unticked, and the family lost the discount every month for the year —
+        # a mis-bill with no error message anywhere. The cap is now announced,
+        # and `search_students` (already an endpoint, used by the payment form)
+        # is the searchable route past it.
+        sibling_candidates = (
+            Student.objects.filter(active=True).select_related("group").order_by("first_name", "last_name")
+        )
+        sibling_total = sibling_candidates.count()
+        context["all_students_for_sibling"] = list(sibling_candidates[:_PICKER_CAP])
+        context["sibling_candidates_total"] = sibling_total
+        context["sibling_search_url"] = reverse("search_students")
+        context["sibling_list_notice"] = (
+            _PICKER_TRUNCATION_NOTICE.format(shown=_PICKER_CAP, total=sibling_total)
+            if sibling_total > _PICKER_CAP
+            else ""
         )
 
         return context
@@ -512,6 +559,7 @@ class StudentListView(ListView):
         return context
 
 
+@method_decorator(admin_required, name="dispatch")
 class StudentUpdateView(UpdateView):
     """Vista para actualizar un estudiante existente"""
 
@@ -551,7 +599,7 @@ class StudentUpdateView(UpdateView):
                 # and an edit that only changed "Precio especial" or the start date
                 # was a silent no-op reported as success.
                 initial["start_date"] = enrollment.enrollment_date
-                is_special_now = enrollment.enrollment_type is not None and enrollment.enrollment_type.name == "special"
+                is_special_now = enrollment.is_hand_priced
                 initial["is_special"] = is_special_now
                 if is_special_now:
                     initial["manual_amount"] = enrollment.final_amount
@@ -596,7 +644,7 @@ class StudentUpdateView(UpdateView):
         # ticking "Precio especial" + typing €25 returned False here, no new
         # enrollment was issued, and the page still said "actualizado
         # exitosamente" while the generator kept billing the standard rate.
-        current_is_special = current.enrollment_type is not None and current.enrollment_type.name == "special"
+        current_is_special = current.is_hand_priced
         wants_special = bool(data.get("is_special") and data.get("manual_amount"))
         if current_is_special != wants_special:
             return True
@@ -658,8 +706,45 @@ class StudentUpdateView(UpdateView):
                     # accumulated a new enrollment row per edit, and payments
                     # then attached to whichever one came back first.
                     if current is None or self._enrollment_plan_changed(current, enrollment_form):
-                        _supersede_enrollment(student, current, enrollment_form)
-                        enrollment_form.create_enrollment(student, is_adult=student.is_adult)
+                        from billing.services.payment_service import PaymentService
+
+                        parent = None if student.is_adult else student.parents.order_by("id").first()
+                        requested_start = enrollment_form.cleaned_data.get("start_date") or date.today()
+                        effective_start = _superseding_start(student, current, enrollment_form, parent=parent)
+
+                        if effective_start is None:
+                            # Every remaining month of the course is already
+                            # invoiced, so the new plan could only take effect by
+                            # re-billing one. Nothing was written (the service
+                            # resolves the date before it touches anything) and
+                            # the student's own edits above still stand.
+                            messages.warning(
+                                self.request,
+                                "El plan no se ha cambiado: no quedan meses sin facturar en este curso. "
+                                "Cancela los cobros pendientes afectados y vuelve a intentarlo.",
+                            )
+                        else:
+                            # The service decides when the change takes effect —
+                            # the first month no period already invoices, and never
+                            # mid-month while the old plan is still teaching. Write
+                            # it back so `create_enrollment` anchors on the same
+                            # date the old plan was closed against.
+                            enrollment_form.cleaned_data["start_date"] = effective_start
+                            enrollment = enrollment_form.create_enrollment(student, is_adult=student.is_adult)
+                            # Issue the replacement's first period now instead of
+                            # waiting for the 1st-of-month cron: the plan change
+                            # used to leave the ficha with no payment at all under
+                            # the new plan, which reads as "nothing happened".
+                            # Idempotent against the cron.
+                            PaymentService.schedule_academic_year_payments(enrollment, parent)
+
+                            if effective_start != requested_start:
+                                messages.info(
+                                    self.request,
+                                    "El nuevo plan se aplica desde el "
+                                    f"{effective_start.strftime('%d/%m/%Y')}: "
+                                    "los meses anteriores ya estaban facturados con el plan anterior.",
+                                )
 
                 messages.success(
                     self.request,
@@ -799,6 +884,7 @@ def search_students(request):
 
 
 @require_http_methods(["POST"])
+@admin_required
 def enroll_student(request, student_id):
     """AJAX: issue a NEW enrollment for an existing student (the book icon on the list).
 
@@ -809,6 +895,12 @@ def enroll_student(request, student_id):
     periodic payments from the chosen start date — ``billing_periods`` reads
     ``enrollment.enrollment_date``, so a student re-enrolled today with a
     1 November start is billed from November, not from today.
+
+    The start date is passed through ``EnrollmentService.supersede_enrollment``
+    first, which may move it forward when the outgoing plan is still teaching the
+    month or when that month is already invoiced (see
+    ``PaymentService.transition_start_date``). The date actually used comes back
+    in ``effective_start`` — the caller must not assume it is the one submitted.
 
     Returns ``{"success": bool, ...}`` JSON, like every AJAX endpoint.
     """
@@ -830,20 +922,33 @@ def enroll_student(request, student_id):
         from billing.services.payment_service import PaymentService
 
         with transaction.atomic():
-            # One ACTIVE enrollment per student (DB constraint) — the new
-            # matrícula supersedes the current one, same as StudentUpdateView
-            # does on a plan change. `_supersede_enrollment` also gap-fills the
-            # months up to a future start and cancels the pending rows the new
-            # schedule re-bills.
-            current = student.enrollments.filter(status="active").order_by("-enrollment_date", "-id").first()
-            _supersede_enrollment(student, current, enrollment_form)
-
-            enrollment = enrollment_form.create_enrollment(student, is_adult=student.is_adult)
-
             # Adults legitimately have no parent/guardian; for children the
             # first parent is the titular — same explicit ordering the payment
-            # generators use.
+            # generators use. Resolved BEFORE the supersede, which bills the
+            # closing enrollment's unbilled months to the same titular.
             parent = None if student.is_adult else student.parents.order_by("id").first()
+
+            # One ACTIVE enrollment per student (DB constraint) — the new
+            # matrícula supersedes the current one, same as StudentUpdateView
+            # does on a plan change. The service closes out the old plan's
+            # unbilled months, cancels the schedule the new one replaces, and
+            # returns the date the new one may start from.
+            current = student.enrollments.filter(status="active").order_by("-enrollment_date", "-id").first()
+            effective_start = _superseding_start(student, current, enrollment_form, parent=parent)
+            if effective_start is None:
+                return JsonResponse(
+                    {
+                        "success": False,
+                        "error": (
+                            "No quedan meses sin facturar en este curso para esta matrícula. "
+                            "Cancela los cobros pendientes afectados o elige una fecha de inicio posterior."
+                        ),
+                    },
+                    status=400,
+                )
+            enrollment_form.cleaned_data["start_date"] = effective_start
+
+            enrollment = enrollment_form.create_enrollment(student, is_adult=student.is_adult)
 
             enrollment_fee = None
             if charge_fee:
@@ -872,5 +977,7 @@ def enroll_student(request, student_id):
             "academic_year": enrollment.academic_year,
             "payments_created": payments_created,
             "enrollment_fee": str(enrollment_fee) if enrollment_fee is not None else None,
+            # Not always the submitted date — see the docstring.
+            "effective_start": effective_start.isoformat(),
         }
     )
