@@ -24,17 +24,36 @@ ACADEMIC_YEAR_ROLLOVER_MONTH = 5  # May
 # one above and must not be conflated — see academic_year_for_month().
 TEACHING_YEAR_START_MONTH = 9  # September
 
-
-# Request-scoped cache for the SiteConfiguration singleton.
+# Money the academy has invoiced and NOT yet collected.
 #
-# `get_config()` is called from 26 places and every call was its own query — the
+# Deliberately not `billing.constants.LIVE_PAYMENT_STATUSES`, which is
+# ("pending", "completed") and answers a different question — money the academy
+# still EXPECTS, collected or not. Folding `completed` in here would report
+# already-banked money as outstanding debt and put every up-to-date family on the
+# chase list. The constant exists so `Enrollment.payment_totals()` and
+# `EnrollmentAdmin.get_queryset`'s annotations (which must agree exactly, one
+# being an optimisation of the other) cannot drift apart.
+UNCOLLECTED_PAYMENT_STATUSES = ("pending",)
+
+
+# Request-scoped (and task-scoped) cache for the SiteConfiguration singleton.
+#
+# `get_config()` is called from ~29 places and every call was its own query — the
 # pricing services, the payment generators, the admin and several views all ask
 # for it, often more than once in a single request. A ContextVar rather than
 # Django's cache framework is deliberate: this holds LIVE PRICES, and a stale
 # entry would mis-bill a family. Within one request the config cannot change, so
-# the memo is always correct; `save()` clears it immediately, which also covers
-# the long-lived Celery worker, and `request_started` clears it between requests
-# in case a thread is reused.
+# the memo is always correct, and `request_started` / `request_finished` clear it
+# between requests in case a thread is reused.
+#
+# `save()` clears it too, but ONLY in the process that ran the save. The comment
+# here used to claim that also covered the long-lived Celery worker; it does not.
+# A ContextVar is per-process state, the admin edits prices in the WEB process,
+# and a worker started before that edit went on serving its own memo for as long
+# as it lived — so the dev/testing worker stack could keep billing the old price
+# indefinitely. Celery's own task_prerun/task_postrun bracket every task, which
+# is the worker's equivalent of request_started/request_finished: a task always
+# re-reads the config it prices with.
 _CONFIG_CACHE: ContextVar = ContextVar("siteconfiguration_cache", default=None)
 
 
@@ -44,6 +63,15 @@ def _clear_config_cache(**_kwargs):
 
 request_started.connect(_clear_config_cache, dispatch_uid="billing.clear_siteconfig_cache.start")
 request_finished.connect(_clear_config_cache, dispatch_uid="billing.clear_siteconfig_cache.end")
+
+try:  # pragma: no cover - celery is a hard dependency; the guard keeps a bare
+    # `python manage.py` usable if it is ever vendored out.
+    from celery.signals import task_postrun, task_prerun
+except ImportError:
+    pass
+else:
+    task_prerun.connect(_clear_config_cache, dispatch_uid="billing.clear_siteconfig_cache.task_start")
+    task_postrun.connect(_clear_config_cache, dispatch_uid="billing.clear_siteconfig_cache.task_end")
 
 
 def _academic_year_from(reference_date, rollover_month):
@@ -77,6 +105,31 @@ def academic_year_for_month(reference_date=None):
     """
     reference_date = reference_date or date.today()
     return _academic_year_from(reference_date, TEACHING_YEAR_START_MONTH)
+
+
+def enrollment_academic_year(start_date=None):
+    """
+    Return the academic year an enrollment STARTING on `start_date` belongs to.
+
+    Neither existing helper answers this question:
+
+    - `current_academic_year` rolls over in May, so a student starting 15 May —
+      mid-course, attending NOW — was stamped with the NEXT year. Their May and
+      June are not in that year's `teaching_months()`, so they were structurally
+      unbillable, and the enrollment was invisible to the May-August cron runs
+      (which filter on `academic_year_for_month`). Two months taught for free.
+    - `academic_year_for_month` maps July/August BACK to the finished course, so
+      a summer signup would land in a year with no teaching months left and
+      `billing_periods()` would return `[]` — zero payments, silently.
+
+    The rule an enrollment actually needs: a start date inside the teaching
+    calendar (Sep-Jun) joins the course that is running; a summer start (Jul/Aug)
+    joins the course that begins in September.
+    """
+    start_date = start_date or date.today()
+    if start_date.month in (7, 8):
+        return f"{start_date.year}-{start_date.year + 1}"
+    return academic_year_for_month(start_date)
 
 
 def relevant_academic_years(reference_date=None):
@@ -263,6 +316,54 @@ class SiteConfiguration(models.Model):
         verbose_name="Estudiante recurrente (€ fijo sobre la matrícula)",
     )
 
+    # ------------------------------------------------------------------
+    # Datos fiscales de la academia (v1.27)
+    #
+    # `pdf_service._get_academy_info()` has always read these five names off the
+    # config with `getattr(..., "")`, and they did not exist — so every value fell
+    # through to the dataclass defaults and `academy_cif` fell through to the
+    # empty string. The tax certificate asserts IRPF validity while naming no CIF,
+    # which is precisely the field that makes it deductible: the document was
+    # cosmetically fine and fiscally useless, and there was nowhere in the app to
+    # correct it.
+    #
+    # All five are `blank=True`: `update_site_config` runs `full_clean()`, and a
+    # non-blank CharField would 400 every price edit until someone filled these
+    # in. The defaults mirror `pdf_service.AcademyInfo` so a fresh install keeps
+    # producing the same document it does today.
+    # ------------------------------------------------------------------
+    academy_name = models.CharField(
+        max_length=120,
+        blank=True,
+        default="Five a Day English Academy",
+        verbose_name="Nombre fiscal de la academia",
+    )
+    academy_cif = models.CharField(
+        max_length=20,
+        blank=True,
+        default="",
+        verbose_name="CIF/NIF",
+        help_text="Aparece en los certificados fiscales; sin él el certificado no sirve para la declaración.",
+    )
+    academy_address = models.CharField(
+        max_length=200,
+        blank=True,
+        default="C/ Hermanos Jiménez 25 · 02004 Albacete",
+        verbose_name="Dirección",
+    )
+    academy_phone = models.CharField(
+        max_length=30,
+        blank=True,
+        default="967 049 096",
+        verbose_name="Teléfono",
+    )
+    academy_website = models.CharField(
+        max_length=120,
+        blank=True,
+        default="www.fiveadayenglish.com",
+        verbose_name="Web",
+    )
+
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
@@ -410,6 +511,26 @@ class Enrollment(models.Model):
     def __str__(self):
         return f"{self.student} - {self.enrollment_type} ({self.get_schedule_type_display()})"
 
+    @property
+    def is_hand_priced(self) -> bool:
+        """True when this is a `special` matrícula whose period price was typed by hand.
+
+        The predicate `enrollment_type.name == "special"` was inlined at five
+        sites (two in the student views, the modality endpoint, the welcome-email
+        task and `PaymentService.hand_priced_amount`), each deciding on its own
+        whether a negotiated price may be re-derived from `SiteConfiguration`.
+        One copy disagreeing is a family billed the standard rate against a price
+        the academy agreed with them, so the question gets one answer.
+
+        Guarded on `enrollment_type_id` rather than on the attribute: a
+        non-nullable FK raises `RelatedObjectDoesNotExist` when it was never set,
+        which happens on the bare, unsaved carrier enrollments the pricing tests
+        build.
+        """
+        if self.enrollment_type_id is None:
+            return False
+        return self.enrollment_type.name == "special"
+
     def save(self, *args, **kwargs):
         """
         Auto-calculate final_amount from the configured fees for this schedule/modality.
@@ -419,19 +540,25 @@ class Enrollment(models.Model):
         category and its amounts are the one-time matrícula fee. EnrollmentService always
         supplies `final_amount`; this fallback only covers enrollments created by hand
         (admin, shell, data migrations).
+
+        The base price and the rounding both come from `billing.services.pricing_service`
+        — `period_base_amount` applies the quarter formula (three months minus the
+        quarterly discount) to whatever base `schedule_type` selected, and
+        `round_money` is the single HALF_UP-with-a-€0.01-floor used by the payment
+        generator. This method used to carry its own copy of both, and the quarter
+        copy had originally omitted the discount: an admin-created quarterly
+        enrollment showed 162.00 on the ficha while the generator billed 153.90.
         """
         if not self.final_amount:
+            # Imported inside the method: `pricing_service` itself is import-safe
+            # here, but keeping the import local matches how `SiteConfiguration`
+            # consumers in the service layer reach back into this module.
+            from billing.services.pricing_service import period_base_amount, round_money
+
             config = SiteConfiguration.get_config()
-            if self.schedule_type == "adult_group":
-                base_amount = config.adult_group_monthly_fee
-            elif self.schedule_type == "part_time":
-                base_amount = config.part_time_monthly_fee
-            else:
-                base_amount = config.full_time_monthly_fee
-            if self.payment_modality == "quarterly":
-                base_amount = base_amount * 3
+            base_amount = period_base_amount(config, self.schedule_type, self.payment_modality)
             discount_amount = base_amount * (self.discount_percentage / Decimal("100"))
-            self.final_amount = base_amount - discount_amount
+            self.final_amount = round_money(base_amount - discount_amount)
 
         # Deliberately OUTSIDE the block above. It used to be nested inside it,
         # so passing final_amount but not enrollment_amount skipped the
@@ -462,8 +589,10 @@ class Enrollment(models.Model):
         on its last, so counting them as owed would flag nearly every family for
         most of every month and make the column unreadable.
 
-        Only `pending` counts, so cancelled / failed / refunded money is
-        excluded exactly as `billing.constants.LIVE_PAYMENT_STATUSES` intends.
+        Only `UNCOLLECTED_PAYMENT_STATUSES` counts, so cancelled / failed /
+        refunded money is excluded — and so is `completed`, which is money that
+        already arrived (see the constant for why this is not
+        `LIVE_PAYMENT_STATUSES`).
         """
         today = date.today()
         overdue = Decimal("0.00")
@@ -471,7 +600,7 @@ class Enrollment(models.Model):
         billed = 0
         for amount, due_date, status in self.payments.values_list("amount", "due_date", "payment_status"):
             billed += 1
-            if status != "pending":
+            if status not in UNCOLLECTED_PAYMENT_STATUSES:
                 continue
             outstanding += amount
             if due_date is not None and due_date < today:
@@ -627,8 +756,46 @@ class Payment(models.Model):
     def __str__(self):
         return f"{self.student} - {self.concept} - €{self.amount} ({self.get_payment_status_display()})"
 
+    #: Statuses a payment cannot be brought back from. Cancelled money was
+    #: withdrawn from the schedule and refunded money was returned to the family;
+    #: in both cases the row is a historical record, not a collectable debt.
+    DEAD_STATUSES = ("cancelled", "refunded")
+
+    def assert_completable(self, previous_status=None):
+        """Raise ValidationError if this payment must not be marked completed.
+
+        A cancelled or refunded payment must not be resurrected. Cancelling frees
+        the month under `unique_pending_periodic_payment_per_month` (it is
+        pending-ONLY), so the schedule may already have re-billed it — completing
+        the dead row again double-collects the family, and the constraint cannot
+        stop a `completed` duplicate. A refunded payment is worse still: the money
+        went back to the family, so completing it re-books income that no longer
+        exists and emails a receipt for a refund.
+
+        The check is a method rather than inline in `clean()` because the two
+        callers need it at different moments. `clean()` runs it on every write
+        path that validates, and re-reads the stored status because the instance's
+        own field has already been overwritten by then. `quick_complete_payment`
+        runs it on the row as loaded, BEFORE mutating it, so it can answer with a
+        400 and the constraint's own Spanish wording instead of the caller
+        inventing a second copy of the status list (`refunded` was missing from
+        that copy, which is how the endpoint resurrected refunds).
+        """
+        if previous_status is None:
+            if not self.pk:
+                return
+            previous_status = type(self).objects.filter(pk=self.pk).values_list("payment_status", flat=True).first()
+        if previous_status in self.DEAD_STATUSES:
+            raise ValidationError(
+                "Este pago está cancelado o reembolsado y no puede marcarse como completado. "
+                "Crea un pago nuevo si hay que volver a cobrarlo."
+            )
+
     def clean(self):
         """Validation logic"""
+
+        if self.pk and self.payment_status == "completed":
+            self.assert_completable()
 
         # If payment is completed, payment_date should be set
         if self.payment_status == "completed" and not self.payment_date:
@@ -668,10 +835,23 @@ class Expense(models.Model):
     Recurring expenses are represented by `is_recurring=True` on a template row.
     The cadence is controlled by `recurring_frequency`:
 
-    - ``monthly`` — every calendar month on ``recurring_day`` (1-28).
-    - ``yearly``  — once a year on ``recurring_day`` + ``recurring_month``.
+    - ``monthly`` — every calendar month on ``recurring_day`` (**1-31**).
+    - ``yearly``  — once a year on ``recurring_day`` (**1-31**) + ``recurring_month``.
     - ``weekly``  — on each weekday listed in ``recurring_weekdays`` (ints 0-6,
       Monday=0 … Sunday=6, matching ``date.weekday()``).
+
+    ``recurring_day`` is 1-31 and NOT 1-28, in every one of the four places that
+    state it (this docstring, the field's `help_text`, `clean()` and
+    `recurring_summary()`). This docstring said 1-28 while the validator accepted
+    1-31, which is the sort of disagreement that gets "fixed" in the tightening
+    direction and quietly breaks the academy's rent: 29, 30 and 31 are
+    deliberately legal and mean **"the last day of the month"**, because
+    `expense_service` clamps the day to `min(recurring_day, last_day_of_month)`
+    when it materialises a row (so a template on the 31st fires on 28 February),
+    and `recurring_summary()` renders anything from 29 up as
+    "Mensual · último día del mes". A 1-28 bound would reject the value the
+    expenses form itself offers (`max="31"`) and make every existing 29-31
+    template un-editable, since `update_expense` re-runs `full_clean()`.
 
     Monthly templates are materialised by a monthly Celery Beat job; weekly and
     yearly templates by a daily job. Materialisation creates concrete Expense
@@ -725,25 +905,31 @@ class Expense(models.Model):
         default="monthly",
         help_text="Cadence of a recurring template: monthly, yearly or weekly.",
     )
+    # help_text is USER-FACING (it is rendered on the admin form), so it is
+    # Spanish like every other label in this project, and it states the same
+    # 1-31 rule as the class docstring and `clean()`.
     recurring_day = models.PositiveSmallIntegerField(
         null=True,
         blank=True,
+        verbose_name="Día del mes",
         help_text=(
-            "Day of the month (1–31). Used by monthly + yearly templates. "
-            "Days past the end of a short month fall back to that month's last "
-            "day, so 31 means 'last day of the month'."
+            "Día del mes (1–31). Lo usan las plantillas mensuales y anuales. "
+            "Los días que no existen en un mes corto se ajustan a su último día, "
+            "así que 29, 30 o 31 significan «el último día del mes»."
         ),
     )
     recurring_month = models.PositiveSmallIntegerField(
         null=True,
         blank=True,
-        help_text="Month (1–12) when a yearly template should materialise.",
+        verbose_name="Mes",
+        help_text="Mes (1–12) en el que se genera una plantilla anual.",
     )
     recurring_weekdays = models.CharField(
         max_length=20,
         blank=True,
         default="",
-        help_text="Comma-separated weekday ints (0=Mon … 6=Sun) for weekly templates.",
+        verbose_name="Días de la semana",
+        help_text="Números de día separados por comas (0=lunes … 6=domingo) para plantillas semanales.",
     )
     # Link back to the template row when the record was auto-generated.
     generated_from = models.ForeignKey(
@@ -817,7 +1003,13 @@ class Expense(models.Model):
             return f"Anual · {self.recurring_day} de {months.get(self.recurring_month, '?')}"
         if self.recurring_frequency == "weekly":
             labels = dict(self.WEEKDAY_CHOICES)
-            days = ", ".join(labels[d] for d in sorted(self.weekday_set()))
+            # Defensive: a malformed CSV written past validation (`objects.create()`
+            # never runs clean()) must not 500 the whole expenses page via this
+            # template property.
+            try:
+                days = ", ".join(labels.get(d, "?") for d in sorted(self.weekday_set()))
+            except ValueError:
+                return "Semanal · (días no válidos)"
             return f"Semanal · {days}"
         return ""
 
@@ -825,25 +1017,36 @@ class Expense(models.Model):
         if not self.is_recurring:
             return
 
+        # These messages reach the admin form and `create_expense`/`update_expense`'s
+        # JSON `message`, so they are Spanish like the weekly branch below.
         if self.recurring_frequency == "monthly":
             if not self.recurring_day:
-                raise ValidationError("Monthly recurring expenses must set recurring_day (1–31).")
+                raise ValidationError("Un gasto mensual recurrente debe indicar el día del mes (1–31).")
             if not (1 <= self.recurring_day <= 31):
-                raise ValidationError("recurring_day must be between 1 and 31.")
+                raise ValidationError("El día del mes debe estar entre 1 y 31.")
         elif self.recurring_frequency == "yearly":
             if not self.recurring_day:
-                raise ValidationError("Yearly recurring expenses must set recurring_day (1–31).")
+                raise ValidationError("Un gasto anual recurrente debe indicar el día del mes (1–31).")
             if not (1 <= self.recurring_day <= 31):
-                raise ValidationError("recurring_day must be between 1 and 31.")
+                raise ValidationError("El día del mes debe estar entre 1 y 31.")
             if not self.recurring_month:
-                raise ValidationError("Yearly recurring expenses must set recurring_month (1–12).")
+                raise ValidationError("Un gasto anual recurrente debe indicar el mes (1–12).")
             if not (1 <= self.recurring_month <= 12):
-                raise ValidationError("recurring_month must be between 1 and 12.")
+                raise ValidationError("El mes debe estar entre 1 y 12.")
         elif self.recurring_frequency == "weekly":
-            weekdays = self.weekday_set()
+            # `weekday_set()` int()s the CSV and raises ValueError on junk ("L,M,V",
+            # "lunes"). ModelForm._post_clean only catches ValidationError, so from
+            # the admin — which has no validated form of its own — that was an
+            # unhandled 500 instead of a field error.
+            try:
+                weekdays = self.weekday_set()
+            except ValueError as err:
+                raise ValidationError(
+                    "recurring_weekdays debe ser una lista de números 0-6 separados por comas (0=lunes)."
+                ) from err
             if not weekdays:
-                raise ValidationError("Weekly recurring expenses must select at least one weekday.")
+                raise ValidationError("Un gasto semanal recurrente debe tener al menos un día de la semana.")
             if any(not (0 <= d <= 6) for d in weekdays):
-                raise ValidationError("recurring_weekdays must contain ints between 0 (Mon) and 6 (Sun).")
+                raise ValidationError("Los días de la semana deben ser números entre 0 (lunes) y 6 (domingo).")
         else:
-            raise ValidationError("recurring_frequency must be monthly, yearly or weekly.")
+            raise ValidationError("La frecuencia de recurrencia debe ser mensual, anual o semanal.")

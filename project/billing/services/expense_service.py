@@ -142,17 +142,32 @@ def materialize_recurring_for_date(target_date: date) -> int:
 
     weekly = Expense.objects.filter(is_recurring=True, recurring_frequency="weekly")
     for tpl in weekly:
-        if weekday in tpl.weekday_set():
+        # One malformed template (junk in recurring_weekdays, written past
+        # validation) must not abort the whole daily job — unlike the payments
+        # cron, there is no back-fill here, so a crashed run loses those days
+        # for EVERY template, forever.
+        try:
+            matches = weekday in tpl.weekday_set()
+        except ValueError:
+            logger.error("Recurring expense template %d has invalid recurring_weekdays; skipped.", int(tpl.pk))
+            continue
+        if matches:
             created += _create_if_absent(tpl, target_date)
 
+    # Clamp the day exactly like the monthly path does (and like the field's help
+    # text promises): a template on day 31 of a 30-day month fires on the 30th,
+    # and 29 February fires on the 28th outside leap years. The old EXACT match
+    # (`recurring_day=target_date.day`) meant "Anual · 31 de abril" validated,
+    # displayed, and then never materialised once in its life.
+    last_day = calendar.monthrange(target_date.year, target_date.month)[1]
     yearly = Expense.objects.filter(
         is_recurring=True,
         recurring_frequency="yearly",
         recurring_month=target_date.month,
-        recurring_day=target_date.day,
     )
     for tpl in yearly:
-        created += _create_if_absent(tpl, target_date)
+        if min(tpl.recurring_day or 1, last_day) == target_date.day:
+            created += _create_if_absent(tpl, target_date)
 
     return created
 

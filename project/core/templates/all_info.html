@@ -80,7 +80,7 @@
           <option value="first_name_asc" {% if students_sort == 'first_name_asc' %}selected{% endif %}>Nombre</option>
           <option value="last_name_asc" {% if students_sort == 'last_name_asc' %}selected{% endif %}>Apellido</option>
         </select>
-        <a href="{% url 'export_database_excel' %}" class="px-4 py-2 bg-primary-500 text-white rounded-md hover:bg-primary-600 transition-colors duration-200 flex items-center gap-2" style="text-decoration:none;">
+        <a href="{% url 'export_database_excel' %}" class="px-4 py-2 bg-primary-500 title="Descargar la base de datos en Excel" aria-label="Descargar la base de datos en Excel" text-white rounded-md hover:bg-primary-600 transition-colors duration-200 flex items-center gap-2" style="text-decoration:none;">
             <span class="material-symbols-outlined text-sm">download</span>
         </a>
       </div>
@@ -113,8 +113,9 @@
               <td class="px-4 py-4 text-sm text-neutral-600">{{ student.id }}</td>
               <td class="px-4 py-4 text-sm text-neutral-700 font-medium">{{ student.first_name }}</td>
               <td class="px-4 py-4 text-sm text-neutral-700 font-medium">{{ student.last_name }}</td>
-              <td class="px-4 py-4 text-sm text-neutral-600">{{ student.birth_date|date:"d/m/Y" }}</td>
-              <td class="px-4 py-4 text-sm text-neutral-600">{{ student.age }}</td>
+              {# birth_date is optional; a bare {{ student.age }} rendered the literal "None". #}
+              <td class="px-4 py-4 text-sm text-neutral-600">{{ student.birth_date|date:"d/m/Y"|default:"—" }}</td>
+              <td class="px-4 py-4 text-sm text-neutral-600">{% if student.age is not None %}{{ student.age }}{% else %}—{% endif %}</td>
               <td class="px-4 py-4 text-sm text-neutral-600">{{ student.school|default:"—" }}</td>
               <td class="px-4 py-4 text-sm text-neutral-600">{{ student.allergies|default:"—" }}</td>
               <td class="px-4 py-4">

@@ -15,11 +15,11 @@ Built to centralize student records, automate billing cycles, and streamline par
 ### Project Status
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v1.27.0-brightgreen?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-v1.27.1-brightgreen?style=flat-square" alt="Version">
   &nbsp;|&nbsp;
   <a href="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml?query=branch%3Amain"><img src="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml/badge.svg?branch=main&style=flat-square" alt="CI main"></a>
   &nbsp;|&nbsp;
-  <img src="https://img.shields.io/badge/coverage-95.64%25-brightgreen?style=flat-square" alt="Coverage">
+  <img src="https://img.shields.io/badge/coverage-95.39%25-brightgreen?style=flat-square" alt="Coverage">
   &nbsp;|&nbsp;
   <a href="https://github.com/starseeker-code-public/five-a-day/actions/workflows/scorecard.yml"><img src="https://img.shields.io/badge/OpenSSF%20Scorecard-monitored-blueviolet?style=flat-square" alt="OSSF Scorecard"></a>
   &nbsp;|&nbsp;
@@ -36,9 +36,9 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 | Version | Date | Description |
 |---------|------|-------------|
-| **v1.27.0** | 2026-09-03 | Parent portal: email + password login, themed UI |
+| **v1.27.1** | 2026-09-03 | Review fix pass: billing transitions, auth hardening, mass mail |
+| v1.27.0 | 2026-09-03 | Parent portal: email + password login, themed UI |
 | v1.26.8 | 2026-09-03 | Teacher/parent login flows, new-enrollment modal, dark emails |
-| v1.26.7 | 2026-09-02 | Same-day production arming: sign-off + PR-merge triggers |
 
 ---
 
@@ -140,8 +140,140 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 ## Version History
 
-<details id="v1270" open>
-<summary><strong>v1.27.0 — The parent portal gets a real password, a real theme, and downloads you can see (current)</strong></summary>
+<details id="v1271" open>
+<summary><strong>v1.27.1 — A full review pass: money that cannot be billed twice, sessions that end when they should, and mass mail that survives the roll (current)</strong></summary>
+
+A single sweep closing a ~98-item review ledger. Nothing here is a new feature; it is the
+accumulated set of things the app got wrong, ranked by what they cost the academy.
+
+**Billing: three ways a family could be charged twice**
+
+- **Changing a payment cadence re-billed months already collected.** `update_enrollment_modality`
+  mutated the live enrollment in place, and billed-month idempotency is keyed on `payment_type` —
+  so a completed *monthly* September was invisible to a newly-anchored *quarter*, and the next
+  `generate_payments` run charged it again. The pending-only, same-type database constraint could
+  not see it either. The change now **supersedes**: `EnrollmentService.change_payment_modality`
+  closes the old enrollment (kept as the record of what it billed) and anchors a replacement at the
+  first month not covered by any non-cancelled periodic payment **of either cadence**. Both
+  directions were affected; a completed quarter switched to monthly back-filled three paid months.
+- **A mid-month re-enrollment either double-billed the transition month or left it unbilled.** The
+  gap-fill issued that month as a *full* period at the old price; with the same cadence it then
+  suppressed the replacement's prorated first period, and with a different cadence the
+  cancel-window cancelled the row the same call chain had just created — leaving the taught head
+  days billed by nobody and the month permanently occupied by a cancelled row no cron could
+  repair. There is now **one** canonical `EnrollmentService.supersede_enrollment`, and the
+  handover moves to the 1st of the following month when the closing enrollment still teaches a
+  mid-month start, so every taught month is billed exactly once by construction. All three
+  endpoints report the effective date, so the adjustment is never silent.
+- **A refunded payment could be resurrected.** `quick_complete_payment` refused `cancelled` but
+  not `refunded`, and saved with a plain `.save()` — which never runs `clean()`, so the model guard
+  covering both was bypassed. The result was a receipt emailed for money already returned and the
+  amount re-booked into the current month's income. `Payment.assert_completable()` is now the one
+  rule, called from both the model and the view.
+- `_bulk_set_status` in the admin had no status guard, so "Marcar como fallidos" and "Cancelar"
+  silently voided **completed** payments, dropping collected income out of closed months.
+- Payment writes are wrapped in `transaction.atomic()` and the receipt dispatched via
+  `transaction.on_commit` — a `HistoryLog` failure used to show an error on a payment that had
+  already committed, so a retry duplicated it.
+- `SiteConfiguration` gained the five `academy_*` fiscal fields. `pdf_service` had always read
+  them via `getattr`, and they had never existed — so **the CIF was blank on every tax certificate
+  the academy ever issued**, on a document that asserts IRPF deductibility.
+
+**Authentication and authorization**
+
+- **An offboarded teacher's open tab kept full access for up to six hours.** The middleware checked
+  only `session["is_authenticated"]`, and the non-admin predicate answered "not a non-admin" for a
+  session whose Teacher row was gone — handing it the *unrestricted* set. Revocation escalated the
+  session. Sessions whose backing account no longer resolves are now rejected outright, and the
+  predicate fails closed. Both it and its sibling also check `Teacher.active` **before** the
+  superuser/staff hatch, because those flags are mirrored from `Teacher.admin` and a deactivated
+  admin still carries them.
+- `@admin_required` (`core/decorators.py`) now states the role requirement at **48 views**. The
+  URL-name allowlist was the sole control on every financial write endpoint — a deny-by-omission
+  list in a file nobody edits when adding a URL.
+- `confirm_password` was missing from the error-mail redaction list, so a 500 in the
+  change-password flow emailed the new plaintext password. The list was audited endpoint by
+  endpoint, and a `RedactingExceptionReporterFilter` was added because Django only cleanses bodies
+  for views using `@sensitive_post_parameters` — which none of this app's hand-rolled auth views do.
+- The portal recovery endpoint could be replayed to **deny a family their own recovery**: every hit
+  rotated the temporary password, so the credential in their inbox was dead before they could type
+  it. It is now 3 requests / 15 min (matching the staff reset), coalesced by a per-family cooldown,
+  with the send moved after the response is written so latency is not an enumeration oracle.
+- Blanket `/parent/` is out of `PUBLIC_PREFIXES` — a new portal URL is now protected by default.
+  Stripe checkout goes through the shared portal gate, so it honours the credential stamp and the
+  must-change-password pin. Both logout views require POST.
+- The production start-up guard now asserts the cache backend: dropping `CACHE_DB` fell back to a
+  per-process `LocMemCache`, multiplying every rate limit by workers × instances. `ADMINS` +
+  throttled `AdminEmailHandler` gives production its first error alerting.
+
+**Mass mail**
+
+- **Waiting-list families received every mass mail** — every recipient query filtered on active
+  children without excluding waiting entries. Addresses are now de-duplicated case-insensitively
+  (`Parent.email` is legitimately not unique), parents without an email no longer inflate the
+  counts, and the counted set and the sent set are the same set.
+- Each batch shares one SMTP session instead of reconnecting per message, and a connection failure
+  reports a tally instead of returning a 500. ~400 lines of near-duplicate preview/send/tally
+  blocks in `app_forms.py` collapsed into two helpers.
+
+**Frontend**
+
+- `localDateISO()` moved into `base.js`: `home.js` was still stamping "Hoy" todos with
+  **yesterday's** date between local midnight and 02:00 Madrid.
+- The CSRF reader was duplicated 6+ times and `testing_tools.html` had it **inverted** (cookie
+  first) — which silently 403s every POST wherever `DEBUG=False`, i.e. exactly where `/testing/`
+  lives. A second, weaker `escapeHtml` that did not escape quotes was being used in an attribute
+  position.
+- The Tailwind palette had been copied inline into three shells and had already drifted
+  (`verify.html`'s copy was missing `fontFamily`); it now lives in `tailwind-config.js` +
+  `palette.css`, with a test asserting the two agree. A new test scans inline `style=""`
+  attributes by perceived lightness and immediately found four pre-existing dark-mode bugs.
+- Focus trap, Escape and restore-focus for all nine dialogs; ~55 icon-only controls and 14 sidebar
+  controls got accessible names; 21 `fetch` sites now report an expired session as such rather than
+  "Error de conexión"; `<html lang>` corrected to `es` on the two widest-cascading templates.
+- `export_payments` had **no entry point anywhere in the UI** — a working endpoint nobody could
+  reach. It now has a link, and honours the page's filters.
+
+**CI/CD and infrastructure**
+
+- The nightly testing deploy had a **winter cron gap**: under CET only one of its two ticks landed
+  inside the deploy window, and observed scheduler drift exceeded the window entirely — producing
+  silently green nights while the VM drifted (it once sat on v1.20.0 against testing's v1.23.1).
+  Three ticks and a 01:00–05:59 window.
+- The production auto-rollback loop had no job-count guard, so an empty list produced
+  "Los 0 jobs vuelven a apuntar…" in a success-toned email while every job stayed on the failed
+  image. Rollback now also fires on cancellation, every job has a `timeout-minutes`, `ci.yml` got a
+  least-privilege `permissions` block, and Trivy actually gates on HIGH/CRITICAL.
+- **Compose is now three files.** `docker-compose.yml` is the image as shipped;
+  `docker-compose.override.yml` (dev only, auto-loaded by a bare `docker compose`) carries the
+  source mount. The testing overlay previously inherited that mount, so **QA ran the VM's git tree
+  instead of the built, scanned image** — the artifact QA signed off was not the one production ran.
+- `seed_enrollment_types` failing is now fatal in `entrypoint.sh` (without its four rows nobody can
+  be enrolled at all), the DB wait is bounded, and `make clean-all` / `reset-db` refuse to run
+  against a testing or production `.env`.
+- `djangorestframework`, `django-filter` and `django-cors-headers` removed — zero imports, pure CVE
+  surface. A DRF advisory had already forced an unrelated release.
+
+**Housekeeping**
+
+- **The end-to-end smoke test passes for the first time.** It had never once run: the import was
+  wrong, and the comment claiming that was fixed was itself wrong. Nothing in the repo invoked it,
+  which is why nobody noticed — there is now a `make smoke`.
+- `prune_audit_log` — the only code path that deletes from a deliberately immutable table — had
+  zero test references for eight versions and would have wiped the entire trail on `--days 0`. It
+  now has a retention floor, a `--dry-run`, and 16 tests.
+- `seed_testdata --reset` left orphaned `auth.User` rows that kept working superuser credentials
+  with no Teacher row to explain them, and its `@fiveaday.test` filter was deleting seeded accounts
+  it never created.
+- Documentation corrections where the docs were actively wrong, not merely stale: `recurring_day`
+  is 1–31 (not 1–28), `RUN_MIGRATIONS_ON_START` is implemented, production deploys use Workload
+  Identity Federation, the portal emails a temporary password rather than a "single-use link", and
+  the Gmail 500/day cap is roughly one mass-mail run rather than a comfortable margin.
+
+</details>
+
+<details id="v1270">
+<summary><strong>v1.27.0 — The parent portal gets a real password, a real theme, and downloads you can see</strong></summary>
 
 **Families log in with an email and a password, like everybody else**
 
@@ -245,7 +377,7 @@ Built to centralize student records, automate billing cycles, and streamline par
   **deletes the `ParentSessionToken` model** — the portal no longer has a token table at all.
   No data migration: existing parents simply have no password until one is issued, and the
   recovery form is the way in.
-- Suite at **1,886 tests, 95.64 % coverage** (6,149 statements, 268 uncovered, 57 files at
+- Suite at **1,899 tests, 95.39 % coverage** (6,790 statements, 313 uncovered, 54 files at
   100 %). `test_parent_portal.py` is rewritten around the password flow — invitation-sent-once,
   the temporary-password contract (accepted, forces a change, cleared once the family picks
   their own), weak passwords against the real validator set, the 8-vs-12 independence of the
@@ -945,6 +1077,8 @@ needed two metadata-only `AlterModelOptions` migrations.
   differ, so a night with no release costs one `curl`. Two cron entries plus a Madrid-hour
   *window* gate keep it in the sleeping hours year-round; GitHub cron is UTC, has no DST, and
   delivers late often enough that an exact-hour gate silently discarded both ticks.
+  *(Widened to a three-tick 01:00-05:59 window in v1.27.1: under CET only one of the two ticks
+  landed inside the old window at all, and observed scheduler drift exceeded it.)*
 - `deploy-production.yml` arms itself on every push to `main`, waits for CI to go green on
   that exact commit, lists the release's migrations, and then **blocks on the `production`
   environment's required reviewer**. Production is never deployed by a timer.
@@ -2890,8 +3024,6 @@ All tools configured in `pyproject.toml` — single source of truth.
 
 | Package | Purpose |
 |---------|---------|
-| `django-cors-headers` | CORS handling for future API consumers |
-| `django-filter` | Query filtering utilities |
 | `django-extensions` | Development utilities (shell_plus, graph_models) |
 | `django-gsheets` + `gspread` | Google Sheets integration (v1.2) |
 | `django-redis` | Redis cache backend (v1.4) |
@@ -2909,7 +3041,6 @@ All tools configured in `pyproject.toml` — single source of truth.
 | `pytest-cov` + `coverage-badge` | Coverage reporting + SVG badge generation |
 | `reportlab` | PDF generation — receipts, quarterly summaries, tax certificates (v1.3) |
 | `pyotp` + `qrcode` | TOTP two-factor authentication + enrolment QR codes (v1.13) |
-| `djangorestframework` | Serializer/API primitives |
 | `django-environ` | Typed environment parsing |
 | `django-debug-toolbar` | SQL/query inspection in development |
 | `gunicorn` | Production WSGI server (`--chdir project`, see the Dockerfile `CMD`) |
@@ -3524,10 +3655,10 @@ Run `make` or `make help` for the full list. Key commands:
 | `make collectstatic` | Collect static files |
 | `make check` / `make check-deploy` | Django system checks / deployment checklist |
 | **Database** | |
-| `make dbshell` | PostgreSQL shell |
-| `make backup` | Dump DB to `backups/` |
+| `make dbshell` | PostgreSQL shell (credentials read from the container env, not hardcoded) |
+| `make backup` | Dump DB to `backups/` — **local dev only**, never touches Cloud SQL |
 | `make restore FILE=backups/X.sql` | Restore from a SQL dump |
-| `make reset-db` | Drop and recreate the database (destructive — y/N prompt) |
+| `make reset-db` | Drop and recreate the database. **Destructive**: refuses when `.env` is production, requires typing `reset <env>`, and is overlay-aware — it previously omitted the testing overlay, so on the QA VM it orphaned the QA volume and brought the stack back up on the wrong one |
 | **Testing** | |
 | `make test` | All tests in Docker against PostgreSQL with coverage |
 | `make test unit` / `make test integration` | Only that suite |
@@ -3535,6 +3666,7 @@ Run `make` or `make help` for the full list. Key commands:
 | `make test K=payment` | Filter by keyword |
 | `make test ARGS='--lf'` | Pass raw pytest flags through |
 | `make test-cov-gate` | Coverage gate — fails if coverage drops below 75% (used by pre-commit) |
+| `make smoke` | End-to-end smoke test (`scripts/docker_smoke_test.py`) — creates a teacher, group, parent, student, enrollment and payment through the real views and prints `SMOKE_OK`. **Dev only**: `.dockerignore` excludes `scripts/`, so it reaches the container via the dev source mount and exists in no built image. Nothing invoked this script before v1.27.1, which is why an `ImportError` in it went unnoticed indefinitely |
 | **Payments** | |
 | `make generate-payments` / `make generate-payments-dry` | Generate the current month / preview only |
 | **Celery** | |
@@ -3575,7 +3707,7 @@ Run `make` or `make help` for the full list. Key commands:
 | `make connect-testing` | SSH into the GCP testing VM (auto-login if needed) |
 | **Cleanup** | |
 | `make clean` | Remove stopped containers + system prune |
-| `make clean-all` | Remove everything including volumes (y/N prompt) |
+| `make clean-all` | Remove this project's containers and volumes. **Heavily guarded**: refuses when `.env` is testing or production, refuses outright when any `*_testing_postgres_data` volume exists on the host, and requires typing `destroy local dev`. It no longer passes `--volumes` to `docker system prune` — `down -v` already removes this project's named volumes, so the daemon-wide flag only ever added collateral damage (a `docker volume prune` on the QA VM orphaned its database once) |
 
 ### Environment Configuration
 
@@ -3784,7 +3916,7 @@ five-a-day/
 │   │   │                         and waiting_list_create (v1.15), features/feature_detail
 │   │   │                         and qa/_qa_styles (v1.21.0)
 │   │   ├── static/               CSS (app.css, theme.css, email.css, admin_custom.css)
-│   │   │                         + JS (17 modules) + images
+│   │   │                         + JS (16 modules) + images
 │   │   └── management/commands/  seed_teachers (v1.26.8: optional USERNAME handle),
 │   │                             seed_demo_parents (v1.26.8 — parent-portal demo family,
 │   │                             refused in production), seed_testdata, export_to_sheets (v1.2),
@@ -3841,7 +3973,7 @@ five-a-day/
 │   │   └── management/commands/  send_email, test_all_emails, plus 4 Beat-task wrappers
 │   │                             (v1.14.2 — birthday, reminders, report, Fun Friday drain)
 │   │
-│   ├── tests/                    pytest suite (1,886 tests, 95.64 % coverage) — unit/ + integration/
+│   ├── tests/                    pytest suite (1,899 tests, 95.39 % coverage) — unit/ + integration/
 │   ├── templates/registration/   Password-reset templates (form, done, confirm, complete + email body)
 │   ├── templates/admin/          Django admin overrides (branded theme)
 │   └── conftest.py               Shared fixtures (models + authenticated_client)
@@ -3850,7 +3982,7 @@ five-a-day/
 │   ├── workflows/
 │   │   ├── ci.yml                     Lint + typecheck + tests + Docker build + CVE scan on every push/PR
 │   │   ├── auto-merge.yml             Hourly development → testing merge + PR to main
-│   │   ├── deploy-testing.yml         Nightly 02:00-05:00 Madrid — deploys testing when versions differ, locks ready_for_prod
+│   │   ├── deploy-testing.yml         Nightly 01:00-05:59 Madrid (3 ticks) — deploys testing when versions differ, locks ready_for_prod
 │   │   ├── deploy-production.yml      Arms when the nightly testing deploy finishes cleanly (needs QA sign-off on testing), deploys after reviewer approval, auto-rollback on failure
 │   │   ├── rollback-production.yml    Dispatch-only — rolls service + all Cloud Run jobs back to a previous image
 │   │   ├── codeql.yml                 Weekly Python security scan
@@ -3858,9 +3990,16 @@ five-a-day/
 │   │   ├── dependency-review.yml      Block PRs introducing HIGH/CRITICAL CVEs
 │   │   └── scorecard.yml              OSSF Scorecard supply-chain security (weekly)
 │   ├── dependabot.yml            Weekly dependency updates
+│   ├── trivyignore               CVE allow-list for the gating image scan (v1.27.1).
+│   │                             Applied to the GATE only, so an ignored CVE still
+│   │                             shows in the Security tab. Entries need a reason.
 │   └── CODEOWNERS                Auto-request reviews from owner accounts
 │
-├── docs/
+├── docs/                         GITIGNORED (`/docs`, under "Docs with secrets") — these
+│   │                             exist on the maintainer's machine only, so every
+│   │                             `docs/*.md` link in this file is a DEAD LINK on GitHub
+│   │                             and nothing written there is visible to CI. Anything
+│   │                             that must survive belongs in a tracked file instead.
 │   ├── GITHUB.md                 Full CI/CD + branch protection reference
 │   ├── HTTPS.md                  HTTPS setup (Docker Nginx + Cloud Run)
 │   ├── UV.md                     UV dependency management guide
@@ -3869,13 +4008,18 @@ five-a-day/
 │
 ├── scripts/                      Dev helpers, backup_retention.sh (Cloud SQL tiers),
 │                                 setup_cicd.sh (deploy credentials — see DEPLOYMENT.md §4),
-│                                 check_version_coherence.py (pre-commit version guard)
+│                                 check_version_coherence.py (pre-commit version guard),
+│                                 docker_smoke_test.py (`make smoke` — dev only, see below)
 ├── backups/                      DB dumps from `make backup` (gitignored)
 │
 ├── Dockerfile                    Multi-stage build (builder + runtime)
-├── docker-compose.yml            PostgreSQL + Redis + Django + Celery worker + beat
-├── docker-compose.testing.yml    QA override (Gunicorn, DEBUG=False)
-├── Makefile                      48 targets (`make help`)
+├── docker-compose.yml            The image AS SHIPPED — PostgreSQL + Redis + Django +
+│                                 Celery worker + beat, no source mount, no command override
+├── docker-compose.override.yml   DEV ONLY (v1.27.1). Auto-loaded by a bare `docker compose`,
+│                                 never by `-f`. Adds runserver + the `.:/app` source mount.
+│                                 This asymmetry is what makes the QA VM run the built image
+├── docker-compose.testing.yml    QA overlay (Gunicorn, DEBUG=False, testing_postgres_data)
+├── Makefile                      49 targets (`make help`)
 ├── pyproject.toml                Dependencies (uv-managed) + tool config
 ├── uv.lock                       Reproducible dependency lock
 ├── entrypoint.sh                 Docker entrypoint (migrate, collectstatic, seeding, start)
@@ -3898,7 +4042,7 @@ Dashboard, authentication, scheduling, and shared utilities. Owns all views and 
 | **Services** | 3 — analytics_service, google_sheets_service, two_factor_service |
 | **Middleware** | 4 — NoHtmlCacheMiddleware (no-cache on dynamic HTML), QAErrorEmailMiddleware, SimpleAuthMiddleware (session auth public allow-list incl. `/password-reset/` + non-admin teacher URL-name whitelist), AuditActorMiddleware |
 | **Templates** | base.html (layout — v1.26.8 renders the global flash-message block and gates the bell / history feed / per-view help on `is_admin_user`), 25 page templates (v1.21.0: `features.html`, `feature_detail.html`) + the shared `qa/_qa_styles.html` partial, 19 email templates + `base_email.html` (v1.26.8: the violet **dark** palette is now inline and unconditional, not a `prefers-color-scheme` overlay), error pages, plus `templates/registration/` for the password-reset and teacher-activation flows |
-| **Static** | 4 CSS files (app.css, theme.css, email.css, admin_custom.css), 17 JS modules, images |
+| **Static** | 5 CSS files (app.css, theme.css, email.css, admin_custom.css, plus `palette.css` — v1.27.1, the `--primary-*` vars, deliberately separate because only `base.html` loads app.css while theme.css is loaded by three shells), 16 JS behaviour modules + `tailwind-config.js` (v1.27.1 — the shared `tailwind.config`, previously copied inline into three shells and already drifted), `vendor/` (self-hosted Tailwind Play build), images |
 | **Commands** | seed_teachers (Teacher + auth.User from env vars; v1.26.8 optional `USERNAME` login handle), seed_demo_parents (v1.26.8 — the parent-portal demo family, `CommandError` in production), seed_testdata, export_to_sheets, reset_two_factor, cleanup_backlog_tasks, prune_audit_log (v1.15), backup_retention (v1.26.0), purge_sessions (v1.23.0), set_ready_for_prod (v1.26.4; since v1.26.7 `on` also fires the repository_dispatch that arms `Deploy production`) |
 | **URLs** | 54 patterns: dashboard, auth, password reset + **password change** (v1.26.8), schedule, todos, support, QA (backlog + export, Desarrollos board/detail/API/export), PWA, 2FA, parent portal (login, forgot / change password, dashboard, payments, receipt, tax certificate) |
 
@@ -3924,7 +4068,7 @@ Financial management with a dedicated service layer.
 
 | Component | Details |
 |-----------|---------|
-| **Models** | 5 — SiteConfiguration (singleton pricing), EnrollmentType (plan types), Enrollment (discount flags), Payment (overdue detection, Stripe ids), Expense (three recurring cadences) |
+| **Models** | 5 — SiteConfiguration (singleton pricing; v1.27.1 adds the five `academy_*` fiscal fields — until then `pdf_service` read fields that did not exist, so the **CIF was blank on every tax certificate**, on a document asserting IRPF deductibility), EnrollmentType (matrícula categories), Enrollment (discount flags, `is_hand_priced`), Payment (overdue detection, Stripe ids, `assert_completable()` refusing resurrection of a cancelled/refunded row), Expense (three recurring cadences; `recurring_day` is 1-31, where 29-31 clamp to the month's last day) |
 | **Services** | 8 — EnrollmentService (creation + discounts + returning-student detection; v1.26.8 honours the form's `start_date` and the "Antiguo alumno" override, and `compute_enrollment_fee` is judged against the enrollment's own academic year), EnrollmentTypeService (`ensure_enrollment_types()`, the idempotent provisioning of the four matrícula categories), PaymentService (generation + calculations; v1.15 quarterly amounts now carry sibling / language-cheque / June discounts; v1.20.0 `hand_priced_amount()` bills a `special` matrícula at its agreed price instead of re-deriving it from config; v1.22.0 `billing_periods()` anchors quarters to the enrollment month, `proration_fraction()` prorates the first period only, and `calculate_period_amount()` becomes the single place a period is priced), PricingService (centralized config access; v1.20.0 `payment_reminder_fees()` computes the five figures the reminder email prints), ExpenseService, PdfService (reportlab; v1.15 per-student payment history), StripeService (httpx, no SDK dependency), GcpCostService (real GCP spend from the BigQuery billing export — live for the running month, archived as a `software` Expense row when the month closes) |
 | **Constants** | Pricing seeds, ENROLLMENT_TYPE_CHOICES, SCHEDULE_TYPE_CHOICES, PAYMENT_METHOD_CHOICES, etc. Every choice **label** is Spanish (v1.20.0) — `get_<field>_display()` output is user-facing; the keys stay English |
 | **Exports** | build_database_workbook() → multi-sheet .xlsx |
@@ -4171,9 +4315,9 @@ Public flow at `/password-reset/...` that lets a teacher recover access without 
 
 | Metric | Value |
 |--------|-------|
-| **Total tests** | 1,886 |
+| **Total tests** | 1,899 |
 | **Test files** | 96 (59 unit + 37 integration) |
-| **Coverage** | 96% (95.64% — 6,149 statements, 268 uncovered) |
+| **Coverage** | 95% (95.39% — 6,790 statements, 313 uncovered) |
 | **Coverage thresholds** | **≥ 90%** (target, no warning) / **75-89%** (CI warning, pre-commit still blocks below 75) / **< 75%** (CI fails, pre-commit rejects the commit) |
 | **Runtime** | ~175 seconds (parallel workers via `pytest-xdist -n auto`) |
 | **Database** | PostgreSQL (same as production) — **always use `make test`** |
@@ -4219,7 +4363,7 @@ Within each file, related tests are grouped into classes. Where a large file abs
 
 ### Unit Tests
 
-**60 files, 914 tests.** Direct-call tests — no HTTP stack, no URL resolver, no template rendering.
+**60 files, 815 tests.** Direct-call tests — no HTTP stack, no URL resolver, no template rendering.
 
 | File | Count | Coverage |
 | --- | --- | --- |
@@ -4282,10 +4426,11 @@ Within each file, related tests are grouped into classes. Where a large file abs
 | [`unit/test_email_service_year.py`](project/tests/unit/test_email_service_year.py) | 3 | Regression: the `year` context value used to be hard-coded to 2025 — it now tracks the current year in every rendered email |
 | [`unit/test_parent_view_internals.py`](project/tests/unit/test_parent_view_internals.py) | 2 | `ParentCreateView` internals called directly through `RequestFactory` — the prefill branch that reads a waiting-list entry from `?from_waiting=<id>`, and the duplicate-DNI reuse path |
 | [`unit/test_testing_tools_helpers.py`](project/tests/unit/test_testing_tools_helpers.py) | 2 | `_git_info` helper: success path + non-zero returncode branch with `subprocess.run` mocked |
+| [`unit/test_audit_pruning.py`](project/tests/unit/test_audit_pruning.py) | 12 | `core.tasks.prune_audit_log` and its Cloud Scheduler command wrapper — the ONLY code path that deletes from `audit_logs`, a table the admin deliberately makes immutable (no add, no change, no delete). It had **zero test references for eight versions** while permanently destroying rows, and `*/admin.py` being coverage-omitted meant nothing else exercised the surrounding rules either. Pins the retention window and its boundary, the floor that refuses a window short enough to erase the course being taught (`--days 0` would have deleted every row, including the entries incriminating whoever ran it), `--dry-run` counting exactly what a real run deletes, and the floor surfacing as a `CommandError` so a Cloud Run Job reports a clean failure instead of a Celery traceback. Rows are backdated with `queryset.update()` because `created_at` is `auto_now_add` |
 
 ### Integration Tests
 
-**36 files, 918 tests.** Full HTTP stack through Django's test client.
+**45 files, 1,084 tests.** Full HTTP stack through Django's test client.
 
 | File | Count | Coverage |
 | --- | --- | --- |
@@ -4326,44 +4471,55 @@ Within each file, related tests are grouped into classes. Where a large file abs
 | [`integration/test_support_views.py`](project/tests/integration/test_support_views.py) | 5 | `submit_support_ticket`: success (send_mail called), short message rejected, no support email configured -> 500, bad JSON, unexpected exception |
 | [`integration/test_reports_view.py`](project/tests/integration/test_reports_view.py) | 4 | Reports dashboard (v1.7): the HTML page renders every analytics block, and the PDF export returns a reportlab document |
 | [`integration/test_receipt_view.py`](project/tests/integration/test_receipt_view.py) | 2 | Payment-receipt PDF endpoint (v1.3): authorised download returns a PDF, unauthorised is rejected |
+| [`integration/test_auth_hardening_fixes.py`](project/tests/integration/test_auth_hardening_fixes.py) | 62 | One regression test per finding of the v1.27.1 authorization review. The load-bearing one: an **offboarded teacher's live session escaped the whitelist** — layer 1 checked only `session["is_authenticated"]`, and the non-admin predicate answered "not a non-admin" for a session whose Teacher row was gone, handing it the *unrestricted* set for up to six hours. Revocation escalated the session. Also pins that `Teacher.active` is consulted **before** the `is_superuser`/`is_staff` hatch (those flags are mirrored from `Teacher.admin`, so a deactivated admin still carries them), `@admin_required`'s response shape mirroring the middleware exactly, `confirm_password` and every other posted secret being redacted in all three body encodings, the recovery endpoint's per-family cooldown and post-response send, the default-deny portal gate, and the production posture guard asserting the cache backend. The two enumeration tests normalise the CSP nonce, the CSRF token and the echoed address out of the body — everything else must match byte for byte |
+| [`integration/test_students_periphery_fixes.py`](project/tests/integration/test_students_periphery_fixes.py) | 40 | The students app's write paths and the admin's blind spots. `clean_group`'s waiting-list exemption was **dead code**: Django cleans `group` before `is_waiting`, so the key was never present and editing a waiting-list student whose preferred group was full — the normal state, since a full group is *why* they wait — was rejected outright. Also covers the group cap now reaching the admin form, `resend_portal_invitation` stamping rather than clearing the once-only guard (clearing it let a later sibling enrollment re-fire the invite and invalidate the temporary password the family was holding), the duplicate-portal-email rule being asymmetric on purpose (admin refuses, `ParentForm` warns so the same-DNI sibling path survives), DNI kept out of the audit label, `birth_date` genuinely optional, and `Group` occupancy preferring an annotation when one is present |
+| [`integration/test_enrollment_transition_fixes.py`](project/tests/integration/test_enrollment_transition_fixes.py) | 32 | Every way a cadence or plan change could bill a month twice or not at all — service-level, anchored to an elapsed course so the assertions are not date bombs. A modality flip used to re-bill months already **collected** under the old cadence, because billed-month idempotency is keyed on `payment_type` and the pending-only DB constraint cannot see a completed row of the other type. Pins the supersede shape (old enrollment finished on the cadence it billed, replacement anchored past every covered month of *either* cadence), `covered_months` expanding a quarterly row to its three months, the mid-month handover moving to the 1st so head days are neither double-billed nor dropped, and the refusal path leaving nothing written |
+| [`integration/test_mass_mail_fixes.py`](project/tests/integration/test_mass_mail_fixes.py) | 32 | Who actually receives a mass mail, and what the operator is told. **Waiting-list families were receiving everything** — every recipient query filtered on active children without excluding waiting entries. Also pins case-insensitive address de-duplication (`Parent.email` is legitimately not unique, so a couple sharing a mailbox got two copies), the counted set and the sent set being the same set, parents without an email no longer inflating the count, an SMTP connection failure reporting a tally instead of 500ing, the tax certificate deliberately keeping waiting-list families (the document attests money actually paid), and the PDF table widths that were overflowing a 174 mm frame |
+| [`integration/test_frontend_template_fixes.py`](project/tests/integration/test_frontend_template_fixes.py) | 24 | The server-observable half of the frontend pass: write controls gated on `is_admin_user`, the money on the student ficha hidden from a non-admin teacher, `<html lang="es">`, no misleading required asterisk on optional fields, and the `{{ x }} euros` / bare-number contract on the payment-reminder template. Two structural guards live here because nothing else can catch them: one asserts `tailwind-config.js` and `palette.css` declare the same palette (the inline copies had already drifted — `verify.html`'s was missing `fontFamily`), and one scans every inline `style=""` attribute by perceived lightness and fails on a light background hex outside `theme.css`'s matched set. That second test found four pre-existing dark-mode bugs on its first run |
+| [`integration/test_iteration1_fixes.py`](project/tests/integration/test_iteration1_fixes.py) | 18 | First-pass review fixes: the €0.00 matrícula that must not be written, the group cap enforced on write, and the modality switch cancelling superseded pending rows (rewritten in v1.27.1 — the switch now supersedes the enrollment, so the assertion is on the specific superseded row rather than the absence of every pending monthly row, because the handover legitimately gap-fills the taught month) |
+| [`integration/test_iteration2_fixes.py`](project/tests/integration/test_iteration2_fixes.py) | 7 | Second-pass review fixes |
+| [`integration/test_iteration4_fixes.py`](project/tests/integration/test_iteration4_fixes.py) | 5 | Fourth-pass review fixes |
 
 ### Coverage Report
 
 | File | Stmts | Miss | Cover | Missing lines |
 | --- | --- | --- | --- | --- |
-| `billing/models.py` | 276 | 24 | 91% | 424-434, 639, 795, 798, 800-822, 835, 837, 849 |
-| `billing/services/enrollment_service.py` | 101 | 3 | 97% | 239, 241, 268 |
-| `billing/services/enrollment_type_service.py` | 42 | 2 | 95% | 94-95 |
-| `billing/services/expense_service.py` | 49 | 3 | 94% | 99-105 |
+| `billing/models.py` | 307 | 21 | 93% | 70-71, 786, 806, 984, 986-1014, 1029, 1031, 1043-1044, 1052 |
+| `billing/services/enrollment_service.py` | 151 | 8 | 95% | 175, 278-280, 340, 463, 465, 499 |
+| `billing/services/expense_service.py` | 56 | 6 | 89% | 99-105, 151-153 |
 | `billing/services/gcp_cost_service.py` | 148 | 14 | 91% | 170-171, 208-209, 223-225, 231-232, 242-243, 292-294 |
-| `billing/services/payment_service.py` | 144 | 7 | 95% | 198, 282, 379-387 |
-| `billing/services/stripe_service.py` | 102 | 3 | 97% | 139-140, 174 |
-| `comms/services/email_service.py` | 61 | 1 | 98% | 46 |
+| `billing/services/payment_service.py` | 224 | 16 | 93% | 307, 339, 423, 501-509, 537-545, 598, 631, 648-655 |
+| `billing/services/pdf_service.py` | 172 | 1 | 99% | 155 |
+| `billing/services/stripe_service.py` | 108 | 3 | 97% | 139-140, 179 |
+| `comms/services/email_functions.py` | 96 | 6 | 94% | 540, 565-569, 579-580 |
+| `comms/services/email_service.py` | 65 | 2 | 97% | 183-184 |
 | `comms/services/sms_service.py` | 50 | 3 | 94% | 58, 63-64 |
-| `comms/tasks.py` | 270 | 4 | 99% | 486, 598, 766, 847 |
-| `core/audit_signals.py` | 94 | 6 | 94% | 109, 115, 131, 142-143, 148 |
-| `core/context_processors.py` | 39 | 1 | 97% | 57 |
-| `core/middleware.py` | 126 | 6 | 95% | 122, 133-138, 259, 304-305 |
-| `core/models.py` | 178 | 2 | 99% | 329, 362 |
+| `comms/tasks.py` | 282 | 10 | 96% | 511, 623, 798-800, 820-821, 825-826, 861 |
+| `core/audit_signals.py` | 103 | 9 | 91% | 116, 122, 138, 149-150, 155, 192, 210, 243 |
+| `core/context_processors.py` | 42 | 1 | 98% | 72 |
+| `core/decorators.py` | 33 | 2 | 94% | 63-64 |
+| `core/middleware.py` | 197 | 13 | 93% | 151, 200, 211-216, 273, 279, 432, 444, 487, 550-551, 591-592 |
+| `core/models.py` | 178 | 2 | 99% | 336, 369 |
 | `core/services/google_sheets_service.py` | 99 | 9 | 91% | 74-76, 112-118 |
-| `core/tasks.py` | 26 | 5 | 81% | 41-46 |
-| `core/views/app_forms.py` | 620 | 45 | 93% | 96, 182-184, 198-201, 218-219, 312-313, 336-337, 385-387, 416, 577-587, 593, 729, 756, 775, 861, 865, 887, 898, 982, 1012, 1025, 1050, 1062, 1093-1096, 1211, 1267, 1293-1297, 1325-1328 |
-| `core/views/auth.py` | 193 | 10 | 95% | 65, 68-70, 239, 256, 310, 355, 438-439 |
-| `core/views/dashboard.py` | 143 | 6 | 96% | 132-139, 180, 196 |
-| `core/views/expenses.py` | 130 | 11 | 92% | 29-30, 158, 178-179, 211-213, 245-247 |
+| `core/views/app_forms.py` | 560 | 32 | 94% | 245, 278-283, 371-372, 436, 526-528, 540-543, 549-550, 688-689, 707-708, 739-741, 973, 1161, 1176-1180, 1308, 1499-1503, 1520-1523 |
+| `core/views/auth.py` | 200 | 11 | 94% | 66, 69-71, 254, 271, 319, 338, 383, 466-467 |
+| `core/views/dashboard.py` | 150 | 5 | 97% | 133-140, 186 |
+| `core/views/expenses.py` | 135 | 11 | 92% | 30-31, 160, 183-184, 217-219, 252-254 |
 | `core/views/features.py` | 173 | 20 | 88% | 137, 161-162, 212-216, 274-280, 337-341 |
-| `core/views/parent_portal.py` | 178 | 5 | 97% | 192, 220, 423, 471, 491 |
-| `core/views/parents.py` | 54 | 1 | 98% | 48 |
+| `core/views/management.py` | 150 | 5 | 97% | 343, 380, 414-416 |
+| `core/views/parent_portal.py` | 220 | 6 | 97% | 112, 254, 487, 605, 653, 673 |
+| `core/views/parents.py` | 60 | 1 | 98% | 51 |
 | `core/views/password_reset.py` | 74 | 2 | 97% | 141, 143 |
-| `core/views/payments.py` | 320 | 20 | 94% | 59-60, 255-260, 310, 316-317, 329-338, 425, 472-473, 495-496, 510-511 |
-| `core/views/students.py` | 325 | 18 | 94% | 189-191, 315-316, 487, 512, 520, 538-544, 549-551, 725-728 |
-| `core/views/testing_tools.py` | 228 | 20 | 91% | 71-72, 76-78, 202, 266, 273, 275, 305-307, 412-416, 429, 447-448 |
-| `core/views/two_factor.py` | 87 | 8 | 91% | 38, 49-50, 170-172, 177-178 |
-| `core/views/waiting_list.py` | 106 | 1 | 99% | 297 |
-| `students/forms.py` | 69 | 2 | 97% | 188-189 |
-| `students/models.py` | 273 | 6 | 98% | 400-401, 576-579 |
+| `core/views/payments.py` | 363 | 30 | 92% | 71-72, 287-292, 349, 355-356, 368-377, 477, 524-525, 547-548, 560, 568-579, 585-586, 980 |
+| `core/views/schedule.py` | 66 | 1 | 98% | 110 |
+| `core/views/students.py` | 385 | 23 | 94% | 103, 299-301, 440-445, 605, 630, 641, 650, 652, 683, 695, 721, 754-760, 769, 939, 965-968 |
+| `core/views/testing_tools.py` | 228 | 20 | 91% | 71-72, 76-78, 202, 266, 273, 275, 313-315, 424-428, 441, 459-460 |
+| `core/views/two_factor.py` | 94 | 8 | 91% | 39, 50-51, 189-191, 196-197 |
+| `core/views/waiting_list.py` | 109 | 1 | 99% | 322 |
+| `students/forms.py` | 101 | 2 | 98% | 312-313 |
+| `students/models.py` | 333 | 9 | 97% | 159-160, 484, 568-569, 752-755 |
 
-**57 files** have 100% coverage (skipped above). Total coverage: **95.64%** across 6,149 statements. Coverage is **very good**. Coverage is enforced at three levels: pre-commit hook (>= 75%), CI hard floor (>= 75%), and CI warning (< 90%).
+**54 files** have 100% coverage (skipped above). Total coverage: **95.39%** across 6,790 statements. Coverage is **very good**. Coverage is enforced at three levels: pre-commit hook (>= 75%), CI hard floor (>= 75%), and CI warning (< 90%).
 
 ---
 
@@ -4541,15 +4697,21 @@ a deliberate trade-off rather than a surprise during an incident.
 - Startup CPU boost — free, shortens the startup window
 - `--max-instances=1` — eliminates the concurrent-migration window at the cost of throughput
 
-**Planned fix** (tracked, not yet implemented):
+**Status:**
 
-1. Move `collectstatic` into the Dockerfile build stage so `staticfiles/` ships baked into the
-   image, and drop it from `entrypoint.sh`. Note the build then needs a dummy `DJANGO_SECRET_KEY`
-   at `RUN` time, since `settings.py` refuses to import with the dev default when `DEBUG=False`.
-2. Gate `migrate` behind a `RUN_MIGRATIONS_ON_START` env var — default `false` on Cloud Run, where
-   the dedicated `fiveaday-migrate` Cloud Run Job is the single, serialised place migrations apply.
-3. Leave both steps enabled in development and testing, where running them on every `up` is the
-   convenient behaviour.
+1. **Still planned.** Move `collectstatic` into the Dockerfile build stage so `staticfiles/` ships
+   baked into the image, and drop it from `entrypoint.sh`. Note the build then needs a dummy
+   `DJANGO_SECRET_KEY` at `RUN` time, since `settings.py` refuses to import with the dev default
+   when `DEBUG=False`.
+2. **Implemented** (`entrypoint.sh`, since v1.26.x — this section claimed otherwise until v1.27.1).
+   `migrate` is gated behind `RUN_MIGRATIONS_ON_START`, parsed case-insensitively and defaulting to
+   `true` so development and the testing VM are unchanged. Set it to `false` on Cloud Run, where the
+   dedicated `fiveaday-migrate` job is the single, serialised place migrations apply — otherwise a
+   cold start self-migrates and bypasses both that ordering and its pre-deploy backup.
+   **The env var still has to be set on the service**; `deploy-production.yml` now asserts it
+   pre-mutation and refuses to deploy while it is unset, so this cannot stay half-done silently.
+3. **Implemented.** Both steps stay enabled in development and testing, where running them on every
+   `up` is the convenient behaviour.
 
 Together these cut the production cold start to container pull + Gunicorn boot, and make schema
 changes an explicit, one-at-a-time operation.
@@ -4560,7 +4722,7 @@ changes an explicit, one-at-a-time operation.
 |------|---------------|
 | No hardcoded credentials | Dev auth refuses login when `LOGIN_USERNAME`/`LOGIN_PASSWORD` are missing; testing/prod auth refuses any password not matching a hashed `auth.User` record |
 | No secrets in YAML | Production credentials live in GCP Secret Manager, injected into Cloud Run at startup — never in the repo |
-| No secrets in GitHub Actions for deploy | CI uses only non-production Gmail SMTP. Production deploy runs manually with the operator's `gcloud` credentials |
+| No secrets in GitHub Actions for deploy | No GCP service-account key exists. The production deploy authenticates via Workload Identity Federation, whose `workloadIdentityUser` binding is scoped to `attribute.environment/production` — so a job that omits `environment: production` cannot mint a token, and the credential-free preflight deliberately cannot reach production at all. The unattended nightly testing deploy holds an SSH deploy key and **no** GCP credential |
 | No secrets in Docker image | `.dockerignore` excludes all `.env*` files |
 | `.gitignore` coverage | `.env*` pattern excludes all env file variants |
 | Production startup validation | `settings.py` raises `ValueError` if `SECRET_KEY` is the dev default and `DEBUG=False` |
@@ -4811,7 +4973,7 @@ git merge development → testing
         ├── PR created: testing → main
         └── Email to owners (OWNER_EMAILS)
         │
-        │  nightly window 02:00-05:00 Europe/Madrid
+        │  nightly window 01:00-05:59 Europe/Madrid
         ▼
 Deploy testing  (deploy-testing.yml)
   • /health/ on the VM ≠ version on origin/testing?
@@ -4875,10 +5037,10 @@ Feature branches off `development` are welcome for non-trivial work, but the exp
 
 | Workflow | File | Triggers | Purpose |
 |----------|------|----------|---------|
-| **CI** | [`ci.yml`](.github/workflows/ci.yml) | Push to `development`/`testing`/`main`; PRs to `development`/`testing`/`main` | Six jobs — **Lint** (Ruff + Bandit + pip-audit + Hadolint), **Type check** (mypy), **Tests** (pytest + PostgreSQL 16 + coverage artifact), **Docker build** (validates Dockerfile), **Trivy** (filesystem CVE scan → Security tab), **Docker publish** (GHCR push + image scan, on `main`/`testing` only) |
+| **CI** | [`ci.yml`](.github/workflows/ci.yml) | Push to `development`/`testing`/`main`; PRs to `development`/`testing`/`main` | Six jobs — **Lint** (Ruff + Bandit + pip-audit + Hadolint), **Type check** (mypy), **Tests** (pytest + PostgreSQL 16 + coverage artifact), **Docker build** (validates Dockerfile), **Trivy** (filesystem CVE scan → Security tab), **Docker publish** (GHCR push + image scan, on `main`/`testing` only). Since v1.27.1 it carries a least-privilege top-level `permissions` block (it was the only workflow without one, so jobs running arbitrary branch code had the repo-default token scope), every job has a `timeout-minutes`, and the **image** scan now GATES on HIGH/CRITICAL: a second Trivy pass writes JSON and a separate step fails the job, so a missing or unparseable report reads as a failed scan rather than a clean one. The escape hatch is [`.github/trivyignore`](.github/trivyignore), applied to the gate only so an ignored CVE still appears in the Security tab |
 | **Auto-merge** | [`auto-merge.yml`](.github/workflows/auto-merge.yml) | Hourly cron + manual dispatch | Merges `development` → `testing` when conditions pass, creates PR to `main`, emails owners |
-| **Deploy testing** | [`deploy-testing.yml`](.github/workflows/deploy-testing.yml) | Daily, 02:00-05:00 Europe/Madrid window + manual dispatch | Compares `/health/` on the VM against `pyproject.toml` on `origin/testing`; deploys only when they differ. Gates the DB volume, resets `ready_for_prod` to false (locking the new version for production until QA signs it off), diffs row counts, then emails the result |
-| **Deploy production** | [`deploy-production.yml`](.github/workflows/deploy-production.yml) | QA's sign-off (`repository_dispatch: qa-ready-for-prod`, fired by the `/testing/` button) + the release PR merge (`push` to `main`) — both exit green and quiet while the other condition is pending — + `Deploy testing` finishing without issues (`workflow_run`, the strict watchdog) + manual dispatch | Two-phase: preflight exits green when production already serves `main`'s version, otherwise **requires release provenance** (the `testing-vX.Y.Z` tag must be an ancestor of `main`) and **testing's QA sign-off** (`/health/?deep=1` healthy + same version + `ready_for_prod=true`), waits for CI to go green and lists the migrations; then **blocks on the `production` environment's required reviewer**. On approval: verified backup → repoint every Cloud Run job → migrate → roll out → verify. A failure after the first write **auto-rolls the code back** (jobs + service to the previous image; the database is never reverted) |
+| **Deploy testing** | [`deploy-testing.yml`](.github/workflows/deploy-testing.yml) | Daily, 01:00-05:59 Europe/Madrid window (three cron ticks) + manual dispatch | Compares `/health/` on the VM against `pyproject.toml` on `origin/testing`; deploys only when they differ. Gates the DB volume, resets `ready_for_prod` to false (locking the new version for production until QA signs it off), diffs row counts, then emails the result |
+| **Deploy production** | [`deploy-production.yml`](.github/workflows/deploy-production.yml) | QA's sign-off (`repository_dispatch: qa-ready-for-prod`, fired by the `/testing/` button) + the release PR merge (`push` to `main`) — both exit green and quiet while the other condition is pending — + `Deploy testing` finishing without issues (`workflow_run`, the strict watchdog) + manual dispatch | Two-phase: preflight exits green when production already serves `main`'s version, otherwise **requires release provenance** (the `testing-vX.Y.Z` tag must be an ancestor of `main`) and **testing's QA sign-off** (`/health/?deep=1` healthy + same version + `ready_for_prod=true`), waits for CI to go green and lists the migrations; then **blocks on the `production` environment's required reviewer**. On approval: verified backup → repoint every Cloud Run job → migrate → roll out → verify. A failure after the first write **auto-rolls the code back** (jobs + service to the previous image; the database is never reverted). v1.27.1 adds four **pre-mutation** gates, all placed before the first write so a mismatch stops the deploy with production untouched and nothing to roll back: `RUN_MIGRATIONS_ON_START` must be `false` on the service (otherwise a cold start self-migrates, bypassing this ordering and its backup); the enumerated Cloud Run **jobs and Cloud Scheduler entries** must match the expected sets (an empty list is fatal, never read as "nothing scheduled" — Scheduler lives in `europe-west1`, and querying the service's region returns nothing silently; a deliberately PAUSED schedule must be listed in `PAUSED_OK_SCHEDULES`); and a **destructive migration** (`DeleteModel`/`RemoveField`/`RenameField`/`DROP`/`TRUNCATE`) is surfaced in the approval summary and refuses to proceed without the `ack_destructive` dispatch input. The rollback now also fires on **cancellation**, and its job-repoint loop has the same count guard as the forward loop — an empty list previously produced "Los 0 jobs vuelven a apuntar…" in a success-toned email while every job stayed on the failed image |
 | **Rollback production** | [`rollback-production.yml`](.github/workflows/rollback-production.yml) | Manual dispatch only | Rolls the service **and** every Cloud Run job back to a previous image tag (empty input = previous image; or an explicit git short SHA), behind the same `production` approval gate and concurrency group as a deploy. Code only — restoring the database stays a manual decision |
 | **CodeQL** | [`codeql.yml`](.github/workflows/codeql.yml) | Push to `main`/`testing`/`development`; PRs to `main`; Monday 04:30 UTC | Python static security analysis (OWASP Top 10, Django-specific queries) |
 | **Notify production** | [`notify-production.yml`](.github/workflows/notify-production.yml) | Push to `main` | Emails `hellofiveaday@gmail.com` with commit info and `gcloud` deploy instructions |
@@ -5002,7 +5164,7 @@ make up                        # Start Docker (PostgreSQL + Redis + Django + Cel
 1. Work on `development` (or a short-lived branch off `development`)
 2. Make changes following the conventions below
 3. Run `make pc-run` — Ruff + mypy + bandit all pass, offers to auto-bump the patch version on success, and auto-stages `uv.lock` if regenerated
-4. Run `make test` — all 1,886 tests must pass (PostgreSQL via Docker, parallel, with coverage)
+4. Run `make test` — all 1,899 tests must pass (PostgreSQL via Docker, parallel, with coverage)
 5. `git commit` with a message like `v1.14.7 — Short description` (version first, em dash — matches every other release commit in the project)
 6. `git push origin development`
 7. CI runs automatically on your push (see [CI/CD](#cicd--github-actions))

@@ -12,6 +12,11 @@ logger = get_task_logger(__name__)
 # table. Long enough to answer "who changed this student's fee last September?".
 AUDIT_LOG_RETENTION_DAYS = 730
 
+# The shortest retention `prune_audit_log` will accept. A full academic year plus
+# a margin, so a pruning run can never destroy the trail for the course being
+# taught — which is the one an audit question is most likely to be about.
+MIN_AUDIT_RETENTION_DAYS = 400
+
 
 @shared_task(name="core.tasks.cleanup_done_backlog_tasks")
 def cleanup_done_backlog_tasks(days: int = 30):
@@ -29,7 +34,7 @@ def cleanup_done_backlog_tasks(days: int = 30):
 
 
 @shared_task(name="core.tasks.prune_audit_log")
-def prune_audit_log(days: int = AUDIT_LOG_RETENTION_DAYS):
+def prune_audit_log(days: int = AUDIT_LOG_RETENTION_DAYS, dry_run: bool = False):
     """Delete AuditLog rows older than `days`.
 
     The audit trail had no cap and no pruning of any kind, unlike HistoryLog
@@ -37,13 +42,34 @@ def prune_audit_log(days: int = AUDIT_LOG_RETENTION_DAYS):
     year of payments writes 16 rows on its own — so at the documented 2,000
     student scale it would become the largest table in the database with
     nothing ever removing a row.
+
+    `days` must be at least MIN_AUDIT_RETENTION_DAYS. This is the only code path
+    that deletes from a table the admin deliberately makes immutable (no add, no
+    change, no delete — see `core.admin`), so the whole point is that ageing rows
+    out is a policy and not a person. `days=0` would delete every row including
+    today's, and a negative value reaches into the future; neither is a retention
+    policy, both are a typo, and either one erases the entries incriminating
+    whoever ran it. Refusing them is cheaper than restoring a backup.
     """
     from core.models import AuditLog
 
+    if days < MIN_AUDIT_RETENTION_DAYS:
+        raise ValueError(
+            f"days must be >= {MIN_AUDIT_RETENTION_DAYS} to prune the audit log "
+            f"(got {days}); a smaller window would erase the recent trail."
+        )
+
     cutoff = timezone.now() - timedelta(days=days)
-    deleted, _ = AuditLog.objects.filter(created_at__lt=cutoff).delete()
+    stale = AuditLog.objects.filter(created_at__lt=cutoff)
+
+    if dry_run:
+        count = stale.count()
+        logger.info("[dry-run] Would delete %d audit log row(s) older than %d days", count, days)
+        return {"status": "success", "deleted": 0, "would_delete": count, "dry_run": True}
+
+    deleted, _ = stale.delete()
     logger.info("Deleted %d audit log row(s) older than %d days", deleted, days)
-    return {"status": "success", "deleted": deleted}
+    return {"status": "success", "deleted": deleted, "dry_run": False}
 
 
 @shared_task(name="core.tasks.purge_expired_sessions")

@@ -1,6 +1,6 @@
 [project]
 name = "five-a-day"
-version = "1.27.0"
+version = "1.27.1"
 description = "Five a Day management software"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -12,10 +12,17 @@ dependencies = [
     # (this was the only unbounded dependency). PYSEC-2026-3717 fixed in 6.0.8.
     "django>=6.0.8,<7",
     "pandas>=2.3.1,<4",
-    "django-filter>=25.1,<27",
-    "djangorestframework>=3.17.2,<4",
+    # REMOVED in v1.27: djangorestframework, django-filter and
+    # django-cors-headers. All three were installed and never used — zero
+    # imports in the tree, absent from INSTALLED_APPS and MIDDLEWARE, and no
+    # REST_FRAMEWORK / CORS_* / FILTERS_* setting anywhere. What they did carry
+    # was CVE surface, in the image and in pip-audit: the DRF advisory pair
+    # CVE-2026-73228/73229 forced release v1.26.2 for a package the app never
+    # called. If a real API is ever built, add the dependency back in the same
+    # change that adds INSTALLED_APPS + DEFAULT_PERMISSION_CLASSES (an
+    # unconfigured DRF defaults to AllowAny) or CorsMiddleware + an explicit
+    # CORS_ALLOWED_ORIGINS — never the bare dependency.
     "markdown>=3.8.2,<4",
-    "django-cors-headers>=4.7.0,<5",
     "django-storages>=1.14.6,<2",
     "django-redis>=6.0.0,<7",
     "django-environ>=0.12.0,<1",

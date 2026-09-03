@@ -79,11 +79,9 @@ document.addEventListener('DOMContentLoaded', function () {
     });
 
     // ==================== FUN FRIDAY ====================
-    function getCsrf() {
-        return document.querySelector('[name=csrfmiddlewaretoken]')?.value
-            || document.cookie.split(';').map(c=>c.trim()).find(c=>c.startsWith('csrftoken='))?.split('=')[1]
-            || '';
-    }
+    // CSRF token + status-checked fetch come from base.js
+    // (window.CSRF_TOKEN / window.apiFetch): one hidden-input-first reader for
+    // the whole app instead of a copy per module.
 
     // Returns sort priority 1(green)→2(yellow✓)→3(yellow✗)→4(grey)
     function getFFCategory(row) {
@@ -107,16 +105,15 @@ document.addEventListener('DOMContentLoaded', function () {
     document.querySelectorAll('.ff-toggle-btn').forEach(btn => {
         btn.addEventListener('click', function() {
             const studentId = this.dataset.studentId;
-            fetch(`/api/students/${studentId}/fun-friday/toggle/`, {
+            window.apiFetch(`/api/students/${studentId}/fun-friday/toggle/`, {
                 method: 'POST',
-                headers: {'Content-Type':'application/json','X-CSRFToken':getCsrf()},
                 body: '{}',
-            }).then(r=>r.json()).then(data => {
+            }).then(data => {
                 if (data.success) {
                     updateFFIcon(this, data.is_this_week, data.was_last_week);
                     applyFFFilter();
                 }
-            });
+            }).catch(err => alert(window.apiErrorMessage(err)));
         });
     });
 
@@ -301,24 +298,33 @@ document.addEventListener('DOMContentLoaded', function () {
             e.preventDefault();
             if (!enrollStudentId) return;
             enrollSubmitBtn.disabled = true;
+            // apiFetch keeps the FormData body untouched (no Content-Type, so
+            // the browser sets the multipart boundary) and turns a 400 into a
+            // rejection carrying the server's own message.
             fetch(`/api/students/${enrollStudentId}/enroll/`, {
                 method: 'POST',
-                headers: { 'X-CSRFToken': getCsrf() },
+                headers: { 'X-CSRFToken': window.CSRF_TOKEN },
                 body: new FormData(enrollForm),
             })
-                .then(r => r.json().then(data => ({ ok: r.ok, data })))
-                .then(({ ok, data }) => {
+                .then(r => r.json().then(data => ({ ok: r.ok, status: r.status, data })),
+                      () => { throw new Error('network'); })
+                .then(({ ok, status, data }) => {
                     if (ok && data.success) {
                         // The Matrícula column and payments changed server-side.
                         window.location.reload();
                         return;
                     }
-                    enrollErrorEl.textContent = data.error || 'Error al crear la matrícula.';
+                    // 403 here is an expired session or a stale CSRF token, not
+                    // a rejected enrollment — say so instead of showing the
+                    // generic form error.
+                    enrollErrorEl.textContent = (status === 401 || status === 403)
+                        ? window.API_MESSAGES.session
+                        : (data.error || 'Error al crear la matrícula.');
                     enrollErrorEl.style.display = '';
                     enrollSubmitBtn.disabled = false;
                 })
                 .catch(() => {
-                    enrollErrorEl.textContent = 'Error de conexión. Inténtalo de nuevo.';
+                    enrollErrorEl.textContent = window.API_MESSAGES.network;
                     enrollErrorEl.style.display = '';
                     enrollSubmitBtn.disabled = false;
                 });

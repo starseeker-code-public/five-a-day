@@ -111,12 +111,12 @@ html.dark select {
 html.dark input::placeholder,
 html.dark textarea::placeholder { color: var(--fad-faint); }
 html.dark input[type="checkbox"],
-html.dark input[type="radio"] { accent-color: #8b5cf6; }
+html.dark input[type="radio"] { accent-color: var(--primary-500); }
 
 /* Keep solid violet action buttons vivid (don't let the bg-* rules dull them) */
-html.dark .bg-primary-500 { background-color: #8b5cf6; }
-html.dark .bg-primary-600 { background-color: #7c3aed; }
-html.dark .hover\:bg-primary-600:hover { background-color: #6d28d9; }
+html.dark .bg-primary-500 { background-color: var(--primary-500); }
+html.dark .bg-primary-600 { background-color: var(--primary-600); }
+html.dark .hover\:bg-primary-600:hover { background-color: var(--primary-700); }
 html.dark .bg-primary-500 .material-symbols-outlined,
 html.dark .header-action-btn { color: #fff; }
 
@@ -167,7 +167,28 @@ html.dark .border-blue-200 { border-color: #2a4166; }
  * with `!important` (author !important beats a normal inline declaration).
  * White handled with precise forms so `color:#fff` text is never affected;
  * the other (unambiguously-background) light hexes use a background-anchored
- * compound selector. */
+ * compound selector.
+ *
+ * ⚠ THIS IS A CLOSED SET AND NOTHING IN THE BUILD ENFORCES IT — the whole
+ * mechanism is substring matching on an attribute, so a template that writes
+ * `style="background:#f4f4f5"` (one shade away from a listed value) simply
+ * renders white-on-dark and no tool notices. That is the structural cost of
+ * the no-build-step choice.
+ * The guard is a TEST, not a convention:
+ *   project/tests/integration/test_frontend_template_fixes.py
+ *   :: test_no_unmatched_inline_light_background_hex
+ * scans every template for an inline background hex and fails if it is not in
+ * the list below (or is not already dark). If you add an inline light
+ * background, add its hex to the matching group here — or, better, move it to
+ * a utility class and skip this mechanism entirely.
+ *
+ * MATCHED SET — keep in step with the selectors below and with the test:
+ *   white / near-white → #fff #ffffff white #f5f5f5 #fafafa #f9fafb #f8fafc
+ *                        #f0f0f0 #fef3c7 #fef2f2 #fefce8 #fdf2f8 #f0fdf4
+ *   semantic (status)  → #fee2e2 #dcfce7 #fffbeb  (+ their inline text
+ *                        colours #991b1b #b91c1c)
+ *   light violet       → #ede9fe #ddd6fe #f5f3ff #faf5ff #f3e8ff
+ *   gradients          → #ede9fe #f5f3ff (linear-gradient stops)            */
 html.dark [style*="background:#fff"],
 html.dark [style*="background: #fff"],
 html.dark [style*="background:#ffffff"],
@@ -187,6 +208,19 @@ html.dark [style*="background"][style*="#fefce8"],
 html.dark [style*="background"][style*="#fdf2f8"],
 html.dark [style*="background"][style*="#f0fdf4"] { background-color: var(--fad-surface) !important; }
 
+/* Inline SEMANTIC (status) backgrounds → the matching dark status colour, not
+ * the neutral surface: these carry meaning (a red "vencido" pill, an amber
+ * banner, a green success circle) and flattening them to --fad-surface would
+ * lose it. The paired inline `color:` has to be overridden too — a dark red on
+ * a dark red background is unreadable, and it is what these attributes set. */
+html.dark [style*="background"][style*="#fee2e2"] { background-color: #3a1d24 !important; }
+html.dark [style*="background"][style*="#dcfce7"] { background-color: #16301f !important; }
+html.dark [style*="background"][style*="#fffbeb"] { background-color: #33280f !important; }
+html.dark [style*="color:#991b1b"],
+html.dark [style*="color: #991b1b"],
+html.dark [style*="color:#b91c1c"],
+html.dark [style*="color: #b91c1c"] { color: #fca5a5 !important; }
+
 /* Light-violet inline backgrounds → the violet-dark accent surface */
 html.dark [style*="background"][style*="#ede9fe"],
 html.dark [style*="background"][style*="#ddd6fe"],
@@ -204,9 +238,17 @@ html.dark .pg-btn {
     border-color: var(--fad-border-2);
     color: var(--fad-violet);
 }
-html.dark .pg-btn:hover { background: var(--fad-active); border-color: #7c3aed; }
-html.dark .pg-active { background: #8b5cf6; color: #fff; }
+html.dark .pg-btn:hover { background: var(--fad-active); border-color: var(--primary-600); }
+html.dark .pg-active { background: var(--primary-500); color: #fff; }
 html.dark .pg-ellipsis { color: var(--fad-faint); }
+
+/* ── Armed danger button (payments list two-click cancel) — dark ────────── */
+html.dark .cancel-armed {
+    background-color: #3a1d24 !important;
+    color: #fca5a5 !important;
+    border-color: #7f2b36;
+}
+html.dark .cancel-armed .material-symbols-outlined { color: #fca5a5 !important; }
 
 /* ── Testing (QA) dashboard (dark) ─────────────────────────────────────── */
 html.dark .qa-card {
@@ -226,14 +268,42 @@ html.dark .priority-low,
 html.dark .status-done { background: #16301f; color: #86efac; }
 html.dark .status-open { background: #1a2842; color: #93c5fd; }
 
+/* The QA pages reach outside the palettes the rest of the app uses (indigo,
+ * violet, rose, cyan and the `gray-*` scale rather than `neutral-*`), and those
+ * had no override at all: the round icon chips behind every card heading stayed
+ * LIGHT indigo/violet on the dark surface, and `border-gray-300` on the backlog
+ * inputs stayed near-white. `bg-*-600/700` are deliberately NOT listed — those
+ * are the solid emerald/rose action buttons, which must stay vivid. */
+html.dark .bg-indigo-100,
+html.dark .bg-violet-100,
+html.dark .bg-purple-50,
+html.dark .bg-purple-100 { background-color: var(--fad-accent-bg); }
+
+html.dark .border-gray-200,
+html.dark .border-gray-300 { border-color: var(--fad-border); }
+
+/* Icon-weight accents (the *-600 shades used on 2rem symbols inside the chips
+ * above) need lightening for contrast; the app's own violet resolves to the
+ * theme's readable violet so the QA pages match the rest of the UI. */
+html.dark .text-violet-500,
+html.dark .text-violet-600,
+html.dark .text-indigo-600,
+html.dark .text-purple-600 { color: var(--fad-violet); }
+html.dark .text-emerald-600 { color: #86efac; }
+html.dark .text-amber-600 { color: #fcd34d; }
+html.dark .text-blue-600 { color: #93c5fd; }
+html.dark .text-cyan-600 { color: #67e8f9; }
+html.dark .text-red-600,
+html.dark .text-rose-600 { color: #fca5a5; }
+
 /* Desarrollos (QA epics) — board rows, deadline pill, task counter */
 html.dark .feature-item {
     background: var(--fad-surface-2);
     border-color: var(--fad-border);
     color: var(--fad-ink);
 }
-html.dark .feature-item:hover { background: var(--fad-active); border-color: #7c3aed; }
-html.dark .deadline-pill { background: #2a1f4a; color: #c4b5fd; }
+html.dark .feature-item:hover { background: var(--fad-active); border-color: var(--primary-600); }
+html.dark .deadline-pill { background: #2a1f4a; color: var(--primary-300); }
 html.dark .deadline-pill.is-overdue { background: #3a1d24; color: #fca5a5; }
 html.dark .deadline-pill.is-none { background: var(--fad-surface-2); color: var(--fad-faint); }
 html.dark .task-counter { background: #232a4d; color: #a5b4fc; }
@@ -246,7 +316,7 @@ html.dark .app-card {
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
 }
 html.dark .app-card:hover {
-    border-color: #8b5cf6;
+    border-color: var(--primary-500);
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.45);
 }
 

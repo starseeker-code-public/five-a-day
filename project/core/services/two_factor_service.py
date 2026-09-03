@@ -250,9 +250,13 @@ def verify_code(teacher, code: str) -> bool:
 
 
 def disable(teacher) -> None:
-    """Turn 2FA off + wipe the secret + backup codes. Callers must be sure
-    the user has authenticated with the second factor at least once during
-    this session (the view enforces that guard)."""
+    """Turn 2FA off + wipe the secret + backup codes.
+
+    Callers MUST verify a current second factor first (a TOTP or an unused
+    backup code): this wipes the secret, and `two_factor_setup` then hands out a
+    fresh one to anyone who reaches it, so an unauthenticated disable is a full
+    second-factor takeover. `two_factor_manage` enforces this before calling —
+    do not add another caller that skips it."""
     teacher.two_factor_secret = ""
     teacher.two_factor_enabled = False
     teacher.two_factor_backup_codes = []

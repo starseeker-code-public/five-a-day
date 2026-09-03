@@ -1,7 +1,7 @@
 import calendar as cal_module
 import logging
 import time
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 
 import httpx
@@ -12,6 +12,7 @@ from django.shortcuts import render
 from billing.constants import LIVE_PAYMENT_STATUSES
 from billing.models import Payment
 from core.constants import SCHEDULED_APPS
+from core.decorators import admin_required
 from core.models import TodoItem
 from students.models import Group, Student
 
@@ -173,27 +174,41 @@ def home(request):
     ]
     has_more_birthdays = birthday_count > 5
 
-    days_in_month = cal_module.monthrange(current_year, current_month)[1]
+    # A rolling 35-day window, not "the rest of this month": the old scan died at
+    # the month boundary (from the last Friday of September to the 30th the card
+    # showed ZERO upcoming sends while three were pending), and `monthly_day_1`
+    # gated on `d >= today` could only ever match on the 1st itself. The window
+    # always contains the next occurrence of every weekly/monthly cadence.
+    window = [today + timedelta(days=offset) for offset in range(35)]
     upcoming_events = []
     for app in SCHEDULED_APPS:
         if not app.get("active"):
             continue
-        if app["frequency"] == "every_friday":
-            for day in range(today.day, days_in_month + 1):
-                d = date(current_year, current_month, day)
-                if d.weekday() == 4:
-                    upcoming_events.append(
-                        {
-                            "name": app["name"],
-                            "date": d,
-                            "url_name": app["url_name"],
-                            "is_fun_friday": app["name"] == "Fun Friday",
-                        }
-                    )
-        elif app["frequency"] == "monthly_day_1":
-            d = date(current_year, current_month, 1)
-            if d >= today:
-                upcoming_events.append({"name": app["name"], "date": d, "url_name": app["url_name"]})
+        frequency = app["frequency"]
+        occurrences: list[date] = []
+        if frequency == "every_friday":
+            occurrences = [d for d in window if d.weekday() == 4]
+        elif frequency == "monthly_day_1":
+            occurrences = [d for d in window if d.day == 1]
+        elif frequency == "monthly_last_day":
+            occurrences = [d for d in window if d.day == cal_module.monthrange(d.year, d.month)[1]]
+        elif frequency == "daily":
+            # One entry, not 35 — "the next send is today" is all the card needs.
+            occurrences = [today]
+        elif frequency == "yearly_april":
+            occurrences = [d for d in window if d.month == 4 and d.day == 1]
+        # manual / on_student_creation / on_enrollment / quarterly are event-driven,
+        # not calendar-scheduled — correctly absent from the upcoming list.
+
+        for d in occurrences:
+            upcoming_events.append(
+                {
+                    "name": app["name"],
+                    "date": d,
+                    "url_name": app["url_name"],
+                    "is_fun_friday": app["name"] == "Fun Friday",
+                }
+            )
 
     upcoming_events.sort(key=lambda x: x["date"])
     next_event = upcoming_events[0] if upcoming_events else None
@@ -320,6 +335,7 @@ def home(request):
     return response
 
 
+@admin_required
 def all_info(request):
     from core.transactions import get_active_students, get_all_payments_unrestricted
 

@@ -18,6 +18,23 @@ from students.models import Student
 pytestmark = pytest.mark.django_db
 
 
+@pytest.fixture(autouse=True)
+def _allow_elapsed_course_start_dates(monkeypatch):
+    """These tests anchor to the ELAPSED 2020-2021 course (see module docstring).
+
+    `EnrollmentForm.clean_start_date` bounds new start dates to the courses
+    currently in play (a typo-year guard), which would reject the anchor —
+    widen the window to include it. The window rule itself is covered in
+    unit/test_enrollment_start_date.py.
+    """
+    from billing.models import relevant_academic_years as _real
+
+    monkeypatch.setattr(
+        "billing.models.relevant_academic_years",
+        lambda reference_date=None: ["2020-2021", *_real(reference_date)],
+    )
+
+
 class TestEnrollStudentEndpoint:
     def test_finishes_current_enrollment_and_bills_from_start_date(
         self,

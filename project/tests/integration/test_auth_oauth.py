@@ -41,7 +41,7 @@ class TestLoginView:
 
 class TestLogoutView:
     def test_clears_session_and_redirects(self, authenticated_client):
-        response = authenticated_client.get(reverse("logout"))
+        response = authenticated_client.post(reverse("logout"))
         assert response.status_code == 302
         assert response.url == reverse("login")
 

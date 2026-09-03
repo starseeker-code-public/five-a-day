@@ -40,6 +40,9 @@ permissions:
   contents: read
 
 env:
+  # Non-secret last resort so the rollback notification cannot be addressed to
+  # nobody (see the same block in deploy-production.yml).
+  ALERT_TO: ${{ secrets.SUPPORT_EMAIL || secrets.OWNER_EMAILS || secrets.EMAIL_HOST_USER }}
   GCP_PROJECT: five-a-day-evolution
   GCP_REGION: europe-southwest1
   SERVICE: fiveaday
@@ -50,6 +53,10 @@ jobs:
   rollback:
     name: Roll back production
     runs-on: ubuntu-latest
+    # Counted from when the runner starts executing, not from the approval
+    # wait. A repoint of 12 jobs plus a rollout and a 5-minute verify is ~10
+    # min; 45 bounds a hung gcloud call instead of holding a runner for 6 h.
+    timeout-minutes: 45
     environment:
       name: production
       url: https://fiveaday-332600671945.europe-southwest1.run.app
@@ -62,7 +69,7 @@ jobs:
       # Full history: image tags are git short SHAs, and the target commit's
       # pyproject.toml is what tells us which version /health/ must report
       # after the rollback.
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           fetch-depth: 0
 
@@ -73,7 +80,7 @@ jobs:
           workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
           service_account: ${{ secrets.GCP_DEPLOY_SA }}
 
-      - uses: google-github-actions/setup-gcloud@e427ad8a34f8676edf47cf7d7925499adf3eb74f  # v2
+      - uses: google-github-actions/setup-gcloud@e427ad8a34f8676edf47cf7d7925499adf3eb74f  # v2.2.1
         with:
           project_id: ${{ env.GCP_PROJECT }}
 
@@ -204,9 +211,10 @@ jobs:
           CURRENT: ${{ steps.target.outputs.current }}
           EXPECTED: ${{ steps.target.outputs.expected_version }}
           ACTOR: ${{ github.actor }}
+          JOB_STATUS: ${{ job.status }}
         run: |
           {
-            echo "## Production rollback — ${{ job.status }}"
+            echo "## Production rollback — $JOB_STATUS"
             echo ""
             echo "| Field | Value |"
             echo "|---|---|"
@@ -233,7 +241,7 @@ jobs:
           from: "Five a Day CI <${{ secrets.EMAIL_HOST_USER }}>"
           # Rollbacks go to dev/support only — the academy inbox (hellofiveaday)
           # is notified exclusively on successful deploys.
-          to: ${{ secrets.SUPPORT_EMAIL || secrets.OWNER_EMAILS }}
+          to: ${{ env.ALERT_TO }}
           subject: "[Five a Day] ${{ job.status == 'success' && '⏪ Producción revertida a una versión anterior' || '🚨 El rollback de producción ha fallado' }}"
           html_body: |
             <div style="font-family: sans-serif; color:#1f2937; max-width:640px;">

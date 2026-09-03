@@ -12,19 +12,33 @@ logger = logging.getLogger(__name__)
 def today_notifications(request):
     today = date.today()
 
-    # Teacher-role flags for template-level gating of admin-only UI.
-    # Anyone who isn't a linked non-admin teacher is treated as admin
-    # (dev basic-auth, OAuth, and admin Teachers all count as admin).
+    # Teacher-role flags for template-level gating of admin-only UI. THE SAME
+    # predicate the middleware enforces with — computed independently, the two
+    # disagreed for an authenticated user with no Teacher row (the UI trimmed
+    # itself while the middleware treated the session as admin, or vice versa).
+    from core.middleware import _is_non_admin_teacher
+
     user = getattr(request, "user", None)
     teacher = None
     if user is not None and getattr(user, "is_authenticated", False):
         teacher = getattr(user, "teacher", None)
-    is_non_admin_teacher = teacher is not None and not teacher.admin
-    is_admin_user = not is_non_admin_teacher
+    session = getattr(request, "session", None)
+    session_authenticated = bool(session is not None and session.get("is_authenticated"))
+    is_non_admin_teacher = _is_non_admin_teacher(request)
+    # `not is_non_admin_teacher` FAILED OPEN: this context processor runs on
+    # EVERY render, including pages served to an anonymous visitor (the login
+    # page, the 403/404/500 handlers, anything rendered before a session
+    # exists), and for those `_is_non_admin_teacher` answers False — "not a
+    # non-admin teacher" — which the template then read as "is an admin" and
+    # rendered the admin UI to nobody in particular. Admin is a POSITIVE grant:
+    # it now requires an authenticated session first.
+    is_admin_user = session_authenticated and not is_non_admin_teacher
 
     # QA testing tools visibility — logged-in ADMIN Teacher in the testing
     # environment only (non-admin teachers must not see the dev tools).
-    show_testing_tools = settings.IS_TESTING_ENV and teacher is not None and teacher.admin
+    # `active` matters as much as `admin`: deactivating a Teacher is how this
+    # academy offboards somebody, and the dev tools include DB seed/reset.
+    show_testing_tools = settings.IS_TESTING_ENV and teacher is not None and teacher.admin and teacher.active
 
     # The header bell and the actions-history feed are admin-only, so a
     # non-admin teacher never renders either one — don't spend the queries.
@@ -38,6 +52,7 @@ def today_notifications(request):
             "show_testing_tools": show_testing_tools,
             "is_admin_user": is_admin_user,
             "is_non_admin_teacher": is_non_admin_teacher,
+            "drive_receipts_url": getattr(settings, "GOOGLE_DRIVE_RECEIPTS_URL", ""),
         }
 
     # Todos due today
@@ -78,6 +93,7 @@ def today_notifications(request):
         "show_testing_tools": show_testing_tools,
         "is_admin_user": is_admin_user,
         "is_non_admin_teacher": is_non_admin_teacher,
+        "drive_receipts_url": getattr(settings, "GOOGLE_DRIVE_RECEIPTS_URL", ""),
     }
 
 

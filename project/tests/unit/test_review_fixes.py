@@ -135,6 +135,12 @@ class TestPortalCredentialEmailAsync:
         parent.set_portal_password("Portal-Fam-2026")
         session = client.session
         session["parent_id"] = parent.id
+        # The credential stamp the session was opened with — a password change
+        # bumps it and invalidates every session that predates it, so a
+        # hand-built session must carry the current value to be accepted.
+        from core.views.parent_portal import _PARENT_CRED_STAMP_KEY, _credential_stamp
+
+        session[_PARENT_CRED_STAMP_KEY] = _credential_stamp(parent)
         session.save()
         payload = {
             "current_password": "wrong",
@@ -441,8 +447,13 @@ class TestReportPdfInService:
         pdf = generate_report_pdf(stub_report, 3, 2026)
         assert pdf.startswith(b"%PDF-")
 
-    def test_reports_view_clamps_out_of_range_month(self, authenticated_client):
-        # Month 99 must clamp to 12, not query for nonexistent month 99
+    def test_reports_view_rejects_out_of_range_month(self, authenticated_client):
+        # Month 99 falls back to the current month — the same `safe_int`
+        # behaviour every other view uses. It used to CLAMP to 12 here (its own
+        # third copy of the helper), so /reports/?month=99 showed December while
+        # /payments/?month=99 showed the current month.
+        from datetime import date
+
         response = authenticated_client.get(reverse("reports_view"), {"month": 99, "year": 2026})
         assert response.status_code == 200
-        assert response.context["month"] == 12
+        assert response.context["month"] == date.today().month

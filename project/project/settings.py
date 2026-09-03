@@ -49,11 +49,41 @@ def _version_from_pyproject() -> str:
 # rebuild. See CLAUDE.md — a legacy APP_VERSION line in .env silently overrides.
 APP_VERSION = os.getenv("APP_VERSION") or _version_from_pyproject()
 
+
+def _env_int(name: str, default: int) -> int:
+    """An int env var that survives sloppy values.
+
+    `int(os.getenv(name, "N"))` bricks the whole process at settings import —
+    gunicorn, migrate, every Cloud Run Job — the moment the var exists but is
+    empty (a `KEY=` line left in .env, or a value blanked by --update-env-vars)
+    or carries junk. A bad value here should mean "the default", loudly, not an
+    academy-wide outage.
+    """
+    raw = (os.getenv(name) or "").strip()
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        import logging
+
+        logging.getLogger(__name__).error("Invalid integer for env %s; using default %d", name, default)
+        return default
+
+
 # ============================================================================
 # SECURITY SETTINGS
 # ============================================================================
 SECRET_KEY = os.getenv("DJANGO_SECRET_KEY", "dev-secret-key-change-in-production")
-EMAIL_SECRET = os.getenv("EMAIL_SECRET")
+# There is deliberately no `EMAIL_SECRET` SETTING. The env var of that name is
+# the Gmail app password and is still read — once, by `EMAIL_HOST_PASSWORD` in
+# the email section below, which is the only thing that ever needs it. Exposing
+# it a second time as a Django setting put a live credential everywhere settings
+# are enumerated: `django-admin diffsettings`, the debug 500 page's settings
+# table, `manage.py shell` completions, and any future `/health/`-style dump.
+# Django's own `SafeExceptionReporterFilter` masks it on the debug page (the key
+# matches its `SECRET` regex), but nothing masked it in the other three, and
+# nothing read it. Do not re-add it.
 
 DEBUG = os.getenv("DJANGO_DEBUG", "False").lower() in ("true", "1", "t")
 
@@ -61,8 +91,11 @@ DEBUG = os.getenv("DJANGO_DEBUG", "False").lower() in ("true", "1", "t")
 if not DEBUG and SECRET_KEY == "dev-secret-key-change-in-production":
     raise ValueError("⚠️  DJANGO_SECRET_KEY debe ser cambiado en producción!")
 
-# Parse ALLOWED_HOSTS from comma-separated string
-ALLOWED_HOSTS = os.getenv("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1").split(",")
+# Parse ALLOWED_HOSTS from comma-separated string. Each entry is stripped (the
+# CSRF list below always was): "host1, host2" produced " host2", which matches
+# no Host header, and that host answered 400 DisallowedHost while /health/ on
+# the first one stayed green.
+ALLOWED_HOSTS = [h.strip() for h in os.getenv("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1").split(",") if h.strip()]
 
 # Security settings for production
 if not DEBUG:
@@ -72,7 +105,7 @@ if not DEBUG:
     CSRF_COOKIE_SECURE = os.getenv("CSRF_COOKIE_SECURE", "True").lower() == "true"
 
     # HSTS (HTTP Strict Transport Security)
-    SECURE_HSTS_SECONDS = int(os.getenv("SECURE_HSTS_SECONDS", "31536000"))  # 1 año
+    SECURE_HSTS_SECONDS = _env_int("SECURE_HSTS_SECONDS", 31536000)  # 1 año
     SECURE_HSTS_INCLUDE_SUBDOMAINS = os.getenv("SECURE_HSTS_INCLUDE_SUBDOMAINS", "True").lower() == "true"
     SECURE_HSTS_PRELOAD = os.getenv("SECURE_HSTS_PRELOAD", "True").lower() == "true"
 
@@ -119,7 +152,7 @@ HEALTH_PROBE_TOKEN = os.getenv("HEALTH_PROBE_TOKEN", "")
 # ============================================================================
 # SESSION CONFIGURATION
 # ============================================================================
-SESSION_COOKIE_AGE = int(os.getenv("SESSION_COOKIE_AGE", "21600"))  # 6 horas
+SESSION_COOKIE_AGE = _env_int("SESSION_COOKIE_AGE", 21600)  # 6 horas
 # Re-save the session on every request so the 6h window is INACTIVITY-based:
 # any activity resets the timer, and 6h with no activity auto-logs-out.
 SESSION_SAVE_EVERY_REQUEST = os.getenv("SESSION_SAVE_EVERY_REQUEST", "True").lower() == "true"
@@ -138,6 +171,11 @@ SESSION_COOKIE_SAMESITE = os.getenv("SESSION_COOKIE_SAMESITE", "Lax")
 # ============================================================================
 SUPPORT_EMAIL = os.getenv("SUPPORT_EMAIL", None)
 
+# Google Drive folder where expense receipts / justificantes live. Empty by
+# default: the "Consultar recibos" buttons are HIDDEN when it is unset, rather
+# than shipping a link to Drive's generic home page (the old placeholder).
+GOOGLE_DRIVE_RECEIPTS_URL = os.getenv("GOOGLE_DRIVE_RECEIPTS_URL", "")
+
 # ============================================================================
 # RATE LIMITING
 # ============================================================================
@@ -146,7 +184,14 @@ SUPPORT_EMAIL = os.getenv("SUPPORT_EMAIL", None)
 # APPENDS what it saw — everything to the left of our own hops is attacker
 # controlled. Cloud Run and a single nginx are both 1. Use 0 when the app is
 # reached directly, so X-Forwarded-For is ignored entirely.
-TRUSTED_PROXY_COUNT = int(os.getenv("TRUSTED_PROXY_COUNT", "1"))
+#
+# The DEFAULT is environment-aware: production sits behind Cloud Run's front end
+# (exactly one trusted hop), but the QA VM and the dev stack bind Gunicorn
+# straight to the interface with NO proxy — there, a default of 1 meant the
+# bucket key was read from a header only the client wrote, so a rotating
+# X-Forwarded-For gave every request a fresh window and defeated every
+# credential throttle on an internet-exposed host.
+TRUSTED_PROXY_COUNT = _env_int("TRUSTED_PROXY_COUNT", 1 if ENVIRONMENT == "production" else 0)
 
 # The rate limiter is backed by the cache, so the cache backend decides whether
 # the limit is real. Django's default LocMemCache is PER-PROCESS: with Gunicorn's
@@ -230,6 +275,24 @@ if ENVIRONMENT == "production":
     if globals().get("SECURE_HSTS_SECONDS", 0) < 31536000:
         _posture_errors.append("SECURE_HSTS_SECONDS must be at least 31536000 (1 year) in production")
 
+    # The CACHE BACKEND is a security control here, not a performance knob:
+    # `core.rate_limit` is cache-backed, and Django's default LocMemCache is
+    # PER-PROCESS. Neither branch above assigns CACHES when both CACHE_URL and
+    # CACHE_DB are absent, so the name is simply undefined and Django falls back
+    # to LocMemCache — silently, with every rate limit multiplied by
+    # workers x instances (4 x maxScale 2 => "5 logins/minute" really up to 40).
+    #
+    # Dropping the var is easy to do by accident: `gcloud run deploy
+    # --set-env-vars` REPLACES the entire env set, so one deploy that repeats
+    # the wrong list unsets CACHE_DB and nothing anywhere reports it. Fail the
+    # start-up instead — Cloud Run then keeps serving the previous revision.
+    _cache_backend = (globals().get("CACHES", {}).get("default") or {}).get("BACKEND", "")
+    if not _cache_backend or "locmem" in _cache_backend.lower():
+        _posture_errors.append(
+            "CACHE_URL or CACHE_DB must be set in production: a per-process LocMemCache "
+            "multiplies every rate limit by workers x instances"
+        )
+
     if _posture_errors:
         raise ValueError(
             "⚠️  Insecure production configuration — refusing to start:\n  - " + "\n  - ".join(_posture_errors)
@@ -244,13 +307,18 @@ INSTALLED_APPS = [  # https://www.djangoproject.com/
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
-    # `rest_framework`, `corsheaders` and `django_filters` were REMOVED (v1.23.0).
-    # None of them was used: there is not a single APIView, serializer or
-    # ViewSet in the tree, CorsMiddleware was never added to MIDDLEWARE, and no
-    # filter backend is configured. Each was a latent misconfiguration rather
-    # than a feature — DRF with no REST_FRAMEWORK settings defaults every view
-    # to AllowAny, and adding CorsMiddleware without CORS settings is one line
-    # away from relaxing same-origin. Re-adding `rest_framework` REQUIRES
+    # `rest_framework`, `corsheaders` and `django_filters` were dropped from
+    # INSTALLED_APPS in v1.23.0 and, as of v1.27.1, are no longer DEPENDENCIES
+    # either — djangorestframework, django-cors-headers and django-filter are
+    # out of pyproject.toml entirely. None of them was ever used: there is not a
+    # single APIView, serializer or ViewSet in the tree, CorsMiddleware was
+    # never added to MIDDLEWARE, and no filter backend was configured. Keeping
+    # them installed-but-unused was pure CVE surface in the image and in
+    # pip-audit — a DRF advisory already forced an unrelated release once.
+    # Each was also a latent misconfiguration rather than a feature: DRF with no
+    # REST_FRAMEWORK settings defaults every view to AllowAny, and adding
+    # CorsMiddleware without CORS settings is one line away from relaxing
+    # same-origin. Re-adding `rest_framework` means re-adding the dependency AND
     # setting DEFAULT_PERMISSION_CLASSES to IsAuthenticated in the same commit.
     "django_extensions",  # https://django-extensions.readthedocs.io/en/latest/
     # https://django-storages.readthedocs.io/en/latest/
@@ -340,6 +408,15 @@ if database_url := os.getenv("DATABASE_URL", "").strip():
     _default_db.setdefault("OPTIONS", {})["options"] = (
         f"-c statement_timeout={os.getenv('DB_STATEMENT_TIMEOUT_MS', '30000')}"
     )
+    # `connect_timeout` existed only on the POSTGRES_* branch — the third time
+    # these two have drifted (CONN_HEALTH_CHECKS was the first, statement_timeout
+    # the second), and the drift always favoured the branch that is easy to test
+    # locally over the one PRODUCTION actually runs. `statement_timeout` does not
+    # help here: it bounds a statement on an ESTABLISHED connection, and says
+    # nothing about a TCP connect that never completes. Without this, a stalled
+    # Cloud SQL socket parks a Gunicorn worker on the OS default connect timeout
+    # (minutes), and with 4 workers the service stops answering.
+    _default_db["OPTIONS"]["connect_timeout"] = _env_int("DB_CONNECT_TIMEOUT", 10)
     DATABASES = {"default": _default_db}
 else:
     DATABASES = {
@@ -360,7 +437,9 @@ else:
             # container use. Django re-opens the connection instead when this is on.
             "CONN_HEALTH_CHECKS": True,
             "OPTIONS": {
-                "connect_timeout": 10,
+                # Same env var as the DATABASE_URL branch above, so the two
+                # cannot drift again.
+                "connect_timeout": _env_int("DB_CONNECT_TIMEOUT", 10),
                 # A ceiling on any single statement. There is no connection pooler
                 # in front of Cloud SQL and the instance's connection limit is
                 # small, so one pathological query (a missing predicate, an
@@ -453,9 +532,53 @@ FORMAT_MODULE_PATH = "project.formats"
 USE_TZ = True
 
 # ============================================================================
+# ERROR ALERTING
+# ============================================================================
+# Until v1.27.1 there was NO application-error alerting of any kind: no Sentry,
+# no ADMINS, no log-based alert. A recurring 500, or a Cloud Run Job failing
+# every night, was invisible until a user phoned the academy — and the Jobs are
+# where the money is (generate_payments, payment reminders, the monthly report).
+#
+# What was chosen, and why it is this and not Sentry: Gmail SMTP is already
+# configured, already used for every transactional mail, and already the channel
+# the owners read. `ADMINS` + Django's own `AdminEmailHandler` therefore costs
+# one setting and no new dependency, no new account and no new egress path — and
+# a paid SaaS for 3-10 users watching one Cloud Run service is not proportionate.
+# The trade-off accepted: no aggregation, no release tracking, no breadcrumbs.
+# If that becomes the binding constraint, a log-based alert on Cloud Logging
+# (already collecting stdout) is the next step up, still without a dependency.
+#
+# Defaults to SUPPORT_EMAIL, which production already sets — so alerting turns
+# on with no env change. `DJANGO_ADMINS` overrides with a comma-separated list.
+_admin_emails = [a.strip() for a in os.getenv("DJANGO_ADMINS", "").split(",") if a.strip()]
+if not _admin_emails and SUPPORT_EMAIL:
+    _admin_emails = [SUPPORT_EMAIL]
+ADMINS = [("Five a Day", address) for address in _admin_emails]
+MANAGERS = ADMINS
+# Django's default is "[Django] ", which reads like somebody else's alert.
+EMAIL_SUBJECT_PREFIX = "[Five a Day] "
+
+# Two guards, because error mail is exactly the feature that turns into noise:
+#   1. PRODUCTION ONLY. Keyed on ENVIRONMENT, like the posture guard — the QA VM
+#      has QAErrorEmailMiddleware for this (with body redaction), development
+#      has a console, and the TEST SUITE must never mail: EMAIL_BACKEND is
+#      locmem there, so an alert would land in `mail.outbox` and break every
+#      test that counts messages.
+#   2. THROTTLED. `core.rate_limit.ErrorAlertThrottleFilter` — one mail per
+#      logging site per 15 min, so a single transient error cannot spam and a
+#      loop of failures cannot mute the inbox.
+_ERROR_MAIL_ENABLED = ENVIRONMENT == "production" and bool(ADMINS)
+
+# ============================================================================
 # LOGGING CONFIGURATION
 # ============================================================================
-LOG_LEVEL = os.getenv("LOG_LEVEL", "DEBUG" if DEBUG else "INFO")
+# Normalised + validated: dictConfig raises on an unknown level, and a
+# well-meaning `LOG_LEVEL=info` (lowercase) prevented the whole app from booting.
+LOG_LEVEL = (os.getenv("LOG_LEVEL") or ("DEBUG" if DEBUG else "INFO")).strip().upper()
+if LOG_LEVEL not in ("CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG"):
+    LOG_LEVEL = "DEBUG" if DEBUG else "INFO"
+
+_LOG_HANDLERS = ["console", "mail_admins"] if _ERROR_MAIL_ENABLED else ["console"]
 
 LOGGING = {
     "version": 1,
@@ -470,29 +593,59 @@ LOGGING = {
             "style": "{",
         },
     },
+    "filters": {
+        "require_debug_false": {"()": "django.utils.log.RequireDebugFalse"},
+        "throttle_error_alerts": {"()": "core.rate_limit.ErrorAlertThrottleFilter"},
+    },
     "handlers": {
         "console": {
             "class": "logging.StreamHandler",
             "formatter": "verbose",
         },
+        # Only reachable when _ERROR_MAIL_ENABLED put it in _LOG_HANDLERS; the
+        # entry itself is harmless (dictConfig instantiates it either way, and
+        # AdminEmailHandler with no ADMINS sends nothing).
+        "mail_admins": {
+            "level": "ERROR",
+            "class": "django.utils.log.AdminEmailHandler",
+            "filters": ["require_debug_false", "throttle_error_alerts"],
+            # `include_html` would attach the full technical 500 page. The body
+            # already carries the traceback and the redacted POST via
+            # DEFAULT_EXCEPTION_REPORTER_FILTER; the HTML version adds every
+            # local variable in every frame to an inbox, which for this app
+            # means student rows and payment amounts.
+            "include_html": False,
+        },
     },
     "root": {
-        "handlers": ["console"],
+        "handlers": _LOG_HANDLERS,
         "level": LOG_LEVEL,
     },
     "loggers": {
+        # `django.request` (where an unhandled 500 is logged) propagates to
+        # `django`, and this logger has propagate=False — so before v1.27.1 the
+        # only handler a 500 ever reached was the console.
         "django": {
-            "handlers": ["console"],
+            "handlers": _LOG_HANDLERS,
             "level": os.getenv("DJANGO_LOG_LEVEL", LOG_LEVEL),
             "propagate": False,
         },
+        # Where every `logger.exception(...)` in core/views lives.
         "core": {
-            "handlers": ["console"],
+            "handlers": _LOG_HANDLERS,
             "level": LOG_LEVEL,
             "propagate": False,
         },
     },
 }
+
+# Governs the debug 500 page AND the body of every AdminEmailHandler mail.
+# Django only cleanses a request body when the view used
+# @sensitive_post_parameters, and none of this app's hand-rolled auth views do —
+# so without this an error report from /login/ or /api/password-change/ carries
+# the submitted password in cleartext. Shares one field-name list with
+# QAErrorEmailMiddleware.
+DEFAULT_EXCEPTION_REPORTER_FILTER = "core.middleware.RedactingExceptionReporterFilter"
 
 # ============================================================================
 # STATIC AND MEDIA FILES
@@ -518,13 +671,29 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 # ============================================================================
 # EMAIL CONFIGURATION
 # ============================================================================
-EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
-EMAIL_HOST = "smtp.gmail.com"
-EMAIL_PORT = 587
-EMAIL_USE_TLS = True
+# Backend is env-overridable so a non-production environment can opt OUT of real
+# SMTP. The QA/testing VM runs the full Celery Beat schedule (birthday, payment
+# reminders, monthly report, Fun Friday) and, hard-wired to Gmail, would
+# autonomously mail whatever addresses its database holds — a real hazard the
+# moment a production dump is restored onto it. Set
+# EMAIL_BACKEND=django.core.mail.backends.console.EmailBackend (or .dummy) in
+# .env.testing to neutralise that; production leaves it at the SMTP default.
+EMAIL_BACKEND = os.getenv("EMAIL_BACKEND", "django.core.mail.backends.smtp.EmailBackend")
+EMAIL_HOST = os.getenv("EMAIL_HOST", "smtp.gmail.com")
+EMAIL_PORT = _env_int("EMAIL_PORT", 587)
+EMAIL_USE_TLS = os.getenv("EMAIL_USE_TLS", "True").lower() in ("true", "1", "t")
 EMAIL_HOST_USER = os.getenv("EMAIL_HOST_USER", "")
 EMAIL_HOST_PASSWORD = os.getenv("EMAIL_SECRET", "")
 DEFAULT_FROM_EMAIL = EMAIL_HOST_USER
+# From address for error mail (AdminEmailHandler). Django's default is
+# "root@localhost", which Gmail's SMTP refuses outright — so the alerting would
+# have looked configured and delivered nothing.
+SERVER_EMAIL = os.getenv("SERVER_EMAIL", "") or DEFAULT_FROM_EMAIL
+# A hung SMTP socket must not park a Gunicorn worker forever. Without this,
+# smtplib inherits the OS default connect timeout (minutes), and the mass-mail
+# views send synchronously in the request — one blackholed port 587 could wedge
+# a worker until it was killed. 20 s is generous for Gmail.
+EMAIL_TIMEOUT = _env_int("EMAIL_TIMEOUT", 20)
 
 # ============================================================================
 # CELERY CONFIGURATION
