@@ -31,7 +31,9 @@
         .then(function (d) {
             spinner.classList.add('hidden');
             bodyEl.classList.remove('hidden');
-            if (d.html) bodyEl.innerHTML = d.html;
+            /* bodyEl is a sandboxed <iframe>: the email is a full document whose
+               stylesheets would leak onto the app page if injected via innerHTML. */
+            if (d.html) bodyEl.srcdoc = d.html;
         })
         .catch(function () {
             spinner.classList.add('hidden');

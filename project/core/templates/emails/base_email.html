@@ -2,72 +2,40 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="color-scheme" content="light dark">
-    <meta name="supported-color-schemes" content="light dark">
+    <meta name="color-scheme" content="dark">
+    <meta name="supported-color-schemes" content="dark">
     <title>{% block title %}Five a Day{% endblock %}</title>
     {% load static %}
     <link rel="stylesheet" href="{% static 'css/email.css' %}">
     <style>
         /* ====================================================================
-           DARK MODE — mirrors the webapp's own dark violet theme (theme.css
-           --fad-* vars). Most email clients strip <link> stylesheets, so this
-           lives inline here. Content templates use inline style="" attributes
-           (required for broad client support), so overrides target those exact
-           hex values with !important — the same attribute-selector technique
-           theme.css itself uses for the webapp's dark mode.
+           The email ships DARK in every client — the webapp's dark violet
+           theme (theme.css --fad-* palette) is baked into the inline styles
+           here and in every content template, because inline is the only
+           styling every client renders. This block is a backstop for clients
+           that do not inherit body/div colors into text elements (Outlook's
+           Word engine resets <p> to black). No !important: inline wins.
            ==================================================================== */
-        @media (prefers-color-scheme: dark) {
-            body { background-color: #141220 !important; color: #d5d0e6 !important; }
-            .email-container, .email-content { background-color: #1e1a2e !important; }
-
-            /* Headings / links / violet accents */
-            [style*="#6d28d9"] { color: #b9a5f5 !important; }
-            [style*="#7c3aed"] { color: #b9a5f5 !important; }
-            [style*="#5b21b6"] { color: #b9a5f5 !important; }
-
-            /* Body text */
-            [style*="#374151"] { color: #d5d0e6 !important; }
-            [style*="#6B7280"] { color: #b0aac9 !important; }
-            [style*="#9CA3AF"] { color: #918bab !important; }
-            [style*="#1F2937"] { color: #ece9f6 !important; }
-
-            /* Violet info boxes (bg #EEF2FF / #f5f3ff, text #3730A3) */
-            [style*="background-color: #EEF2FF"], [style*="background-color: #f5f3ff"] { background-color: #272235 !important; }
-            [style*="#3730A3"] { color: #c4b5fd !important; }
-
-            /* Green boxes (bg #F0FDF4, text #166534) */
-            [style*="background-color: #F0FDF4"] { background-color: #16261d !important; }
-            [style*="#166534"] { color: #86efac !important; }
-
-            /* Amber boxes (bg #FFFBEB, text #92400E) */
-            [style*="background-color: #FFFBEB"] { background-color: #2e2410 !important; }
-            [style*="#92400E"] { color: #fcd34d !important; }
-
-            /* Red boxes (bg #FEF2F2 / #FEE2E2, text #991B1B) */
-            [style*="background-color: #FEF2F2"] { background-color: #2e1616 !important; }
-            [style*="#991B1B"] { color: #fca5a5 !important; }
-            [style*="#dc2626"] { color: #f87171 !important; }
-            [style*="#16a34a"] { color: #4ade80 !important; }
-
-            /* Neutral / gray box (monthly_report "Resumen del Mes") */
-            [style*="background-color: #F3F4F6"] { background-color: #272235 !important; }
-
-            /* Table dividers */
-            [style*="border-bottom: 1px solid #C7D2FE"], [style*="border-bottom: 1px solid #ddd6fe"] { border-bottom-color: #3f3559 !important; }
-            [style*="border: 1px solid #ddd6fe"] { border-color: #3f3559 !important; }
-
-            a { color: #b9a5f5 !important; }
-        }
+        body, p, li, td, th, span { color: #d5d0e6; }
+        h1, h2, h3, h4 { color: #b9a5f5; }
+        a { color: #b9a5f5; }
+        body, .email-container { background-color: #141220; }
+        .email-content { background-color: #1e1a2e; }
+        .email-footer { background-color: #241f36; }
     </style>
     {% block extra_css %}{% endblock %}
     {% block extra_head %}{% endblock %}
 </head>
-<body>
-    <div class="email-container">
-        <div class="email-content">
+<body style="margin: 0; padding: 0; background-color: #141220; font-family: 'Trebuchet MS', Arial, sans-serif; font-size: 16px; line-height: 1.6; color: #d5d0e6;">
+    <!-- Scaffold styles are INLINE on purpose: most clients (Gmail, Outlook)
+         strip the <link> stylesheet above, so anything not inlined simply
+         does not render — which left the footer's white legal text invisible
+         on the client's default white background. -->
+    <div class="email-container" style="width: 100%; max-width: 600px; margin: 0 auto; padding: 16px 8px;">
+        <div class="email-content" style="background-color: #1e1a2e; color: #d5d0e6; border-radius: 12px; padding: 30px 24px;">
             {% block content %}{% endblock %}
         </div>
-        <div class="email-footer">
+        <div class="email-footer" style="background-color: #241f36; border-radius: 12px 12px 0 0; margin-top: 16px; padding: 24px 20px 8px; text-align: center; font-size: 14px; color: #ffffff;">
             <div data-smartmail="gmail_signature" dir="ltr">
                 <div dir="ltr">
                     <div>
@@ -157,7 +125,7 @@
                 </div>
             </div>
         </div>
-        <div class="email-footer">
+        <div class="email-footer" style="background-color: #241f36; border-radius: 0 0 12px 12px; padding: 8px 20px 24px; text-align: left; font-size: 14px; color: #ffffff;">
             {% block footer %}       
                     <div>
                         <p style="color: rgb(255, 195, 255) !important;" data-ogsc="rgb(80, 0, 80)">

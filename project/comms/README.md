@@ -14,7 +14,7 @@ Generic email sending service with HTML template rendering and inline images.
 - `send_bulk_emails(template_name, emails_data, ...)` — sends multiple emails with the same template
 - `email_service` — singleton instance used throughout the project
 
-Templates live in `core/templates/emails/` and extend `emails/base_email.html`. There are currently **18 content templates** (19 files including the shared base): `happy_birthday`, `welcome_student`, `enrollment_child`, `enrollment_adult`, `fun_friday`, `payment_reminder`, `payment_reminder_simple`, `payment_receipt`, `receipt_quarterly_child`, `receipt_adult`, `receipt_enrollment`, `vacation_closure`, `tax_certificate`, `monthly_report`, `admin_monthly_report`, `newsletter`, `parent_magic_link`, `password_reset`, plus the shared `base_email`.
+Templates live in `core/templates/emails/` and extend `emails/base_email.html`. There are currently **18 content templates** (19 files including the shared base): `happy_birthday`, `welcome_student`, `enrollment_child`, `enrollment_adult`, `fun_friday`, `payment_reminder`, `payment_reminder_simple`, `payment_receipt`, `receipt_quarterly_child`, `receipt_adult`, `receipt_enrollment`, `vacation_closure`, `tax_certificate`, `monthly_report`, `admin_monthly_report`, `newsletter`, `parent_set_password`, `password_reset`, plus the shared `base_email`.
 
 **Every content template must define its own `{% block title %}`** (v1.20.0). `base_email.html` supplies a generic "Five a Day" fallback and 11 of the 18 were silently taking it, so the document title bore no relation to the subject line. Give a new template a title matching its `subject=`, in the shared `"<asunto> · Five a Day"` shape.
 
@@ -69,12 +69,12 @@ All tasks have retry logic (3 retries, exponential backoff):
 | Task | Purpose | Trigger |
 | ---- | ------- | ------- |
 | `send_welcome_email_task` | Async welcome email (includes the group's timetable). Reports the payment modality in Spanish, and "Especial" for a `special` matrícula — its cadence is whatever was agreed with the family, not a standard one (v1.20.0) | On student creation, fired `on_commit` |
-| `send_birthday_email_task` | Individual birthday email — every parent with an address, adult students themselves | Called by batch task. Production runs `CELERY_TASK_ALWAYS_EAGER=True`, so this executes **inline**: 2 queries per student since v1.26.1, down from 3 (a `prefetch_related` that its own `exclude()` discarded). Fan-out task costs are invisible in dev, where subtask queries land in the worker |
+| `send_birthday_email_task` | Individual birthday email — every parent with an address, adult students themselves. v1.26.8 attaches `happy-birthday.png` as a **`cid:` inline part**; the template's `<img src="cid:birthday_image">` had nothing attached, so every birthday email ever sent rendered a broken image | Called by batch task. Production runs `CELERY_TASK_ALWAYS_EAGER=True`, so this executes **inline**: 2 queries per student since v1.26.1, down from 3 (a `prefetch_related` that its own `exclude()` discarded). Fan-out task costs are invisible in dev, where subtask queries land in the worker |
 | `send_birthday_emails_task` | Daily birthday batch — goes to **all** of a student's parents, dated with `localdate()` | Celery Beat (daily 08:00) / `send_birthday_emails` command |
 | `send_payment_reminders` | Weekly payment reminder batch, deduped against the SMS channel | Celery Beat (Mondays 09:00) / `send_payment_reminders` command |
 | `send_payment_reminder_sms_task` | Twilio SMS reminder for one payment — opt-in parents only (v1.8) | Called from the reminder batch |
-| `send_monthly_report_task` | Admin monthly report (`--recipient` overrides `SUPPORT_EMAIL`) | Celery Beat (28th, 20:00) / `send_monthly_report` command |
-| `send_parent_magic_link_task` | Emails the parent-portal magic link (v1.9) | Parent-portal login |
+| `send_monthly_report_task` | Admin monthly report. With no explicit recipient it now (v1.26.8) goes to **both** `SUPPORT_EMAIL` and `DEFAULT_FROM_EMAIL`, deduped — the academy reads it in two inboxes — and is skipped only when neither is set. `--recipient` still overrides both | Celery Beat (28th, 20:00) / `send_monthly_report` command |
+| `send_parent_temporary_password_task` | Generates, hashes onto `Parent.temporary_password` and emails a one-off portal password — the invitation when the record is created, and the recovery from `¿Has olvidado tu contraseña?` (`reset=True` swaps the copy). The plaintext is generated **inside** the task, never passed as an argument: task arguments are serialised into the broker and printed in task logs (v1.9, reworked v1.27) | `ParentCreateView`, parent-portal recovery form |
 | `send_payment_receipt_email_task` | Emails a receipt PDF for a completed payment (v1.11) | Payment completion / Stripe webhook |
 | `send_generic_email_task` | Generic email dispatcher | Manual |
 | `send_enrollment_confirmation_task` | Enrollment confirmation with attachments (uses `student.gender` field) | On enrollment |
@@ -134,7 +134,7 @@ Tests for comms services live in `project/tests/`:
 | `test_email_functions.py` | All convenience functions in `email_functions.py` — correct template, subject, context, and fail_silently for each function |
 | `test_email_service_year.py` | Regression: the `year` context value used to be hard-coded to 2025 |
 | `test_tasks.py` | The core email tasks called synchronously with `email_service` mocked |
-| `test_new_email_tasks.py` | `send_parent_magic_link_task` (v1.9) + `send_payment_receipt_email_task` (v1.11) |
+| `test_new_email_tasks.py` | `send_parent_temporary_password_task` (v1.9, reworked v1.27 — both the invitation and the reset flavour, and the plaintext never crossing the task boundary) + `send_payment_receipt_email_task` (v1.11) |
 | `test_sms_service.py` / `test_sms_tasks.py` | `SmsService` configuration/send/opt-in gate, and the SMS reminder task |
 | `test_email_bug_hunt_fixes.py` | Round-2 email regressions — templates, image guard, `on_commit`, all-parents birthday, timezone |
 | `test_fun_friday_scheduling.py` | `FunFridayScheduledSend.is_due` + the idempotent drain task |

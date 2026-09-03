@@ -265,6 +265,17 @@ jobs:
             exit 1
           fi
 
+          # --- GATE: the VM must be ON the testing branch ---
+          # `git pull origin testing` merges into whatever branch is checked
+          # out, so a tree left on another branch would deploy testing's code
+          # under the wrong branch name and desync every later pull. Fix the
+          # VM by hand (git checkout testing); deploying is not the repair.
+          BRANCH=$($GIT rev-parse --abbrev-ref HEAD)
+          if [ "$BRANCH" != "testing" ]; then
+            echo "ABORT: VM tree is on branch '$BRANCH', expected 'testing'."
+            exit 1
+          fi
+
           $GIT pull --ff-only origin testing
           $GIT log --oneline -1
 
@@ -276,10 +287,17 @@ jobs:
           # testing_postgres_data instead of the base file's dev volume, and what
           # swaps runserver for Gunicorn. A one-file bring-up starts a
           # different, valid, WRONG stack and exits 0.
+          #
+          # --renew-anon-volumes: the base compose file mounts an anonymous
+          # volume over /app/.venv, and Compose REUSES anonymous volumes on
+          # recreate — so without this flag a rebuilt image keeps the previous
+          # image's venv. The v1.26.6 python 3.12→3.14 base bump crash-looped
+          # every app container on ModuleNotFoundError('django') this way.
+          # Only anonymous volumes are renewed; named volumes (the DB) are safe.
           sudo docker compose \
             -f $D/docker-compose.yml \
             -f $D/docker-compose.testing.yml \
-            up -d --build
+            up -d --build --renew-anon-volumes
 
           # --- GATE: prove the overlay took effect ---
           VOL=$(sudo docker inspect fiveaday_postgres \
@@ -386,6 +404,25 @@ jobs:
             echo "</details>"
           } >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Deployed commit info
+        id: commit
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # This job never checks the repo out (everything happens over SSH on
+          # the VM), so read the tip of `testing` — what the VM just pulled —
+          # from the API. The subject is free-form text, so it goes to
+          # $GITHUB_OUTPUT through the <<DELIMITER form: a crafted commit
+          # message must not be able to forge extra outputs.
+          JSON=$(gh api "repos/$GITHUB_REPOSITORY/commits/testing")
+          {
+            printf 'sha=%s\n' "$(printf '%s' "$JSON" | jq -r '.sha' | cut -c1-7)"
+            echo "subject<<GH_OUT_EOF"
+            printf '%s' "$JSON" | jq -r '.commit.message' | head -n 1
+            echo "GH_OUT_EOF"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Notify success
         if: success()
         uses: dawidd6/action-send-mail@94de994a9f6fffee200243214e17002e2920bb59  # v18
@@ -396,41 +433,45 @@ jobs:
           username: ${{ secrets.EMAIL_HOST_USER }}
           password: ${{ secrets.EMAIL_SECRET }}
           from: "Five a Day CI <${{ secrets.EMAIL_HOST_USER }}>"
-          to: ${{ secrets.TESTING_NOTIFY_EMAILS || secrets.OWNER_EMAILS }}
+          # hellofiveaday (the academy inbox) is added ONLY on successful
+          # deploys — failures and gate alerts stay with the dev/support list.
+          to: hellofiveaday@gmail.com${{ (secrets.TESTING_NOTIFY_EMAILS || secrets.OWNER_EMAILS) && format(', {0}', secrets.TESTING_NOTIFY_EMAILS || secrets.OWNER_EMAILS) || '' }}
           subject: "[Five a Day] v${{ needs.check.outputs.target_version }} desplegada en pruebas"
           html_body: |
             <div style="font-family: sans-serif; color:#1f2937; max-width:640px;">
-              <h2 style="color:#6d28d9;">🚀 Despliegue automático en pruebas</h2>
+              <h2 style="color:#6d28d9;">🚀 Nueva versión en el entorno de pruebas</h2>
               <p style="font-size:15px; line-height:1.6;">
-                El despliegue nocturno ha publicado la versión
+                El despliegue ha publicado la versión
                 <strong>v${{ needs.check.outputs.target_version }}</strong>
                 (antes <strong>v${{ needs.check.outputs.live_version || 'desconocida' }}</strong>)
                 en el <strong>entorno de pruebas</strong>. Ya podéis probarla.
               </p>
               <p style="text-align:center; margin:24px 0;">
-                <a href="${{ secrets.TESTING_URL || 'http://34.26.130.187:8000' }}"
+                <a href="${{ env.TEST_URL }}"
                    style="padding:12px 28px; background:#6d28d9; color:#fff; text-decoration:none; border-radius:8px; font-weight:600; font-size:15px;">
                   Abrir el entorno de pruebas →
                 </a>
               </p>
               <hr style="border:none; border-top:1px solid #e5e7eb; margin:24px 0;">
-              <p style="font-size:13px; color:#4b5563; line-height:1.6;">
-                Comprobado tras el despliegue: la versión que responde <code>/health/</code> coincide
-                con <code>pyproject.toml</code> en <code>testing</code>, el contenedor de base de datos
-                ha montado el volumen <code>testing_postgres_data</code> y no hay volúmenes huérfanos.
+              <h3 style="color:#6b7280; font-size:12px; text-transform:uppercase; letter-spacing:0.05em;">Detalles del despliegue</h3>
+              <table cellpadding="6" style="border-collapse:collapse; font-family:sans-serif; font-size:13px;">
+                <tr><td><strong>Entorno</strong></td><td><a href="${{ env.TEST_URL }}" style="color:#6d28d9;">${{ env.TEST_URL }}</a></td></tr>
+                <tr><td><strong>Versión</strong></td><td>v${{ needs.check.outputs.live_version || 'desconocida' }} → <strong>v${{ needs.check.outputs.target_version }}</strong></td></tr>
+                <tr><td><strong>Commit</strong></td><td><a href="${{ github.server_url }}/${{ github.repository }}/commit/${{ steps.commit.outputs.sha }}" style="color:#6d28d9;"><code>${{ steps.commit.outputs.sha }}</code></a></td></tr>
+                <tr><td><strong>Mensaje</strong></td><td>${{ steps.commit.outputs.subject }}</td></tr>
+              </table>
+              <hr style="border:none; border-top:1px solid #e5e7eb; margin:24px 0;">
+              <p style="font-size:14px; color:#374151; line-height:1.6;">
+                Por favor, Silvia y Penélope, comprobad que los cambios descritos en el mensaje
+                son correctos. Esta versión queda lista para vuestros tests; una vez validada,
+                <strong>marcadla como lista para despliegue en producción</strong> mediante el
+                botón del panel de testing.
               </p>
-              <p style="font-size:13px; color:#4b5563; line-height:1.6;">
-                <strong>Esta versión queda bloqueada para producción</strong> hasta que alguien la
-                valide con el botón <em>¿Listo para desplegar?</em> del panel de pruebas. Hasta
-                entonces, el workflow de despliegue a producción no se armará. Una vez validada
-                (y con la release fusionada en <code>main</code>), se armará solo en la pasada
-                nocturna siguiente — o lanza <em>Deploy production</em> a mano para desplegar hoy.
+              <p style="font-size:13px; color:#4b5563;">
+                Referencia:
+                <a href="${{ github.server_url }}/${{ github.repository }}/blob/testing/README.md"
+                   style="color:#6d28d9;">README de la rama testing</a>
               </p>
-              <p style="margin-top:16px;">
-                <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-                   style="padding:8px 16px; background:#6b46c1; color:#fff; text-decoration:none; border-radius:4px; font-size:13px;">Ver el despliegue →</a>
-              </p>
-              <p style="color:#9ca3af; font-size:12px;">Enviado automáticamente por el workflow de despliegue nocturno a pruebas.</p>
             </div>
 
       - name: Notify failure
@@ -443,27 +484,22 @@ jobs:
           username: ${{ secrets.EMAIL_HOST_USER }}
           password: ${{ secrets.EMAIL_SECRET }}
           from: "Five a Day CI <${{ secrets.EMAIL_HOST_USER }}>"
-          to: ${{ secrets.TESTING_NOTIFY_EMAILS || secrets.OWNER_EMAILS }}
-          subject: "[Five a Day] ⚠️ El despliegue nocturno a pruebas ha fallado"
+          # Dev/support only — the academy inbox is notified exclusively on
+          # successful deploys.
+          to: ${{ secrets.SUPPORT_EMAIL || secrets.OWNER_EMAILS }}
+          subject: "[Five a Day] ⚠️ El despliegue a pruebas ha fallado"
           html_body: |
             <div style="font-family: sans-serif; color:#1f2937; max-width:640px;">
-              <h2 style="color:#b91c1c;">⚠️ Fallo en el despliegue nocturno a pruebas</h2>
-              <p style="font-size:15px; line-height:1.6;">
-                El despliegue de <strong>v${{ needs.check.outputs.target_version }}</strong>
-                en el entorno de pruebas no ha terminado correctamente. El entorno puede
-                haber quedado en la versión anterior
-                (<strong>v${{ needs.check.outputs.live_version || 'desconocida' }}</strong>).
-              </p>
-              <p style="font-size:14px; color:#4b5563; line-height:1.6;">
-                Causas habituales: el árbol de trabajo de la VM está sucio (el <em>gate</em> aborta
-                antes del <code>pull</code>), la compilación se ha quedado sin memoria en la e2-micro,
-                o el contenedor no ha llegado a responder <code>/health/</code> en 10 minutos.
-                <strong>No ejecutes nunca <code>docker volume prune</code> en esa VM.</strong>
-              </p>
-              <p style="margin-top:16px;">
-                <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-                   style="padding:8px 16px; background:#b91c1c; color:#fff; text-decoration:none; border-radius:4px; font-size:13px;">Ver el run fallido →</a>
-              </p>
+              <h2 style="color:#b91c1c;">⚠️ Despliegue a pruebas fallido</h2>
+              <table cellpadding="6" style="border-collapse:collapse; font-family:sans-serif; font-size:13px;">
+                <tr><td><strong>Situación</strong></td><td>v${{ needs.check.outputs.target_version }} no llegó a desplegarse — la VM puede seguir en v${{ needs.check.outputs.live_version || 'desconocida' }}</td></tr>
+                <tr><td><strong>Causas típicas</strong></td><td>árbol sucio en la VM (gate) · sin memoria en la e2-micro · <code>/health/</code> sin responder en 10 min</td></tr>
+                <tr><td><strong>Aviso</strong></td><td>nunca <code>docker volume prune</code> en esa VM</td></tr>
+                <tr><td><strong>Run fallido</strong></td><td><a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">logs</a></td></tr>
+                <tr><td><strong>Actions</strong></td><td><a href="${{ github.server_url }}/${{ github.repository }}/actions">todas las ejecuciones</a></td></tr>
+                <tr><td><strong>Testing</strong></td><td><a href="${{ env.TEST_URL }}">${{ env.TEST_URL }}</a> · <a href="${{ env.TEST_URL }}/health/">health</a></td></tr>
+                <tr><td><strong>Repo</strong></td><td><a href="${{ github.server_url }}/${{ github.repository }}">${{ github.repository }}</a> · <a href="${{ github.server_url }}/${{ github.repository }}/tree/testing">rama testing</a></td></tr>
+              </table>
             </div>
 
   # ============================================================
@@ -488,24 +524,19 @@ jobs:
           username: ${{ secrets.EMAIL_HOST_USER }}
           password: ${{ secrets.EMAIL_SECRET }}
           from: "Five a Day CI <${{ secrets.EMAIL_HOST_USER }}>"
-          to: ${{ secrets.TESTING_NOTIFY_EMAILS || secrets.OWNER_EMAILS }}
+          # Dev/support only — the academy inbox is notified exclusively on
+          # successful deploys.
+          to: ${{ secrets.SUPPORT_EMAIL || secrets.OWNER_EMAILS }}
           subject: "[Five a Day] ⚠️ No se pudo comprobar la versión del entorno de pruebas"
           html_body: |
             <div style="font-family: sans-serif; color:#1f2937; max-width:640px;">
-              <h2 style="color:#b91c1c;">⚠️ El chequeo nocturno de pruebas ha fallado</h2>
-              <p style="font-size:15px; line-height:1.6;">
-                El despliegue nocturno no ha llegado a ejecutarse: falló la comprobación previa
-                que compara la versión desplegada con <code>pyproject.toml</code> en
-                <code>testing</code>. <strong>El entorno de pruebas sigue con la versión
-                anterior</strong> y seguirá así hasta que se resuelva.
-              </p>
-              <p style="font-size:14px; color:#4b5563; line-height:1.6;">
-                Causas habituales: <code>/health/</code> responde un <code>environment</code>
-                distinto de <code>testing</code> (la URL apunta a otro sitio), o no se pudo leer
-                la versión de <code>pyproject.toml</code> en la rama.
-              </p>
-              <p style="margin-top:16px;">
-                <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-                   style="padding:8px 16px; background:#b91c1c; color:#fff; text-decoration:none; border-radius:4px; font-size:13px;">Ver el run fallido →</a>
-              </p>
+              <h2 style="color:#b91c1c;">⚠️ Chequeo previo al despliegue de pruebas fallido</h2>
+              <table cellpadding="6" style="border-collapse:collapse; font-family:sans-serif; font-size:13px;">
+                <tr><td><strong>Situación</strong></td><td>el despliegue no llegó a ejecutarse — la VM sigue en la versión anterior hasta que se resuelva</td></tr>
+                <tr><td><strong>Causas típicas</strong></td><td><code>/health/</code> responde un <code>environment</code> ≠ <code>testing</code> (URL equivocada) · <code>pyproject.toml</code> ilegible en la rama</td></tr>
+                <tr><td><strong>Run fallido</strong></td><td><a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">logs</a></td></tr>
+                <tr><td><strong>Actions</strong></td><td><a href="${{ github.server_url }}/${{ github.repository }}/actions">todas las ejecuciones</a></td></tr>
+                <tr><td><strong>Testing</strong></td><td><a href="${{ env.TEST_URL }}">${{ env.TEST_URL }}</a> · <a href="${{ env.TEST_URL }}/health/">health</a></td></tr>
+                <tr><td><strong>Repo</strong></td><td><a href="${{ github.server_url }}/${{ github.repository }}">${{ github.repository }}</a> · <a href="${{ github.server_url }}/${{ github.repository }}/tree/testing">rama testing</a></td></tr>
+              </table>
             </div>

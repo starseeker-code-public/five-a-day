@@ -1,6 +1,6 @@
 /**
  * students.js — Student list: search, sort, Fun Friday toggle/filter, student
- * type / GDPR / allergy filters, new-student dropdown.
+ * type / GDPR / allergy filters, new-student dropdown, "Nueva matrícula" modal.
  * No Django template variables required.
  */
 document.addEventListener('DOMContentLoaded', function () {
@@ -250,21 +250,102 @@ document.addEventListener('DOMContentLoaded', function () {
         });
     }
 
+    // ==================== NUEVA MATRÍCULA (book icon + modal) ====================
+    const enrollModal = document.getElementById('enrollModal');
+    if (enrollModal) {
+        const enrollForm = document.getElementById('enrollForm');
+        const enrollNameEl = document.getElementById('enrollStudentName');
+        const enrollErrorEl = document.getElementById('enrollError');
+        const enrollSpecialCb = document.getElementById('id_is_special');
+        const enrollManualRow = document.getElementById('enrollManualRow');
+        const enrollSpecialFeeRow = document.getElementById('enrollSpecialFeeRow');
+        const enrollSubmitBtn = document.getElementById('enrollSubmitBtn');
+        let enrollStudentId = null;
+
+        function closeEnrollModal() { enrollModal.style.display = 'none'; }
+
+        function toggleSpecialRows() {
+            const on = enrollSpecialCb.checked;
+            enrollManualRow.style.display = on ? '' : 'none';
+            enrollSpecialFeeRow.style.display = on ? '' : 'none';
+        }
+
+        document.querySelectorAll('.enroll-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                enrollStudentId = btn.dataset.studentId;
+                // textContent, never innerHTML — the name is user-entered text.
+                enrollNameEl.textContent = btn.dataset.studentName;
+                // reset() restores the server-rendered defaults: today's start
+                // date, "cobrar matrícula" checked, everything else clear.
+                enrollForm.reset();
+                // Adults have no plan choice (the service prices adult_group) and
+                // no child discounts, mirroring the create page's adult mode.
+                const isAdult = btn.dataset.isAdult === '1';
+                enrollModal.querySelectorAll('.enroll-child-only').forEach(el => {
+                    el.style.display = isAdult ? 'none' : '';
+                    const box = el.querySelector('input[type="checkbox"]');
+                    if (isAdult && box) box.checked = false;
+                });
+                toggleSpecialRows();
+                enrollErrorEl.style.display = 'none';
+                enrollModal.style.display = 'flex';
+            });
+        });
+
+        enrollSpecialCb.addEventListener('change', toggleSpecialRows);
+        document.getElementById('enrollModalClose').addEventListener('click', closeEnrollModal);
+        document.getElementById('enrollCancelBtn').addEventListener('click', closeEnrollModal);
+        enrollModal.addEventListener('click', (e) => { if (e.target === enrollModal) closeEnrollModal(); });
+
+        enrollForm.addEventListener('submit', function (e) {
+            e.preventDefault();
+            if (!enrollStudentId) return;
+            enrollSubmitBtn.disabled = true;
+            fetch(`/api/students/${enrollStudentId}/enroll/`, {
+                method: 'POST',
+                headers: { 'X-CSRFToken': getCsrf() },
+                body: new FormData(enrollForm),
+            })
+                .then(r => r.json().then(data => ({ ok: r.ok, data })))
+                .then(({ ok, data }) => {
+                    if (ok && data.success) {
+                        // The Matrícula column and payments changed server-side.
+                        window.location.reload();
+                        return;
+                    }
+                    enrollErrorEl.textContent = data.error || 'Error al crear la matrícula.';
+                    enrollErrorEl.style.display = '';
+                    enrollSubmitBtn.disabled = false;
+                })
+                .catch(() => {
+                    enrollErrorEl.textContent = 'Error de conexión. Inténtalo de nuevo.';
+                    enrollErrorEl.style.display = '';
+                    enrollSubmitBtn.disabled = false;
+                });
+        });
+    }
+
     // ==================== NEW STUDENT DROPDOWN ====================
+    // The whole "Nuevo Estudiante" dropdown is admin-only, so it is absent from
+    // the DOM for a non-admin teacher — guard, or the TypeError takes down the
+    // rest of this handler with it.
+    const newStudentDropdown = document.getElementById('newStudentDropdown');
     const newStudentBtn = document.getElementById('newStudentBtn');
     const newStudentMenu = document.getElementById('newStudentMenu');
     const newStudentArrow = document.getElementById('newStudentArrow');
 
-    newStudentBtn.addEventListener('click', () => {
-        const open = !newStudentMenu.classList.contains('hidden');
-        newStudentMenu.classList.toggle('hidden');
-        newStudentArrow.textContent = open ? 'expand_more' : 'expand_less';
-    });
+    if (newStudentDropdown && newStudentBtn && newStudentMenu && newStudentArrow) {
+        newStudentBtn.addEventListener('click', () => {
+            const open = !newStudentMenu.classList.contains('hidden');
+            newStudentMenu.classList.toggle('hidden');
+            newStudentArrow.textContent = open ? 'expand_more' : 'expand_less';
+        });
 
-    document.addEventListener('click', (e) => {
-        if (!document.getElementById('newStudentDropdown').contains(e.target)) {
-            newStudentMenu.classList.add('hidden');
-            newStudentArrow.textContent = 'expand_more';
-        }
-    });
+        document.addEventListener('click', (e) => {
+            if (!newStudentDropdown.contains(e.target)) {
+                newStudentMenu.classList.add('hidden');
+                newStudentArrow.textContent = 'expand_more';
+            }
+        });
+    }
 });

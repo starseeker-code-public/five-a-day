@@ -49,9 +49,9 @@
                 <span class="material-symbols-outlined text-3xl">sync</span>
                 <p class="mt-2 text-sm">Cargando…</p>
             </div>
-            <div id="emailPreviewBody" class="max-h-[600px] overflow-y-auto bg-white">
-                {{ email_html|safe }}
-            </div>
+            <iframe id="emailPreviewBody" title="Vista previa del email" sandbox
+                    class="w-full h-[600px] bg-white border-0"
+                    srcdoc="{{ email_html }}"></iframe>
         </div>
     </div>
 </div>

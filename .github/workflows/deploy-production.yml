@@ -1,29 +1,35 @@
 name: Deploy production
 
-# Arms itself automatically every time the nightly testing deploy finishes
-# without issues, then STOPS and waits for a human. Two-phase by design:
+# Arms itself automatically on the LAST of the events a release needs, then
+# STOPS and waits for a human. Two-phase by design:
 #
 #   PHASE 1 (automatic, credential-free)
-#   `Deploy testing` completes cleanly
+#   QA signs off on /testing/ (repository_dispatch), the release PR merges
+#   into main (push), or the nightly `Deploy testing` completes (workflow_run)
 #                 →  preflight: exit green when production already serves
 #                    main's version (the common nightly case — silent, no
-#                    email); otherwise the QA sign-off gate (testing's
-#                    /health/?deep=1 must be healthy, serve THIS version, and
-#                    report ready_for_prod=true — set by the "¿Listo para
-#                    desplegar?" button on /testing/ and reset by every nightly
-#                    testing deploy), wait for CI green, list migrations
+#                    email); otherwise the provenance gate (the version on main
+#                    must carry the testing-vX.Y.Z release tag in its history,
+#                    i.e. it arrived via the testing → main PR), then the QA
+#                    sign-off gate (testing's /health/?deep=1 must be healthy,
+#                    serve THIS version, and report ready_for_prod=true — set
+#                    by the "¿Listo para desplegar?" button on /testing/ and
+#                    reset by every nightly testing deploy), wait for CI green,
+#                    list migrations
 #   PHASE 2 (manual approval)
 #                 →  deploy: BLOCKED on the `production` environment's required
 #                    reviewer. Nothing touches GCP until somebody clicks
 #                    "Review deployments → Approve".
 #
-# The release cadence this produces: night 1 deploys the release to testing
-# and resets ready_for_prod, QA validates it during the day, and night 2's
-# no-op testing run re-triggers this workflow — which now finds everything in
-# place and arms. To ship the same day, dispatch this workflow by hand after
-# signing off. Production is still never deployed by a timer: the trigger only
-# ARMS the deploy, a human always approves. The `/deploy` skill remains the
-# by-hand path for emergencies.
+# The cadence this produces: the nightly deploy puts the release on the VM and
+# resets ready_for_prod; then the LAST of {QA's sign-off, the PR merge} arms
+# this workflow the moment it happens — same day, no manual dispatch. Those two
+# day-time triggers exit GREEN AND QUIET when the other condition is still
+# pending ("not yet" is a state, not a fault); the nightly workflow_run
+# re-trigger is the strict WATCHDOG that fails loudly while a merged release
+# sits unsigned. Production is still never deployed by a timer: every trigger
+# only ARMS the deploy, a human always approves. The `/deploy` skill remains
+# the by-hand path for emergencies.
 #
 # If the deploy job fails AFTER it has started changing production (jobs
 # repointed / service rolled), a rollback step automatically restores the
@@ -32,21 +38,41 @@ name: Deploy production
 # is in the failure email). rollback-production.yml is the on-demand variant.
 
 on:
-  # Chained to the nightly testing deploy, NOT to the push to main. Firing on
-  # the release PR merge raced the pipeline it depends on: preflight demands
-  # that TESTING serve the release version with QA's sign-off, but the VM only
-  # picks a version up on the next nightly deploy — so a same-day merge always
-  # failed the gate (v1.26.5: main merged at 13:36, testing still served
-  # v1.26.2). `workflow_run` fires this at the only moment the gate can pass:
-  # right after testing's state changed. The no-op nightly run (VM already on
-  # the target version) also completes successfully and re-triggers this — that
-  # is the run that ships a release, because a no-op does NOT reset
-  # ready_for_prod. Like `schedule`, workflow_run only ever fires from the
-  # workflow file on the DEFAULT branch (main): edits to this trigger travel
-  # development → testing → main before they change anything.
+  # A release needs three events: (1) the nightly testing deploy puts the
+  # version on the VM, (2) QA signs it off on /testing/, (3) the testing → main
+  # release PR merges. Because the testing deploy RESETS ready_for_prod, the
+  # sign-off always post-dates the deploy — so the LAST event is always the
+  # sign-off or the merge, and those two are the arming triggers:
+  #
+  #   repository_dispatch — the "¿Listo para desplegar?" button (and
+  #     `set_ready_for_prod on`) fires `qa-ready-for-prod` via the GitHub API
+  #     (core/github_dispatch.py, GITHUB_DISPATCH_TOKEN on the testing VM;
+  #     fail-soft, so a missing token just falls back to the nightly cadence).
+  #     The event's payload is deliberately IGNORED — preflight re-derives
+  #     everything from main's pyproject.toml and testing's /health/?deep=1.
+  #   push to main — the release PR merge. Firing on the merge used to be the
+  #     ONLY trigger and was removed because a same-day merge always failed the
+  #     QA gate loudly (v1.26.5: main merged at 13:36, testing still served
+  #     v1.26.2). What makes it safe to reinstate is the trigger-mode split
+  #     below: on these two day-time events an unmet gate ends the run GREEN
+  #     with a "not armed" summary instead of a red run and an alarm email.
+  #   workflow_run — the nightly `Deploy testing` completing. Never the arming
+  #     event for a new version (the deploy resets the sign-off); it is the
+  #     strict WATCHDOG: a merged release still unsigned by then fails loudly
+  #     and emails — deliberate insistence, an unshipped release is a state to
+  #     resolve, not to sit in.
+  #
+  # All of these fire from the workflow file on the DEFAULT branch (main), so
+  # trigger edits travel development → testing → main before they change
+  # anything (push runs the file as of the pushed commit, so the release that
+  # ships a trigger change already merges with it active).
   workflow_run:
     workflows: ["Deploy testing"]
     types: [completed]
+  push:
+    branches: [main]
+  repository_dispatch:
+    types: [qa-ready-for-prod]
   workflow_dispatch:
     inputs:
       force:
@@ -97,7 +123,28 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
         with:
-          fetch-depth: 0   # migration diff needs history and tags
+          fetch-depth: 0   # migration diff and provenance gate need history and tags
+
+      - name: Trigger mode
+        id: mode
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          # STRICT events fail LOUDLY when the release is not ready: the nightly
+          # workflow_run is the watchdog for a release sitting unshipped, and a
+          # workflow_dispatch has a human watching who wants the reason. The
+          # day-time events — the release PR merge (push) and QA's sign-off
+          # (repository_dispatch) — are SOFT: each fires the moment its own
+          # condition became true, so "the other condition is still pending" is
+          # the expected state, not a fault. Soft runs end green with
+          # should_deploy=false and a summary, never an alarm email; whatever
+          # stays pending, the next nightly watchdog run judges strictly.
+          case "$EVENT_NAME" in
+            push|repository_dispatch) STRICT=false ;;
+            *) STRICT=true ;;
+          esac
+          echo "strict=$STRICT" >> "$GITHUB_OUTPUT"
+          echo "event=$EVENT_NAME strict=$STRICT"
 
       - name: Read versions
         id: versions
@@ -155,10 +202,58 @@ jobs:
             echo "proceed=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: 'Phase 1 gate: testing must be healthy and signed off for THIS version'
+      - name: 'Gate 1: the version must have arrived via the testing → main release PR'
+        id: provenance
         if: steps.precheck.outputs.proceed == 'true'
         env:
           NEW: ${{ steps.versions.outputs.new_version }}
+          STRICT: ${{ steps.mode.outputs.strict }}
+          FORCE: ${{ inputs.force }}
+        run: |
+          # auto-merge.yml tags the exact testing commit each release PR ships
+          # as testing-vX.Y.Z (the documented manual same-day procedure creates
+          # the same tag). That tag being an ancestor of main is proof that this
+          # version travelled development → testing → main through the release
+          # PR. A version bump that reached main any other way (a stray direct
+          # merge — the PR #49 shape) must never arm production: until now that
+          # condition was only IMPLICIT in the version compare, this makes it a
+          # first-class gate. On the repository_dispatch trigger it is also the
+          # normal "PR not merged yet" wait state, hence the soft exit.
+          if [ "$FORCE" = "true" ]; then
+            echo "::warning::force=true — the release-provenance gate is BYPASSED."
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          TAG="testing-v$NEW"
+          if git rev-parse -q --verify "refs/tags/$TAG^{commit}" > /dev/null \
+             && git merge-base --is-ancestor "refs/tags/$TAG^{commit}" HEAD; then
+            echo "Gate passed: $TAG is an ancestor of main — v$NEW arrived via the release PR."
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "proceed=false" >> "$GITHUB_OUTPUT"
+          MSG="v$NEW is on main but the release tag $TAG is missing or not an ancestor of main — the testing → main release PR for it has not been merged (or the version arrived outside the release path)."
+          if [ "$STRICT" = "true" ]; then
+            echo "::error::$MSG Refusing to arm."
+            exit 1
+          fi
+          echo "::notice::$MSG"
+          {
+            echo "## Not armed — waiting for the release PR"
+            echo ""
+            echo "$MSG"
+            echo ""
+            echo "No alarm: tonight's watchdog run re-checks this strictly and emails if it is still unresolved."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 'Gate 2: testing must be healthy and signed off for THIS version'
+        id: qagate
+        if: steps.provenance.outputs.proceed == 'true'
+        env:
+          NEW: ${{ steps.versions.outputs.new_version }}
+          STRICT: ${{ steps.mode.outputs.strict }}
           FORCE: ${{ inputs.force }}
         run: |
           # The QA sign-off gate. Testing's deep health probe must (a) answer and
@@ -166,49 +261,67 @@ jobs:
           # (c) report ready_for_prod=true — which only the "¿Listo para
           # desplegar?" button on /testing/ sets, and which every nightly
           # testing deploy resets to false. A sign-off therefore always refers
-          # to the version it was given on, never to an older build.
+          # to the version it was given on, never to an older build. On the
+          # push trigger (the PR just merged) an unmet check is the normal
+          # "testing has not deployed / QA has not signed off yet" wait state,
+          # hence the soft exit.
           if [ "$FORCE" = "true" ]; then
             echo "::warning::force=true — the testing sign-off gate is BYPASSED. This ships without QA validation."
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
           # Deliberately no -f: a 503 (degraded deep probe) still carries a JSON
           # body naming what is wrong, which beats "curl: (22)".
           BODY=$(curl -sS --max-time 25 --retry 3 --retry-delay 5 "$TEST_URL/health/?deep=1" || echo '')
+          PROBLEMS=()
           if [ -z "$BODY" ] || ! printf '%s' "$BODY" | jq -e . > /dev/null 2>&1; then
-            echo "::error::Testing did not answer /health/?deep=1 — cannot confirm the QA sign-off. Fix the testing VM (or use force for an emergency)."
+            PROBLEMS+=("Testing did not answer /health/?deep=1 — cannot confirm the QA sign-off. Fix the testing VM (or use force for an emergency).")
+          else
+            printf '%s' "$BODY" | jq .
+
+            STATUS=$(printf '%s' "$BODY" | jq -r '.status // empty')
+            ENVIRONMENT=$(printf '%s' "$BODY" | jq -r '.environment // empty')
+            TEST_VERSION=$(printf '%s' "$BODY" | jq -r '.version // empty')
+            CONNECTED=$(printf '%s' "$BODY" | jq -r '.database.connected // false')
+            READY=$(printf '%s' "$BODY" | jq -r '.ready_for_prod // false')
+
+            if [ "$ENVIRONMENT" != "testing" ]; then
+              PROBLEMS+=("$TEST_URL reports environment='$ENVIRONMENT', expected 'testing' — the URL points somewhere else.")
+            fi
+            if [ "$STATUS" != "healthy" ] || [ "$CONNECTED" != "true" ]; then
+              PROBLEMS+=("Testing is not healthy (status='$STATUS', database.connected='$CONNECTED').")
+            fi
+            if [ "$TEST_VERSION" != "$NEW" ]; then
+              PROBLEMS+=("Testing serves v$TEST_VERSION but this release is v$NEW — the sign-off (if any) does not apply to this version.")
+            fi
+            if [ "$READY" != "true" ]; then
+              PROBLEMS+=("ready_for_prod is '$READY'. QA has not signed off v$NEW — press '¿Listo para desplegar?' on /testing/ first.")
+            fi
+          fi
+
+          if [ "${#PROBLEMS[@]}" -eq 0 ]; then
+            echo "Gate passed: testing is healthy, serves v$NEW, and QA signed it off."
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "proceed=false" >> "$GITHUB_OUTPUT"
+          if [ "$STRICT" = "true" ]; then
+            for p in "${PROBLEMS[@]}"; do echo "::error::$p"; done
             exit 1
           fi
-          printf '%s' "$BODY" | jq .
-
-          STATUS=$(printf '%s' "$BODY" | jq -r '.status // empty')
-          ENVIRONMENT=$(printf '%s' "$BODY" | jq -r '.environment // empty')
-          TEST_VERSION=$(printf '%s' "$BODY" | jq -r '.version // empty')
-          CONNECTED=$(printf '%s' "$BODY" | jq -r '.database.connected // false')
-          READY=$(printf '%s' "$BODY" | jq -r '.ready_for_prod // false')
-
-          FAILED=0
-          if [ "$ENVIRONMENT" != "testing" ]; then
-            echo "::error::$TEST_URL reports environment='$ENVIRONMENT', expected 'testing' — the URL points somewhere else."
-            FAILED=1
-          fi
-          if [ "$STATUS" != "healthy" ] || [ "$CONNECTED" != "true" ]; then
-            echo "::error::Testing is not healthy (status='$STATUS', database.connected='$CONNECTED')."
-            FAILED=1
-          fi
-          if [ "$TEST_VERSION" != "$NEW" ]; then
-            echo "::error::Testing serves v$TEST_VERSION but this release is v$NEW — the sign-off (if any) does not apply to this version."
-            FAILED=1
-          fi
-          if [ "$READY" != "true" ]; then
-            echo "::error::ready_for_prod is '$READY'. QA has not signed off v$NEW — press '¿Listo para desplegar?' on /testing/ first."
-            FAILED=1
-          fi
-          [ "$FAILED" -eq 0 ] || exit 1
-          echo "Gate passed: testing is healthy, serves v$TEST_VERSION, and QA signed it off."
+          for p in "${PROBLEMS[@]}"; do echo "::notice::$p"; done
+          {
+            echo "## Not armed — the release is not ready on testing yet"
+            echo ""
+            for p in "${PROBLEMS[@]}"; do echo "- $p"; done
+            echo ""
+            echo "No alarm: tonight's watchdog run re-checks this strictly and emails if it is still unresolved."
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Wait for CI to go green on this commit
-        if: steps.precheck.outputs.proceed == 'true'
+        if: steps.qagate.outputs.proceed == 'true'
         id: ci
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b  # v7
         with:
@@ -320,7 +433,7 @@ jobs:
             }
 
       - name: List migrations the approver is about to authorise
-        if: steps.precheck.outputs.proceed == 'true'
+        if: steps.qagate.outputs.proceed == 'true'
         id: migrations
         # Via env, never interpolated into the body: the value comes from the
         # production /health/ response, i.e. off-box data.
@@ -344,22 +457,27 @@ jobs:
       - name: Arm
         id: compare
         # No `if:` — the implicit success() is exactly right: on a "nothing to
-        # deploy" night the gated steps above are *skipped* and this still runs
-        # to emit should_deploy=false; but if a gate FAILED, this is skipped,
-        # should_deploy stays empty and the deploy job cannot fire.
+        # deploy" night, or when a SOFT gate reported "not yet" (proceed=false,
+        # green exit), the later steps are *skipped* or no-ops and this still
+        # runs to emit should_deploy=false; but if a STRICT gate FAILED, this
+        # is skipped, should_deploy stays empty and the deploy job cannot fire.
+        # PROCEED comes from the LAST gate: it is 'true' only when every gate
+        # in the chain passed (each gate is skipped unless the previous one
+        # emitted proceed=true, and a skipped step's output is empty).
         #
         # All values via env. `FILES='${{ ... }}'` in particular would be an
         # injection sink: it is a list of git paths, and a path may legally
         # contain a single quote, which breaks out of the shell literal.
         env:
-          PROCEED: ${{ steps.precheck.outputs.proceed }}
+          PROCEED: ${{ steps.qagate.outputs.proceed }}
           NEW: ${{ steps.versions.outputs.new_version }}
           LIVE: ${{ steps.versions.outputs.live_version }}
           FILES: ${{ steps.migrations.outputs.files }}
           SHORT_SHA: ${{ steps.versions.outputs.short_sha }}
         run: |
           if [ "$PROCEED" != "true" ]; then
-            # The precheck already wrote the "Nothing to deploy" summary.
+            # Whichever step stopped the chain (precheck's "Nothing to deploy",
+            # or a soft gate's "Not armed — waiting") already wrote the summary.
             echo "should_deploy=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -434,6 +552,18 @@ jobs:
           [ "$ACTUAL" = "$NEW_SHA" ] || { echo "::error::HEAD is $ACTUAL, expected $NEW_SHA"; exit 1; }
           [ -z "$(git status --porcelain)" ] || { echo "::error::working tree is dirty"; exit 1; }
           echo "building $NEW_SHA (v$NEW_VERSION)"
+
+      - name: Deployed commit info
+        id: commit
+        run: |
+          # For the success email. The subject is free-form text, so it goes to
+          # $GITHUB_OUTPUT through the <<DELIMITER form: a crafted commit
+          # message must not be able to forge extra outputs.
+          {
+            echo "subject<<GH_OUT_EOF"
+            git log -1 --pretty=%s
+            echo "GH_OUT_EOF"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093  # v3.0.0
@@ -848,31 +978,34 @@ jobs:
           subject: "[Five a Day] v${{ needs.preflight.outputs.new_version }} desplegada en producción"
           html_body: |
             <div style="font-family: sans-serif; color:#1f2937; max-width:640px;">
-              <h2 style="color:#6d28d9;">✅ Nueva versión en producción</h2>
+              <h2 style="color:#6d28d9;">🎉 Nueva versión en producción</h2>
               <p style="font-size:15px; line-height:1.6;">
-                La versión <strong>v${{ needs.preflight.outputs.new_version }}</strong>
+                ¡Todo ha ido de maravilla! La versión
+                <strong>v${{ needs.preflight.outputs.new_version }}</strong>
                 (antes <strong>v${{ needs.preflight.outputs.live_version || 'desconocida' }}</strong>)
-                ya está publicada en <strong>producción</strong>. Se aprobó manualmente en GitHub;
-                la aprobación queda registrada en el entorno <code>production</code> del repositorio.
+                se ha desplegado correctamente y ya está funcionando en <strong>producción</strong>.
+                Los cambios que validasteis en pruebas están ahora disponibles para todos. 🚀
+              </p>
+              <p style="font-size:14px; color:#374151; line-height:1.6;">
+                <em>${{ steps.commit.outputs.subject }}</em>
               </p>
               <p style="text-align:center; margin:24px 0;">
-                <a href="${{ secrets.PRODUCTION_URL || 'https://fiveaday-332600671945.europe-southwest1.run.app' }}"
+                <a href="${{ env.PROD_URL }}"
                    style="padding:12px 28px; background:#6d28d9; color:#fff; text-decoration:none; border-radius:8px; font-weight:600; font-size:15px;">
                   Abrir la aplicación →
                 </a>
               </p>
               <hr style="border:none; border-top:1px solid #e5e7eb; margin:24px 0;">
-              <h3 style="color:#6b7280; font-size:12px; text-transform:uppercase; letter-spacing:0.05em;">Detalles técnicos</h3>
+              <h3 style="color:#6b7280; font-size:12px; text-transform:uppercase; letter-spacing:0.05em;">Detalles del despliegue</h3>
               <table cellpadding="6" style="border-collapse:collapse; font-family:sans-serif; font-size:13px;">
-                <tr><td><strong>Imagen</strong></td><td><code>${{ steps.diff.outputs.old_sha }}</code> → <code>${{ needs.preflight.outputs.short_sha }}</code></td></tr>
-                <tr><td><strong>Copia de seguridad</strong></td><td><code>${{ steps.backup.outputs.backup_id }}</code> (verificada como SUCCESSFUL antes de migrar)</td></tr>
+                <tr><td><strong>Entorno</strong></td><td><a href="${{ env.PROD_URL }}" style="color:#6d28d9;">${{ env.PROD_URL }}</a></td></tr>
+                <tr><td><strong>Versión</strong></td><td>v${{ needs.preflight.outputs.live_version || 'desconocida' }} → <strong>v${{ needs.preflight.outputs.new_version }}</strong></td></tr>
+                <tr><td><strong>Commit</strong></td><td><a href="${{ github.server_url }}/${{ github.repository }}/commit/${{ needs.preflight.outputs.sha }}" style="color:#6d28d9;"><code>${{ needs.preflight.outputs.short_sha }}</code></a></td></tr>
+                <tr><td><strong>Mensaje</strong></td><td>${{ steps.commit.outputs.subject }}</td></tr>
                 <tr><td><strong>Migraciones</strong></td><td>${{ steps.diff.outputs.migrations || 'ninguna' }}</td></tr>
-                <tr><td><strong>Trabajos Cloud Run</strong></td><td>todos repuntados a la nueva imagen y verificados</td></tr>
+                <tr><td><strong>Copia de seguridad</strong></td><td><code>${{ steps.backup.outputs.backup_id }}</code> (verificada antes de migrar)</td></tr>
+                <tr><td><strong>Despliegue</strong></td><td><a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" style="color:#6d28d9;">registro completo del despliegue</a></td></tr>
               </table>
-              <p style="margin-top:16px;">
-                <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-                   style="padding:8px 16px; background:#6b46c1; color:#fff; text-decoration:none; border-radius:4px; font-size:13px;">Ver el despliegue →</a>
-              </p>
             </div>
 
       - name: Notify failure
@@ -885,31 +1018,25 @@ jobs:
           username: ${{ secrets.EMAIL_HOST_USER }}
           password: ${{ secrets.EMAIL_SECRET }}
           from: "Five a Day CI <${{ secrets.EMAIL_HOST_USER }}>"
-          to: hellofiveaday@gmail.com${{ secrets.SUPPORT_EMAIL && format(', {0}', secrets.SUPPORT_EMAIL) || '' }}
+          # Failures go to dev/support only — the academy inbox (hellofiveaday)
+          # is notified exclusively on successful deploys.
+          to: ${{ secrets.SUPPORT_EMAIL || secrets.OWNER_EMAILS }}
           subject: "[Five a Day] 🚨 El despliegue a producción ha fallado"
           html_body: |
             <div style="font-family: sans-serif; color:#1f2937; max-width:640px;">
-              <h2 style="color:#b91c1c;">🚨 Fallo en el despliegue a producción</h2>
-              <p style="font-size:15px; line-height:1.6;">
-                El despliegue de <strong>v${{ needs.preflight.outputs.new_version }}</strong>
-                se ha detenido.
-              </p>
-              <p style="font-size:14px; line-height:1.6;">
-                <strong>Rollback automático:</strong>
-                ${{ steps.rollback.outputs.state || 'no aplicado — el fallo ocurrió antes de tocar producción, que sigue sirviendo la versión anterior' }}.<br>
-                ${{ steps.rollback.outputs.detail || '' }}
-              </p>
-              <p style="font-size:14px; color:#4b5563; line-height:1.6;">
-                Copia de seguridad previa:
-                <code>${{ steps.backup.outputs.backup_id || 'no llegó a crearse' }}</code>.
-                La base de datos nunca se revierte automáticamente; si hay que restaurarla,
-                es una decisión manual (ver DEPLOYMENT.md). Para un rollback a un tag
-                concreto, usa el workflow <em>Rollback production</em>.
-              </p>
-              <p style="margin-top:16px;">
-                <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-                   style="padding:8px 16px; background:#b91c1c; color:#fff; text-decoration:none; border-radius:4px; font-size:13px;">Ver el run fallido →</a>
-              </p>
+              <h2 style="color:#b91c1c;">🚨 Despliegue a producción fallido</h2>
+              <table cellpadding="6" style="border-collapse:collapse; font-family:sans-serif; font-size:13px;">
+                <tr><td><strong>Versión</strong></td><td>v${{ needs.preflight.outputs.new_version }} (detenido)</td></tr>
+                <tr><td><strong>Rollback automático</strong></td><td>${{ steps.rollback.outputs.state || 'no aplicado — el fallo ocurrió antes de tocar producción, que sigue en la versión anterior' }}</td></tr>
+                <tr><td><strong>Detalle</strong></td><td>${{ steps.rollback.outputs.detail || '—' }}</td></tr>
+                <tr><td><strong>Backup previo</strong></td><td><code>${{ steps.backup.outputs.backup_id || 'no llegó a crearse' }}</code> — la BD nunca se revierte sola (DEPLOYMENT.md)</td></tr>
+                <tr><td><strong>Rollback manual</strong></td><td><a href="${{ github.server_url }}/${{ github.repository }}/actions/workflows/rollback-production.yml">workflow Rollback production</a></td></tr>
+                <tr><td><strong>Run fallido</strong></td><td><a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">logs</a></td></tr>
+                <tr><td><strong>Actions</strong></td><td><a href="${{ github.server_url }}/${{ github.repository }}/actions">todas las ejecuciones</a></td></tr>
+                <tr><td><strong>Producción</strong></td><td><a href="${{ env.PROD_URL }}">${{ env.PROD_URL }}</a> · <a href="${{ env.PROD_URL }}/health/">health</a></td></tr>
+                <tr><td><strong>Testing</strong></td><td><a href="${{ env.TEST_URL }}">${{ env.TEST_URL }}</a> · <a href="${{ env.TEST_URL }}/health/">health</a></td></tr>
+                <tr><td><strong>Repo</strong></td><td><a href="${{ github.server_url }}/${{ github.repository }}">${{ github.repository }}</a> · <a href="${{ github.server_url }}/${{ github.repository }}/tree/main">rama main</a></td></tr>
+              </table>
             </div>
 
   # ============================================================
@@ -917,13 +1044,16 @@ jobs:
   #
   # The deploy job carries its own failure email, but it never starts when
   # preflight fails — QA has not signed off the release, testing serves another
-  # version, CI went red on main, a required check never ran, or the 45-minute
-  # wait expired. That is exactly the state somebody needs to know about, and
-  # without this it is only a red run in the Actions tab. Note this fires on
-  # every nightly re-trigger while a merged release sits unsigned — that
-  # insistence is deliberate: an unshipped release is a state to resolve, not
-  # to sit in. A quiet night (production already on main's version) never gets
-  # here: the precheck ends the run green before the gates.
+  # version, the release version reached main outside the release PR, CI went
+  # red on main, a required check never ran, or the 45-minute wait expired.
+  # That is exactly the state somebody needs to know about, and without this it
+  # is only a red run in the Actions tab. Preflight only FAILS on the strict
+  # triggers (the nightly workflow_run watchdog and workflow_dispatch): the
+  # day-time triggers (push, repository_dispatch) end green with a "not armed"
+  # summary instead, so this fires once per night while a merged release sits
+  # unsigned — that insistence is deliberate: an unshipped release is a state
+  # to resolve, not to sit in. A quiet night (production already on main's
+  # version) never gets here: the precheck ends the run green before the gates.
   # ============================================================
   notify-preflight-failure:
     name: Notify preflight failure
@@ -939,29 +1069,21 @@ jobs:
           username: ${{ secrets.EMAIL_HOST_USER }}
           password: ${{ secrets.EMAIL_SECRET }}
           from: "Five a Day CI <${{ secrets.EMAIL_HOST_USER }}>"
-          to: hellofiveaday@gmail.com${{ secrets.SUPPORT_EMAIL && format(', {0}', secrets.SUPPORT_EMAIL) || '' }}
+          # Gate alerts go to dev/support only — the academy inbox
+          # (hellofiveaday) is notified exclusively on successful deploys.
+          to: ${{ secrets.SUPPORT_EMAIL || secrets.OWNER_EMAILS }}
           subject: "[Five a Day] ⚠️ La versión en main NO es desplegable"
           html_body: |
             <div style="font-family: sans-serif; color:#1f2937; max-width:640px;">
-              <h2 style="color:#b91c1c;">⚠️ El despliegue a producción no se ha podido preparar</h2>
-              <p style="font-size:15px; line-height:1.6;">
-                <code>main</code> lleva una versión que producción aún no sirve, pero la
-                comprobación previa ha fallado, así que <strong>no hay ningún despliegue
-                esperando aprobación</strong>. Producción sigue intacta.
-              </p>
-              <p style="font-size:14px; color:#4b5563; line-height:1.6;">
-                La causa más habitual: el entorno de pruebas <strong>no ha validado esta
-                versión</strong> — falta pulsar <em>¿Listo para desplegar?</em> en
-                <code>/testing/</code> (el despliegue nocturno a pruebas resetea ese visto
-                bueno con cada versión nueva). Tras pulsarlo, lanza <em>Deploy production</em>
-                a mano para desplegar hoy, o no hagas nada: el intento de la noche siguiente
-                se armará solo. Otras causas: pruebas sirve otra versión o no responde,
-                CI está en rojo en el commit, un check obligatorio (<code>Lint</code>,
-                <code>Type check</code>, <code>Tests</code>, <code>Docker build</code>)
-                no llegó a ejecutarse, o CI no terminó en 45 minutos.
-              </p>
-              <p style="margin-top:16px;">
-                <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-                   style="padding:8px 16px; background:#b91c1c; color:#fff; text-decoration:none; border-radius:4px; font-size:13px;">Ver el run fallido →</a>
-              </p>
+              <h2 style="color:#b91c1c;">⚠️ Despliegue a producción no armado</h2>
+              <table cellpadding="6" style="border-collapse:collapse; font-family:sans-serif; font-size:13px;">
+                <tr><td><strong>Situación</strong></td><td><code>main</code> lleva una versión que producción no sirve, pero el preflight falló — <strong>no hay despliegue esperando aprobación</strong>; producción intacta</td></tr>
+                <tr><td><strong>Causa más probable</strong></td><td>falta el visto bueno de QA — botón <em>¿Listo para desplegar?</em> en <a href="${{ env.TEST_URL }}/testing/">/testing/</a> (al pulsarlo, el workflow se re-arma solo)</td></tr>
+                <tr><td><strong>Otras causas</strong></td><td>pruebas sirve otra versión o no responde · la versión llegó a <code>main</code> fuera de la PR de release (sin tag <code>testing-vX.Y.Z</code>) · CI en rojo o check obligatorio sin ejecutar · CI no terminó en 45 min</td></tr>
+                <tr><td><strong>Run fallido</strong></td><td><a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">logs</a></td></tr>
+                <tr><td><strong>Workflow</strong></td><td><a href="${{ github.server_url }}/${{ github.repository }}/actions/workflows/deploy-production.yml">Deploy production</a> · <a href="${{ github.server_url }}/${{ github.repository }}/actions">Actions</a></td></tr>
+                <tr><td><strong>Testing</strong></td><td><a href="${{ env.TEST_URL }}">${{ env.TEST_URL }}</a> · <a href="${{ env.TEST_URL }}/health/?deep=1">health deep</a> · <a href="${{ env.TEST_URL }}/testing/">panel QA</a></td></tr>
+                <tr><td><strong>Producción</strong></td><td><a href="${{ env.PROD_URL }}">${{ env.PROD_URL }}</a> · <a href="${{ env.PROD_URL }}/health/">health</a></td></tr>
+                <tr><td><strong>Repo</strong></td><td><a href="${{ github.server_url }}/${{ github.repository }}">${{ github.repository }}</a> · <a href="${{ github.server_url }}/${{ github.repository }}/tree/main">rama main</a></td></tr>
+              </table>
             </div>

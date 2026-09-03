@@ -154,6 +154,9 @@ def send_birthday_email_task(self, student_id: int):
     mom and dad want to know it's their kid's birthday; before this fix the
     task did `.first()` and only picked the arbitrary first row.
     """
+    import os
+
+    from django.conf import settings
     from django.db.models import Prefetch
 
     from comms.services.email_service import email_service
@@ -189,6 +192,10 @@ def send_birthday_email_task(self, student_id: int):
         logger.warning("Student id=%d has no parent (or self) with email", student_id)
         return {"status": "skipped", "reason": "no email recipient"}
 
+    # The template's <img> is a cid: inline part (a URL src never loads in a
+    # mail client) — same pattern as fun_friday's event_image.
+    birthday_image = os.path.join(settings.BASE_DIR, "core/static/images/happy-birthday.png")
+
     successes = 0
     for email in recipients:
         ok = email_service.send_email(
@@ -196,6 +203,7 @@ def send_birthday_email_task(self, student_id: int):
             recipients=email,
             subject=f"🎉 ¡Feliz Cumpleaños {student.first_name}!",
             context={"name": student.first_name},
+            inline_images={"birthday_image": birthday_image},
             fail_silently=True,
         )
         if ok:
@@ -258,9 +266,10 @@ def send_birthday_emails_task(self):
 def send_monthly_report_task(self, recipient_email: str | None = None):
     """
     Monthly (day 28) job: email a compact financial snapshot for the current
-    month to the support / admin address. When `recipient_email` is None,
-    reads `settings.SUPPORT_EMAIL` (which is where every admin-facing
-    notification already goes).
+    month to the support / admin address. When `recipient_email` is None, goes
+    to BOTH `settings.SUPPORT_EMAIL` (where every admin-facing notification
+    already goes) and `settings.DEFAULT_FROM_EMAIL` (the academy's own Gmail),
+    deduped — so it is skipped only when neither is configured.
     """
     from decimal import Decimal
 
@@ -270,11 +279,19 @@ def send_monthly_report_task(self, recipient_email: str | None = None):
     from billing.models import Payment
     from comms.services.email_service import email_service
 
-    to = recipient_email or getattr(settings, "SUPPORT_EMAIL", None)
-    if not to:
+    if recipient_email:
+        # Explicit override (the --recipient flag on the management command):
+        # that one run goes only where it was pointed.
+        recipients = [recipient_email]
+    else:
+        # The academy reads this in two inboxes: the support address and its
+        # own Gmail account (DEFAULT_FROM_EMAIL). Deduped in case they match.
+        candidates = [getattr(settings, "SUPPORT_EMAIL", None), settings.DEFAULT_FROM_EMAIL]
+        recipients = list(dict.fromkeys(c for c in candidates if c))
+    if not recipients:
         logger.warning(
-            "send_monthly_report_task: SUPPORT_EMAIL is not set — nobody to email; "
-            "set SUPPORT_EMAIL in the environment to activate the monthly report."
+            "send_monthly_report_task: neither SUPPORT_EMAIL nor DEFAULT_FROM_EMAIL is set — "
+            "nobody to email; set SUPPORT_EMAIL in the environment to activate the monthly report."
         )
         return {"status": "skipped", "reason": "no recipient"}
 
@@ -322,7 +339,7 @@ def send_monthly_report_task(self, recipient_email: str | None = None):
 
     success = email_service.send_email(
         template_name="admin_monthly_report",
-        recipients=to,
+        recipients=recipients,
         subject=f"[Five a Day] Informe mensual {today:%m/%Y}",
         context={
             "period": f"{today:%m/%Y}",
@@ -333,7 +350,7 @@ def send_monthly_report_task(self, recipient_email: str | None = None):
         },
         fail_silently=True,
     )
-    logger.info("Monthly report sent to %s (email_success=%s)", to, success)
+    logger.info("Monthly report sent to %s (email_success=%s)", ", ".join(recipients), success)
     return {
         "status": "success" if success else "failed",
         "expected": str(expected),
@@ -471,18 +488,33 @@ def send_payment_reminder_sms_task(self, payment_id: int):
 
 
 @shared_task(
-    name="comms.tasks.send_parent_magic_link_task",
+    name="comms.tasks.send_parent_temporary_password_task",
     bind=True,
-    max_retries=2,
-    default_retry_delay=30,
+    max_retries=0,
 )
-def send_parent_magic_link_task(self, parent_id: int, link: str):
+def send_parent_temporary_password_task(self, parent_id: int, login_url: str = "", reset: bool = False):
     """
-    v1.9 companion task: email the magic-link URL to a parent.
+    Generate a temporary portal password and email it to the parent.
 
-    Runs asynchronously so the /parent/login/ POST returns in constant time
+    Two callers, one template: the once-only invitation sent when the parent
+    record is created (``reset=False``), and the self-service recovery form
+    (``reset=True``). The copy differs, the mechanism does not.
+
+    The password is generated HERE and not passed in. It is a live credential,
+    and a task argument is serialised into the broker (Redis, in development)
+    and printed by Celery's own task logging — so the plaintext exists only
+    inside this function and inside the email it produces. `login_url` travels
+    as an argument precisely because it is NOT a secret.
+
+    ``max_retries=0`` for the same reason: a retry would mint a *second*
+    password and silently invalidate the one the family may have just received.
+    The send is `fail_silently`, so a dead SMTP hop returns ``"failed"`` rather
+    than raising, and the family recovers with another "¿Has olvidado tu
+    contraseña?" — which is exactly the same operation.
+
+    Runs asynchronously so the recovery POST returns in constant time
     regardless of SMTP latency — that keeps the enumeration-protection story
-    honest (attacker can't distinguish real vs unknown emails by timing).
+    honest (an attacker can't distinguish real from unknown emails by timing).
     """
     from comms.services.email_service import email_service
     from students.models import Parent
@@ -490,23 +522,29 @@ def send_parent_magic_link_task(self, parent_id: int, link: str):
     try:
         parent = Parent.objects.get(id=parent_id)
     except Parent.DoesNotExist:
-        logger.warning("send_parent_magic_link_task: parent %s not found", parent_id)
+        logger.warning("send_parent_temporary_password_task: parent %d not found", int(parent_id))
         return {"status": "error", "message": "parent not found"}
 
     if not parent.email:
         return {"status": "skipped", "reason": "no email"}
 
+    temporary_password = parent.issue_temporary_password()
+
     success = email_service.send_email(
-        template_name="parent_magic_link",
+        template_name="parent_temporary_password",
         recipients=parent.email,
-        subject="Acceso al portal · Five a Day",
+        subject=("Tu contraseña temporal · Five a Day" if reset else "Acceso al portal de familias · Five a Day"),
         context={
             "parent_name": parent.first_name,
-            "link": link,
-            "expires_minutes": 30,
+            "parent_email": parent.email,
+            "temporary_password": temporary_password,
+            "reset": reset,
+            "login_url": login_url,
         },
         fail_silently=True,
     )
+    # Never log the password itself, and never return it — the result backend
+    # keeps task return values.
     return {"status": "success" if success else "failed", "recipient": parent.email}
 
 
@@ -623,8 +661,11 @@ def send_enrollment_confirmation_task(self, enrollment_id: int, attachments_path
     """
     import os
 
+    from django.db.models import Prefetch
+
     from billing.models import Enrollment
     from comms.services.email_functions import send_enrollment_confirmation_email
+    from students.models import Parent
 
     MONTHS_ES = [
         "enero",
@@ -642,14 +683,30 @@ def send_enrollment_confirmation_task(self, enrollment_id: int, attachments_path
     ]
 
     try:
+        # The email filter goes INSIDE the prefetch, same as
+        # `send_birthday_email_task`. `prefetch_related("student__parents")`
+        # followed by `parents.exclude(...).first()` was pure overhead: the
+        # `exclude()` builds a NEW queryset that ignores the prefetch cache, so
+        # the task paid for a prefetch it then threw away.
+        #
+        # `order_by("id")` because this pick decides which parent is named as
+        # the recipient — an unordered `.first()` sorts by pk anyway, but only
+        # by accident, and no model in `students.models` sets `Meta.ordering`.
+        # The payment generators order explicitly for the same reason.
         enrollment = (
             Enrollment.objects.select_related("student", "student__group")
-            .prefetch_related("student__parents")
+            .prefetch_related(
+                Prefetch(
+                    "student__parents",
+                    queryset=Parent.objects.exclude(email="").exclude(email__isnull=True).order_by("id"),
+                    to_attr="emailable_parents",
+                )
+            )
             .get(id=enrollment_id)
         )
 
         student = enrollment.student
-        parent = student.parents.exclude(email="").exclude(email__isnull=True).first()
+        parent = next(iter(student.emailable_parents), None)
 
         if not parent:
             logger.error("No parent with email for enrollment_id=%d", enrollment_id)

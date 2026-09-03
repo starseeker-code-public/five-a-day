@@ -134,6 +134,17 @@ services:
       - /app/.venv
     working_dir: /app/project
     command: celery -A project.celery worker -l info -Q celery,emails --concurrency=2
+    # Overrides the Dockerfile HEALTHCHECK, which probes /health/ over HTTP — no
+    # web server runs here, so the inherited check can never pass and the
+    # container sits permanently unhealthy. Ping this node by name: replying to a
+    # broadcast is not proof THIS worker is the one alive. $$ escapes the $ so
+    # HOSTNAME is read in the container, not substituted by Compose from the host.
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A project.celery inspect ping -d celery@$$HOSTNAME --timeout 10 >/dev/null 2>&1"]
+      interval: 30s
+      timeout: 15s
+      start_period: 40s
+      retries: 3
     depends_on:
       db:
         condition: service_healthy
@@ -164,6 +175,14 @@ services:
       - /app/.venv
     working_dir: /app/project
     command: celery -A project.celery beat -l info --pidfile=/tmp/celerybeat.pid --schedule=/tmp/celerybeat-schedule
+    # Overrides the Dockerfile HEALTHCHECK (see celery_worker). Beat has no
+    # inspect interface, so liveness is the pidfile it was told to write.
+    healthcheck:
+      test: ["CMD-SHELL", "kill -0 $$(cat /tmp/celerybeat.pid)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 40s
+      retries: 3
     depends_on:
       db:
         condition: service_healthy

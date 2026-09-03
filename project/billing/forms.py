@@ -1,3 +1,4 @@
+from datetime import date
 from decimal import Decimal
 
 from django import forms
@@ -23,6 +24,21 @@ class EnrollmentForm(forms.Form):
         widget=forms.Select(attrs={"class": "form-control", "id": "id_enrollment_plan"}),
         label="Tipo de matrícula",
     )
+    # The day the student actually STARTS, which need not be the day the ficha is
+    # created: a family signing up today for a 1 November start is billed from
+    # November. It becomes `Enrollment.enrollment_date`, so the academic year,
+    # the first billing period and its proration all derive from it. Blank means
+    # today. `initial` is a callable so it is evaluated per render, not at import.
+    start_date = forms.DateField(
+        required=False,
+        initial=date.today,
+        input_formats=["%Y-%m-%d", "%d/%m/%Y"],
+        widget=forms.DateInput(
+            format="%Y-%m-%d",
+            attrs={"class": "form-control", "type": "date", "id": "id_start_date"},
+        ),
+        label="Fecha de inicio",
+    )
     has_language_cheque = forms.BooleanField(
         required=False,
         widget=forms.CheckboxInput(attrs={"class": "form-check-input", "id": "id_has_language_cheque"}),
@@ -36,6 +52,16 @@ class EnrollmentForm(forms.Form):
     sibling_id = forms.IntegerField(
         required=False,
         widget=forms.HiddenInput(attrs={"id": "id_sibling_id"}),
+    )
+    # Forces the returning-student matrícula ("Antiguo alumno") even when the
+    # Student row carries no prior Enrollment — a student re-joining after years
+    # away, or one promoted off the waiting list, is a fresh row to the service's
+    # auto-detection. Checking it never *removes* the discount the auto-detection
+    # would grant on its own.
+    is_returning_student = forms.BooleanField(
+        required=False,
+        widget=forms.CheckboxInput(attrs={"class": "form-check-input", "id": "id_is_returning_student"}),
+        label="Antiguo alumno",
     )
     is_special = forms.BooleanField(
         required=False,
@@ -96,9 +122,11 @@ class EnrollmentForm(forms.Form):
 
         enrollment_data = {
             "enrollment_plan": self.cleaned_data.get("enrollment_plan", "monthly_full"),
+            "start_date": self.cleaned_data.get("start_date"),
             "has_language_cheque": self.cleaned_data.get("has_language_cheque", False),
             "is_sibling_discount": self.cleaned_data.get("is_sibling_discount", False),
             "is_special": self.cleaned_data.get("is_special", False),
             "manual_amount": self.cleaned_data.get("manual_amount"),
+            "is_returning_student": self.cleaned_data.get("is_returning_student", False),
         }
         return EnrollmentService.create_enrollment(student, enrollment_data, is_adult=is_adult)

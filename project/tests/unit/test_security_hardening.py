@@ -7,14 +7,13 @@ leaving the fix silently undone.
 """
 
 import hashlib
-from datetime import timedelta
 from pathlib import Path
 
 import pytest
 from django.contrib.auth.hashers import identify_hasher
+from django.contrib.sessions.backends.db import SessionStore
 from django.test import override_settings
 from django.urls import reverse
-from django.utils import timezone
 
 from core.middleware import QAErrorEmailMiddleware, SecurityHeadersMiddleware
 from core.services import two_factor_service as tfs
@@ -351,25 +350,40 @@ class TestOAuthScopes:
 
 @pytest.mark.django_db
 class TestSessionPurge:
-    def test_spent_and_expired_parent_tokens_are_deleted(self, parent):
+    """Expired `django_session` rows are swept because session payloads are
+    base64 JSON — signed, not encrypted — so anything a view puts in a session
+    is readable by anyone who can read the table, and rows outlived their
+    cookies indefinitely.
+
+    There is no longer a `parent_session_tokens` half to this: the portal emails
+    a temporary PASSWORD rather than a set-password link, and that hash lives in
+    a column on `parents` which `set_portal_password` clears — so spent
+    credentials are overwritten in place rather than accumulating in a side
+    table that needs sweeping.
+    """
+
+    def test_expired_sessions_are_deleted(self):
+        from django.contrib.sessions.models import Session
+
         from core.tasks import purge_expired_sessions
-        from students.models import ParentSessionToken
 
-        live = ParentSessionToken.issue(parent)
+        store = SessionStore()
+        store["parent_id"] = 1
+        store.set_expiry(-1)  # already expired
+        store.save()
+        expired_key = store.session_key
 
-        spent = ParentSessionToken.issue(parent)
-        spent.used_at = timezone.now()
-        spent.save(update_fields=["used_at"])
-
-        expired = ParentSessionToken.issue(parent)
-        expired.expires_at = timezone.now() - timedelta(hours=1)
-        expired.save(update_fields=["expires_at"])
+        live = SessionStore()
+        live["parent_id"] = 2
+        live.set_expiry(3600)
+        live.save()
 
         result = purge_expired_sessions()
 
-        assert result["parent_tokens_deleted"] == 2
-        remaining = list(ParentSessionToken.objects.values_list("id", flat=True))
-        assert remaining == [live.id], "an unused, unexpired token must survive"
+        assert result["status"] == "success"
+        remaining = set(Session.objects.values_list("session_key", flat=True))
+        assert expired_key not in remaining
+        assert live.session_key in remaining
 
 
 # ─────────────────────────────────────────────────────────────────────────────

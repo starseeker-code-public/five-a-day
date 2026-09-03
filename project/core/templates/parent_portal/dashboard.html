@@ -1,24 +1,27 @@
 {% extends 'parent_portal/base_portal.html' %}
-{% block title %}Panel · Portal Five a Day{% endblock %}
+{% block title %}Panel · Portal de familias Five a Day{% endblock %}
 {% block content %}
 <h1 class="text-2xl font-bold text-neutral-800 mb-2">Hola, {{ parent.first_name }}</h1>
-<p class="text-neutral-600 mb-8">Este es tu panel de familia — información y descargas en un solo sitio.</p>
+<p class="text-neutral-500 mb-8">Este es tu panel de familia — información y descargas en un solo sitio.</p>
 
 <div class="bg-white rounded-lg shadow p-6 mb-6">
-    <h2 class="text-lg font-semibold mb-4">Tus hijos/as</h2>
+    <h2 class="text-lg font-semibold text-neutral-800 mb-4">Tus hijos/as</h2>
     {% for c in children %}
     <div class="border-b border-neutral-100 py-3 last:border-0">
-        <div class="flex items-center justify-between">
+        <div class="flex items-center justify-between gap-4">
             <div>
                 <p class="font-medium text-neutral-800">{{ c.full_name }}</p>
-                <p class="text-sm text-neutral-500">{{ c.age }} años · Grupo: {{ c.group.group_name }}</p>
+                <p class="text-sm text-neutral-500">
+                    {% if c.age is not None %}{{ c.age }} años · {% endif %}
+                    Grupo: {{ c.group.group_name|default:"Sin asignar" }}
+                </p>
             </div>
             {% if c.is_waiting %}
-                <span class="text-amber-600 text-sm">En lista de espera</span>
+                <span class="text-amber-600 text-sm whitespace-nowrap">En lista de espera</span>
             {% elif c.active %}
-                <span class="text-green-600 text-sm">Activo</span>
+                <span class="text-green-600 text-sm whitespace-nowrap">Activo</span>
             {% else %}
-                <span class="text-neutral-400 text-sm">Baja</span>
+                <span class="text-neutral-400 text-sm whitespace-nowrap">Baja</span>
             {% endif %}
         </div>
     </div>
@@ -29,16 +32,16 @@
 
 <div class="bg-white rounded-lg shadow p-6 mb-6">
     <div class="flex items-center justify-between mb-4">
-        <h2 class="text-lg font-semibold">Próximos pagos</h2>
+        <h2 class="text-lg font-semibold text-neutral-800">Próximos pagos</h2>
         <a href="{% url 'parent_portal_payments' %}" class="text-sm text-primary-700 hover:text-primary-900 no-underline">Ver historial completo →</a>
     </div>
     {% for p in upcoming_payments %}
-    <div class="flex items-center justify-between py-2 border-b border-neutral-100 last:border-0">
+    <div class="flex items-center justify-between gap-4 py-2 border-b border-neutral-100 last:border-0">
         <div>
             <p class="text-neutral-800">{{ p.concept }}</p>
             <p class="text-sm text-neutral-500">{{ p.student.full_name }} · Vence {{ p.due_date|date:"d/m/Y" }}</p>
         </div>
-        <span class="font-bold text-primary-700">{{ p.amount|floatformat:2 }} €</span>
+        <span class="font-bold text-primary-700 whitespace-nowrap">{{ p.amount|floatformat:2 }} €</span>
     </div>
     {% empty %}
     <p class="text-neutral-400 py-2">No tienes pagos pendientes.</p>
@@ -46,10 +49,21 @@
 </div>
 
 <div class="bg-white rounded-lg shadow p-6">
-    <h2 class="text-lg font-semibold mb-4">Descargas</h2>
-    <a href="{% url 'parent_portal_tax_certificate' %}?year={{ now|date:'Y' }}"
-       class="inline-block px-4 py-2 bg-primary-500 hover:bg-primary-600 text-white rounded-md no-underline">
-        Certificado fiscal {{ now|date:'Y' }}
-    </a>
+    <h2 class="text-lg font-semibold text-neutral-800 mb-1">Descargas</h2>
+    <p class="text-sm text-neutral-500 mb-4">
+        El certificado fiscal resume todo lo pagado en un año natural. Los recibos individuales
+        de cada pago están en el <a href="{% url 'parent_portal_payments' %}" class="text-primary-700 hover:text-primary-900">historial de pagos</a>.
+    </p>
+
+    <div class="flex flex-wrap items-center gap-2">
+        {% for y in certificate_years %}
+        <a href="{% url 'parent_portal_tax_certificate' %}?year={{ y }}"
+           class="inline-flex items-center gap-2 px-4 py-2 rounded-md no-underline font-medium
+                  {% if forloop.first %}bg-primary-600 hover:bg-primary-700 text-white{% else %}bg-neutral-100 hover:bg-neutral-200 text-neutral-700{% endif %}">
+            <span class="material-symbols-outlined text-base leading-none">download</span>
+            Certificado fiscal {{ y }}
+        </a>
+        {% endfor %}
+    </div>
 </div>
 {% endblock %}

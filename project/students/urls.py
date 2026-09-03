@@ -12,6 +12,8 @@ from core.views import (
     # Waiting list (v1.1)
     add_to_waiting_list,
     assign_from_waiting_list,
+    # New enrollment modal (book icon on the list)
+    enroll_student,
     remove_fun_friday_attendance,
     search_parents,
     # Search/validation API
@@ -66,6 +68,11 @@ urlpatterns = [
     # ============================================================================
     # API ENDPOINTS - Search and Validation
     # ============================================================================
+    path(
+        "api/students/<int:student_id>/enroll/",
+        enroll_student,
+        name="enroll_student",
+    ),
     path("api/search/students/", search_students, name="search_students"),
     path("api/search/parents/", search_parents, name="search_parents"),
     path(

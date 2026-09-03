@@ -2,13 +2,15 @@ import csv
 from datetime import date
 from decimal import Decimal
 
-from django.contrib import admin
+from django.contrib import admin, messages
+from django.db import IntegrityError, transaction
 from django.db.models import Count, DecimalField, Q, Sum, Value
 from django.db.models.functions import Coalesce
 from django.http import HttpResponse
 from django.urls import reverse
 from django.utils.html import format_html
 
+from billing.constants import PERIODIC_PAYMENT_TYPES
 from billing.models import (
     Enrollment,
     EnrollmentPaymentTotals,
@@ -225,12 +227,92 @@ class PaymentAdmin(admin.ModelAdmin):
 
     mark_as_completed.short_description = "Marcar como completados"
 
+    def _reopen_to_pending(self, request, queryset):
+        """Set the selection back to `pending`, skipping rows that cannot be.
+
+        Reopening is the one status change the database can refuse:
+        `unique_pending_periodic_payment_per_month` allows a single PENDING
+        monthly/quarterly row per student per due-month, and cancelling frees
+        that month so the schedule may already have re-billed it. Restoring the
+        cancelled row then collides with its own replacement — which is not an
+        edge case but the normal aftermath of the documented
+        `reconcile_payment_schedule` repair.
+
+        A bare `queryset.update(...)` lost that argument twice over: it raised a
+        raw `IntegrityError` (an unhandled 500, never the constraint's Spanish
+        `violation_error_message`, because `update()` does not call
+        `full_clean()`), and the failure rolled back the whole action, so none
+        of the selection was reopened. Colliding rows are now reported by name
+        and the rest go through.
+
+        Row-by-row `save()` rather than `update()` for the same reason
+        `mark_as_completed` loops: `Payment` is audit-tracked, and `update()`
+        bypasses the `pre_save`/`post_save` receivers, so a bulk status change
+        left no `AuditLog` entry and did not bump `updated_at`.
+        """
+        rows = list(queryset)
+        selected_ids = {p.id for p in rows}
+
+        # The months already held by a pending periodic row that is NOT part of
+        # this selection. Resolved in one query rather than one per row.
+        occupied = set()
+        periodic = [p for p in rows if p.payment_type in PERIODIC_PAYMENT_TYPES]
+        if periodic:
+            occupied = {
+                (student_id, payment_type, due_date.year, due_date.month)
+                for student_id, payment_type, due_date in Payment.objects.filter(
+                    student_id__in={p.student_id for p in periodic},
+                    payment_type__in=PERIODIC_PAYMENT_TYPES,
+                    payment_status="pending",
+                )
+                .exclude(id__in=selected_ids)
+                .values_list("student_id", "payment_type", "due_date")
+            }
+
+        reopened = 0
+        blocked = []
+        for payment in rows:
+            slot = None
+            if payment.payment_type in PERIODIC_PAYMENT_TYPES and payment.due_date is not None:
+                slot = (payment.student_id, payment.payment_type, payment.due_date.year, payment.due_date.month)
+                if slot in occupied:
+                    blocked.append(payment)
+                    continue
+
+            payment.payment_status = "pending"
+            payment.payment_date = None
+            try:
+                # Savepoint per row: a genuine race (something else claiming the
+                # month between the query above and this write) must not undo
+                # the rows already reopened.
+                with transaction.atomic():
+                    payment.save(update_fields=["payment_status", "payment_date", "updated_at"])
+            except IntegrityError:
+                blocked.append(payment)
+                continue
+
+            if slot is not None:
+                # Claim it, so two selected rows falling in the same month do
+                # not collide with each other either.
+                occupied.add(slot)
+            reopened += 1
+
+        message = f"{reopened} pagos reabiertos como pendientes."
+        if blocked:
+            names = ", ".join(f"{p.student} ({p.concept})" for p in blocked[:5])
+            if len(blocked) > 5:
+                names += f" y {len(blocked) - 5} más"
+            message += (
+                f" {len(blocked)} sin reabrir: ya existe un pago pendiente de ese tipo "
+                f"para ese alumno en ese mes — {names}."
+            )
+        self.message_user(request, message, level=messages.WARNING if blocked else messages.INFO)
+
     def mark_as_pending(self, request, queryset):
         """Reopen the selection. Clears `payment_date` — a pending payment has
         not been collected, and every income figure filters on that date, so
         leaving it set reported money against a payment nobody has paid."""
-        updated = queryset.update(payment_status="pending", payment_date=None)
-        self.message_user(request, f"{updated} payments marked as pending.")
+        self._reopen_to_pending(request, queryset)
 
     mark_as_pending.short_description = "Marcar como pendientes"
 
@@ -247,9 +329,10 @@ class PaymentAdmin(admin.ModelAdmin):
     soft_delete_payments.short_description = "Cancelar los pagos seleccionados"
 
     def restore_payments(self, request, queryset):
-        # payment_date cleared for the same reason as mark_as_pending.
-        updated = queryset.update(payment_status="pending", payment_date=None)
-        self.message_user(request, f"{updated} payments restored to pending.")
+        # Same operation as mark_as_pending, including the collision handling:
+        # restoring a cancelled row is precisely when the month is most likely
+        # to have been re-billed already.
+        self._reopen_to_pending(request, queryset)
 
     restore_payments.short_description = "Restaurar a pendiente"
 

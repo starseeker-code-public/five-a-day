@@ -285,15 +285,12 @@
     // Soft-delete: sets payment_status='cancelled' so the row stays for the
     // audit trail but stops counting toward "esperado". Used for duplicates
     // and for students who drop out before a due date.
+    // No confirm() gate: embedded browsers (sandboxed webviews) silently
+    // return false from confirm(), which made the button a no-op there.
     document.querySelectorAll('.payment-cancel-btn').forEach(btn => {
         btn.addEventListener('click', function (e) {
             e.stopPropagation();
             const paymentId = this.dataset.paymentId;
-            const student = this.dataset.studentName || 'este alumno';
-            const concept = this.dataset.concept ? ` (${this.dataset.concept})` : '';
-            if (!confirm(`¿Cancelar el pago de ${student}${concept}?\n\nDejará de contar como pago esperado. Podrás verlo en el historial marcado como "Cancelado".`)) {
-                return;
-            }
             fetch(`/payments/${paymentId}/deactivate/`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCsrf() },

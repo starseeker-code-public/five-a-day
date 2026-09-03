@@ -12,6 +12,35 @@
 
 An enrollment represents a student being "inside the system" for an academic year. One enrollment per academic year per student.
 
+### Start date (v1.26.8)
+
+The enrollment form carries a **Fecha de inicio** (`EnrollmentForm.start_date`, blank = today). It is
+the day the student actually STARTS, which need not be the day the ficha is created, and it becomes
+`Enrollment.enrollment_date` — the single date everything downstream reads:
+
+- the **academic year** is `current_academic_year(start_date)`, not of today;
+- the **matrícula** Payment falls due on the last day of the month the enrollment *starts*;
+- **billing begins** at that month (`PaymentService.billing_periods`), and the first period is
+  prorated from that day (`proration_fraction`).
+
+So a family signing up on 3 September for a 1 November start is billed from November, with a full
+November — not a prorated September. The same helper (`_create_enrollment_fee_payment`) issues the
+matrícula for both entry points, the student-creation page and the "Nueva matrícula" modal, so the
+fee, the returning-student discount and the concept wording cannot drift between them.
+
+### "Antiguo alumno" override (v1.26.8)
+
+The returning-student matrícula is normally detected automatically — the student has an `Enrollment`
+for an earlier academic year. The form's **Antiguo alumno** checkbox (`is_returning_student`) lets an
+admin assert it for a `Student` row that has no such history: someone re-registering after years
+away, or promoted off the waiting list, which creates a fresh row. It is OR-ed with the automatic
+detection, so it can only **add** the discount, never revoke one, and it does not outrank `special`
+or `adults` when the matrícula category is resolved. It is pre-ticked when the ficha is being created
+from a waiting-list entry that already carries enrollments.
+
+The discount is judged against **the enrollment's own academic year**, not today's — otherwise a
+future-dated enrollment would read as the student's own prior history and win the discount by itself.
+
 ### Enrollment Fees (once per academic year)
 
 | Student Type       | Fee   | Notes                                            |

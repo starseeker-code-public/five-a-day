@@ -20,6 +20,7 @@ from django.utils.text import get_valid_filename
 from django.views.decorators.http import require_http_methods
 
 from core.decorators import qa_access_required
+from core.github_dispatch import notify_github_qa_signoff
 from core.models import BacklogTask, QAConfiguration
 from core.utils import csv_safe
 
@@ -163,6 +164,18 @@ def api_seed_database(request):
             kwargs["reset"] = True
 
         call_command(*args, **kwargs)
+
+        # The demo family is part of "seed the QA database": without it there
+        # is no way to open /parent/login/ on the VM, because the real flow
+        # needs a mailbox. Idempotent, and it refuses to run in production.
+        # Run AFTER seed_testdata so `--reset` (which wipes every Parent and
+        # Student) cannot delete the family we just made.
+        try:
+            call_command("seed_demo_parents", stdout=out)
+        except Exception:  # noqa: BLE001 — the QA dataset is the point; the demo parent is a bonus
+            logger.exception("seed_demo_parents failed during the QA seed")
+            out.write(os.linesep + "⚠️  seed_demo_parents ha fallado — revisa los logs." + os.linesep)
+
         output = out.getvalue()
         return JsonResponse({"success": True, "message": output})
     except Exception:
@@ -517,10 +530,20 @@ def api_mark_ready(request):
     config.ready_for_prod = True
     config.save()
 
+    # Tell GitHub so `Deploy production` re-evaluates NOW instead of on the next
+    # nightly run. Fail-soft on purpose: the flag above is the source of truth,
+    # and the nightly workflow_run re-trigger remains the fallback arming path,
+    # so a missing token or an unreachable API must never fail the sign-off.
+    dispatched = notify_github_qa_signoff()
+    message = f"Enviado a {support_email}. Versión desbloqueada para producción."
+    if dispatched:
+        message += " El despliegue a producción se está armando en GitHub."
+
     return JsonResponse(
         {
             "success": True,
             "ready_for_prod": True,
-            "message": f"Enviado a {support_email}. Versión desbloqueada para producción.",
+            "deploy_dispatched": dispatched,
+            "message": message,
         }
     )

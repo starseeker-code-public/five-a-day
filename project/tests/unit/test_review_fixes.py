@@ -102,80 +102,55 @@ class TestStripeCheckoutUrls:
         assert "cancelled=" in captured["cancel_url"]
 
 
-# ── Magic-link async + rate limit ──────────────────────────────────────────
+# ── Portal credential email async + rate limit ─────────────────────────────
 
 
-class TestMagicLinkAsync:
-    def test_login_dispatches_to_celery_not_send_mail_sync(self, client, parent):
+class TestPortalCredentialEmailAsync:
+    def test_recovery_dispatches_to_celery_not_send_mail_sync(self, client, parent):
         """The synchronous send_mail call is gone — verify the task is queued
-        instead so an SMTP hang can't stall the request."""
-        with patch("comms.tasks.send_parent_magic_link_task.delay") as mock_delay:
-            response = client.post(reverse("parent_portal_login"), {"email": parent.email})
+        instead so an SMTP hang can't stall the request (and can't be timed to
+        tell a registered address from an unknown one)."""
+        with patch("comms.tasks.send_parent_temporary_password_task.delay") as mock_delay:
+            response = client.post(reverse("parent_portal_forgot_password"), {"email": parent.email})
         assert response.status_code == 200
         mock_delay.assert_called_once()
-        _, kwargs = mock_delay.call_args
         args = mock_delay.call_args[0]
         # First positional arg is parent_id
         assert args[0] == parent.id
-        # Second arg is the absolute link URL
+        # Second is the absolute login URL. The PASSWORD is deliberately absent:
+        # it is generated inside the task so the plaintext never reaches the
+        # broker or Celery's task log.
         assert "/parent/login/" in args[1]
+        assert not any("password" in str(a).lower() for a in args[2:])
 
-    def test_verify_rate_limit_covers_get(self, client, parent):
-        """After the fix, /parent/login/<token>/ is GET-throttled so token
-        brute-force is capped at 20/min/IP."""
+    def test_change_password_is_rate_limited(self, client, parent):
+        """`parent_portal_change_password` takes the CURRENT password in its
+        voluntary mode, so the POST is throttled like the staff equivalent —
+        otherwise a session cookie plus unlimited attempts is a password oracle.
+
+        Only the POST counts. `rate_limit` defaults to POST-only for good
+        reason: rendering the form is not an attempt, and charging quota for it
+        would let a family lock themselves out by refreshing the page.
+        """
+        parent.set_portal_password("Portal-Fam-2026")
+        session = client.session
+        session["parent_id"] = parent.id
+        session.save()
+        payload = {
+            "current_password": "wrong",
+            "password": "Otra-Clave-2026",
+            "password_confirm": "Otra-Clave-2026",
+        }
 
         with override_settings(RATELIMIT_ENABLE=True):
             from django.core.cache import cache
 
             cache.clear()
-            # Hit 20 GETs, then the 21st must 429
-            for _ in range(20):
-                # Use a fresh (unknown) token each iteration to hit the fast path
-                r = client.get(reverse("parent_portal_verify", args=["deadbeef"]))
-                assert r.status_code == 302  # redirects to login (unknown token)
-            r = client.get(reverse("parent_portal_verify", args=["deadbeef"]))
-            assert r.status_code == 429
-
-
-# ── ParentSessionToken TOCTOU ──────────────────────────────────────────────
-
-
-class TestParentSessionTokenAtomicity:
-    def test_consume_by_token_marks_used(self, parent):
-        from students.models import ParentSessionToken
-
-        token = ParentSessionToken.issue(parent)
-        result = ParentSessionToken.consume_by_token(token.token)
-        assert result is not None
-        assert result.pk == token.pk
-        result.refresh_from_db()
-        assert result.used_at is not None
-
-    def test_consume_by_token_second_call_returns_none(self, parent):
-        from students.models import ParentSessionToken
-
-        token = ParentSessionToken.issue(parent)
-        first = ParentSessionToken.consume_by_token(token.token)
-        second = ParentSessionToken.consume_by_token(token.token)
-        assert first is not None
-        assert second is None
-
-    def test_consume_by_token_unknown_returns_none(self):
-        from students.models import ParentSessionToken
-
-        assert ParentSessionToken.consume_by_token("nonexistent-token") is None
-
-    def test_consume_by_token_expired_returns_none(self, parent):
-        from datetime import timedelta
-
-        from django.utils import timezone
-
-        from students.models import ParentSessionToken
-
-        token = ParentSessionToken.issue(parent)
-        token.expires_at = timezone.now() - timedelta(minutes=1)
-        token.save(update_fields=["expires_at"])
-        assert ParentSessionToken.consume_by_token(token.token) is None
+            for _ in range(5):
+                assert client.post(reverse("parent_portal_change_password"), payload).status_code == 200
+            assert client.post(reverse("parent_portal_change_password"), payload).status_code == 429
+            # GETs are not charged, so the form still renders while throttled.
+            assert client.get(reverse("parent_portal_change_password")).status_code == 200
 
 
 # ── Rate limiter ────────────────────────────────────────────────────────────

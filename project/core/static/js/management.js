@@ -52,7 +52,11 @@ function showToast(message, type = 'success') {
 }
 
 // Modo edición de configuración
-document.getElementById('btn-edit-values').addEventListener('click', function() {
+// Every binding below is null-guarded: a non-admin teacher gets this page in
+// view-only mode, so the admin controls are absent from the DOM and an
+// unguarded addEventListener() threw and aborted the whole script.
+const btnEditValues = document.getElementById('btn-edit-values');
+if (btnEditValues) btnEditValues.addEventListener('click', function() {
     editMode = !editMode;
     const inputs = document.querySelectorAll('.config-input');
     const saveContainer = document.getElementById('save-config-container');
@@ -96,10 +100,12 @@ function cancelEdit() {
     editBtn.classList.remove('bg-red-500', 'hover:bg-red-600');
 }
 
-document.getElementById('btn-cancel-edit').addEventListener('click', cancelEdit);
+const btnCancelEdit = document.getElementById('btn-cancel-edit');
+if (btnCancelEdit) btnCancelEdit.addEventListener('click', cancelEdit);
 
 // Guardar configuración
-document.getElementById('btn-save-config').addEventListener('click', async function() {
+const btnSaveConfig = document.getElementById('btn-save-config');
+if (btnSaveConfig) btnSaveConfig.addEventListener('click', async function() {
     const data = {};
     document.querySelectorAll('.config-input').forEach(input => {
         if (!input.disabled && input.name) {
@@ -136,11 +142,13 @@ document.getElementById('btn-save-config').addEventListener('click', async funct
 });
 
 // Nuevo Profesor
-document.getElementById('btn-new-teacher').addEventListener('click', function() {
+const btnNewTeacher = document.getElementById('btn-new-teacher');
+if (btnNewTeacher) btnNewTeacher.addEventListener('click', function() {
     openModal('modal-teacher');
 });
 
-document.getElementById('form-teacher').addEventListener('submit', async function(e) {
+const formTeacher = document.getElementById('form-teacher');
+if (formTeacher) formTeacher.addEventListener('submit', async function(e) {
     e.preventDefault();
 
     const formData = new FormData(this);
@@ -167,8 +175,10 @@ document.getElementById('form-teacher').addEventListener('submit', async functio
         if (result.success) {
             showToast(result.message, 'success');
             closeModal('modal-teacher');
-            // Recargar página para ver el nuevo profesor
-            setTimeout(() => location.reload(), 1000);
+            // Recargar página para ver el nuevo profesor. 2.5 s, not 1 s: the
+            // toast now says whether the activation email went out, and a
+            // faster reload wiped that sentence before it could be read.
+            setTimeout(() => location.reload(), 2500);
         } else {
             showToast(result.message, 'error');
         }
@@ -178,7 +188,8 @@ document.getElementById('form-teacher').addEventListener('submit', async functio
 });
 
 // Nuevo Grupo
-document.getElementById('btn-new-group').addEventListener('click', async function() {
+const btnNewGroup = document.getElementById('btn-new-group');
+if (btnNewGroup) btnNewGroup.addEventListener('click', async function() {
     // Refrescar lista de profesores antes de abrir
     try {
         const response = await fetch(window.MANAGEMENT_CONFIG.getTeachersUrl);
@@ -200,7 +211,8 @@ document.getElementById('btn-new-group').addEventListener('click', async functio
     openModal('modal-group');
 });
 
-document.getElementById('form-group').addEventListener('submit', async function(e) {
+const formGroup = document.getElementById('form-group');
+if (formGroup) formGroup.addEventListener('submit', async function(e) {
     e.preventDefault();
 
     const formData = new FormData(this);
@@ -234,6 +246,64 @@ document.getElementById('form-group').addEventListener('submit', async function(
         }
     } catch (error) {
         showToast('Error al crear el grupo', 'error');
+    }
+});
+
+// Cambiar Contraseña (cuenta propia)
+// Absent for Google-OAuth sessions and for accounts with no usable password —
+// the server refuses those too, this is not the only gate.
+const btnChangePassword = document.getElementById('btn-change-password');
+if (btnChangePassword) btnChangePassword.addEventListener('click', function() {
+    const form = document.getElementById('form-password');
+    if (form) form.reset();
+    openModal('modal-password');
+});
+
+const formPassword = document.getElementById('form-password');
+if (formPassword) formPassword.addEventListener('submit', async function(e) {
+    e.preventDefault();
+
+    const formData = new FormData(this);
+    const data = {
+        current_password: formData.get('current_password'),
+        new_password: formData.get('new_password'),
+        confirm_password: formData.get('confirm_password')
+    };
+
+    if (data.new_password !== data.confirm_password) {
+        showToast('Las contraseñas nuevas no coinciden', 'error');
+        return;
+    }
+
+    try {
+        const response = await fetch(window.MANAGEMENT_CONFIG.changePasswordUrl, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': csrfToken
+            },
+            body: JSON.stringify(data)
+        });
+
+        // The rate limiter answers 429 as text/plain, so response.json()
+        // would throw and the real reason ("too many attempts") would surface
+        // as a generic error.
+        if (response.status === 429) {
+            showToast('Demasiados intentos. Prueba de nuevo en unos minutos.', 'error');
+            return;
+        }
+
+        const result = await response.json();
+
+        if (result.success) {
+            showToast(result.message, 'success');
+            closeModal('modal-password');
+            this.reset();
+        } else {
+            showToast(result.message, 'error');
+        }
+    } catch (error) {
+        showToast('Error al cambiar la contraseña', 'error');
     }
 });
 

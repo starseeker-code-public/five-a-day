@@ -5,6 +5,7 @@ from django.http import HttpResponseRedirect
 from django.urls import reverse_lazy
 from django.views.generic import CreateView
 
+from core.views.parent_portal import send_portal_invitation_once
 from students.forms import ParentForm
 from students.models import Parent
 
@@ -58,12 +59,30 @@ class ParentCreateView(CreateView):
                     f"El padre/tutor {existing_parent.full_name} ya existe. Serás redirigido para crear un estudiante.",
                 )
                 self.object = existing_parent
+                # Deliberately NOT invited here. Reaching this branch means a
+                # second (or third) child for a family that already exists, and
+                # the whole point of the once-only guard is that they get one
+                # invitation. `send_portal_invitation_once` would no-op anyway;
+                # not calling it is what makes that obvious to the next reader.
                 return HttpResponseRedirect(self.get_success_url())
 
             self.object = form.save()
+
+            # Portal invitation — fired once, on creation, so the family can set
+            # their own password. Failure to send is logged inside the helper
+            # and must never block the enrolment that is mid-flow: the parent
+            # can always recover from "¿Has olvidado tu contraseña?".
+            invited = send_portal_invitation_once(self.request, self.object)
+
+            note = (
+                f" Se le ha enviado un email a {self.object.email} con una contraseña temporal para el portal."
+                if invited
+                else ""
+            )
             messages.success(
                 self.request,
-                f"Padre/tutor {self.object.full_name} creado exitosamente. Ahora crea un estudiante para este padre.",
+                f"Padre/tutor {self.object.full_name} creado exitosamente. "
+                f"Ahora crea un estudiante para este padre.{note}",
             )
             return HttpResponseRedirect(self.get_success_url())
 

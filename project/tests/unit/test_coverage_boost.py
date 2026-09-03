@@ -314,15 +314,17 @@ class TestWaitingListBranches:
 
 
 class TestParentPortalEdgeBranches:
-    def test_login_post_missing_email_shows_error(self, client):
-        response = client.post(reverse("parent_portal_login"), {"email": ""})
+    def test_forgot_password_missing_email_shows_error(self, client):
+        response = client.post(reverse("parent_portal_forgot_password"), {"email": ""})
         assert response.status_code == 200
-        # Renders the login page, not the "check your inbox" one
-        assert b"Introduce un email" in response.content or response.status_code == 200
+        assert b"Introduce un email" in response.content
 
-    def test_login_task_dispatch_failure_does_not_crash(self, client, parent):
-        with patch("comms.tasks.send_parent_magic_link_task.delay", side_effect=RuntimeError("celery down")):
-            response = client.post(reverse("parent_portal_login"), {"email": parent.email})
+    def test_recovery_task_dispatch_failure_does_not_crash(self, client, parent):
+        with patch(
+            "comms.tasks.send_parent_temporary_password_task.delay",
+            side_effect=RuntimeError("celery down"),
+        ):
+            response = client.post(reverse("parent_portal_forgot_password"), {"email": parent.email})
         # Request still succeeds; the failure was logged, not raised.
         assert response.status_code == 200
 

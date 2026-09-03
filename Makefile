@@ -121,8 +121,13 @@ setup:
 build:
 	docker compose build
 
+# -V (--renew-anon-volumes): docker-compose.yml mounts an anonymous volume over
+# /app/.venv, and Compose reuses it on recreate — after a Python base-image bump
+# the stale venv shadows the image's and django crash-loops on ModuleNotFoundError
+# (this took down the testing VM on the v1.26.6 3.12→3.14 bump). -V only renews
+# anonymous volumes; named volumes (postgres_data, redis_data) are untouched.
 up:
-	docker compose up -d --remove-orphans
+	docker compose up -d -V --remove-orphans
 	@echo "Started: http://localhost:8000"
 
 down:
@@ -134,12 +139,12 @@ rebuild:
 	@if [ -z "$(SERVICE)" ]; then \
 		docker compose down; \
 		docker compose build --no-cache; \
-		docker compose up -d; \
+		docker compose up -d -V; \
 		echo "Rebuilt and started: http://localhost:8000"; \
 	else \
 		docker compose stop $(SERVICE); \
 		docker compose build --no-cache $(SERVICE); \
-		docker compose up -d $(SERVICE); \
+		docker compose up -d -V $(SERVICE); \
 		echo "Rebuilt service: $(SERVICE)"; \
 	fi
 
@@ -153,7 +158,7 @@ start:
 	docker compose start $(SERVICE)
 
 dev:
-	docker compose up $(if $(BUILD),--build,) --remove-orphans
+	docker compose up -V $(if $(BUILD),--build,) --remove-orphans
 
 # ============================================================================
 # MONITORING

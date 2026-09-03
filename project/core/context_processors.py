@@ -12,6 +12,34 @@ logger = logging.getLogger(__name__)
 def today_notifications(request):
     today = date.today()
 
+    # Teacher-role flags for template-level gating of admin-only UI.
+    # Anyone who isn't a linked non-admin teacher is treated as admin
+    # (dev basic-auth, OAuth, and admin Teachers all count as admin).
+    user = getattr(request, "user", None)
+    teacher = None
+    if user is not None and getattr(user, "is_authenticated", False):
+        teacher = getattr(user, "teacher", None)
+    is_non_admin_teacher = teacher is not None and not teacher.admin
+    is_admin_user = not is_non_admin_teacher
+
+    # QA testing tools visibility — logged-in ADMIN Teacher in the testing
+    # environment only (non-admin teachers must not see the dev tools).
+    show_testing_tools = settings.IS_TESTING_ENV and teacher is not None and teacher.admin
+
+    # The header bell and the actions-history feed are admin-only, so a
+    # non-admin teacher never renders either one — don't spend the queries.
+    if is_non_admin_teacher:
+        return {
+            "notifications_today_todos": [],
+            "notifications_today_apps": [],
+            "notifications_count": 0,
+            "history_count": 0,
+            "support_email": getattr(settings, "SUPPORT_EMAIL", ""),
+            "show_testing_tools": show_testing_tools,
+            "is_admin_user": is_admin_user,
+            "is_non_admin_teacher": is_non_admin_teacher,
+        }
+
     # Todos due today
     # This runs on EVERY page, so it degrades rather than 500s — but it used to
     # degrade silently, which meant a database problem showed up only as an
@@ -40,20 +68,6 @@ def today_notifications(request):
     except Exception:
         logger.exception("Could not count history entries; rendering the badge as 0")
         history_count = 0
-
-    # Teacher-role flags for template-level gating of admin-only UI.
-    # Anyone who isn't a linked non-admin teacher is treated as admin
-    # (dev basic-auth, OAuth, and admin Teachers all count as admin).
-    user = getattr(request, "user", None)
-    teacher = None
-    if user is not None and getattr(user, "is_authenticated", False):
-        teacher = getattr(user, "teacher", None)
-    is_non_admin_teacher = teacher is not None and not teacher.admin
-    is_admin_user = not is_non_admin_teacher
-
-    # QA testing tools visibility — logged-in ADMIN Teacher in the testing
-    # environment only (non-admin teachers must not see the dev tools).
-    show_testing_tools = settings.IS_TESTING_ENV and teacher is not None and teacher.admin
 
     return {
         "notifications_today_todos": todos,

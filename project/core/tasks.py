@@ -4,7 +4,6 @@ from datetime import timedelta
 
 from celery import shared_task
 from celery.utils.log import get_task_logger
-from django.db import models
 from django.utils import timezone
 
 logger = get_task_logger(__name__)
@@ -49,33 +48,26 @@ def prune_audit_log(days: int = AUDIT_LOG_RETENTION_DAYS):
 
 @shared_task(name="core.tasks.purge_expired_sessions")
 def purge_expired_sessions():
-    """Delete expired `django_session` rows and spent parent magic-link tokens.
+    """Delete expired `django_session` rows.
 
-    Nothing purged either table before v1.23.0. That matters more than ordinary
-    table growth because both hold authentication material:
+    Nothing purged this table before v1.23.0, and that matters more than
+    ordinary table growth because it holds authentication material:
+    `django_session` is the DEFAULT database session backend, and session
+    payloads are base64-encoded JSON — signed, not encrypted. Anything a view
+    puts in the session is readable by anyone who can read the table, and rows
+    outlived their cookies indefinitely.
 
-    - `django_session` is the DEFAULT database session backend, and session
-      payloads are base64-encoded JSON — signed, not encrypted. Anything a view
-      puts in the session is therefore readable by anyone who can read the
-      table, and rows outlived their cookies indefinitely.
-    - `parent_session_tokens` keeps every magic link ever issued, spent or not.
+    Django ships `clearsessions` for this; the task wraps it so the work is
+    scheduled the same way as every other periodic job.
 
-    Django ships `clearsessions` for the first half; this task wraps it so the
-    work is scheduled the same way as every other periodic job, and adds the
-    parent tokens, which Django knows nothing about.
+    It used to purge `parent_session_tokens` too. That table is gone: the parent
+    portal issues a temporary PASSWORD rather than a set-password link, and the
+    hash lives in a column on `parents` that `set_portal_password` clears — so
+    there is no longer a side table of spent credentials to sweep.
     """
     from django.core.management import call_command
 
-    from students.models import ParentSessionToken
-
     call_command("clearsessions")
 
-    # Consumed or expired: either way the token can never authenticate again,
-    # so the row is pure residue. `used_at` is set atomically on consumption
-    # (see ParentSessionToken.consume_by_token).
-    now = timezone.now()
-    deleted, _ = ParentSessionToken.objects.filter(
-        models.Q(used_at__isnull=False) | models.Q(expires_at__lt=now)
-    ).delete()
-    logger.info("Purged expired sessions; deleted %d spent parent token(s)", deleted)
-    return {"status": "success", "parent_tokens_deleted": deleted}
+    logger.info("Purged expired sessions")
+    return {"status": "success"}

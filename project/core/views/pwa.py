@@ -64,6 +64,16 @@ _SW_TEMPLATE = """// Five a Day — service worker (v1.12)
 //     them would leak session data on shared devices after logout.
 
 const CACHE_NAME = "fiveaday-v%(cache_key)s";
+// DEBUG on the server. Cache-first is only safe because production serves
+// content-hashed filenames, so an edited asset arrives under a NEW url that
+// no cache entry can shadow. Development serves the bare path
+// (/static/js/management.js), and CACHE_NAME is keyed on APP_VERSION — so
+// between two releases every edited JS/CSS file is served from the cache
+// FOREVER. The symptom is brutal to diagnose: the HTML is `no-cache`
+// (NoHtmlCacheMiddleware) so template changes appear instantly, while the
+// matching script stays stale — a new button renders and clicking it does
+// nothing, and the server is serving the right file the whole time.
+const DEV = %(dev)s;
 const STATIC_SHELL = [
     "/static/images/logo_white_bg.png",
     "/manifest.webmanifest",
@@ -87,8 +97,11 @@ self.addEventListener("activate", (event) => {
 
 function isCacheable(url) {
     const path = url.pathname;
-    // Static assets never carry a session — safe to cache.
-    if (path.startsWith("/static/") || path.startsWith("/media/")) return true;
+    // Static assets never carry a session — safe to cache. In development the
+    // paths are not content-hashed, so the SW is bypassed for them entirely
+    // (see DEV above); production keeps cache-first, which is what hashing
+    // makes optimal.
+    if (path.startsWith("/static/") || path.startsWith("/media/")) return !DEV;
     // Manifest is public and identical for every user.
     if (path === "/manifest.webmanifest") return true;
     // NOTE: /login/ is deliberately NOT cached. It looks public, but it embeds
@@ -132,7 +145,10 @@ def service_worker(request):
     from django.conf import settings
 
     version = getattr(settings, "APP_VERSION", "1.0")
-    body = _SW_TEMPLATE % {"cache_key": version}
+    body = _SW_TEMPLATE % {
+        "cache_key": version,
+        "dev": "true" if settings.DEBUG else "false",
+    }
     response = HttpResponse(body, content_type="application/javascript")
     response["Cache-Control"] = "public, max-age=3600"
     # Service workers must be served with a "Service-Worker-Allowed: /" header
