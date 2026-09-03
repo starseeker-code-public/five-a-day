@@ -29,9 +29,9 @@ class AuditLog(models.Model):
     """
 
     ACTION_CHOICES = [
-        ("create", "Create"),
-        ("update", "Update"),
-        ("delete", "Delete"),
+        ("create", "Creación"),
+        ("update", "Modificación"),
+        ("delete", "Eliminación"),
     ]
 
     actor = models.ForeignKey(
@@ -77,15 +77,23 @@ class AuditLog(models.Model):
         changes: dict[str, Any] | None = None,
         actor=None,
         actor_label: str = "",
+        object_label: str | None = None,
     ) -> AuditLog:
-        """Convenience constructor used by signal receivers."""
+        """Convenience constructor used by signal receivers.
+
+        `object_label` defaults to `str(instance)`, but a caller may pass a
+        PII-minimised label instead — `core.audit_signals._object_label` does,
+        because `Parent.__str__` embeds the DNI that the per-model field
+        allow-list exists to keep out of this table. See `Parent.audit_label`.
+        """
         meta = instance._meta
+        label = object_label if object_label is not None else str(instance)
         return cls.objects.create(
             actor=actor,
             actor_label=actor_label or (str(actor) if actor else ""),
             action=action,
             model=f"{meta.app_label}.{meta.object_name}",
             object_id=str(getattr(instance, "pk", "")),
-            object_label=str(instance)[:300],
+            object_label=label[:300],
             changes=json.loads(json.dumps(changes or {}, default=str)),
         )

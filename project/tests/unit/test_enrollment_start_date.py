@@ -36,11 +36,50 @@ class TestCreateEnrollmentStartDate:
         assert enrollment.enrollment_date == date.today()
         assert enrollment.academic_year == current_academic_year()
 
-    def test_form_passes_start_date_through(self, student, enrollment_type_new_student, site_config):
+    def test_form_passes_start_date_through(self, student, enrollment_type_new_student, site_config, monkeypatch):
+        # Widen the typo-year window to include the elapsed anchor course —
+        # the window rule itself is covered in TestStartDateWindow below.
+        from billing.models import relevant_academic_years as _real
+
+        monkeypatch.setattr(
+            "billing.models.relevant_academic_years",
+            lambda reference_date=None: ["2020-2021", *_real(reference_date)],
+        )
         form = EnrollmentForm({"enrollment_plan": "monthly_full", "start_date": "2020-11-15"})
         assert form.is_valid(), form.errors
         enrollment = form.create_enrollment(student)
         assert enrollment.enrollment_date == date(2020, 11, 15)
+
+
+class TestStartDateWindow:
+    """`clean_start_date` — the typo-year guard on NEW start dates."""
+
+    def test_mistyped_past_year_rejected(self):
+        form = EnrollmentForm({"enrollment_plan": "monthly_full", "start_date": "2019-09-01"})
+        assert not form.is_valid()
+        assert "curso actual" in " ".join(form.errors["start_date"])
+
+    def test_far_future_year_rejected(self):
+        form = EnrollmentForm({"enrollment_plan": "monthly_full", "start_date": "2039-09-01"})
+        assert not form.is_valid()
+
+    def test_today_accepted(self):
+        form = EnrollmentForm({"enrollment_plan": "monthly_full", "start_date": date.today().isoformat()})
+        assert form.is_valid(), form.errors
+
+    def test_blank_accepted(self):
+        form = EnrollmentForm({"enrollment_plan": "monthly_full"})
+        assert form.is_valid(), form.errors
+
+    def test_unchanged_current_start_bypasses_window(self):
+        # Editing an enrollment from a past course POSTs its stored start date
+        # back unchanged; the window must not reject it.
+        old = date(2019, 9, 1)
+        form = EnrollmentForm(
+            {"enrollment_plan": "monthly_full", "start_date": old.isoformat()},
+            current_start=old,
+        )
+        assert form.is_valid(), form.errors
 
     def test_summer_start_first_period_is_september(self, student, enrollment_type_new_student, site_config):
         """A July signup starts billing in September (the course's first

@@ -3,15 +3,18 @@ import logging
 from django.contrib import messages
 from django.http import HttpResponseRedirect
 from django.urls import reverse_lazy
+from django.utils.decorators import method_decorator
 from django.views.generic import CreateView
 
+from core.decorators import admin_required
 from core.views.parent_portal import send_portal_invitation_once
-from students.forms import ParentForm
+from students.forms import PORTAL_EMAIL_COLLISION_WARNING, ParentForm
 from students.models import Parent
 
 logger = logging.getLogger(__name__)
 
 
+@method_decorator(admin_required, name="dispatch")
 class ParentCreateView(CreateView):
     model = Parent
     form_class = ParentForm
@@ -59,12 +62,27 @@ class ParentCreateView(CreateView):
                     f"El padre/tutor {existing_parent.full_name} ya existe. Serás redirigido para crear un estudiante.",
                 )
                 self.object = existing_parent
-                # Deliberately NOT invited here. Reaching this branch means a
-                # second (or third) child for a family that already exists, and
-                # the whole point of the once-only guard is that they get one
-                # invitation. `send_portal_invitation_once` would no-op anyway;
-                # not calling it is what makes that obvious to the next reader.
+                # Invite them too — `send_portal_invitation_once` is guarded by
+                # `portal_invite_sent_at`, so a family reached here for a second
+                # child still gets exactly ONE invitation, but a parent who
+                # predates the portal (invite timestamp NULL) would otherwise
+                # NEVER be invited by any path. The guard, not this branch, is
+                # what enforces once-only.
+                send_portal_invitation_once(self.request, existing_parent)
                 return HttpResponseRedirect(self.get_success_url())
+
+            # Email is the portal LOGIN identity but is not unique, and
+            # `_parent_by_email` refuses an ambiguous match — so two rows sharing
+            # an address lock BOTH families out of login and recovery. Warn the
+            # admin at creation, where it can still be fixed, rather than leaving
+            # it to surface as a mystery "email o contraseña incorrectos".
+            #
+            # Detected by `ParentForm.clean_email` and worded in `students.forms`,
+            # so this screen, the admin form and the admin's post-save warning
+            # all agree on what a collision is. Non-blocking here on purpose:
+            # see that method's docstring.
+            if form.email_collides_with_other_family:
+                messages.warning(self.request, PORTAL_EMAIL_COLLISION_WARNING)
 
             self.object = form.save()
 

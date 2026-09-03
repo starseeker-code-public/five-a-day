@@ -18,6 +18,7 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.views.decorators.http import require_http_methods
 
+from core.decorators import admin_required
 from core.models import HistoryLog
 from students.forms import WaitingListForm
 from students.models import Group, Student
@@ -119,6 +120,7 @@ def waiting_list_create(request):
 
 
 @require_http_methods(["GET", "POST"])
+@admin_required
 def assign_from_waiting_list(request, student_id):
     """
     Start the real enrollment for a waiting-list entry.
@@ -187,7 +189,12 @@ def discard_waiting_entry(waiting, new_student=None):
     except ProtectedError:
         waiting.active = False
         waiting.is_waiting = False
-        waiting.save(update_fields=["active", "is_waiting", "updated_at"])
+        # `waiting_since` too: Student.save() clears it on the is_waiting→False
+        # transition, but omitting it from update_fields dropped that clear, so
+        # the row read as a live waiting entry (waiting_since set) that was not
+        # actually on the list.
+        waiting.waiting_since = None
+        waiting.save(update_fields=["active", "is_waiting", "waiting_since", "updated_at"])
         outcome = "archivada (tenía pagos asociados)"
 
     detail = f" → nueva ficha: {new_student.full_name}" if new_student else ""
@@ -199,6 +206,7 @@ def discard_waiting_entry(waiting, new_student=None):
 
 
 @require_http_methods(["POST"])
+@admin_required
 def add_to_waiting_list(request, student_id):
     """Flip an existing student back onto the waiting list (rare — usually used on
     admin's request when a spot needs to be freed without deleting the student)."""
@@ -218,8 +226,18 @@ def add_to_waiting_list(request, student_id):
         # the student kept generating pending payments while off the roster,
         # and `assign_from_waiting_list` later hit the
         # unique_active_enrollment_per_student constraint and 500'd, so they
-        # could never be promoted back.
-        cancelled = EnrollmentService.close_active_enrollments(student, "cancelled")
+        # could never be promoted back. Also cancel the FUTURE pending periodic
+        # rows — a student off the roster must stop being billed and chased for
+        # months they will not attend; already-taught months (up to this one)
+        # stay owed.
+        from core.views.students import _first_day_of_next_month
+
+        cancelled = EnrollmentService.close_active_enrollments(
+            student,
+            "cancelled",
+            cancel_pending_periodic=True,
+            cancel_from=_first_day_of_next_month(),
+        )
 
     group_name = student.group.group_name if student.group else "sin grupo"
     HistoryLog.log(
@@ -243,6 +261,11 @@ def group_capacity_summary():
     """
     from django.db.models import Count, Q
 
+    # The annotation aliases are load-bearing: `Group.ENROLLED_ANNOTATIONS` /
+    # `WAITING_ANNOTATIONS` name them, so `enrolled_count`, `waiting_count`,
+    # `available_spots` and `is_full` all read these values instead of issuing a
+    # `.count()` each. Rename them here and the properties silently fall back to
+    # four queries per row.
     qs = (
         Group.objects.filter(active=True)
         .annotate(
@@ -263,9 +286,11 @@ def group_capacity_summary():
 
     summary = []
     for group in qs:
-        available = None
-        if group.max_students:
-            available = max(group.max_students - group.enrolled, 0)
+        # Read through the model properties rather than re-deriving them: they
+        # now prefer the annotations above (so this stays one query), and
+        # "max_students == 0 means no cap" is then defined in exactly one place
+        # instead of being spelled out again here.
+        available = group.available_spots
         summary.append(
             {
                 "id": group.id,
@@ -274,12 +299,12 @@ def group_capacity_summary():
                 "group": group,
                 "name": group.group_name,
                 "color": group.color,
-                "enrolled": group.enrolled,
-                "waiting": group.waiting,
+                "enrolled": group.enrolled_count,
+                "waiting": group.waiting_count,
                 "max_students": group.max_students,
                 "available": available,
-                "is_full": bool(group.max_students) and group.enrolled >= group.max_students,
-                "has_room_for_waiters": bool(group.waiting) and (available is None or available > 0),
+                "is_full": group.is_full,
+                "has_room_for_waiters": bool(group.waiting_count) and (available is None or available > 0),
             }
         )
     return summary

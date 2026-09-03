@@ -6,7 +6,7 @@ Extracted from generate_payments management command and views.
 import calendar
 import logging
 from datetime import date
-from decimal import ROUND_HALF_UP, Decimal
+from decimal import Decimal
 
 from django.db import IntegrityError, transaction
 from django.db.models.functions import ExtractMonth, ExtractYear
@@ -88,11 +88,24 @@ class PaymentService:
         """
         # Effective months billed: full months, plus the prorated first one.
         effective = Decimal(len(months) - 1) + fraction
+        return PaymentService._price_months(enrollment, config, months, effective, quarterly)
 
+    @staticmethod
+    def _price_months(enrollment, config, months, effective, quarterly):
+        """Price ``effective`` months' worth of the teaching months ``months``.
+
+        Split out of ``calculate_period_amount`` so a period that is short at
+        BOTH ends can be priced by the same code. ``calculate_period_amount``
+        expresses "the first month is partial" (one fraction, on month 0), which
+        is all the schedule generator ever needs; ``close_out_periods`` bills a
+        block truncated by a plan change and has to hand in the total directly.
+        Any new amount calculation must come through here — a second copy of this
+        discount ORDER is a family charged one figure and quoted another.
+        """
         special = PaymentService.hand_priced_amount(enrollment)
         if special is not None:
             whole_period = Decimal(3) if quarterly else Decimal(1)
-            return max(special * (effective / whole_period), Decimal("0.01"))
+            return PaymentService._round_money(special * (effective / whole_period))
 
         base = PaymentService._get_base_monthly_fee(enrollment, config)
         total = base * effective
@@ -102,7 +115,7 @@ class PaymentService:
 
         # Adult groups pay a flat rate — no sibling / cheque / June discounts.
         if enrollment.schedule_type == "adult_group":
-            return max(total, Decimal("0.01"))
+            return PaymentService._round_money(total)
 
         if enrollment.is_sibling_discount:
             total -= total * (config.sibling_discount / Decimal("100"))
@@ -114,7 +127,21 @@ class PaymentService:
         if 6 in months:  # June carries the "complete the year" discount
             total -= config.june_discount
 
-        return max(total, Decimal("0.01"))
+        return PaymentService._round_money(total)
+
+    @staticmethod
+    def _round_money(value):
+        """The ONE rounding for a period price — floor €0.01, quantize HALF_UP.
+
+        Delegates to `billing.services.pricing_service.round_money`, which is
+        where the rule now lives because `Enrollment.save()` needs it too and
+        cannot import this module (it is imported BY this module). This method
+        stays as the name every billing caller already reaches for; see the
+        helper for why the floor and the HALF_UP matter.
+        """
+        from billing.services.pricing_service import round_money
+
+        return round_money(value)
 
     @staticmethod
     def calculate_monthly_amount(enrollment, config, month, fraction=Decimal("1")):
@@ -165,6 +192,120 @@ class PaymentService:
             return Decimal("1")
         remaining = days_in_month - reference.day + 1
         return Decimal(remaining) / Decimal(days_in_month)
+
+    @staticmethod
+    def covered_months(student):
+        """`{(month, year)}` a periodic payment of `student` already invoices. One query.
+
+        BOTH cadences are read, and that is the whole point. The generators' own
+        idempotency (`billed_months_map`, `pending_periods`) is keyed on
+        `(student, payment_type, due month)`, so it is structurally blind across
+        a cadence change — which is how flipping a student from monthly to
+        quarterly re-billed months already COLLECTED under the old cadence, at
+        full price, with `unique_pending_periodic_payment_per_month` unable to
+        help (it is pending-only AND keyed on `payment_type`).
+
+        A `monthly` row covers its due month. A `quarterly` row covers its due
+        month and the two before it — the block it was priced for, since quarters
+        are anchored to the enrollment month and fall due on the last day of
+        their third month.
+
+        Cancelled rows are excluded, deliberately and unlike `billed_months_map`:
+        cancelling frees the month under the DB constraint, so a superseded row
+        must not keep a month reserved forever (a cancelled row holding its month
+        is exactly what made a mis-billed transition unrepairable). Everything
+        else counts, `pending` included — an invoice already sent to a family is
+        not re-issued under a different plan.
+
+        The one-month June stub reports the two months before June as covered as
+        well, because a row cannot say whether its block was short. That can only
+        push a plan change LATER, never re-bill a month that was paid, which is
+        the direction that cannot cost a family money.
+        """
+        covered: set[tuple[int, int]] = set()
+        rows = (
+            Payment.objects.filter(student=student, payment_type__in=PERIODIC_PAYMENT_TYPES)
+            .exclude(payment_status="cancelled")
+            .exclude(due_date__isnull=True)
+            .values_list("payment_type", "due_date")
+        )
+        for payment_type, due in rows:
+            month, year = due.month, due.year
+            for _ in range(3 if payment_type == "quarterly" else 1):
+                covered.add((month, year))
+                month -= 1
+                if month == 0:
+                    month, year = 12, year - 1
+        return covered
+
+    @staticmethod
+    def transition_start_date(student, requested_start=None, closing=None):
+        """The date a REPLACEMENT enrollment may start billing from, or None.
+
+        The single answer to "when does a plan change take effect?", used by
+        `EnrollmentService.supersede_enrollment` for all three transitions (a
+        modality flip, an edited plan, a new matrícula for an existing student).
+        Two rules, and both exist because a month can only be billed once:
+
+        1. **Never inside a month another period already invoices.** The first
+           candidate month not in `covered_months()` wins, so the new cadence's
+           `billing_periods` cannot reach back over money already collected or
+           already invoiced.
+        2. **Never mid-month while the closing enrollment is still teaching.**
+           When `closing` taught the first part of `requested_start`'s month, the
+           handover is moved to the 1st of the FOLLOWING month and the closing
+           plan keeps that month whole.
+
+        Rule 2 is the judgement call, and the database makes it for us: splitting
+        the transition month would mean two periodic rows falling due in it —
+        the closing enrollment's head days and the replacement's prorated tail —
+        and `unique_pending_periodic_payment_per_month` allows exactly ONE pending
+        periodic row per student per due month. The alternatives were the two bugs
+        this replaces: bill both (a month charged twice) or bill neither head
+        (days taught for free, permanently, because a cancelled row still occupies
+        its month for the cron's back-fill). Keeping the month whole on the old
+        plan bills it exactly once, at a price the family was already quoted, and
+        the endpoints report the effective date so nothing is silent.
+
+        A `requested_start` on the 1st is honoured as-is, and so is one for a
+        month the closing enrollment does not teach (a re-enrollment for the next
+        course, or a backdated start before the closing enrollment began) — there
+        is no split to avoid, so proration is left intact.
+
+        Returns None when every remaining month of the course is already
+        invoiced: there is nothing left to re-bill, so the caller must refuse the
+        change rather than issue an enrollment that can never generate a payment.
+        """
+        from billing.models import enrollment_academic_year
+
+        requested_start = requested_start or date.today()
+        earliest = requested_start
+
+        if closing is not None and requested_start.day > 1 and closing.enrollment_date is not None:
+            teaches_transition_month = (requested_start.month, requested_start.year) in set(
+                PaymentService.teaching_months(closing.academic_year)
+            )
+            if teaches_transition_month and closing.enrollment_date < requested_start:
+                earliest = PaymentService._first_day_of_next_month(requested_start)
+
+        covered = PaymentService.covered_months(student)
+        academic_year = enrollment_academic_year(requested_start)
+        for month, year in PaymentService.teaching_months(academic_year):
+            if PaymentService._last_day(month, year) < earliest:
+                continue
+            if (month, year) in covered:
+                continue
+            # `max` keeps a mid-month request in an uncovered month exactly where
+            # the admin put it, so its first period stays prorated; only a month
+            # we had to skip forward to starts on the 1st.
+            return max(date(year, month, 1), earliest)
+        return None
+
+    @staticmethod
+    def _first_day_of_next_month(reference):
+        if reference.month == 12:
+            return date(reference.year + 1, 1, 1)
+        return date(reference.year, reference.month + 1, 1)
 
     @staticmethod
     def billing_periods(enrollment):
@@ -350,6 +491,23 @@ class PaymentService:
         quarterly = enrollment.payment_modality == "quarterly"
         payment_type = "quarterly" if quarterly else "monthly"
 
+        # An active enrollment with NO billable periods at all is a data problem,
+        # not a normal state — it means `enrollment_date` falls outside
+        # `academic_year`'s teaching window (e.g. the year was edited to a past
+        # course in /admin/). Every caller treats "0 created" as success, and the
+        # cron cannot back-fill because it goes through this same helper, so say
+        # so loudly instead of returning 0 in silence.
+        if not PaymentService.billing_periods(enrollment):
+            logger.warning(
+                "Enrollment %d (student %d) has no billable periods: enrollment_date %s "
+                "falls outside academic year %s. No payments will ever be generated for it.",
+                int(enrollment.pk),
+                int(enrollment.student_id),
+                enrollment.enrollment_date.isoformat() if enrollment.enrollment_date else "None",
+                enrollment.academic_year,
+            )
+            return 0
+
         created = 0
         for period in PaymentService.pending_periods(enrollment, as_of=today, billed_months=billed_months):
             amount = PaymentService.calculate_period_amount(
@@ -371,7 +529,7 @@ class PaymentService:
                         enrollment=enrollment,
                         payment_type=payment_type,
                         payment_method="transfer",
-                        amount=amount.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
+                        amount=amount,  # already quantized by calculate_period_amount
                         payment_status="pending",
                         due_date=period["due"],
                         concept=PaymentService.period_concept(period, quarterly),
@@ -387,6 +545,115 @@ class PaymentService:
                 continue
             if billed_months is not None:
                 billed_months.add((period["due"].month, period["due"].year))
+            created += 1
+
+        return created
+
+    @staticmethod
+    def close_out_periods(enrollment, parent=None, until=None):
+        """Bill every period `enrollment` taught IN FULL before `until`, and nothing else.
+
+        The closing half of a plan change (`EnrollmentService.supersede_enrollment`).
+        `generate_payments` only visits ACTIVE enrollments, so a month the closing
+        enrollment taught and never billed becomes structurally unbillable the
+        instant it is finished — no back-fill can reach it, because the
+        replacement's schedule starts later. This issues those months at the
+        closing enrollment's own price, before it is closed.
+
+        Deliberately NOT `schedule_academic_year_payments(..., as_of=until - 1 day)`,
+        which is what the view helper this replaces did. That helper always issues
+        an enrollment's FIRST period even when it opens in the future (so an
+        August signup sees their September fee immediately) — here that meant
+        issuing, at the old price and in full, exactly the period the replacement
+        was about to issue prorated. The family was then billed the old whole
+        month and the new prorated one was silently dropped by the billed-month
+        check.
+
+        `until` is a month boundary for every transition
+        `EnrollmentService.supersede_enrollment` allows, so a MONTHLY plan's
+        periods never straddle it. A quarterly block can, and it is billed for
+        its taught months only, due on the last of them — a short quarter, priced
+        by the same `_price_months` the one-month June stub uses.
+
+        Skipping is deliberately checked TWICE, and the second check is the one
+        that matters here. Same-cadence idempotency (`billed_months`, cancelled
+        rows included, exactly as the generators do it) stops a re-run and
+        respects a payment an admin deliberately cancelled. But this method runs
+        at a moment when the student may carry rows of the OTHER cadence — that
+        is the whole reason the transition exists — and those are invisible to a
+        `payment_type`-keyed check, which is the same blindness that let a
+        modality flip double-bill in the first place. So a period is also skipped
+        when `covered_months()` already accounts for ANY of its months. That is
+        conservative for a quarter (one overlapping month skips the whole block,
+        leaving the other two for `reconcile_payment_schedule`), and conservative
+        is the right direction: under-billing is repairable, a family charged
+        twice is not.
+
+        Returns the number of payments created.
+        """
+        from billing.models import SiteConfiguration
+
+        student = enrollment.student
+        if not student.active or until is None:
+            return 0
+
+        config = SiteConfiguration.get_config()
+        quarterly = enrollment.payment_modality == "quarterly"
+        payment_type = "quarterly" if quarterly else "monthly"
+
+        billed_months = {
+            (d.month, d.year)
+            for d in Payment.objects.filter(student=student, payment_type=payment_type).values_list(
+                "due_date", flat=True
+            )
+            if d is not None
+        }
+        covered = PaymentService.covered_months(student)
+
+        created = 0
+        for period in PaymentService.billing_periods(enrollment):
+            # Months whose LAST day is before the handover: taught in full by this
+            # enrollment. Anything else belongs to the replacement.
+            months = [(m, y) for (m, y) in period["months"] if PaymentService._last_day(m, y) < until]
+            if not months:
+                # Periods are ordered, so nothing later can qualify either.
+                break
+
+            # The period's own join proration always applies to its FIRST month
+            # and truncation only ever drops months off the END, so the fraction
+            # carries over unchanged.
+            fraction = period["fraction"]
+            effective = Decimal(len(months) - 1) + fraction
+            due = PaymentService._last_day(months[-1][0], months[-1][1])
+            if (due.month, due.year) in billed_months:
+                continue
+            if any(month in covered for month in months):
+                continue
+
+            amount = PaymentService._price_months(enrollment, config, [m for m, _ in months], effective, quarterly)
+            truncated = {"months": months, "fraction": fraction}
+            try:
+                with transaction.atomic():
+                    Payment.objects.create(
+                        student=student,
+                        parent=parent,
+                        enrollment=enrollment,
+                        payment_type=payment_type,
+                        payment_method="transfer",
+                        amount=amount,
+                        payment_status="pending",
+                        due_date=due,
+                        concept=PaymentService.period_concept(truncated, quarterly),
+                    )
+            except IntegrityError:
+                logger.warning(
+                    "Close-out payment for student %d due %s already existed; skipped.",
+                    int(student.pk),
+                    due.isoformat(),
+                )
+                billed_months.add((due.month, due.year))
+                continue
+            billed_months.add((due.month, due.year))
             created += 1
 
         return created

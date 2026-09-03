@@ -114,18 +114,31 @@
                 class="px-3 py-2 border border-neutral-300 rounded-md text-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500 w-48"
                 style="display: none;"
             >
-            <button id="paymentTypeFilterBtn" class="px-4 py-2 bg-primary-500 text-white rounded-md hover:bg-primary-600 transition-colors duration-200 flex items-center gap-2" title="Tipo: Todos">
+            <button id="paymentTypeFilterBtn" class="px-4 py-2 bg-primary-500 text-white rounded-md hover:bg-primary-600 transition-colors duration-200 flex items-center gap-2" title="Tipo: Todos" aria-label="Filtrar por tipo de pago">
                 <span class="material-symbols-outlined text-sm" id="paymentTypeFilterIcon">tune</span>
             </button>
-            <button id="paymentStatusFilterBtn" class="px-4 py-2 bg-primary-500 text-white rounded-md hover:bg-primary-600 transition-colors duration-200 flex items-center gap-2" title="Estado: Todos">
+            <button id="paymentStatusFilterBtn" class="px-4 py-2 bg-primary-500 text-white rounded-md hover:bg-primary-600 transition-colors duration-200 flex items-center gap-2" title="Estado: Todos" aria-label="Filtrar por estado del pago">
                 <span class="material-symbols-outlined text-sm" id="paymentStatusFilterIcon">filter_list</span>
             </button>
-            <button id="paymentSortBtn" class="px-4 py-2 bg-primary-500 text-white rounded-md hover:bg-primary-600 transition-colors duration-200 flex items-center gap-2" title="Ordenar: Fecha ↑">
+            <button id="paymentSortBtn" class="px-4 py-2 bg-primary-500 text-white rounded-md hover:bg-primary-600 transition-colors duration-200 flex items-center gap-2" title="Ordenar: Fecha ↑" aria-label="Cambiar el orden de la lista">
                 <span class="material-symbols-outlined text-sm" id="paymentSortIcon">sort</span>
             </button>
-            <button id="paymentSearchBtn" class="px-4 py-2 bg-primary-500 text-white rounded-md hover:bg-primary-600 transition-colors duration-200 flex items-center gap-2" title="Buscar">
+            <button id="paymentSearchBtn" class="px-4 py-2 bg-primary-500 text-white rounded-md hover:bg-primary-600 transition-colors duration-200 flex items-center gap-2" title="Buscar" aria-label="Buscar pagos por nombre">
                 <span class="material-symbols-outlined text-sm">search</span>
             </button>
+            {% comment %}
+               CSV export. The query string is forwarded, because `export_payments`
+               shares this view's filter helper: without it the link honours no filter
+               at all and downloads the whole table while the page shows one month.
+               Known and deliberate gap: the month/year form above IS in the query
+               string and so is exported, but the tipo/estado buttons are client-side
+               only, so those two are not reflected in the file.
+            {% endcomment %}
+            <a href="{% url 'export_payments' %}{% if request.GET.urlencode %}?{{ request.GET.urlencode }}{% endif %}"
+               class="px-4 py-2 bg-primary-500 text-white rounded-md hover:bg-primary-600 transition-colors duration-200 flex items-center gap-2 no-underline"
+               title="Exportar a CSV los pagos del periodo mostrado" aria-label="Exportar a CSV los pagos del periodo mostrado">
+                <span class="material-symbols-outlined text-sm">download</span>
+            </a>
         </div>
     </div>
 </div>
@@ -158,14 +171,28 @@
                     data-payment-id="{{ payment.id }}">
                     <td class="px-4 py-3">
                         <div class="flex items-center gap-3">
-                            {% if payment.payment_status != 'completed' and payment.payment_status != 'cancelled' %}
-                            <div class="w-12 h-12 rounded-full flex items-center justify-center shrink-0 cursor-pointer payment-complete-trigger relative" style="background-color:#ede9fe;" data-payment-id="{{ payment.id }}">
+                            {% comment %}
+                               The "cobrar" trigger is hidden on any status that
+                               quick_complete_payment refuses. `cancelled` was already
+                               excluded (cancelling frees the month for
+                               unique_pending_periodic_payment_per_month, so the schedule
+                               may have re-billed it); `refunded` must be too — completing
+                               a refunded payment rewrites payment_date and emails the
+                               family a receipt for money that was RETURNED. `failed`
+                               stays completable: a failed card retried in cash is a real
+                               workflow. Keep in step with quick_complete_payment.
+                            {% endcomment %}
+                            {% if payment.payment_status != 'completed' and payment.payment_status != 'cancelled' and payment.payment_status != 'refunded' %}
+                            <div class="w-12 h-12 rounded-full flex items-center justify-center shrink-0 cursor-pointer payment-complete-trigger relative" style="background-color:#ede9fe;" data-payment-id="{{ payment.id }}" title="Marcar como cobrado" aria-label="Marcar como cobrado">
                                 <span class="material-symbols-outlined" style="font-size:22px;color:#8b5cf6;">payment</span>
                                 <!-- Dropdown -->
                                 <div class="payment-dropdown hidden absolute top-full left-0 mt-1 bg-white border border-neutral-200 rounded-lg shadow-lg z-50 py-1 w-44">
                                     {% for method_key, method_label in payment_method_choices %}
+                                    {# data-method-label carries the SPANISH label from the model choices, so the #}
+                                    {# JS that rewrites the Método cell after a quick-complete never needs its own #}
+                                    {# label map (it had one, in English, in a Spanish table).                     #}
                                     <button type="button" class="payment-method-btn w-full text-left px-4 py-2 text-sm hover:bg-primary-50 transition-colors flex items-center gap-2"
-                                            data-payment-id="{{ payment.id }}" data-method="{{ method_key }}">
+                                            data-payment-id="{{ payment.id }}" data-method="{{ method_key }}" data-method-label="{{ method_label }}">
                                         <span class="material-symbols-outlined text-sm">
                                             {% if method_key == 'cash' %}payments{% elif method_key == 'transfer' %}account_balance{% else %}credit_card{% endif %}
                                         </span>
@@ -187,10 +214,13 @@
                     <td class="px-4 py-3 text-center">
                         <div class="font-bold text-neutral-800">{{ payment.amount }}€</div>
                     </td>
-                    <td class="px-4 py-3 text-center">
+                    {# data-cell="…" so payments.js can find these three cells by NAME.    #}
+                    {# It used to index them as td[4] / td[5] / td[7], which silently      #}
+                    {# rewrote the wrong column the moment a column was added or moved.    #}
+                    <td class="px-4 py-3 text-center" data-cell="method">
                         <span class="text-sm text-neutral-800">{{ payment.get_payment_method_display }}</span>
                     </td>
-                    <td class="px-4 py-3 text-center">
+                    <td class="px-4 py-3 text-center" data-cell="status">
                         {% if payment.payment_status == 'completed' %}
                             <span class="status-badge inline-flex items-center px-2 py-1 rounded-full text-xs font-bold bg-green-100 text-green-800">
                                 <span class="material-symbols-outlined text-sm mr-2">check_circle</span>
@@ -231,7 +261,7 @@
                             <div class="text-red-500 text-xs">{{ payment.days_overdue }} días vencido</div>
                         {% endif %}
                     </td>
-                    <td class="px-4 py-3 text-center text-sm text-neutral-600 nowrap">
+                    <td class="px-4 py-3 text-center text-sm text-neutral-600 nowrap" data-cell="payment-date">
                         {% if payment.payment_date %}
                             {{ payment.payment_date|date:"d/m/Y" }}
                         {% else %}
@@ -240,12 +270,13 @@
                     </td>
                     <td style="position:sticky;right:0;background:#f9fafb;width:6rem;padding:0.75rem;text-align:center;z-index:2;">
                         <div style="display:flex;align-items:center;justify-content:center;gap:0.25rem;">
-                            <a href="{% url 'payment_detail_view' payment.id %}" class="inline-flex p-2 text-primary-600 hover:bg-primary-100 rounded-full transition-all duration-200" style="text-decoration:none;" title="Ver pago"><span class="material-symbols-outlined text-base">visibility</span></a>
+                            <a href="{% url 'payment_detail_view' payment.id %}" class="inline-flex p-2 text-primary-600 hover:bg-primary-100 rounded-full transition-all duration-200" style="text-decoration:none;" title="Ver pago" aria-label="Ver detalle del pago"><span class="material-symbols-outlined text-base">visibility</span></a>
                             {% if is_admin_user and payment.payment_status != 'cancelled' %}
                             <button type="button"
                                     class="payment-cancel-btn inline-flex p-2 text-neutral-500 hover:bg-red-100 hover:text-red-600 rounded-full transition-all duration-200"
                                     data-payment-id="{{ payment.id }}"
-                                    title="Cancelar pago">
+                                    title="Cancelar pago"
+                                    aria-label="Cancelar pago">
                                 <span class="material-symbols-outlined text-base">block</span>
                             </button>
                             {% endif %}

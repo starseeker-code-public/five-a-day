@@ -22,12 +22,11 @@
         bodyEl.classList.add('hidden');
         spinner.classList.remove('hidden');
 
-        fetch(window.location.pathname, {
+        window.apiFetch(window.location.pathname, {
             method: 'POST',
             headers: { 'X-CSRFToken': data.get('csrfmiddlewaretoken') },
             body: data,
         })
-        .then(function (r) { return r.json(); })
         .then(function (d) {
             spinner.classList.add('hidden');
             bodyEl.classList.remove('hidden');
@@ -35,9 +34,13 @@
                stylesheets would leak onto the app page if injected via innerHTML. */
             if (d.html) bodyEl.srcdoc = d.html;
         })
-        .catch(function () {
+        .catch(function (err) {
+            /* The preview used to fail completely silently: spinner off, empty
+               iframe, no explanation. */
             spinner.classList.add('hidden');
             bodyEl.classList.remove('hidden');
+            bodyEl.srcdoc = '<p style="font-family:sans-serif;color:#b91c1c;padding:1rem;">'
+                + window.escapeHtml(window.apiErrorMessage(err)) + '</p>';
         });
     }
 
@@ -70,12 +73,11 @@
             testSendBtn.innerHTML = '<span class="material-symbols-outlined">sync</span> Enviando…';
             feedback.classList.add('hidden');
 
-            fetch(window.location.pathname, {
+            window.apiFetch(window.location.pathname, {
                 method: 'POST',
                 headers: { 'X-CSRFToken': data.get('csrfmiddlewaretoken') },
                 body: data,
             })
-            .then(function (r) { return r.json(); })
             .then(function (d) {
                 feedback.className = d.ok
                     ? 'mb-3 p-3 rounded-lg text-sm font-medium border bg-green-50 text-green-800 border-green-200'
@@ -85,9 +87,9 @@
                 testSendBtn.disabled = false;
                 testSendBtn.innerHTML = '<span class="material-symbols-outlined">science</span> Enviar prueba';
             })
-            .catch(function () {
+            .catch(function (err) {
                 feedback.className = 'mb-3 p-3 rounded-lg text-sm font-medium border bg-red-50 text-red-800 border-red-200';
-                feedback.textContent = '❌ Error de conexión';
+                feedback.textContent = '❌ ' + window.apiErrorMessage(err);
                 feedback.classList.remove('hidden');
                 testSendBtn.disabled = false;
                 testSendBtn.innerHTML = '<span class="material-symbols-outlined">science</span> Enviar prueba';

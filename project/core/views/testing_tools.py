@@ -295,6 +295,14 @@ def api_create_backlog_task(request):
                     "title": task.title,
                     "priority": task.priority,
                     "status": task.status,
+                    # The Spanish labels come from the model's own choices so an
+                    # AJAX-inserted row reads exactly like a server-rendered one.
+                    # Without these the board showed the raw keys ("medium",
+                    # "open") until the next reload, and the alternative — a
+                    # label map in JS — is a second copy of the choices that
+                    # drifts the moment one is renamed.
+                    "priority_display": task.get_priority_display(),
+                    "status_display": task.get_status_display(),
                     "created_by": task.created_by,
                     "created_at": task.created_at.strftime("%d/%m/%Y %H:%M"),
                 },
@@ -406,7 +414,11 @@ def api_update_backlog_task(request, task_id):
         if new_status == "done" and not was_done:
             _email_task_done(task)
 
-        return JsonResponse({"success": True})
+        # `status_display` for the same reason the create endpoint returns it:
+        # the board updates the badge from this response, and the raw key would
+        # render as "done" instead of "Completada" until the next reload. The
+        # label comes from the model's choices so JS never holds a second copy.
+        return JsonResponse({"success": True, "status_display": task.get_status_display()})
     except BacklogTask.DoesNotExist:
         return JsonResponse({"success": False, "message": "Tarea no encontrada."}, status=404)
     except json.JSONDecodeError:

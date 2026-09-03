@@ -2,7 +2,9 @@ import csv
 from datetime import date
 from decimal import Decimal
 
+from django import forms
 from django.contrib import admin, messages
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import IntegrityError, transaction
 from django.db.models import Count, DecimalField, Q, Sum, Value
 from django.db.models.functions import Coalesce
@@ -12,6 +14,7 @@ from django.utils.html import format_html
 
 from billing.constants import PERIODIC_PAYMENT_TYPES
 from billing.models import (
+    UNCOLLECTED_PAYMENT_STATUSES,
     Enrollment,
     EnrollmentPaymentTotals,
     EnrollmentType,
@@ -94,9 +97,9 @@ class PaymentAdmin(admin.ModelAdmin):
     raw_id_fields = ["student", "parent", "enrollment"]
 
     fieldsets = (
-        ("Payment Information", {"fields": ("student", "parent", "enrollment")}),
+        ("Titularidad", {"fields": ("student", "parent", "enrollment")}),
         (
-            "Payment Details",
+            "Detalles del pago",
             {
                 "fields": (
                     "payment_type",
@@ -109,7 +112,7 @@ class PaymentAdmin(admin.ModelAdmin):
                 )
             },
         ),
-        ("Dates", {"fields": ("due_date", "payment_date")}),
+        ("Fechas", {"fields": ("due_date", "payment_date")}),
         ("Información adicional", {"fields": ("observations", "document_url"), "classes": ("collapse",)}),
         (
             "Sistema",
@@ -180,7 +183,7 @@ class PaymentAdmin(admin.ModelAdmin):
 
         status_text = obj.get_payment_status_display()
         if obj.is_overdue and obj.payment_status == "pending":
-            status_text += f" ({obj.days_overdue}d overdue)"
+            status_text += f" ({obj.days_overdue} d de retraso)"
 
         return format_html('<span style="color: {}; font-weight: bold;">{}</span>', color, status_text)
 
@@ -211,7 +214,13 @@ class PaymentAdmin(admin.ModelAdmin):
         """
         from core.views.payments import _queue_payment_receipt
 
-        pending = list(queryset.exclude(payment_status="completed"))
+        # ONLY pending rows. `exclude("completed")` also caught `cancelled`,
+        # `failed` and `refunded` — so this action resurrected them, dated them
+        # today (re-booking the money as this month's income) and emailed a
+        # receipt for a refund. Cancelling frees the month under the pending-only
+        # unique index, so a cancelled duplicate completed here would double-bill
+        # with nothing to stop it — exactly what `quick_complete_payment` refuses.
+        pending = list(queryset.filter(payment_status="pending"))
         today = date.today()
         for payment in pending:
             payment.payment_status = "completed"
@@ -220,9 +229,9 @@ class PaymentAdmin(admin.ModelAdmin):
             _queue_payment_receipt(payment.id)
 
         skipped = queryset.count() - len(pending)
-        message = f"{len(pending)} payments marked as completed."
+        message = f"{len(pending)} pagos marcados como completados."
         if skipped:
-            message += f" {skipped} already completed and left untouched."
+            message += f" {skipped} no pendientes (completados/cancelados/fallidos) sin tocar."
         self.message_user(request, message)
 
     mark_as_completed.short_description = "Marcar como completados"
@@ -316,15 +325,67 @@ class PaymentAdmin(admin.ModelAdmin):
 
     mark_as_pending.short_description = "Marcar como pendientes"
 
+    #: Statuses `_bulk_set_status` refuses to move COLLECTED money into.
+    _VOIDING_STATUSES = ("failed", "cancelled")
+
+    def _bulk_set_status(self, queryset, status: str):
+        """Set `payment_status` row by row so the audit signals fire.
+
+        Returns `(changed, protected)` — the rows moved, and the COMPLETED rows
+        left alone.
+
+        `queryset.update()` fires NEITHER the pre/post_save receivers (Payment is
+        audit-tracked, so a bulk status change left no AuditLog row for money
+        being voided) NOR `auto_now` on `updated_at` (the row kept its original
+        timestamp). Voiding billed money with no trace is exactly what the audit
+        log exists to prevent — and `_reopen_to_pending` already loops for the
+        same reason.
+
+        A COMPLETED payment is never moved to `failed` or `cancelled`. That money
+        has been collected and is counted as income in a month that is very likely
+        already closed and reported; voiding it silently subtracts it from those
+        figures, and neither status describes what happened (it did not fail, and
+        it was not withdrawn from the schedule). `mark_as_completed` already skips
+        every non-pending row for the mirror-image reason. Reopening it first
+        ("Marcar como pendientes") is the auditable route, and that action has to
+        pass the pending-per-month constraint, which is exactly the check a
+        re-collection needs.
+        """
+        changed = 0
+        protected = []
+        for payment in queryset:
+            if payment.payment_status == status:
+                continue
+            if payment.payment_status == "completed" and status in self._VOIDING_STATUSES:
+                protected.append(payment)
+                continue
+            payment.payment_status = status
+            payment.save(update_fields=["payment_status", "updated_at"])
+            changed += 1
+        return changed, protected
+
+    def _report_bulk_status(self, request, changed: int, protected: list, done: str) -> None:
+        message = f"{changed} pagos marcados como {done}."
+        if protected:
+            names = ", ".join(f"{p.student} ({p.concept})" for p in protected[:5])
+            if len(protected) > 5:
+                names += f" y {len(protected) - 5} más"
+            message += (
+                f" {len(protected)} sin tocar: están completados, es decir cobrados, "
+                f"y anularlos restaría ese dinero de los ingresos ya declarados. "
+                f"Reábrelos con «Marcar como pendientes» si hay que corregirlos — {names}."
+            )
+        self.message_user(request, message, level=messages.WARNING if protected else messages.INFO)
+
     def mark_as_failed(self, request, queryset):
-        updated = queryset.update(payment_status="failed")
-        self.message_user(request, f"{updated} payments marked as failed.")
+        changed, protected = self._bulk_set_status(queryset, "failed")
+        self._report_bulk_status(request, changed, protected, "fallidos")
 
     mark_as_failed.short_description = "Marcar como fallidos"
 
     def soft_delete_payments(self, request, queryset):
-        updated = queryset.update(payment_status="cancelled")
-        self.message_user(request, f"{updated} payments cancelled (soft deleted).")
+        changed, protected = self._bulk_set_status(queryset, "cancelled")
+        self._report_bulk_status(request, changed, protected, "cancelados (borrado lógico)")
 
     soft_delete_payments.short_description = "Cancelar los pagos seleccionados"
 
@@ -387,7 +448,12 @@ class PaymentAdmin(admin.ModelAdmin):
 
 @admin.register(SiteConfiguration)
 class SiteConfigurationAdmin(admin.ModelAdmin):
-    list_display = ["__str__", "full_time_monthly_fee", "part_time_monthly_fee", "updated_at"]
+    list_display = ["__str__", "academy_cif", "full_time_monthly_fee", "part_time_monthly_fee", "updated_at"]
+    # No `fieldsets` on purpose: a field absent from a fieldset is UNREACHABLE,
+    # not merely hidden, and this is the one row that holds every live price. The
+    # `academy_*` columns therefore appear here the moment they exist. `academy_cif`
+    # is surfaced in `list_display` because it is the field that decides whether a
+    # tax certificate is usable, and it ships empty.
 
     def has_add_permission(self, request):
         return not SiteConfiguration.objects.exists()
@@ -410,7 +476,20 @@ class EnrollmentAdmin(admin.ModelAdmin):
     ]
     list_filter = ["status", "schedule_type", "enrollment_type", "enrollment_period_start", "enrollment_date"]
     search_fields = ["student__first_name", "student__last_name", "notes"]
-    readonly_fields = ["created_at", "updated_at", "is_up_to_date", "overdue_amount", "outstanding_amount"]
+    # NOT the `is_up_to_date` / `overdue_amount` / `outstanding_amount` model
+    # properties: each of the three calls `payment_totals()`, so rendering the
+    # change form ran the same aggregate query three times. These display methods
+    # share one result per object (`_totals`). The properties themselves are left
+    # alone — they are read all over the app on instances the caller expects to be
+    # live, and memoising them on the model would serve a stale figure to anyone
+    # who created a payment and re-read the same instance.
+    readonly_fields = [
+        "created_at",
+        "updated_at",
+        "up_to_date_display",
+        "overdue_display",
+        "outstanding_display",
+    ]
     raw_id_fields = ["student"]
 
     def get_queryset(self, request):
@@ -436,14 +515,28 @@ class EnrollmentAdmin(admin.ModelAdmin):
             .select_related("student", "enrollment_type")
             .annotate(
                 _billed=Count("payments", distinct=True),
+                # Same status set `Enrollment.payment_totals()` counts, read from
+                # the one constant so the annotation and the method cannot drift
+                # (this is an optimisation OF that method, and a silent
+                # disagreement between them shows the admin one debt figure while
+                # every other page shows another). Deliberately not
+                # `LIVE_PAYMENT_STATUSES` — that includes `completed`, which is
+                # money already banked, not money outstanding.
                 _outstanding=Coalesce(
-                    Sum("payments__amount", filter=Q(payments__payment_status="pending"), output_field=money),
+                    Sum(
+                        "payments__amount",
+                        filter=Q(payments__payment_status__in=UNCOLLECTED_PAYMENT_STATUSES),
+                        output_field=money,
+                    ),
                     zero,
                 ),
                 _overdue=Coalesce(
                     Sum(
                         "payments__amount",
-                        filter=Q(payments__payment_status="pending", payments__due_date__lt=today),
+                        filter=Q(
+                            payments__payment_status__in=UNCOLLECTED_PAYMENT_STATUSES,
+                            payments__due_date__lt=today,
+                        ),
                         output_field=money,
                     ),
                     zero,
@@ -484,14 +577,14 @@ class EnrollmentAdmin(admin.ModelAdmin):
             },
         ),
         ("Precios", {"fields": ("enrollment_amount", "discount_percentage", "final_amount")}),
-        ("Additional Information", {"fields": ("document_url", "notes"), "classes": ("collapse",)}),
+        ("Información adicional", {"fields": ("document_url", "notes"), "classes": ("collapse",)}),
         (
-            "System Information",
+            "Sistema",
             {
                 "fields": (
-                    "is_up_to_date",
-                    "overdue_amount",
-                    "outstanding_amount",
+                    "up_to_date_display",
+                    "overdue_display",
+                    "outstanding_display",
                     "created_at",
                     "updated_at",
                 ),
@@ -499,6 +592,36 @@ class EnrollmentAdmin(admin.ModelAdmin):
             },
         ),
     )
+
+    @staticmethod
+    def _totals(obj) -> EnrollmentPaymentTotals:
+        """One `payment_totals()` per object per request.
+
+        `get_queryset` annotates the three figures for the changelist; the change
+        form renders a plain instance, so it falls back to the model method — and
+        three readonly fields asking three separate questions meant three
+        identical aggregate queries. Cached on the instance, which lives exactly
+        as long as the response that is rendering it.
+        """
+        if hasattr(obj, "_overdue"):
+            return EnrollmentPaymentTotals(overdue=obj._overdue, outstanding=obj._outstanding, billed=obj._billed)
+        cached = getattr(obj, "_admin_totals", None)
+        if cached is None:
+            cached = obj.payment_totals()
+            obj._admin_totals = cached
+        return cached
+
+    @admin.display(description="Al día", boolean=True)
+    def up_to_date_display(self, obj):
+        return self._totals(obj).overdue == Decimal("0.00")
+
+    @admin.display(description="Vencido")
+    def overdue_display(self, obj):
+        return f"{self._totals(obj).overdue:.2f} €"
+
+    @admin.display(description="Pendiente de cobro")
+    def outstanding_display(self, obj):
+        return f"{self._totals(obj).outstanding:.2f} €"
 
     def payment_status_display(self, obj):
         """Does this family owe money, and is any of it late?
@@ -514,12 +637,9 @@ class EnrollmentAdmin(admin.ModelAdmin):
         RemovedInDjango60Warning before), and the branch that had none 500'd the
         whole changelist as soon as one enrollment reached it.
         """
-        # Annotated by get_queryset on the changelist; computed on demand for a
-        # single instance (the change form, a shell, a test).
-        if hasattr(obj, "_overdue"):
-            totals = EnrollmentPaymentTotals(overdue=obj._overdue, outstanding=obj._outstanding, billed=obj._billed)
-        else:
-            totals = obj.payment_totals()
+        # Annotated by get_queryset on the changelist; computed on demand (and
+        # memoised) for a single instance (the change form, a shell, a test).
+        totals = self._totals(obj)
         if totals.overdue:
             return format_html('<span style="color: red;">&#10007; Vencido (&euro;{})</span>', totals.overdue)
         if totals.outstanding:
@@ -535,9 +655,36 @@ class EnrollmentAdmin(admin.ModelAdmin):
     payment_status_display.short_description = "Estado de pago"
 
 
+class ExpenseAdminForm(forms.ModelForm):
+    class Meta:
+        model = Expense
+        fields = "__all__"
+
+    def clean(self):
+        cleaned = super().clean()
+        # Run the model's own per-frequency rules (including the recurring_weekdays
+        # parse) so the admin cannot save a template the app path would reject.
+        # Without this, typing "L,M,V" into recurring_weekdays saved a row whose
+        # `weekday_set()` then raised ValueError — a 500 on /expenses/ for
+        # everyone and an aborted daily materialiser for all weekly/yearly rows.
+        instance = self.instance
+        for field, value in cleaned.items():
+            setattr(instance, field, value)
+        try:
+            instance.clean()
+        except DjangoValidationError as exc:
+            raise forms.ValidationError(exc.messages) from exc
+        return cleaned
+
+
 @admin.register(Expense)
 class ExpenseAdmin(admin.ModelAdmin):
-    list_display = ["expense_date", "description", "category", "amount", "is_recurring"]
+    form = ExpenseAdminForm
+    list_display = ["expense_date", "description", "category", "amount", "is_recurring", "recurring_summary"]
     list_filter = ["category", "is_recurring", "expense_date"]
     search_fields = ["description", "notes"]
     readonly_fields = ["created_at", "updated_at", "generated_from"]
+
+    @admin.display(description="Recurrencia")
+    def recurring_summary(self, obj):
+        return obj.recurring_summary() or "—"

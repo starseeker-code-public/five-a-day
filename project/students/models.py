@@ -1,3 +1,4 @@
+import functools
 import secrets
 
 from django.conf import settings
@@ -5,7 +6,7 @@ from django.contrib.auth.hashers import check_password, make_password
 from django.core.validators import EmailValidator
 from django.db import models
 from django.db.models.functions import Upper
-from django.db.models.signals import post_save, pre_save
+from django.db.models.signals import post_delete, post_save, pre_save
 from django.dispatch import receiver
 from django.utils import timezone
 
@@ -20,9 +21,30 @@ PORTAL_AUTH_TEMPORARY = "temporary"
 #: hand exactly once.
 _TEMP_PASSWORD_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789"
 
-#: Hashed once at import so refusing a parent who has no credential at all
-#: still costs one hash. The value is a constant, never a usable password.
-_NO_CREDENTIAL_DUMMY_HASH = make_password("fad-portal-no-credential-set")
+
+@functools.cache
+def _no_credential_dummy_hash() -> str:
+    """Dummy hash for equalising failed-login work. Never a usable password.
+
+    Computed LAZILY (and memoised): evaluated at module import, this ran a full
+    PBKDF2 (~0.3 s of CPU, 1.2M iterations) in every process that imports the
+    models — each Gunicorn worker, every manage.py invocation, all the Cloud Run
+    Jobs — most of which never authenticate a parent at all. The test settings
+    swap in a fast hasher, which is exactly why the suite never noticed.
+    """
+    return make_password("fad-portal-no-credential-set")
+
+
+def burn_portal_login_work(raw_password: str) -> None:
+    """Spend the same hashing work a failed `authenticate_portal` costs.
+
+    For callers that resolved NO parent for the submitted address: without this,
+    an unknown email returned in milliseconds while a known one paid two hash
+    verifications — a remote timing oracle for exactly which addresses belong to
+    families of the academy (the fact the unified error message exists to hide).
+    """
+    check_password(raw_password, _no_credential_dummy_hash())
+    check_password(raw_password, _no_credential_dummy_hash())
 
 
 def generate_temporary_password() -> str:
@@ -130,6 +152,12 @@ class Teacher(models.Model):
             if user.is_superuser != self.admin:
                 user.is_superuser = self.admin
                 dirty = True
+            if user.is_active != self.active:
+                # `active` is the offboarding switch (the admin fieldset is
+                # literally titled "Acceso"). Unmirrored, unticking it removed
+                # the teacher from every dropdown and left their login working.
+                user.is_active = self.active
+                dirty = True
             if password is not None:
                 user.set_password(password)
                 dirty = True
@@ -146,6 +174,7 @@ class Teacher(models.Model):
                 "last_name": self.last_name,
                 "is_staff": self.admin,
                 "is_superuser": self.admin,
+                "is_active": self.active,
             },
         )
         if not created:
@@ -155,6 +184,7 @@ class Teacher(models.Model):
             user.last_name = self.last_name
             user.is_staff = self.admin
             user.is_superuser = self.admin
+            user.is_active = self.active
 
         if password is not None:
             user.set_password(password)
@@ -181,6 +211,9 @@ def _sync_linked_user_flags(sender, instance, **kwargs):
     if user.is_superuser != instance.admin:
         user.is_superuser = instance.admin
         dirty = True
+    if user.is_active != instance.active:
+        user.is_active = instance.active
+        dirty = True
     if user.email != instance.email:
         user.email = instance.email
         user.username = instance.email
@@ -193,6 +226,22 @@ def _sync_linked_user_flags(sender, instance, **kwargs):
         dirty = True
     if dirty:
         user.save()
+
+
+@receiver(post_delete, sender=Teacher)
+def _deactivate_orphaned_user(sender, instance, **kwargs):
+    """Deleting a Teacher must not ESCALATE its login.
+
+    `Teacher.user` survives the delete (the FK is on Teacher), and an auth.User
+    with no Teacher row used to bypass both the 2FA requirement and the
+    non-admin URL whitelist (each is keyed off the Teacher). Deactivate the
+    orphaned account; an admin can re-link or re-enable it deliberately from
+    /admin/ if the delete was a mistake.
+    """
+    if instance.user_id:
+        from django.contrib.auth import get_user_model
+
+        get_user_model().objects.filter(pk=instance.user_id, is_active=True).update(is_active=False)
 
 
 class Group(models.Model):
@@ -219,14 +268,77 @@ class Group(models.Model):
     def __str__(self):
         return self.group_name
 
+    #: Annotation aliases that already carry this group's occupancy, in
+    #: preference order. `core.views.waiting_list.group_capacity_summary()`
+    #: annotates `enrolled` / `waiting`; `GroupAdmin.get_queryset` annotates
+    #: `_enrolled`. Listed here so the properties below can be free when the
+    #: queryset already paid for the count, and still correct on a bare object.
+    ENROLLED_ANNOTATIONS = ("enrolled", "_enrolled")
+    WAITING_ANNOTATIONS = ("waiting", "_waiting")
+
+    def _annotated(self, names):
+        """First of `names` present on this INSTANCE, or None.
+
+        Reads `__dict__` rather than `getattr`: a queryset annotation lands
+        there, while `getattr` would walk the class and could hand back the
+        property itself or a related manager that happens to share the name.
+        """
+        for name in names:
+            value = self.__dict__.get(name)
+            if value is not None:
+                return value
+        return None
+
+    def occupied_count(self, exclude_student_pk=None) -> int:
+        """Fresh COUNT of the students occupying a place, ignoring annotations.
+
+        `exclude_student_pk` discounts the student currently being saved, which
+        is what lets an edit that keeps a student in an already-full group
+        through — they are one of the occupants being counted.
+        """
+        qs = self.students.filter(active=True, is_waiting=False)
+        if exclude_student_pk is not None:
+            qs = qs.exclude(pk=exclude_student_pk)
+        return qs.count()
+
+    def has_room_for(self, *, exclude_student_pk=None) -> bool:
+        """Whether one more student can take a place in this group.
+
+        THE capacity predicate. `students.forms` (and therefore both the app's
+        student forms and the admin's) validate against this one method, so the
+        cap cannot be enforced two different ways — the rule used to live in
+        `StudentForm.clean_group` only, which the admin never went through.
+        `max_students == 0` means "no cap", not "no room".
+        """
+        if not self.max_students:
+            return True
+        if exclude_student_pk is None:
+            occupied = self.enrolled_count
+        else:
+            occupied = self.occupied_count(exclude_student_pk=exclude_student_pk)
+        return occupied < self.max_students
+
     @property
     def enrolled_count(self):
-        """Active, non-waiting students currently occupying a spot in this group."""
-        return self.students.filter(active=True, is_waiting=False).count()
+        """Active, non-waiting students currently occupying a spot in this group.
+
+        Prefers an annotation the queryset already resolved (see
+        `ENROLLED_ANNOTATIONS`) so a page that went through
+        `group_capacity_summary()` pays nothing here. Without that, one template
+        row touching `enrolled_count`, `waiting_count`, `available_spots` and
+        `is_full` cost FOUR queries — the last two recompute this one.
+        """
+        annotated = self._annotated(self.ENROLLED_ANNOTATIONS)
+        if annotated is not None:
+            return annotated
+        return self.occupied_count()
 
     @property
     def waiting_count(self):
         """Students on the waiting list whose preferred group is this one."""
+        annotated = self._annotated(self.WAITING_ANNOTATIONS)
+        if annotated is not None:
+            return annotated
         return self.students.filter(active=True, is_waiting=True).count()
 
     @property
@@ -239,7 +351,7 @@ class Group(models.Model):
     @property
     def is_full(self):
         """True only when a cap is set and enrolled_count has reached it."""
-        return bool(self.max_students) and self.enrolled_count >= self.max_students
+        return not self.has_room_for()
 
 
 class Parent(models.Model):
@@ -292,6 +404,17 @@ class Parent(models.Model):
         blank=True,
         verbose_name="Invitación al portal enviada",
     )
+    # Bumped whenever the portal credential changes (set-password). Every portal
+    # session stores the value it was opened with; a session older than this is
+    # rejected, so changing the password logs out every OTHER device — the
+    # portal equivalent of Django's session-auth-hash. Without it, a reset only
+    # ended the browser that performed it and any other logged-in session
+    # survived on its rolling 6-hour expiry.
+    portal_credential_changed_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        verbose_name="Credencial del portal cambiada",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)  # Added for consistency
 
@@ -302,7 +425,14 @@ class Parent(models.Model):
         indexes = [
             # No `Index(fields=["dni"])` — the field is `unique=True`, which is
             # already a b-tree index. See the note on `Payment.Meta.indexes`.
-            models.Index(fields=["email"]),
+            #
+            # No plain `Index(fields=["email"])` either. Every lookup on this
+            # column is `email__iexact` (`_parent_by_email`, the portal login,
+            # `send_email`, `seed_demo_parents`) or a non-indexable
+            # `exclude(email="")` / `email__icontains`, so a case-SENSITIVE
+            # b-tree answered none of them — it only added write cost to every
+            # Parent insert and update. The functional index below is the one
+            # that earns its keep.
             # Case-insensitive lookups need their own index: the parent-portal
             # login resolves a family by `email__iexact`, which Postgres renders
             # as `UPPER(email::text) = UPPER(%s)`. A plain b-tree on `email`
@@ -320,6 +450,42 @@ class Parent(models.Model):
     @property
     def full_name(self):
         return f"{self.first_name} {self.last_name}"
+
+    @property
+    def audit_label(self):
+        """PII-minimised label for `AuditLog` (see `core.audit_signals`).
+
+        `AuditLog.object_label` defaults to `str(instance)`, and this model's
+        `__str__` embeds the DNI — the one field the audit allow-list goes out
+        of its way to EXCLUDE from `changes`. Letting it back in through the
+        label meant the DNI of every parent was written into a searchable log
+        kept for two years, defeating the whole point of the allow-list. The
+        pk plus the name identifies the row just as well.
+        """
+        return f"{self.full_name} (#{self.pk})"
+
+    @classmethod
+    def other_families_sharing_email(cls, email, *, exclude_pk=None):
+        """Parents OTHER than `exclude_pk` that already use `email`.
+
+        `Parent.email` is not unique, and `_parent_by_email` deliberately
+        REFUSES an ambiguous match rather than serving one family another
+        family's payment history — so two rows carrying one address lock BOTH
+        of them out of portal login and out of password recovery.
+
+        The single predicate behind every write path's duplicate check
+        (`ParentForm` / `ParentCreateView` warn, `ParentAdminForm` refuses a new
+        collision), so the app UI and the admin cannot disagree about what a
+        collision is. Matched with `iexact` because that is how the login
+        resolves it — `Ana@x.com` and `ana@x.com` are the same lockout.
+        """
+        email = (email or "").strip()
+        if not email:
+            return cls.objects.none()
+        qs = cls.objects.filter(email__iexact=email)
+        if exclude_pk is not None:
+            qs = qs.exclude(pk=exclude_pk)
+        return qs
 
     # ── Portal credential ───────────────────────────────────────────────────
 
@@ -346,12 +512,15 @@ class Parent(models.Model):
         self.password = make_password(raw_password)
         self.temporary_password = ""
         self.temporary_password_issued_at = None
+        # Invalidate every existing portal session (see the field's comment).
+        self.portal_credential_changed_at = timezone.now()
         if save:
             self.save(
                 update_fields=[
                     "password",
                     "temporary_password",
                     "temporary_password_issued_at",
+                    "portal_credential_changed_at",
                     "updated_at",
                 ]
             )
@@ -389,10 +558,9 @@ class Parent(models.Model):
         when it matched an emailed one (the caller must then force a change),
         and ``None`` when it matched neither.
 
-        A parent with NO credential at all still pays for one hash against a
-        dummy value before being refused. Returning early would make "never
-        onboarded" measurably faster than "wrong password", which is a timing
-        oracle for which of the academy's families have signed up.
+        A failed attempt costs the SAME hashing work whatever the parent's
+        onboarding state — see the comment below. Callers that resolve no
+        parent at all must call `burn_portal_login_work` to match.
         """
 
         def _persist(new_hash: str) -> None:
@@ -400,14 +568,22 @@ class Parent(models.Model):
             self.password = new_hash
             self.save(update_fields=["password", "updated_at"])
 
-        if self.password and check_password(raw_password, self.password, setter=_persist):
-            return PORTAL_AUTH_PASSWORD
+        # Every FAILED attempt costs exactly two hash verifications, whatever
+        # credentials exist. The old shape charged 2 hashes to a family with its
+        # own password, 1 to one still on the emailed temporary, and 1 to one
+        # with neither — a ~300 ms tell for which families held an unopened
+        # temporary password, the highest-value target this endpoint has.
+        if self.password:
+            if check_password(raw_password, self.password, setter=_persist):
+                return PORTAL_AUTH_PASSWORD
+        else:
+            check_password(raw_password, _no_credential_dummy_hash())
 
-        if self.temporary_password and check_password(raw_password, self.temporary_password):
-            return PORTAL_AUTH_TEMPORARY
-
-        if not self.password and not self.temporary_password:
-            check_password(raw_password, _NO_CREDENTIAL_DUMMY_HASH)
+        if self.temporary_password:
+            if check_password(raw_password, self.temporary_password):
+                return PORTAL_AUTH_TEMPORARY
+        else:
+            check_password(raw_password, _no_credential_dummy_hash())
 
         return None
 

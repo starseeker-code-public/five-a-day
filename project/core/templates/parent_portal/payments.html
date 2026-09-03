@@ -88,23 +88,39 @@ document.addEventListener('click', function (e) {
 async function payOnline(btn) {
     btn.disabled = true;
     btn.textContent = 'Cargando...';
+    const reset = () => { btn.disabled = false; btn.textContent = 'Pagar online'; };
     try {
         const resp = await fetch(btn.dataset.url, {
             method: 'POST',
             headers: {'X-CSRFToken': getCsrfToken(), 'X-Requested-With': 'XMLHttpRequest'},
         });
+        // The status is checked BEFORE .json(): a portal session that has
+        // expired answers 403 (or redirects to the portal login and returns
+        // HTML), and .json() then threw a SyntaxError that surfaced as
+        // "Error de red." — telling a family their connection is broken when
+        // what they need to do is sign in again. This page does not load
+        // base.js (base_portal.html is a standalone shell), so the check is
+        // inline rather than through window.apiFetch.
+        if (resp.status === 401 || resp.status === 403) {
+            reset();
+            alert('Tu sesión ha caducado. Vuelve a iniciar sesión para pagar.');
+            return;
+        }
+        if (!resp.ok) {
+            reset();
+            alert('No se pudo iniciar el pago. Vuelve a intentarlo en unos momentos.');
+            return;
+        }
         const data = await resp.json();
         if (data.success && data.url) {
             window.location.href = data.url;
         } else {
-            btn.disabled = false;
-            btn.textContent = 'Pagar online';
+            reset();
             alert(data.error || 'No se pudo iniciar el pago.');
         }
     } catch (e) {
-        btn.disabled = false;
-        btn.textContent = 'Pagar online';
-        alert('Error de red.');
+        reset();
+        alert('Error de conexión. Comprueba tu conexión e inténtalo de nuevo.');
     }
 }
 </script>

@@ -2,10 +2,11 @@ import json
 import logging
 
 from django.db import models
-from django.http import JsonResponse
+from django.http import Http404, JsonResponse
 from django.shortcuts import get_object_or_404, render
 from django.views.decorators.http import require_http_methods
 
+from core.decorators import admin_required
 from core.models import FunFridayAttendance, HistoryLog, ScheduleSlot
 from core.schedule_utils import is_valid_slot, slot_time_range
 from core.views.students import get_ff_student_ids, get_last_friday, get_next_friday
@@ -70,6 +71,7 @@ def schedule_view(request):
 
 
 @require_http_methods(["POST"])
+@admin_required
 def save_schedule_slot(request):
     """Save a single schedule slot assignment to the database."""
     try:
@@ -102,6 +104,10 @@ def save_schedule_slot(request):
         )
 
         return JsonResponse({"success": True})
+    except Http404:
+        # The group lookup — a missing/deleted group is a 404, not a "no se pudo
+        # guardar" masked by the catch-all (Http404 subclasses Exception).
+        raise
     except Exception:
         logger.exception("Error saving schedule slot")
         return JsonResponse({"success": False, "error": "No se pudo guardar el horario."}, status=400)

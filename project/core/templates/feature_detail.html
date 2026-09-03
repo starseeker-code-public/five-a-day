@@ -38,7 +38,7 @@
      data-task-create-url="{% url 'api_create_feature_task' feature.id %}">
 
     <div class="mb-6 flex items-center gap-3">
-        <a href="{% url 'features' %}" title="Volver a Desarrollos"
+        <a href="{% url 'features' %}" title="Volver a Desarrollos" aria-label="Volver a Desarrollos"
            class="qa-card-icon bg-violet-100 no-underline" style="width:2.5rem;height:2.5rem;">
             <span class="material-symbols-outlined text-violet-600">arrow_back</span>
         </a>
@@ -117,7 +117,7 @@
             <div class="flex items-center gap-2">
                 <input type="date" id="feature-deadline" value="{{ feature.deadline|date:'Y-m-d' }}"
                        class="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-primary-300 outline-none">
-                <button type="button" id="deadline-save-btn" title="Guardar la fecha límite (vacía = sin fecha)"
+                <button type="button" id="deadline-save-btn" title="Guardar la fecha límite (vacía = sin fecha)" aria-label="Guardar la fecha límite"
                         class="w-9 h-9 bg-primary-500 text-white rounded-lg hover:bg-primary-600 inline-flex items-center justify-center shrink-0">
                     <span class="material-symbols-outlined text-[18px]">save</span>
                 </button>
@@ -150,7 +150,7 @@
                     <option value="medium" selected>Media</option>
                     <option value="high">Alta</option>
                 </select>
-                <button id="task-add-btn" title="Crear tarea en el backlog"
+                <button id="task-add-btn" title="Crear tarea en el backlog" aria-label="Crear tarea en el backlog"
                         class="md:col-span-1 justify-self-end w-9 h-9 bg-primary-500 text-white rounded-lg hover:bg-primary-600 transition-colors inline-flex items-center justify-center">
                     <span class="material-symbols-outlined text-[18px]">add</span>
                 </button>
@@ -183,20 +183,10 @@
     const page = document.getElementById('feature-detail-page');
     if (!page) return;
 
-    // CSRF from the hidden input first — the cookie is HttpOnly whenever DEBUG=False.
-    function getCsrfToken() {
-        const el = document.querySelector('[name=csrfmiddlewaretoken]');
-        if (el && el.value) return el.value;
-        const cookie = document.cookie.split(';').find(c => c.trim().startsWith('csrftoken='));
-        return cookie ? cookie.split('=')[1] : '';
-    }
-
+    // CSRF + status-checked POST come from base.js (window.CSRF_TOKEN — hidden
+    // input first, the cookie is HttpOnly whenever DEBUG=False).
     function post(url, body) {
-        return fetch(url, {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json', 'X-CSRFToken': getCsrfToken()},
-            body: JSON.stringify(body),
-        }).then(r => r.json());
+        return window.apiFetch(url, { method: 'POST', body: JSON.stringify(body) });
     }
 
     function flash(el, ok, text) {
@@ -238,7 +228,7 @@
                 readBlock.classList.remove('hidden');
                 editMsg.classList.add('hidden');
             })
-            .catch(() => flash(editMsg, false, 'Error en la peticion.'))
+            .catch(err => flash(editMsg, false, window.apiErrorMessage(err)))
             .finally(() => { this.disabled = false; });
     });
 
@@ -255,7 +245,7 @@
                 statusBadge.textContent = data.feature.status_display;
                 flash(detailMsg, true, '✓ Estado guardado');
             })
-            .catch(() => flash(detailMsg, false, 'Error en la peticion.'));
+            .catch(err => flash(detailMsg, false, window.apiErrorMessage(err)));
     });
 
     document.getElementById('deadline-save-btn')?.addEventListener('click', function() {
@@ -269,7 +259,7 @@
                     ? '✓ Fecha límite: ' + data.feature.deadline_display
                     : '✓ Desarrollo sin fecha límite');
             })
-            .catch(() => flash(detailMsg, false, 'Error en la peticion.'))
+            .catch(err => flash(detailMsg, false, window.apiErrorMessage(err)))
             .finally(() => { this.disabled = false; });
     });
 
@@ -343,8 +333,8 @@
                 titleInput.value = '';
                 descInput.value = '';
             })
-            .catch(() => {
-                taskError.textContent = 'Error en la peticion.';
+            .catch(err => {
+                taskError.textContent = window.apiErrorMessage(err);
                 taskError.classList.remove('hidden');
             })
             .finally(() => { this.disabled = false; });

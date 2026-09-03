@@ -1,5 +1,10 @@
 // payments.js — merged from payments_list.html and payment_create.html
 
+// Local calendar date as YYYY-MM-DD (NOT the UTC date — see base.js, which
+// owns the primitive; home.js reads the same one). This file had the only copy
+// and kept it file-private, which is why home.js still carried the UTC bug.
+const localDateISO = window.localDateISO;
+
 // ============================================================
 // PAYMENTS LIST (payments_list.html)
 // ============================================================
@@ -10,10 +15,12 @@
     const PAGE_SIZE = 10;
     let currentPage = 1;
 
-    function getCsrf() {
-        return document.querySelector('[name=csrfmiddlewaretoken]')?.value
-            || document.cookie.split(';').map(c=>c.trim()).find(c=>c.startsWith('csrftoken='))?.split('=')[1]
-            || '';
+    // Cells are addressed by NAME, not by column index. `td[4]` / `td[5]` /
+    // `td[7]` broke silently on any column change: the quick-complete handler
+    // would rewrite the wrong column with a status badge and nothing would
+    // error.
+    function cell(row, name) {
+        return row.querySelector(`[data-cell="${name}"]`);
     }
 
     // Get all data rows (cached once)
@@ -163,12 +170,22 @@
         { icon: 'pending_actions', title: 'No completados',       bg: '#dc2626', color: '#fff' },
     ];
 
+    // "No completados" is a still-to-collect view, so it hides every status
+    // that is no longer collectable — not just `completed`. `cancelled` and
+    // `refunded` money is out of the picture (the same call
+    // billing.constants.LIVE_PAYMENT_STATUSES makes for "Esperado" on the
+    // summary line above), while `failed` is a charge that still owes and
+    // stays. Previously only `completed` was hidden, so cancelling a row under
+    // this filter left it on screen while completing one removed it — the same
+    // list obeying its own filter for one action and not the other.
+    const SETTLED_STATUSES = ['completed', 'cancelled', 'refunded'];
+
     function applyStatusFilter() {
         allRows.forEach(row => {
             if (statusFilterState === 0) {
                 row._statusHidden = false;
             } else {
-                row._statusHidden = row.dataset.paymentStatus === 'completed';
+                row._statusHidden = SETTLED_STATUSES.indexOf(row.dataset.paymentStatus) !== -1;
             }
         });
         applyFiltersAndPaginate();
@@ -235,16 +252,17 @@
             e.stopPropagation();
             const paymentId = this.dataset.paymentId;
             const method = this.dataset.method;
+            // The SPANISH label from the model choices, rendered onto the
+            // button by the template. The old `{ cash: 'Cash', \u2026 }` map was a
+            // second copy of PAYMENT_METHOD_CHOICES *in English*, so a
+            // just-collected payment read "Bank Transfer" until the next
+            // reload showed "Transferencia".
+            const methodLabel = this.dataset.methodLabel || method;
 
-            fetch(`/api/payments/${paymentId}/quick-complete/`, {
+            window.apiFetch(`/api/payments/${paymentId}/quick-complete/`, {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'X-CSRFToken': getCsrf(),
-                },
                 body: JSON.stringify({ payment_method: method }),
             })
-            .then(r => r.json())
             .then(data => {
                 if (data.success) {
                     const row = document.querySelector(`tr[data-payment-id="${paymentId}"]`);
@@ -252,30 +270,32 @@
                         row.dataset.paymentStatus = 'completed';
                         const trigger = row.querySelector('.payment-complete-trigger');
                         if (trigger) trigger.remove();
-                        const statusCell = row.querySelectorAll('td')[5];
+                        const statusCell = cell(row, 'status');
                         if (statusCell) {
-                            statusCell.innerHTML = '<span class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800"><span class="material-symbols-outlined text-sm mr-1">check_circle</span>Completado</span>';
+                            statusCell.innerHTML = '<span class="status-badge inline-flex items-center px-2 py-1 rounded-full text-xs font-bold bg-green-100 text-green-800"><span class="material-symbols-outlined text-sm mr-2">check_circle</span>Completado</span>';
                         }
-                        const payDateCell = row.querySelectorAll('td')[7];
+                        const payDateCell = cell(row, 'payment-date');
                         if (payDateCell) {
                             const today = new Date();
                             payDateCell.textContent = `${String(today.getDate()).padStart(2,'0')}/${String(today.getMonth()+1).padStart(2,'0')}/${today.getFullYear()}`;
                         }
-                        const methodLabels = { cash: 'Cash', transfer: 'Bank Transfer', credit_card: 'Credit Card' };
-                        const methodCell = row.querySelectorAll('td')[4];
+                        const methodCell = cell(row, 'method');
                         if (methodCell) {
-                            methodCell.innerHTML = `<span class="text-sm text-neutral-800">${methodLabels[method] || method}</span>`;
+                            methodCell.replaceChildren();
+                            const span = document.createElement('span');
+                            span.className = 'text-sm text-neutral-800';
+                            span.textContent = methodLabel;
+                            methodCell.appendChild(span);
                         }
+                        // Re-run the status filter: the row has just become
+                        // `completed`, which "No completados" must hide.
                         applyStatusFilter();
                     }
                 } else {
                     alert(data.error || 'Error al completar el pago');
                 }
             })
-            .catch(err => {
-                console.error('Error completing payment:', err);
-                alert('Error de conexi\u00f3n');
-            });
+            .catch(err => alert(window.apiErrorMessage(err)));
 
             document.querySelectorAll('.payment-dropdown').forEach(d => d.classList.add('hidden'));
         });
@@ -285,18 +305,38 @@
     // Soft-delete: sets payment_status='cancelled' so the row stays for the
     // audit trail but stops counting toward "esperado". Used for duplicates
     // and for students who drop out before a due date.
-    // No confirm() gate: embedded browsers (sandboxed webviews) silently
-    // return false from confirm(), which made the button a no-op there.
+    //
+    // Two-CLICK confirmation instead of native confirm(): a mis-click here
+    // soft-deletes a payment, and completing a cancelled row is now refused
+    // (quick_complete_payment), so the only undo is /admin/ — unreachable for
+    // the non-admin teachers who use this page. Native confirm() is avoided on
+    // purpose (sandboxed webviews silently return false and make it a no-op),
+    // so the first click arms the button and a second within 4s commits.
     document.querySelectorAll('.payment-cancel-btn').forEach(btn => {
+        let armed = false;
+        let armTimer = null;
+        const originalHtml = btn.innerHTML;
+        const disarm = () => {
+            armed = false;
+            btn.innerHTML = originalHtml;
+            btn.classList.remove('cancel-armed');
+            if (armTimer) { clearTimeout(armTimer); armTimer = null; }
+        };
         btn.addEventListener('click', function (e) {
             e.stopPropagation();
+            if (!armed) {
+                armed = true;
+                btn.innerHTML = '<span class="material-symbols-outlined text-sm">warning</span>¿Seguro?';
+                btn.classList.add('cancel-armed');
+                armTimer = setTimeout(disarm, 4000);
+                return;
+            }
+            disarm();
             const paymentId = this.dataset.paymentId;
-            fetch(`/payments/${paymentId}/deactivate/`, {
+            window.apiFetch(`/payments/${paymentId}/deactivate/`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCsrf() },
                 body: '{}',
             })
-            .then(r => r.json())
             .then(data => {
                 if (!data.success) {
                     alert(data.message || data.error || 'No se pudo cancelar el pago');
@@ -305,16 +345,21 @@
                 const row = document.querySelector(`tr[data-payment-id="${paymentId}"]`);
                 if (row) {
                     row.dataset.paymentStatus = 'cancelled';
-                    const statusCell = row.querySelectorAll('td')[5];
+                    const statusCell = cell(row, 'status');
                     if (statusCell) {
                         statusCell.innerHTML = '<span class="status-badge inline-flex items-center px-2 py-1 rounded-full text-xs font-bold bg-neutral-100 text-neutral-800"><span class="material-symbols-outlined text-sm mr-2">block</span>Cancelado</span>';
                     }
                     const trigger = row.querySelector('.payment-complete-trigger');
                     if (trigger) trigger.remove();
                     this.remove();
+                    // The complete path re-filtered and this one did not, so a
+                    // row cancelled under "No completados" stayed on screen
+                    // while a completed one vanished — the same list obeying
+                    // its filter for one action and not the other.
+                    applyStatusFilter();
                 }
             })
-            .catch(() => alert('Error de conexión'));
+            .catch(err => alert(window.apiErrorMessage(err)));
         });
     });
 
@@ -341,13 +386,13 @@
     let selectedParent = null;
 
     // Set today as default due date
-    document.getElementById('due_date').value = new Date().toISOString().split('T')[0];
+    document.getElementById('due_date').value = localDateISO();
 
     // Auto-fill payment date when status changes to completed
     document.getElementById('payment_status').addEventListener('change', function() {
         const paymentDate = document.getElementById('payment_date');
         if (this.value === 'completed' && !paymentDate.value) {
-            paymentDate.value = new Date().toISOString().split('T')[0];
+            paymentDate.value = localDateISO();
         }
     });
 
@@ -373,10 +418,19 @@
         const query = this.value.trim();
         if (query.length < 2) { studentSuggestions.classList.add('hidden'); return; }
         studentTimeout = setTimeout(() => {
-            fetch(`/api/search/students/?q=${encodeURIComponent(query)}`)
-                .then(r => r.json())
+            window.apiFetch(`/api/search/students/?q=${encodeURIComponent(query)}`)
                 .then(data => displayStudentSuggestions(data.results))
-                .catch(e => console.error(e));
+                .catch(err => {
+                    // A silent console.error left the box empty with nothing on
+                    // screen to explain why — the same failure mode the old
+                    // validate_student_parent hop had.
+                    studentSuggestions.replaceChildren();
+                    const msg = document.createElement('div');
+                    msg.className = 'p-3 text-sm text-red-600';
+                    msg.textContent = window.apiErrorMessage(err);
+                    studentSuggestions.appendChild(msg);
+                    studentSuggestions.classList.remove('hidden');
+                });
         }, 300);
     });
 
@@ -464,7 +518,7 @@
         const paymentStatus = document.getElementById('payment_status').value;
         const paymentDate = document.getElementById('payment_date');
         if (paymentStatus === 'completed' && !paymentDate.value) {
-            paymentDate.value = new Date().toISOString().split('T')[0];
+            paymentDate.value = localDateISO();
         }
     });
 })();

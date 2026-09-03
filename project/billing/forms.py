@@ -103,6 +103,43 @@ class EnrollmentForm(forms.Form):
         label="Matrícula especial (€)",
     )
 
+    def __init__(self, *args, current_start=None, **kwargs):
+        """`current_start` is the live enrollment's start date, when editing.
+
+        The date-window validation below must always accept the value already
+        stored — otherwise an ordinary edit of an enrollment from a past course
+        (whose pre-filled start date POSTs back unchanged) would be rejected by
+        a rule meant to catch typos on NEW enrollments.
+        """
+        super().__init__(*args, **kwargs)
+        self._current_start = current_start
+
+    def clean_start_date(self):
+        start = self.cleaned_data.get("start_date")
+        if not start or start == self._current_start:
+            return start
+
+        # Bound to the courses currently in play (`relevant_academic_years` —
+        # one year most of the time, two in the May-August overlap). Unbounded,
+        # a mistyped year filed the enrollment under an old `academic_year`,
+        # which dropped the student out of the list views AND back-filled a
+        # year of already-overdue payments that the reminder cron then chased.
+        from billing.models import relevant_academic_years
+
+        years = relevant_academic_years()
+        # From 1 July before the earliest relevant course (a July/August start
+        # belongs to the course beginning that September) to the end of the
+        # summer after the latest one.
+        lower = date(int(years[0].split("-")[0]), 7, 1)
+        upper = date(int(years[-1].split("-")[1]), 8, 31)
+        if not (lower <= start <= upper):
+            raise forms.ValidationError(
+                f"La fecha de inicio debe estar dentro del curso actual "
+                f"({lower.strftime('%d/%m/%Y')} – {upper.strftime('%d/%m/%Y')}). "
+                f"Revisa el año: ¿era {start.strftime('%d/%m/%Y')}?"
+            )
+        return start
+
     def clean(self):
         cleaned_data = super().clean()
         is_special = cleaned_data.get("is_special")

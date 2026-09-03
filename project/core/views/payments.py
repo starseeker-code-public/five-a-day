@@ -6,17 +6,18 @@ from decimal import Decimal, InvalidOperation
 
 from django.contrib import messages
 from django.core.exceptions import ValidationError
-from django.db import IntegrityError
+from django.db import IntegrityError, transaction
 from django.db.models import Case, DecimalField, Max, Min, Q, Sum, Value, When
-from django.http import HttpResponse, JsonResponse
+from django.http import Http404, HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_http_methods
 
 from billing import constants
 from billing.models import Payment
 from core.constants import MESES_ES
+from core.decorators import admin_required
 from core.models import HistoryLog
-from core.utils import csv_safe_row, safe_int
+from core.utils import MAX_QUERY_YEAR, MIN_QUERY_YEAR, csv_safe_row, safe_int
 from students.models import Parent, Student
 
 logger = logging.getLogger(__name__)
@@ -49,15 +50,28 @@ def parse_date_value(date_value):
 def _queue_payment_receipt(payment_id: int) -> None:
     """Fire the payment-receipt email for a payment just marked completed.
 
+    Dispatched ON COMMIT, not inline. Production runs
+    `CELERY_TASK_ALWAYS_EAGER=True` (Cloud Run, no worker), so `.delay()` executes
+    the task *here* — it re-reads the payment by id and emails a receipt. Called
+    from inside a `transaction.atomic()` block that later rolls back, that is a
+    receipt for money the database does not record; with a real broker it is a
+    worker reading the row before the write is visible. `transaction.on_commit`
+    runs the callback immediately when there is no open transaction, so callers
+    outside one (the admin bulk action) behave exactly as before.
+
     Best-effort: a receipt that fails to send must never fail the request that
     recorded the money. Imported lazily to avoid a comms->billing import cycle.
     """
-    try:
-        from comms.tasks import send_payment_receipt_email_task
 
-        send_payment_receipt_email_task.delay(int(payment_id))
-    except Exception:  # noqa: BLE001 — receipt is nice-to-have
-        logger.exception("Failed to enqueue payment receipt for payment %d", int(payment_id))
+    def _dispatch():
+        try:
+            from comms.tasks import send_payment_receipt_email_task
+
+            send_payment_receipt_email_task.delay(int(payment_id))
+        except Exception:  # noqa: BLE001 — receipt is nice-to-have
+            logger.exception("Failed to enqueue payment receipt for payment %d", int(payment_id))
+
+    transaction.on_commit(_dispatch)
 
 
 def _validated_choice(value, choices, default):
@@ -69,27 +83,28 @@ def _validated_choice(value, choices, default):
     return value if value in {key for key, _ in choices} else default
 
 
-def _safe_int(raw, *, default, low=None, high=None):
-    """Parse a query-string int, rejected to `default` outside [low, high].
+def _filtered_payments(request, default_year=None):
+    """The payments queryset for the CURRENT request's filters.
 
-    Thin alias for `core.utils.safe_int` — this helper existed here, in
-    `app_forms` and in `reports` as three separate copies, and two other views
-    were still missing it entirely.
-    """
-    return safe_int(raw, default=default, low=low, high=high)
+    Shared by `payments_list` and `export_payments`, which is the whole point:
+    "Exportar" used to run `Payment.objects.all()` and hand back the entire
+    table, so a filtered screen produced an unfiltered file — reconciled against
+    the figures on that screen it looks like the totals are wrong, when it is the
+    file that is answering a different question.
 
+    Returns `(queryset, search_query, selected_month, selected_year)`.
 
-def payments_list(request):
+    `default_year` is what to use when the request carries no `year`: the list
+    view defaults to the current year (a page has to show *something*), the
+    export passes None and exports every year. That asymmetry is deliberate —
+    the export link is a plain anchor, so a request with no parameters is the
+    "I want everything" case, and silently narrowing it to this year would drop
+    rows that the caller never asked to exclude.
     """
-    Main payments list view with pagination
-    Shows active payments only (not deactivated ones)
-    """
-    # Get all active payments ordered by most recent first
     payments_queryset = Payment.objects.select_related(
         "student", "parent", "enrollment", "enrollment__enrollment_type"
     ).order_by("-due_date", "-created_at")
 
-    # Add search functionality
     search_query = request.GET.get("search", "")
     if search_query:
         payments_queryset = payments_queryset.filter(
@@ -101,16 +116,30 @@ def payments_list(request):
             | Q(reference_number__icontains=search_query)
         )
 
+    # Month/year filter (server-side, so it narrows the whole dataset rather
+    # than only the rows already rendered). Empty month = the whole year.
+    selected_month = safe_int(request.GET.get("month"), default=None, low=1, high=12)
+    selected_year = safe_int(request.GET.get("year"), default=default_year, low=MIN_QUERY_YEAR, high=MAX_QUERY_YEAR)
+    if selected_year:
+        payments_queryset = payments_queryset.filter(due_date__year=selected_year)
+    if selected_month:
+        payments_queryset = payments_queryset.filter(due_date__month=selected_month)
+
+    return payments_queryset, search_query, selected_month, selected_year
+
+
+@admin_required
+def payments_list(request):
+    """
+    Main payments list view with pagination
+    Shows active payments only (not deactivated ones)
+    """
     today = date.today()
     current_year = today.year
 
-    # Month/year filter (server-side, so it narrows the whole dataset rather
-    # than only the rows already rendered). Empty month = the whole year.
-    selected_month = _safe_int(request.GET.get("month"), default=None, low=1, high=12)
-    selected_year = _safe_int(request.GET.get("year"), default=current_year, low=2000, high=2100)
-    payments_queryset = payments_queryset.filter(due_date__year=selected_year)
-    if selected_month:
-        payments_queryset = payments_queryset.filter(due_date__month=selected_month)
+    payments_queryset, search_query, selected_month, selected_year = _filtered_payments(
+        request, default_year=current_year
+    )
 
     # Years that actually have payments, so the dropdown never offers an
     # empty year. Always includes the current one.
@@ -133,9 +162,11 @@ def payments_list(request):
     # — three different periods in one line, which is a large part of why
     # "esperado" was reported as unintelligible.
     _zero = Decimal("0.00")
-    period_payments = Payment.objects.filter(due_date__year=selected_year)
-    if selected_month:
-        period_payments = period_payments.filter(due_date__month=selected_month)
+    # Same filters as the rows — INCLUDING the search. Rebuilding from
+    # `Payment.objects` without it meant `?search=Ana` showed Ana's two payments
+    # under academy-wide totals ("2 resultados" next to a 214-payment summary),
+    # which contradicts the very comment above.
+    period_payments = payments_queryset
 
     stats = period_payments.aggregate(
         # Money still expected in this period. Cancelled / failed / refunded are
@@ -227,6 +258,7 @@ def payments_list(request):
 
 
 @require_http_methods(["GET", "POST"])
+@admin_required
 def create_payment(request):
     """
     Create new payment
@@ -299,15 +331,22 @@ def create_payment(request):
                 reference_number=(request.POST.get("reference_number", "") or "")[:50],
                 observations=request.POST.get("observations", ""),
             )
-            payment.full_clean(exclude=["enrollment"])
-            payment.save()
-            HistoryLog.log(
-                "payment_created",
-                f"Pago creado: {student.full_name} — €{payment.amount} ({payment.get_payment_type_display()})",
-                icon="add_card",
-            )
-            if payment.payment_status == "completed":
-                _queue_payment_receipt(payment.id)
+            # One transaction for the payment, its history entry and the receipt
+            # dispatch. Without it a HistoryLog failure showed the admin "Error al
+            # crear el pago" while the Payment was already committed — and the
+            # obvious response to that message is to submit the form again, which
+            # created a second one. `_queue_payment_receipt` defers to COMMIT, so
+            # no receipt is emailed for a payment that rolled back.
+            with transaction.atomic():
+                payment.full_clean(exclude=["enrollment"])
+                payment.save()
+                HistoryLog.log(
+                    "payment_created",
+                    f"Pago creado: {student.full_name} — €{payment.amount} ({payment.get_payment_type_display()})",
+                    icon="add_card",
+                )
+                if payment.payment_status == "completed":
+                    _queue_payment_receipt(payment.id)
             messages.success(request, f"Pago creado exitosamente para {student.full_name}.")
             return redirect("payments_list")
 
@@ -346,11 +385,19 @@ def create_payment(request):
     return render(request, "payments/payment_create.html", {})
 
 
+@admin_required
 def payment_detail_view(request, payment_id):
     """
     Detailed view of a payment (read-only)
     """
-    payment = get_object_or_404(Payment, id=payment_id)
+    # The template walks student (+ group), parent, enrollment and its type —
+    # unjoined that page cost 6 queries for one row.
+    payment = get_object_or_404(
+        Payment.objects.select_related(
+            "student", "student__group", "parent", "enrollment", "enrollment__enrollment_type"
+        ),
+        id=payment_id,
+    )
 
     context = {
         "payment": payment,
@@ -360,6 +407,7 @@ def payment_detail_view(request, payment_id):
 
 
 @require_http_methods(["GET"])
+@admin_required
 def payment_receipt_pdf(request, payment_id):
     """Stream a payment-receipt PDF (v1.3)."""
     from billing.services.pdf_service import generate_payment_receipt
@@ -372,6 +420,7 @@ def payment_receipt_pdf(request, payment_id):
 
 
 @require_http_methods(["GET"])
+@admin_required
 def student_payments_pdf(request, student_id):
     """Stream a student's full payment history as a PDF.
 
@@ -385,7 +434,7 @@ def student_payments_pdf(request, student_id):
 
     payments = Payment.objects.filter(student=student).select_related("enrollment").order_by("due_date", "id")
 
-    year = _safe_int(request.GET.get("year"), default=None, low=2000, high=2100)
+    year = safe_int(request.GET.get("year"), default=None, low=MIN_QUERY_YEAR, high=MAX_QUERY_YEAR)
     suffix = ""
     if year:
         payments = payments.filter(due_date__year=year)
@@ -400,12 +449,15 @@ def student_payments_pdf(request, student_id):
 
 
 @require_http_methods(["POST"])
+@admin_required
 def update_payment(request, payment_id):
     """
     AJAX endpoint to update existing payment
     """
+    # Outside the try: Http404 subclasses Exception, so inside it the catch-all
+    # converted a plain missing row into a 500 + traceback in the logs.
+    payment = get_object_or_404(Payment, id=payment_id)
     try:
-        payment = get_object_or_404(Payment, id=payment_id)
         was_completed = payment.payment_status == "completed"
 
         # Parse data
@@ -502,6 +554,29 @@ def update_payment(request, payment_id):
             return JsonResponse({"success": False, "error": error_msg}, status=400)
         messages.error(request, error_msg)
         return redirect("payments_list")
+    except Http404:
+        # The student_id/parent_id lookups above — a missing row is a 404, not a
+        # server error to be swallowed by the catch-all.
+        raise
+    except IntegrityError as e:
+        # `full_clean(exclude=["student", ...])` SKIPS the unique-month constraint:
+        # Django's UniqueConstraint.validate() returns early when any of its
+        # expressions references an excluded field, and this one is keyed on
+        # F("student"). So an edit that moves a due date into an occupied month
+        # only surfaces here, at the database. Same actionable message
+        # create_payment gives; anything else stays generic.
+        logger.exception("IntegrityError while updating payment %d", int(payment_id))
+        if "unique_pending_periodic_payment_per_month" in str(e):
+            error_msg = (
+                "Ya existe un pago pendiente de ese tipo para ese alumno en ese mes. "
+                "Edita o cancela el pago existente en lugar de crear otro."
+            )
+        else:
+            error_msg = "Error al actualizar el pago. Inténtalo de nuevo."
+        if request.content_type == "application/json":
+            return JsonResponse({"success": False, "error": error_msg}, status=400)
+        messages.error(request, error_msg)
+        return redirect("payments_list")
     except Exception:
         logger.exception("Error updating payment %d", int(payment_id))
         error_msg = "Error al actualizar el pago. Inténtalo de nuevo."
@@ -512,12 +587,15 @@ def update_payment(request, payment_id):
 
 
 @require_http_methods(["POST"])
+@admin_required
 def delete_payment(request, payment_id):
     """
     AJAX endpoint to delete payment
     """
+    # Outside the try — a double-clicked delete used to 500 ("Error al eliminar")
+    # on the second request while the first had already succeeded.
+    payment = get_object_or_404(Payment.objects.select_related("student"), id=payment_id)
     try:
-        payment = get_object_or_404(Payment, id=payment_id)
         student_name = payment.student.full_name
 
         payment.delete()
@@ -540,12 +618,13 @@ def delete_payment(request, payment_id):
 
 # Soft delete!
 @require_http_methods(["POST"])
+@admin_required
 def deactivate_payment(request, payment_id):
     """
     Soft delete - deactivate payment instead of deleting
     """
+    payment = get_object_or_404(Payment, id=payment_id)
     try:
-        payment = get_object_or_404(Payment, id=payment_id)
         payment.payment_status = "cancelled"
         payment.save()
 
@@ -560,14 +639,14 @@ def deactivate_payment(request, payment_id):
 
 
 @require_http_methods(["POST"])
+@admin_required
 def quick_complete_payment(request, payment_id):
     """
     AJAX endpoint to quickly complete a payment by setting its payment method.
     Expects JSON body: {"payment_method": "cash"|"transfer"|"credit_card"}
     """
-
+    payment = get_object_or_404(Payment.objects.select_related("student"), id=payment_id)
     try:
-        payment = get_object_or_404(Payment, id=payment_id)
         data = json.loads(request.body)
         payment_method = data.get("payment_method")
 
@@ -589,31 +668,39 @@ def quick_complete_payment(request, payment_id):
                 }
             )
 
-        # A cancelled payment stays visible for the audit trail but is dead:
-        # completing it would resurrect money the schedule may have re-billed
-        # (cancelling frees the month, and the pending-only unique constraint
-        # would not stop a completed duplicate).
-        if payment.payment_status == "cancelled":
-            return JsonResponse(
-                {"success": False, "error": "El pago está cancelado y no puede completarse."},
-                status=400,
+        # A cancelled or REFUNDED payment stays visible for the audit trail but is
+        # dead. The guard is `Payment.assert_completable()` — the model's own rule,
+        # which `Payment.clean()` also runs — rather than a status list retyped
+        # here. That list is exactly what went wrong: it named only `cancelled`,
+        # and `payment.save()` never runs `clean()`, so a refunded payment was
+        # re-completed, its `payment_date` rewritten to today (re-booking money
+        # already returned into this month's income) and a receipt emailed for a
+        # refund. Passing the loaded status explicitly answers before the row is
+        # mutated, so the message can be actionable instead of a 500.
+        payment.assert_completable(previous_status=payment.payment_status)
+
+        # One transaction for the status change and its history entry: a
+        # HistoryLog failure used to return "Error al completar el pago" with the
+        # payment already completed, and `_queue_payment_receipt` had already
+        # fired — so a retry either did nothing or, worse, the operator assumed
+        # the money was not recorded. The receipt now dispatches on COMMIT.
+        with transaction.atomic():
+            payment.payment_method = payment_method
+            payment.payment_status = "completed"
+            payment.payment_date = date.today()
+            payment.save()
+
+            HistoryLog.log(
+                "payment_completed",
+                f"Pago completado: {payment.student.full_name} — "
+                f"{payment.get_payment_method_display()} (€{payment.amount})",
+                icon="paid",
             )
 
-        payment.payment_method = payment_method
-        payment.payment_status = "completed"
-        payment.payment_date = date.today()
-        payment.save()
-
-        HistoryLog.log(
-            "payment_completed",
-            f"Pago completado: {payment.student.full_name} — {payment.get_payment_method_display()} (€{payment.amount})",
-            icon="paid",
-        )
-
-        # Email the payer a receipt. Previously only the Stripe webhook did
-        # this, so a payment taken in cash / by transfer and marked complete
-        # here sent nothing at all.
-        _queue_payment_receipt(payment.id)
+            # Email the payer a receipt. Previously only the Stripe webhook did
+            # this, so a payment taken in cash / by transfer and marked complete
+            # here sent nothing at all.
+            _queue_payment_receipt(payment.id)
 
         return JsonResponse(
             {
@@ -622,6 +709,10 @@ def quick_complete_payment(request, payment_id):
             }
         )
 
+    except ValidationError as e:
+        # `ValidationError.messages` is Django's (and the model's) written-for-humans
+        # text — the resurrection refusal above arrives here.
+        return JsonResponse({"success": False, "error": " ".join(e.messages)}, status=400)
     except Exception:
         logger.exception("Error completing payment %d", int(payment_id))
         return JsonResponse(
@@ -631,23 +722,25 @@ def quick_complete_payment(request, payment_id):
 
 
 @require_http_methods(["GET"])
+@admin_required
 def get_payment_details(request, payment_id):
     """
     AJAX endpoint to get payment details
     """
+    payment = get_object_or_404(Payment.objects.select_related("student", "parent"), id=payment_id)
     try:
-        payment = get_object_or_404(Payment, id=payment_id)
-
         return JsonResponse(
             {
                 "success": True,
                 "payment": {
                     "id": payment.id,
-                    "student_id": payment.student.id,
+                    "student_id": payment.student_id,
                     "student_name": payment.student.full_name,
-                    "parent_id": payment.parent.id if payment.parent else None,
+                    # `_id` reads the FK column already on the row; `payment.parent.id`
+                    # fetched the whole related object just to return its pk.
+                    "parent_id": payment.parent_id,
                     "parent_name": payment.parent.full_name if payment.parent else "",
-                    "enrollment_id": (payment.enrollment.id if payment.enrollment else None),
+                    "enrollment_id": payment.enrollment_id,
                     "payment_type": payment.payment_type,
                     "payment_method": payment.payment_method,
                     "amount": str(payment.amount),
@@ -674,6 +767,8 @@ def get_payment_details(request, payment_id):
         )
 
 
+@require_http_methods(["GET"])
+@admin_required
 def search_payments(request):
     """
     AJAX endpoint to search payments
@@ -718,12 +813,35 @@ def search_payments(request):
     return JsonResponse({"results": results})
 
 
+@require_http_methods(["GET"])
+@admin_required
 def export_payments(request):
-    """
-    Export payments to CSV
+    """Export payments to CSV, honouring the payments list's own filters.
+
+    `search`, `month` and `year` are read exactly as `payments_list` reads them,
+    so the file matches the screen it was downloaded from. It used to export
+    `Payment.objects.all()` regardless: clicking "Exportar" on a filtered view —
+    one month, one family — silently downloaded the whole table, and the totals
+    in it agreed with nothing on the page.
+
+    Two things are still NOT honoured, because they never reach the server:
+    the status and type filters on that page are applied client-side to rows
+    already in the DOM. Add them to the export link's query string and they will
+    be picked up here only once the view learns them; today they are absent from
+    `request.GET`.
     """
     response = HttpResponse(content_type="text/csv")
-    response["Content-Disposition"] = 'attachment; filename="pagos.csv"'
+
+    payments, _search, selected_month, selected_year = _filtered_payments(request, default_year=None)
+
+    # Name the file after what is in it, so two exports of different filters do
+    # not overwrite each other in the Downloads folder.
+    stem = "pagos"
+    if selected_year:
+        stem += f"-{selected_year}"
+        if selected_month:
+            stem += f"-{selected_month:02d}"
+    response["Content-Disposition"] = f'attachment; filename="{stem}.csv"'
 
     writer = csv.writer(response)
     writer.writerow(
@@ -741,9 +859,9 @@ def export_payments(request):
         ]
     )
 
-    payments = Payment.objects.all().select_related("student", "parent").order_by("-created_at")
-
-    for payment in payments:
+    # `.iterator()` streams from the server-side cursor instead of materialising
+    # the whole result as model objects before the first row is written.
+    for payment in payments.iterator(chunk_size=2000):
         # csv_safe_row: names and concepts are free text set by any teacher, and
         # a leading =/+/-/@ makes the cell a formula in the admin's spreadsheet.
         writer.writerow(
@@ -767,6 +885,8 @@ def export_payments(request):
     return response
 
 
+@require_http_methods(["GET"])
+@admin_required
 def export_database_excel(request):
     """Export Estudiantes, Matrículas and Pagos as a single .xlsx file."""
     from billing.exports import build_database_workbook
@@ -779,6 +899,8 @@ def export_database_excel(request):
     return response
 
 
+@require_http_methods(["GET"])
+@admin_required
 def search_parents(request):
     """AJAX endpoint to search parents"""
     query = request.GET.get("q", "").strip()
@@ -805,6 +927,7 @@ def search_parents(request):
 
 
 @require_http_methods(["POST"])
+@admin_required
 def validate_student_parent(request):
     """AJAX endpoint to validate student-parent relationship"""
     try:
@@ -853,6 +976,8 @@ def validate_student_parent(request):
 
     except json.JSONDecodeError:
         return JsonResponse({"valid": False, "message": "Invalid JSON data"}, status=400)
+    except Http404:
+        raise
     except Exception:
         logger.exception("Error validating payment payload")
         return JsonResponse({"valid": False, "message": "Datos de pago inválidos."}, status=400)

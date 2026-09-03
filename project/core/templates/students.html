@@ -101,7 +101,8 @@
 <div class="mb-6">
     <div class="flex justify-between items-center">
         <div>
-            <p class="text-neutral-600">Total: {{ students.count }} estudiantes activos &middot; Cheque idioma: {{ language_cheque_count }}</p>
+            {# total_count is the real (uncapped) count the view already computed — students is a [:500] slice, so .count() on it was both an extra query and the wrong number #}
+            <p class="text-neutral-600">Total: {{ total_count }} estudiantes activos &middot; Cheque idioma: {{ language_cheque_count }}</p>
         </div>
         <div class="flex gap-2 items-center">
             <input
@@ -111,22 +112,22 @@
                 class="px-3 py-2 border border-neutral-300 rounded-md text-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500 w-48"
                 style="display: none;"
             >
-            <button id="studentTypeFilterBtn" class="px-4 py-2 bg-primary-500 text-white rounded-md hover:bg-primary-600 transition-colors duration-200 flex items-center gap-2" title="Todos los estudiantes">
+            <button id="studentTypeFilterBtn" aria-label="Filtrar por tipo de estudiante" class="px-4 py-2 bg-primary-500 text-white rounded-md hover:bg-primary-600 transition-colors duration-200 flex items-center gap-2" title="Todos los estudiantes">
                 <span class="material-symbols-outlined text-sm" id="studentTypeFilterIcon">groups</span>
             </button>
-<button id="studentGdprFilterBtn" class="px-4 py-2 bg-primary-500 text-white rounded-md hover:bg-primary-600 transition-colors duration-200 flex items-center gap-2" title="RGPD: Todos">
+<button id="studentGdprFilterBtn" aria-label="Filtrar por consentimiento RGPD" class="px-4 py-2 bg-primary-500 text-white rounded-md hover:bg-primary-600 transition-colors duration-200 flex items-center gap-2" title="RGPD: Todos">
                 <span class="material-symbols-outlined text-sm" id="studentGdprFilterIcon">policy</span>
             </button>
-            <button id="studentAllergyFilterBtn" class="px-4 py-2 bg-primary-500 text-white rounded-md hover:bg-primary-600 transition-colors duration-200 flex items-center gap-2" title="Alergias: Todos">
+            <button id="studentAllergyFilterBtn" aria-label="Filtrar por alergias" class="px-4 py-2 bg-primary-500 text-white rounded-md hover:bg-primary-600 transition-colors duration-200 flex items-center gap-2" title="Alergias: Todos">
                 <span class="material-symbols-outlined text-sm" id="studentAllergyFilterIcon">allergies</span>
             </button>
-<button id="studentFFFilterBtn" class="px-4 py-2 bg-primary-500 text-white rounded-md hover:bg-primary-600 transition-colors duration-200 flex items-center gap-2" title="Filtrar por Fun Friday">
+<button id="studentFFFilterBtn" aria-label="Filtrar por asistencia a Fun Friday" class="px-4 py-2 bg-primary-500 text-white rounded-md hover:bg-primary-600 transition-colors duration-200 flex items-center gap-2" title="Filtrar por Fun Friday">
                 <span class="material-symbols-outlined text-sm" id="studentFFFilterIcon">celebration</span>
             </button>
-            <button id="studentSortBtn" class="px-4 py-2 bg-primary-500 text-white rounded-md hover:bg-primary-600 transition-colors duration-200 flex items-center gap-2" title="Ordenar: ID ↑">
+            <button id="studentSortBtn" aria-label="Cambiar el orden de la lista" class="px-4 py-2 bg-primary-500 text-white rounded-md hover:bg-primary-600 transition-colors duration-200 flex items-center gap-2" title="Ordenar: ID ↑">
                 <span class="material-symbols-outlined text-sm" id="studentSortIcon">sort</span>
             </button>
-            <button id="studentSearchBtn" class="px-4 py-2 bg-primary-500 text-white rounded-md hover:bg-primary-600 transition-colors duration-200 flex items-center gap-2" title="Buscar">
+            <button id="studentSearchBtn" aria-label="Buscar estudiantes por nombre" class="px-4 py-2 bg-primary-500 text-white rounded-md hover:bg-primary-600 transition-colors duration-200 flex items-center gap-2" title="Buscar">
                 <span class="material-symbols-outlined text-sm">search</span>
             </button>
         </div>
@@ -172,7 +173,9 @@
                         </div>
                     </td>
                     <td class="px-6 py-4 text-center text-sm text-neutral-600">
-                        {{ student.age }} años
+                        {# birth_date is optional, so Student.age can be None — which #}
+                        {# rendered as the literal "None años" in the roll.           #}
+                        {% if student.age is not None %}{{ student.age }} años{% else %}<span class="text-neutral-400" title="Sin fecha de nacimiento">—</span>{% endif %}
                     </td>
                     <td class="px-6 py-4 text-center">
                         <div class="flex items-center gap-1.5 justify-center">
@@ -238,14 +241,14 @@
                     </td>
                     <td class="px-3 py-4 border-l border-neutral-200 bg-neutral-50 text-center">
                         <div style="display:flex;align-items:center;justify-content:center;gap:0.25rem;">
-                            <a href="{% url 'student_detail' student.id %}" class="inline-flex p-2 text-primary-600 hover:bg-primary-100 rounded-full transition-all duration-200" style="text-decoration:none;" title="Ver estudiante">
+                            <a href="{% url 'student_detail' student.id %}" class="inline-flex p-2 text-primary-600 hover:bg-primary-100 rounded-full transition-all duration-200" style="text-decoration:none;" title="Ver estudiante" aria-label="Ver la ficha del estudiante">
                                 <span class="material-symbols-outlined text-base">visibility</span>
                             </a>
                             {% if is_admin_user %}
-                            <button type="button" class="enroll-btn inline-flex p-2 text-neutral-500 hover:bg-primary-100 hover:text-primary-600 rounded-full transition-all duration-200" style="background:none;border:none;cursor:pointer;" title="Nueva matrícula" data-student-id="{{ student.id }}" data-student-name="{{ student.full_name }}" data-is-adult="{% if student.is_adult %}1{% else %}0{% endif %}">
+                            <button type="button" class="enroll-btn inline-flex p-2 text-neutral-500 hover:bg-primary-100 hover:text-primary-600 rounded-full transition-all duration-200" style="background:none;border:none;cursor:pointer;" title="Nueva matrícula" aria-label="Crear una nueva matrícula" data-student-id="{{ student.id }}" data-student-name="{{ student.full_name }}" data-is-adult="{% if student.is_adult %}1{% else %}0{% endif %}">
                                 <span class="material-symbols-outlined text-base">menu_book</span>
                             </button>
-                            <a href="{% url 'student_update' student.id %}" class="inline-flex p-2 text-neutral-500 hover:bg-primary-100 hover:text-primary-600 rounded-full transition-all duration-200" style="text-decoration:none;" title="Editar estudiante">
+                            <a href="{% url 'student_update' student.id %}" class="inline-flex p-2 text-neutral-500 hover:bg-primary-100 hover:text-primary-600 rounded-full transition-all duration-200" style="text-decoration:none;" title="Editar estudiante" aria-label="Editar la ficha del estudiante">
                                 <span class="material-symbols-outlined text-base">edit</span>
                             </a>
                             {% endif %}
@@ -275,14 +278,17 @@
 <!-- Nueva matrícula (book icon). Reuses the shared EnrollmentForm widgets so the
      plan choices and field ids match student_create; the endpoint is the same
      form's server-side validation. -->
-<div id="enrollModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:100;align-items:center;justify-content:center;">
+{# role="dialog" aria-modal="true" is what opts this panel into the shared #}
+{# focus trap / Escape / restore-focus handling in base.js.                #}
+<div id="enrollModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:100;align-items:center;justify-content:center;"
+     role="dialog" aria-modal="true" aria-label="Nueva matrícula">
     <div class="bg-white rounded-lg shadow-xl p-6 max-w-md w-full mx-4" style="max-height:90vh;overflow-y:auto;">
         <div class="flex items-center justify-between mb-1">
             <h3 class="text-lg font-bold text-neutral-800 flex items-center gap-2">
                 <span class="material-symbols-outlined text-primary-600">menu_book</span>
                 Nueva matrícula
             </h3>
-            <button type="button" id="enrollModalClose" class="text-neutral-400 hover:text-neutral-600" style="background:none;border:none;cursor:pointer;padding:0;">
+            <button type="button" id="enrollModalClose" title="Cerrar" aria-label="Cerrar" class="text-neutral-400 hover:text-neutral-600" style="background:none;border:none;cursor:pointer;padding:0;">
                 <span class="material-symbols-outlined">close</span>
             </button>
         </div>
@@ -327,9 +333,10 @@
                 </div>
 
                 <div class="flex items-center space-x-3 pt-2 border-t border-neutral-200">
-                    <input type="checkbox" name="charge_enrollment_fee" id="enroll_charge_fee" class="form-check-input" checked>
+                    {# Deliberately UNCHECKED: the common use of this modal is a mid-year plan change, where the family already paid this course's matrícula — a pre-ticked box silently invoiced a second one (the unique-month constraint only covers monthly/quarterly, so nothing else stops the duplicate). #}
+                    <input type="checkbox" name="charge_enrollment_fee" id="enroll_charge_fee" class="form-check-input">
                     <label for="enroll_charge_fee" class="text-sm font-medium text-neutral-700">
-                        Cobrar matrícula <span class="text-xs text-neutral-500">(pago único; con dto. de antiguo alumno si procede)</span>
+                        Cobrar matrícula <span class="text-xs text-neutral-500">(pago único; con dto. de antiguo alumno si procede — márcalo solo si esta matrícula debe cobrarse)</span>
                     </label>
                 </div>
             </div>

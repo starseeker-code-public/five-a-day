@@ -1,0 +1,23 @@
+# Trivy ignore list — the ONLY escape hatch for the image CVE gate in
+# .github/workflows/ci.yml ("Fail the build on HIGH/CRITICAL in the image").
+#
+# The gate already ignores advisories with no fixed version available
+# (ignore-unfixed), so anything that reaches it CAN be fixed by bumping a
+# dependency in pyproject.toml or the base-image digest in the Dockerfile.
+# Prefer the bump. Dependabot watches pip, github-actions AND docker digests on
+# the development branch, so the fix is usually already in a PR.
+#
+# Only add an id here when the bump is genuinely impossible right now, and give
+# every entry all three of:
+#   · the CVE / GHSA id
+#   · WHY it does not apply or cannot be fixed yet
+#   · a date to revisit and who owns it
+# Entries are visible in the diff and in code review — that is the point. An
+# undated entry is a permanently disabled control; treat one as a bug.
+#
+# Format: one id per line. Example (do not uncomment):
+#   # CVE-0000-00000  libfoo — reachable only via the CLI we do not ship.
+#   #                 Revisit 2026-12-01 (jhernandez); fixed upstream in 2.1.
+#   CVE-0000-00000
+
+# (empty — no exceptions in force)

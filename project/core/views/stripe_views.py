@@ -13,6 +13,7 @@ from django.views.decorators.http import require_http_methods
 
 from billing.models import Payment
 from billing.services.stripe_service import StripeError, get_stripe_service
+from core.views.parent_portal import _require_parent
 
 logger = logging.getLogger(__name__)
 
@@ -24,14 +25,25 @@ def create_checkout_link(request, payment_id: int):
     parent that owns the payment (via the parent-portal session) may request
     a link — teachers use bank transfer / cash, not Stripe.
     """
-    parent_id = request.session.get("parent_id")
-    if not parent_id:
+    # Through the SHARED helper, not `session["parent_id"]` raw. Reading the key
+    # directly skipped both checks the portal's own pages get:
+    #   * the credential stamp — so "changing your password logs out your other
+    #     devices" had a hole exactly the shape of this endpoint: a session
+    #     invalidated by a password reset could still mint a Checkout URL;
+    #   * the must-change-password pin — so a family holding an emailed
+    #     TEMPORARY password (a credential sitting in plaintext in an inbox)
+    #     could reach a payment page they are otherwise locked out of.
+    # The helper's second return value is the redirect it would send a browser;
+    # this endpoint answers JSON, so it is discarded for the 401 contract the
+    # portal's JS already handles.
+    parent, redirect_resp = _require_parent(request)
+    if redirect_resp is not None:
         return JsonResponse({"success": False, "error": "not authenticated"}, status=401)
 
     payment = get_object_or_404(
         Payment.objects.select_related("parent"),
         id=payment_id,
-        parent_id=parent_id,
+        parent=parent,
     )
     if payment.payment_status == "completed":
         return JsonResponse({"success": False, "error": "already paid"}, status=409)

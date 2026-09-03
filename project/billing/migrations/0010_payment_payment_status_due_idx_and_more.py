@@ -4,10 +4,11 @@ The two unique constraints put a DATABASE guarantee behind idempotency rules tha
 until now existed only as a read-then-write check in Python — see the comments on
 `Payment.Meta.constraints` and `Expense.Meta.constraints`.
 
-`_assert_no_live_duplicates` runs first so that a database which ALREADY contains
-double-billed rows fails with an actionable message naming the students, rather
-than with a bare Postgres constraint violation part-way through a deploy. Adding
-the constraint is what surfaces such rows; it is not what created them.
+`_assert_no_pending_duplicates` (payments) and `_assert_no_materialized_duplicates`
+(expenses) run first so that a database which ALREADY contains double rows fails
+with an actionable message naming them, rather than with a bare Postgres
+constraint violation part-way through a deploy. Adding the constraint is what
+surfaces such rows; it is not what created them.
 """
 
 import django.db.models.functions.datetime
@@ -48,6 +49,31 @@ def _assert_no_pending_duplicates(apps, schema_editor):
     )
 
 
+def _assert_no_materialized_duplicates(apps, schema_editor):
+    """Same guard for `unique_materialized_expense_per_date` — the expense
+    materialisers had the identical read-then-write race, so a DB from before
+    v1.26 can carry two rows with one (generated_from, expense_date)."""
+    Expense = apps.get_model("billing", "Expense")
+    dupes = (
+        Expense.objects.filter(generated_from__isnull=False)
+        .values("generated_from_id", "expense_date")
+        .annotate(n=models.Count("id"))
+        .filter(n__gt=1)
+        .order_by("generated_from_id", "expense_date")
+    )
+    rows = list(dupes[:20])
+    if not rows:
+        return
+
+    detail = "\n".join(f"  generated_from={r['generated_from_id']} on {r['expense_date']}: {r['n']} rows" for r in rows)
+    raise CommandError(
+        "Cannot add unique_materialized_expense_per_date: this database already has "
+        f"more than one materialised expense for the same template and date.\n{detail}\n"
+        "These are duplicate recurring-expense rows. Delete the extras (keep one per "
+        "template+date), then re-run this migration."
+    )
+
+
 def _noop(apps, schema_editor):
     """Reversing the constraint needs no data work."""
 
@@ -64,6 +90,7 @@ class Migration(migrations.Migration):
             model_name="payment",
             index=models.Index(fields=["payment_status", "due_date"], name="payment_status_due_idx"),
         ),
+        migrations.RunPython(_assert_no_materialized_duplicates, _noop),
         migrations.AddConstraint(
             model_name="expense",
             constraint=models.UniqueConstraint(

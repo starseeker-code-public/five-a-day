@@ -1,5 +1,7 @@
 <!DOCTYPE html>
-<html lang="en">
+{# lang="es": the whole UI is Spanish. This was "en", so screen readers read #}
+{# every page with English phonetics and the browser offered to translate it. #}
+<html lang="es">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -88,30 +90,20 @@
     })();
     </script>
 
-    <!-- Tailwind CSS (CDN) -->
+    <!-- Tailwind CSS — vendored Play build, no build tools, no CDN.
+         The theme (violet `primary` scale, darkMode:'class', font) lives in ONE
+         file now: js/tailwind-config.js. It was pasted inline here and into
+         parent_portal/base_portal.html and two_factor/verify.html, and the
+         three copies had already drifted. Must stay a plain non-deferred
+         <script src> right after the Play build — see that file's header. -->
     <script src="{% static 'js/vendor/tailwindcss-play-3.4.17.js' %}"></script>
-    <script nonce="{{ csp_nonce }}">
-    tailwind.config = {
-        darkMode: 'class',
-        theme: {
-            extend: {
-                colors: {
-                    primary: {
-                        50: '#f5f3ff', 100: '#ede9fe', 200: '#ddd6fe', 300: '#c4b5fd',
-                        400: '#a78bfa', 500: '#8b5cf6', 600: '#7c3aed', 700: '#6d28d9',
-                        800: '#5b21b6', 900: '#4c1d95',
-                    }
-                },
-                fontFamily: {
-                    sans: ['Trebuchet MS', 'ui-sans-serif', 'system-ui', 'sans-serif'],
-                }
-            }
-        }
-    }
-    </script>
+    <script src="{% static 'js/tailwind-config.js' %}"></script>
 
     <!-- Material Symbols icons -->
     <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined" rel="stylesheet">
+
+    <!-- Brand palette (CSS custom properties) — must precede app.css/theme.css -->
+    <link rel="stylesheet" href="{% static 'css/palette.css' %}">
 
     <!-- App custom styles (sidebar, icons) -->
     <link rel="stylesheet" href="{% static 'css/app.css' %}">
@@ -125,7 +117,10 @@
     <div class="flex min-h-screen bg-neutral-50">
         <!-- Sidebar -->
         <aside id="main-sidebar" class="{% block sidebar_class %}w-[7.5rem]{% endblock %} bg-primary-100 p-6 border-r border-primary-200 transition-all duration-300 ease-in-out group flex flex-col relative {% block sidebar_hover %}{% endblock %}">
-            <div class="mb-8 flex flex-col items-center sidebar-expanded:items-start">
+            {# `sidebar-expanded:items-start` was here: an inert Tailwind variant  #}
+            {# (no such variant is configured) matching the dead .sidebar-expanded #}
+            {# CSS block that app.css no longer carries. Removed with it.          #}
+            <div class="mb-8 flex flex-col items-center">
                 <div class="flex items-center gap-3">
                     <h1 class="text-3xl font-bold text-primary-700 hidden sidebar-title transition-opacity duration-300">
                         Five a Day
@@ -137,65 +132,78 @@
             </div>
             <div class="sidebar-fixed-links">
                 <nav class="space-y-0">
-                    <a href="{% url 'home' %}" data-hotkey="0" class="sidebar-link w-full flex items-center gap-3 px-2 py-3 rounded-md {% if request.resolver_match.url_name == 'home' %}active-sidebar-link bg-primary-200 text-primary-700{% else %}text-neutral-600{% endif %} font-medium hover:bg-primary-100 hover:text-primary-700 transition-all duration-200">
+                    <a aria-label="Panel Principal" href="{% url 'home' %}" data-hotkey="0" class="sidebar-link w-full flex items-center gap-3 px-2 py-3 rounded-md {% if request.resolver_match.url_name == 'home' %}active-sidebar-link bg-primary-200 text-primary-700{% else %}text-neutral-600{% endif %} font-medium hover:bg-primary-100 hover:text-primary-700 transition-all duration-200">
                         <span class="material-symbols-outlined mx-auto sidebar-icon">dashboard</span>
                         <span class="hidden sidebar-text">Panel Principal</span>
                     </a>
-                    <a href="{% url 'students_list' %}" data-hotkey="1" class="sidebar-link w-full flex items-center gap-3 px-2 py-3 rounded-md {% if request.resolver_match.url_name == 'students_list' or request.resolver_match.url_name == 'student_create' or request.resolver_match.url_name == 'student_detail' or request.resolver_match.url_name == 'student_update' %}active-sidebar-link bg-primary-200 text-primary-700{% else %}text-neutral-600{% endif %} font-medium hover:bg-primary-100 hover:text-primary-700 transition-all duration-200">
+                    <a aria-label="Estudiantes" href="{% url 'students_list' %}" data-hotkey="1" class="sidebar-link w-full flex items-center gap-3 px-2 py-3 rounded-md {% if request.resolver_match.url_name == 'students_list' or request.resolver_match.url_name == 'student_create' or request.resolver_match.url_name == 'student_detail' or request.resolver_match.url_name == 'student_update' %}active-sidebar-link bg-primary-200 text-primary-700{% else %}text-neutral-600{% endif %} font-medium hover:bg-primary-100 hover:text-primary-700 transition-all duration-200">
                         <span class="material-symbols-outlined mx-auto sidebar-icon">people</span>
                         <span class="hidden sidebar-text">Estudiantes</span>
                     </a>
-                    <a href="{% url 'waiting_list' %}" data-hotkey="2" class="sidebar-link w-full flex items-center gap-3 px-2 py-3 rounded-md {% if request.resolver_match.url_name == 'waiting_list' %}active-sidebar-link bg-primary-200 text-primary-700{% else %}text-neutral-600{% endif %} font-medium hover:bg-primary-100 hover:text-primary-700 transition-all duration-200">
+                    <a aria-label="Lista de Espera" href="{% url 'waiting_list' %}" data-hotkey="2" class="sidebar-link w-full flex items-center gap-3 px-2 py-3 rounded-md {% if request.resolver_match.url_name == 'waiting_list' %}active-sidebar-link bg-primary-200 text-primary-700{% else %}text-neutral-600{% endif %} font-medium hover:bg-primary-100 hover:text-primary-700 transition-all duration-200">
                         <span class="material-symbols-outlined mx-auto sidebar-icon">hourglass_top</span>
                         <span class="hidden sidebar-text">Lista de Espera</span>
                     </a>
-                    <a href="{% url 'schedule_view' %}" data-hotkey="3" class="sidebar-link w-full flex items-center gap-3 px-2 py-3 rounded-md {% if request.resolver_match.url_name == 'schedule_view' %}active-sidebar-link bg-primary-200 text-primary-700{% else %}text-neutral-600{% endif %} font-medium hover:bg-primary-100 hover:text-primary-700 transition-all duration-200">
+                    <a aria-label="Horario" href="{% url 'schedule_view' %}" data-hotkey="3" class="sidebar-link w-full flex items-center gap-3 px-2 py-3 rounded-md {% if request.resolver_match.url_name == 'schedule_view' %}active-sidebar-link bg-primary-200 text-primary-700{% else %}text-neutral-600{% endif %} font-medium hover:bg-primary-100 hover:text-primary-700 transition-all duration-200">
                         <span class="material-symbols-outlined mx-auto sidebar-icon">calendar_month</span>
                         <span class="hidden sidebar-text">Horario</span>
                     </a>
                     {% if is_admin_user %}
-                    <a href="{% url 'payments_list' %}" data-hotkey="4" class="sidebar-link w-full flex items-center gap-3 px-2 py-3 rounded-md {% if request.resolver_match.url_name == 'payments_list' or request.resolver_match.url_name == 'create_payment' or request.resolver_match.url_name == 'payment_detail_view' or request.resolver_match.url_name == 'update_payment' %}active-sidebar-link bg-primary-200 text-primary-700{% else %}text-neutral-600{% endif %} font-medium hover:bg-primary-100 hover:text-primary-700 transition-all duration-200">
+                    <a aria-label="Pagos" href="{% url 'payments_list' %}" data-hotkey="4" class="sidebar-link w-full flex items-center gap-3 px-2 py-3 rounded-md {% if request.resolver_match.url_name == 'payments_list' or request.resolver_match.url_name == 'create_payment' or request.resolver_match.url_name == 'payment_detail_view' or request.resolver_match.url_name == 'update_payment' %}active-sidebar-link bg-primary-200 text-primary-700{% else %}text-neutral-600{% endif %} font-medium hover:bg-primary-100 hover:text-primary-700 transition-all duration-200">
                         <span class="material-symbols-outlined mx-auto sidebar-icon">payment</span>
                         <span class="hidden sidebar-text">Pagos</span>
                     </a>
-                    <a href="{% url 'expenses_list' %}" data-hotkey="5" class="sidebar-link w-full flex items-center gap-3 px-2 py-3 rounded-md {% if request.resolver_match.url_name == 'expenses_list' %}active-sidebar-link bg-primary-200 text-primary-700{% else %}text-neutral-600{% endif %} font-medium hover:bg-primary-100 hover:text-primary-700 transition-all duration-200">
+                    <a aria-label="Gastos" href="{% url 'expenses_list' %}" data-hotkey="5" class="sidebar-link w-full flex items-center gap-3 px-2 py-3 rounded-md {% if request.resolver_match.url_name == 'expenses_list' %}active-sidebar-link bg-primary-200 text-primary-700{% else %}text-neutral-600{% endif %} font-medium hover:bg-primary-100 hover:text-primary-700 transition-all duration-200">
                         <span class="material-symbols-outlined mx-auto sidebar-icon">receipt_long</span>
                         <span class="hidden sidebar-text">Gastos</span>
                     </a>
-                    <a href="{% url 'apps' %}" data-hotkey="6" class="sidebar-link w-full flex items-center gap-3 px-2 py-3 rounded-md {% if request.resolver_match.url_name == 'apps' or request.resolver_match.url_name == 'fun_friday_form' %}active-sidebar-link bg-primary-200 text-primary-700{% else %}text-neutral-600{% endif %} font-medium hover:bg-primary-100 hover:text-primary-700 transition-all duration-200">
+                    <a aria-label="Aplicaciones" href="{% url 'apps' %}" data-hotkey="6" class="sidebar-link w-full flex items-center gap-3 px-2 py-3 rounded-md {% if request.resolver_match.url_name == 'apps' or request.resolver_match.url_name == 'fun_friday_form' %}active-sidebar-link bg-primary-200 text-primary-700{% else %}text-neutral-600{% endif %} font-medium hover:bg-primary-100 hover:text-primary-700 transition-all duration-200">
                         <span class="material-symbols-outlined mx-auto sidebar-icon">apps</span>
                         <span class="hidden sidebar-text">Aplicaciones</span>
                     </a>
                     {% else %}
-                    <a href="{% url 'fun_friday_view' %}" class="sidebar-link w-full flex items-center gap-3 px-2 py-3 rounded-md {% if request.resolver_match.url_name == 'fun_friday_view' %}active-sidebar-link bg-primary-200 text-primary-700{% else %}text-neutral-600{% endif %} font-medium hover:bg-primary-100 hover:text-primary-700 transition-all duration-200">
+                    <a aria-label="Fun Friday" href="{% url 'fun_friday_view' %}" class="sidebar-link w-full flex items-center gap-3 px-2 py-3 rounded-md {% if request.resolver_match.url_name == 'fun_friday_view' %}active-sidebar-link bg-primary-200 text-primary-700{% else %}text-neutral-600{% endif %} font-medium hover:bg-primary-100 hover:text-primary-700 transition-all duration-200">
                         <span class="material-symbols-outlined mx-auto sidebar-icon">celebration</span>
                         <span class="hidden sidebar-text">Fun Friday</span>
                     </a>
                     {% endif %}
-                    <a href="{% url 'management' %}" data-hotkey="7" class="sidebar-link w-full flex items-center gap-3 px-2 py-3 rounded-md {% if request.resolver_match.url_name == 'management' %}active-sidebar-link bg-primary-200 text-primary-700{% else %}text-neutral-600{% endif %} font-medium hover:bg-primary-100 hover:text-primary-700 transition-all duration-200">
+                    <a aria-label="Gestión" href="{% url 'management' %}" data-hotkey="7" class="sidebar-link w-full flex items-center gap-3 px-2 py-3 rounded-md {% if request.resolver_match.url_name == 'management' %}active-sidebar-link bg-primary-200 text-primary-700{% else %}text-neutral-600{% endif %} font-medium hover:bg-primary-100 hover:text-primary-700 transition-all duration-200">
                         <span class="material-symbols-outlined mx-auto sidebar-icon">settings</span>
                         <span class="hidden sidebar-text">Gestión</span>
                     </a>
                     {% if is_admin_user %}
-                    <a href="{% url 'reports_view' %}" data-hotkey="8" class="sidebar-link w-full flex items-center gap-3 px-2 py-3 rounded-md {% if request.resolver_match.url_name == 'reports_view' %}active-sidebar-link bg-primary-200 text-primary-700{% else %}text-neutral-600{% endif %} font-medium hover:bg-primary-100 hover:text-primary-700 transition-all duration-200">
+                    <a aria-label="Informes" href="{% url 'reports_view' %}" data-hotkey="8" class="sidebar-link w-full flex items-center gap-3 px-2 py-3 rounded-md {% if request.resolver_match.url_name == 'reports_view' %}active-sidebar-link bg-primary-200 text-primary-700{% else %}text-neutral-600{% endif %} font-medium hover:bg-primary-100 hover:text-primary-700 transition-all duration-200">
                         <span class="material-symbols-outlined mx-auto sidebar-icon">bar_chart</span>
                         <span class="hidden sidebar-text">Informes</span>
                     </a>
-                    <a href="{% url 'all_info' %}" data-hotkey="9" class="sidebar-link w-full flex items-center gap-3 px-2 py-3 rounded-md {% if request.resolver_match.url_name == 'all_info' %}active-sidebar-link bg-primary-200 text-primary-700{% else %}text-neutral-600{% endif %} font-medium hover:bg-primary-100 hover:text-primary-700 transition-all duration-200">
+                    <a aria-label="Base de Datos" href="{% url 'all_info' %}" data-hotkey="9" class="sidebar-link w-full flex items-center gap-3 px-2 py-3 rounded-md {% if request.resolver_match.url_name == 'all_info' %}active-sidebar-link bg-primary-200 text-primary-700{% else %}text-neutral-600{% endif %} font-medium hover:bg-primary-100 hover:text-primary-700 transition-all duration-200">
                         <span class="material-symbols-outlined mx-auto sidebar-icon">analytics</span>
                         <span class="hidden sidebar-text">Base de Datos</span>
                     </a>
                     {% endif %}
-                    <a href="{% url 'logout' %}" class="sidebar-link w-full flex items-center gap-3 px-2 py-3 rounded-md text-neutral-600 font-medium hover:bg-primary-100 hover:text-primary-700 transition-all duration-200">
-                        <span class="material-symbols-outlined mx-auto sidebar-icon">logout</span>
-                        <span class="hidden sidebar-text">Cerrar Sesión</span>
-                    </a>
-                    <a href="#" id="support-open-btn" class="sidebar-link w-full flex items-center gap-3 px-2 py-3 rounded-md text-neutral-600 font-medium hover:bg-primary-100 hover:text-primary-700 transition-all duration-200">
+                    {% comment %}
+                       A POST form, not a link: `logout` is @require_http_methods(["POST"])
+                       (a GET logout is CSRF-able — any <img src="/logout/"> on any page
+                       ends the session), so an <a href> returns 405. Styled with the same
+                       sidebar-link classes and `border:0;background:none` so it renders
+                       byte-identically to the other nav items; the hotkey badge is not on
+                       this link, so nothing else keys off the element type.
+                    {% endcomment %}
+                    <form method="post" action="{% url 'logout' %}" class="contents">
+                        {% csrf_token %}
+                        <button type="submit" aria-label="Cerrar Sesión" title="Cerrar Sesión"
+                                class="sidebar-link w-full flex items-center gap-3 px-2 py-3 rounded-md text-neutral-600 font-medium hover:bg-primary-100 hover:text-primary-700 transition-all duration-200"
+                                style="background:none;border:0;cursor:pointer;font:inherit;text-align:left;">
+                            <span class="material-symbols-outlined mx-auto sidebar-icon">logout</span>
+                            <span class="hidden sidebar-text">Cerrar Sesión</span>
+                        </button>
+                    </form>
+                    <a aria-label="¿Necesitas ayuda?" href="#" id="support-open-btn" class="sidebar-link w-full flex items-center gap-3 px-2 py-3 rounded-md text-neutral-600 font-medium hover:bg-primary-100 hover:text-primary-700 transition-all duration-200">
                         <span class="material-symbols-outlined mx-auto sidebar-icon">help</span>
                         <span class="hidden sidebar-text">¿Necesitas ayuda?</span>
                     </a>
                     {% if show_testing_tools %}
-                    <a href="{% url 'testing_tools' %}" class="sidebar-link w-full flex items-center gap-3 px-2 py-3 rounded-md {% if request.resolver_match.url_name == 'testing_tools' %}active-sidebar-link bg-primary-200 text-primary-700{% else %}text-neutral-600{% endif %} font-medium hover:bg-primary-100 hover:text-primary-700 transition-all duration-200">
+                    <a aria-label="Testing" href="{% url 'testing_tools' %}" class="sidebar-link w-full flex items-center gap-3 px-2 py-3 rounded-md {% if request.resolver_match.url_name == 'testing_tools' %}active-sidebar-link bg-primary-200 text-primary-700{% else %}text-neutral-600{% endif %} font-medium hover:bg-primary-100 hover:text-primary-700 transition-all duration-200">
                         <span class="material-symbols-outlined mx-auto sidebar-icon">info</span>
                         <span class="hidden sidebar-text">Testing</span>
                     </a>
@@ -236,7 +244,7 @@
                     {% if is_admin_user %}
                     <!-- History Log -->
                     <div class="relative" id="history-container">
-                        <button id="history-btn" class="w-11 h-11 inline-flex items-center justify-center rounded-full text-neutral-700 bg-primary-100 hover:bg-primary-200 transition-all duration-200" title="Historial">
+                        <button id="history-btn" aria-label="Historial de acciones" class="w-11 h-11 inline-flex items-center justify-center rounded-full text-neutral-700 bg-primary-100 hover:bg-primary-200 transition-all duration-200" title="Historial">
                             <span class="material-symbols-outlined">article</span>
                         </button>
                         {% if history_count > 0 %}
@@ -264,7 +272,7 @@
                     </div>
                     <!-- Notifications Bell -->
                     <div class="relative" id="notif-container">
-                        <button id="notif-btn" class="w-11 h-11 inline-flex items-center justify-center rounded-full text-neutral-800 bg-primary-100 hover:bg-primary-200 transition-all duration-200">
+                        <button id="notif-btn" title="Notificaciones de hoy" aria-label="Notificaciones de hoy" class="w-11 h-11 inline-flex items-center justify-center rounded-full text-neutral-800 bg-primary-100 hover:bg-primary-200 transition-all duration-200">
                             <span class="material-symbols-outlined">notifications</span>
                         </button>
                         {% if notifications_count > 0 %}
@@ -347,7 +355,7 @@
             </div>
 
             <!-- Floating scroll-to-top -->
-            <a id="scroll-top-btn" href="#" class="group inline-flex items-center justify-center w-12 h-12 bg-primary-100 hover:bg-primary-600 rounded-full border-2 border-primary-200 transition-all duration-300 hover:scale-110 no-underline fixed right-20 bottom-8 z-[9999]">
+            <a id="scroll-top-btn" title="Volver arriba" aria-label="Volver arriba" href="#" class="group inline-flex items-center justify-center w-12 h-12 bg-primary-100 hover:bg-primary-600 rounded-full border-2 border-primary-200 transition-all duration-300 hover:scale-110 no-underline fixed right-20 bottom-8 z-[9999]">
                 <span class="material-symbols-outlined text-3xl text-primary-700 transition-colors duration-200" style="font-variation-settings: 'FILL' 1, 'wght' 700, 'GRAD' 0, 'opsz' 30;">arrow_upward</span>
             </a>
         </main>
@@ -375,7 +383,7 @@
                 <h2 class="text-lg font-bold text-neutral-800 flex items-center gap-2">
                     <span class="material-symbols-outlined text-primary-600">help</span> Ayuda de esta sección
                 </h2>
-                <button type="button" id="view-help-close" class="p-1.5 rounded-full hover:bg-neutral-100 transition-colors flex items-center justify-center">
+                <button type="button" id="view-help-close" title="Cerrar la ayuda" aria-label="Cerrar la ayuda" class="p-1.5 rounded-full hover:bg-neutral-100 transition-colors flex items-center justify-center">
                     <span class="material-symbols-outlined text-neutral-500">close</span>
                 </button>
             </div>
@@ -394,7 +402,7 @@
                     <span class="material-symbols-outlined">help</span>
                     ¿Necesitas ayuda?
                 </h3>
-                <button type="button" id="support-close-btn" class="p-1.5 rounded-full bg-white/20 hover:bg-white/35 transition-colors flex items-center justify-center">
+                <button type="button" id="support-close-btn" title="Cerrar" aria-label="Cerrar" class="p-1.5 rounded-full bg-white/20 hover:bg-white/35 transition-colors flex items-center justify-center">
                     <span class="material-symbols-outlined">close</span>
                 </button>
             </div>
