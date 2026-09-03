@@ -174,7 +174,7 @@ jobs:
       - name: Check CI status on development
         id: ci
         if: steps.conditions.outputs.should_merge == 'true'
-        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b  # v7.1.0
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0
         env:
           LAST_SHA: ${{ steps.conditions.outputs.last_sha }}
         with:
@@ -364,7 +364,7 @@ jobs:
       - name: Create PR testing → main
         id: pr
         if: steps.merge.conclusion == 'success'
-        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b  # v7.1.0
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0
         env:
           # Every value via env. Interpolating `${{ }}` into this body was a JS
           # injection sink twice over: `'${{ ... }}'` breaks out on a single
