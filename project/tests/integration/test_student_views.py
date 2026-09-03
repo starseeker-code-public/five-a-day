@@ -128,6 +128,23 @@ class TestStudentCreateView:
         assert Decimal(price_config["quarterly_gross"]) == gross
         assert Decimal(price_config["quarterly"]) == gross * (1 - site_config.quarterly_enrollment_discount / 100)
 
+    def test_returning_checkbox_unchecked_by_default(
+        self, authenticated_client, group, site_config, enrollment_type_new_student
+    ):
+        response = authenticated_client.get(reverse("student_create"))
+        assert response.context["enrollment_form"].initial.get("is_returning_student") is False
+
+    def test_returning_checkbox_prechecked_for_waiting_entry_with_history(
+        self, authenticated_client, student, cancelled_enrollment, site_config
+    ):
+        """A student moved onto the waiting list keeps their (cancelled)
+        enrollment rows, so promoting them off it is a re-enrolment — the
+        "Antiguo alumno" checkbox arrives pre-marked."""
+        student.is_waiting = True
+        student.save()
+        response = authenticated_client.get(reverse("student_create") + f"?from_waiting={student.id}")
+        assert response.context["enrollment_form"].initial.get("is_returning_student") is True
+
 
 class TestFirstPeriodProrationContext:
     """The form must show the prorated first fee before the admin saves.
@@ -182,6 +199,34 @@ class TestStudentCreateViewPost:
         )
         assert response.status_code == 302
         assert Student.objects.filter(first_name="Nuevo").exists()
+
+    def test_forced_returning_flag_discounts_the_matricula(
+        self, authenticated_client, parent, group, site_config, enrollment_type_returning_student
+    ):
+        """ "Antiguo alumno" checked on a brand-new student (no prior Enrollment
+        rows anywhere): the enrollment resolves to returning_student and the
+        matrícula payment carries the discount."""
+        response = authenticated_client.post(
+            reverse("student_create") + f"?parent_id={parent.id}",
+            {
+                "first_name": "Retornado",
+                "last_name": "Alumno",
+                "birth_date": "2017-05-20",
+                "school": "CEIP Nuevo",
+                "gdpr_signed": "on",
+                "group": group.id,
+                "parent_id": parent.id,
+                "enrollment_plan": "monthly_full",
+                "is_returning_student": "on",
+            },
+        )
+        assert response.status_code == 302
+        student = Student.objects.get(first_name="Retornado")
+        assert student.enrollments.get().enrollment_type.name == "returning_student"
+        fee_payment = student.payments.get(payment_type="enrollment")
+        expected = site_config.children_enrollment_fee - site_config.returning_student_enrollment_discount
+        assert fee_payment.amount == expected
+        assert "dto. alumno recurrente" in fee_payment.concept
 
     def test_creates_adult_student(self, authenticated_client, group, site_config, enrollment_type_adults):
         response = authenticated_client.post(

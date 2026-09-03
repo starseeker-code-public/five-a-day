@@ -80,13 +80,14 @@ from core.views.management import (
 
 # Parent portal (v1.9)
 from core.views.parent_portal import (
+    parent_portal_change_password,
     parent_portal_dashboard,
+    parent_portal_forgot_password,
     parent_portal_login,
     parent_portal_logout,
     parent_portal_payments,
     parent_portal_receipt,
     parent_portal_tax_certificate,
-    parent_portal_verify,
 )
 
 # Parents
@@ -96,6 +97,7 @@ from core.views.password_reset import (
     BrandedPasswordResetConfirmView,
     BrandedPasswordResetDoneView,
     BrandedPasswordResetView,
+    change_password,
 )
 
 # Payments
@@ -109,7 +111,6 @@ from core.views.payments import (
     parse_date_value,
     payment_detail_view,
     payment_receipt_pdf,
-    payment_statistics,
     payments_list,
     quick_complete_payment,
     search_parents,
@@ -140,6 +141,7 @@ from core.views.students import (
     StudentDetailView,
     StudentListView,
     StudentUpdateView,
+    enroll_student,
     get_ff_student_ids,
     get_last_friday,
     get_next_friday,

@@ -1,0 +1,52 @@
+{% extends "emails/base_email.html" %}
+{% block title %}Activa tu cuenta · Five a Day{% endblock %}
+
+{% block content %}
+<div style="text-align: center; padding: 40px 20px;">
+    <h1 style="color: #b9a5f5; font-size: 32px; margin-bottom: 20px;">
+        &#128273; Activa tu cuenta
+    </h1>
+
+    <p style="font-size: 18px; color: #d5d0e6; line-height: 1.6; margin-bottom: 10px;">
+        Hola{% if user.first_name %} <strong>{{ user.first_name }}</strong>{% endif %},
+    </p>
+
+    <p style="font-size: 16px; color: #b0aac9; line-height: 1.6; margin-bottom: 20px;">
+        Se ha creado tu cuenta de profesor/a en <strong>Five a Day eVolution</strong>.
+        Elige tu contrase&ntilde;a con el siguiente bot&oacute;n para activar el acceso:
+    </p>
+
+    <div style="text-align: center; margin: 32px 0;">
+        <a
+            href="{{ protocol }}://{{ domain }}{% url 'password_reset_confirm' uidb64=uid token=token %}"
+            style="display: inline-block; background-color: #6d28d9; color: #FFFFFF; text-decoration: none; padding: 12px 30px; border-radius: 8px; font-weight: 600;"
+        >
+            Establecer mi contrase&ntilde;a
+        </a>
+    </div>
+
+    <div style="background-color: #272235; border-left: 4px solid #6366F1; padding: 15px; margin: 20px 0; text-align: left;">
+        <p style="color: #c4b5fd; margin: 0 0 8px 0; font-size: 13px;">
+            Si el bot&oacute;n no funciona, copia y pega este enlace en tu navegador:
+        </p>
+        <p style="font-size: 13px; word-break: break-all; margin: 0;">
+            <a href="{{ protocol }}://{{ domain }}{% url 'password_reset_confirm' uidb64=uid token=token %}" style="color: #b9a5f5;">{{ protocol }}://{{ domain }}{% url 'password_reset_confirm' uidb64=uid token=token %}</a>
+        </p>
+    </div>
+
+    <div style="background-color: #272235; border-radius: 12px; padding: 20px; margin: 20px 0; text-align: left;">
+        <p style="color: #d5d0e6; margin: 0; font-size: 14px;">
+            Tu usuario es tu direcci&oacute;n de correo: <strong>{{ email }}</strong>
+        </p>
+    </div>
+
+    <div style="background-color: #2e2410; border-left: 4px solid #F59E0B; padding: 15px; margin: 20px 0; text-align: left;">
+        <p style="color: #fcd34d; margin: 0; font-size: 13px;">
+            Este enlace caducar&aacute; en unas horas por motivos de seguridad. Si ya no funciona,
+            pide uno nuevo desde
+            <a href="{{ protocol }}://{{ domain }}{% url 'password_reset' %}" style="color: #fcd34d;">&iquest;Olvidaste tu contrase&ntilde;a?</a>
+            en la pantalla de acceso.
+        </p>
+    </div>
+</div>
+{% endblock %}

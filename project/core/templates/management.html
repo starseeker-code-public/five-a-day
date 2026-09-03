@@ -216,8 +216,10 @@
                                     {{ group.group.teacher.full_name }}
                                 </td>
                                 <td class="px-4 py-3 text-neutral-600">
-                                    {# `groups` is group_capacity_summary() — counts already annotated.
-                                       `group.enrolled_count` / `.is_full` were COUNT queries per row. #}
+                                    {% comment %}
+                                       `groups` is group_capacity_summary() — counts already annotated.
+                                       `group.enrolled_count` / `.is_full` were COUNT queries per row.
+                                    {% endcomment %}
                                     {% if group.max_students %}
                                         {{ group.enrolled }}/{{ group.max_students }} estudiantes
                                         {% if group.is_full %}
@@ -240,9 +242,17 @@
                     </table>
                 </div>
                 
-                <!-- Botones de acción (admin only — non-admin teachers see this page in view-only mode) -->
-                {% if is_admin_user %}
+                {% comment %}
+                Botones de acción. The two creation buttons are admin-only
+                (non-admin teachers see this page in view-only mode), but
+                "Cambiar contraseña" is self-service and therefore sits
+                OUTSIDE that gate — it only ever acts on the current user.
+                It is hidden for Google-OAuth sessions and for accounts with
+                no usable password (see `can_change_own_password`).
+                {% endcomment %}
+                {% if is_admin_user or can_change_password %}
                 <div style="margin-top:2.5rem;display:flex;flex-wrap:wrap;gap:0.75rem;">
+                    {% if is_admin_user %}
                     <button type="button" id="btn-new-teacher" class="px-6 py-3 bg-primary-500 text-white rounded-md hover:bg-primary-600 transition-colors duration-200 flex items-center gap-2">
                         <span class="material-symbols-outlined">person_add</span>
                         Nuevo Profesor
@@ -251,6 +261,13 @@
                         <span class="material-symbols-outlined">group_add</span>
                         Nuevo Grupo
                     </button>
+                    {% endif %}
+                    {% if can_change_password %}
+                    <button type="button" id="btn-change-password" class="px-6 py-3 bg-primary-500 text-white rounded-md hover:bg-primary-600 transition-colors duration-200 flex items-center gap-2">
+                        <span class="material-symbols-outlined">key</span>
+                        Cambiar Contraseña
+                    </button>
+                    {% endif %}
                 </div>
                 {% endif %}
             </div>
@@ -294,10 +311,10 @@
             </div>
             <p class="text-xs text-neutral-500">Los profesores nuevos se crean sin permisos de administrador. Un administrador puede concederlos después desde el panel <code>/admin/</code>.</p>
             <div class="flex justify-between items-center" style="margin-top:3rem; padding-top:1.5rem; border-top:1px solid #f3f4f6;">
-                <button type="button" data-close-modal="modal-teacher" class="transition-colors" style="background-color:#ede9fe; color:#2e1065; font-weight:900; padding:0.75rem 2.25rem; border-radius:9999px;">
+                <button type="button" data-close-modal="modal-teacher" class="px-6 py-3 bg-neutral-100 text-neutral-700 rounded-lg hover:bg-neutral-200 transition-colors font-medium">
                     Cancelar
                 </button>
-                <button type="submit" class="transition-colors flex items-center gap-2" style="background-color:#ddd6fe; color:#2e1065; font-weight:900; padding:0.6rem 1.75rem; border-radius:0.5rem;">
+                <button type="submit" class="px-6 py-3 bg-primary-500 text-white rounded-md hover:bg-primary-600 transition-colors duration-200 flex items-center gap-2">
                     <span class="material-symbols-outlined text-sm">save</span>
                     Crear Profesor
                 </button>
@@ -348,10 +365,10 @@
                 </select>
             </div>
             <div class="flex justify-between items-center" style="margin-top:3rem; padding-top:1.5rem; border-top:1px solid #f3f4f6;">
-                <button type="button" data-close-modal="modal-group" class="transition-colors" style="background-color:#ede9fe; color:#2e1065; font-weight:900; padding:0.75rem 2.25rem; border-radius:9999px;">
+                <button type="button" data-close-modal="modal-group" class="px-6 py-3 bg-neutral-100 text-neutral-700 rounded-lg hover:bg-neutral-200 transition-colors font-medium">
                     Cancelar
                 </button>
-                <button type="submit" class="transition-colors flex items-center gap-2" style="background-color:#ddd6fe; color:#2e1065; font-weight:900; padding:0.6rem 1.75rem; border-radius:0.5rem;">
+                <button type="submit" class="px-6 py-3 bg-primary-500 text-white rounded-md hover:bg-primary-600 transition-colors duration-200 flex items-center gap-2">
                     <span class="material-symbols-outlined text-sm">save</span>
                     Crear Grupo
                 </button>
@@ -359,6 +376,48 @@
         </form>
     </div>
 </div>
+
+{% if can_change_password %}
+<!-- Modal: Cambiar Contraseña (usuario actual) -->
+<div id="modal-password" style="display:none; position:fixed; inset:0; background-color:rgba(0,0,0,0.5); z-index:50; align-items:center; justify-content:center;"
+         role="dialog" aria-modal="true" aria-label="Cambiar contraseña">
+    <div class="bg-white rounded-lg shadow-xl w-full max-w-md mx-4 overflow-hidden">
+        <div class="px-6 py-4 flex justify-between items-center" style="background-color:#fff; border-bottom:1px solid #f3f4f6;">
+            <h3 class="text-lg font-semibold" style="color:#8b5cf6;">Cambiar Contraseña</h3>
+            <button type="button" data-close-modal="modal-password" class="p-1.5 rounded-full transition-colors modal-x-hover" style="color:#9ca3af;">
+                <span class="material-symbols-outlined text-xl">close</span>
+            </button>
+        </div>
+        <form id="form-password" class="p-6 space-y-5">
+            <div>
+                <label class="block text-sm font-medium text-neutral-700 mb-1.5" for="pw-current">Contraseña actual *</label>
+                <input type="password" id="pw-current" name="current_password" required autocomplete="current-password"
+                       class="w-full px-4 py-2 border border-neutral-300 rounded-md focus:ring-2 focus:ring-violet-400 focus:border-violet-400">
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-neutral-700 mb-1.5" for="pw-new">Contraseña nueva *</label>
+                <input type="password" id="pw-new" name="new_password" required autocomplete="new-password"
+                       class="w-full px-4 py-2 border border-neutral-300 rounded-md focus:ring-2 focus:ring-violet-400 focus:border-violet-400">
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-neutral-700 mb-1.5" for="pw-confirm">Repite la contraseña nueva *</label>
+                <input type="password" id="pw-confirm" name="confirm_password" required autocomplete="new-password"
+                       class="w-full px-4 py-2 border border-neutral-300 rounded-md focus:ring-2 focus:ring-violet-400 focus:border-violet-400">
+            </div>
+            <p class="text-xs text-neutral-500">Cambia la contraseña de tu propia cuenta ({{ request.user.email|default:request.session.username }}). Seguirás con la sesión abierta.</p>
+            <div class="flex justify-between items-center" style="margin-top:3rem; padding-top:1.5rem; border-top:1px solid #f3f4f6;">
+                <button type="button" data-close-modal="modal-password" class="px-6 py-3 bg-neutral-100 text-neutral-700 rounded-lg hover:bg-neutral-200 transition-colors font-medium">
+                    Cancelar
+                </button>
+                <button type="submit" class="px-6 py-3 bg-primary-500 text-white rounded-md hover:bg-primary-600 transition-colors duration-200 flex items-center gap-2">
+                    <span class="material-symbols-outlined text-sm">save</span>
+                    Guardar Contraseña
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endif %}
 
 <!-- Toast de notificación -->
 <div id="toast" class="fixed bottom-4 right-4 transform translate-y-full opacity-0 transition-all duration-300 z-50">
@@ -377,6 +436,7 @@ window.MANAGEMENT_CONFIG = {
     createTeacherUrl: '{% url "create_teacher" %}',
     getTeachersUrl: '{% url "api_get_teachers" %}',
     createGroupUrl: '{% url "create_group" %}',
+    changePasswordUrl: '{% url "change_password" %}',
     csrfToken: '{{ csrf_token }}'
 };
 </script>

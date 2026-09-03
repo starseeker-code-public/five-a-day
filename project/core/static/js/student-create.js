@@ -60,9 +60,39 @@ document.addEventListener('DOMContentLoaded', function () {
     const priceBreakdown = document.getElementById('price-breakdown');
     const lcCheckbox = document.getElementById('id_has_language_cheque');
     const siblingCheckbox = document.getElementById('id_is_sibling_discount');
+    const startDateInput = document.getElementById('id_start_date');
 
     // Guard: if essential elements are missing (e.g. success page), skip
     if (!calculatedPrice) return;
+
+    // Client-side mirror of PaymentService.proration_fraction + billing_periods'
+    // first-period pick, so the amber "Primer pago (parcial)" row follows the
+    // CHOSEN start date. The server-computed cfg values describe today (the
+    // default); picking 1 November must preview a full November instead.
+    const FIRST_PERIOD_MONTHS_ES = {
+        9: 'Septiembre', 10: 'Octubre', 11: 'Noviembre', 12: 'Diciembre',
+        1: 'Enero', 2: 'Febrero', 3: 'Marzo', 4: 'Abril', 5: 'Mayo', 6: 'Junio'
+    };
+
+    function computeFirstPeriod(dateStr) {
+        if (!dateStr) return null;
+        const parts = dateStr.split('-').map(Number);
+        if (parts.length !== 3 || parts.some(isNaN)) return null;
+        const [y, m, d] = parts;
+        // The academic year rolls over in May, like current_academic_year().
+        const startYear = m >= 5 ? y : y - 1;
+        for (const tm of [9, 10, 11, 12, 1, 2, 3, 4, 5, 6]) {
+            const ty = tm >= 9 ? startYear : startYear + 1;
+            // First teaching month whose last day is on/after the start date.
+            if (ty > y || (ty === y && tm >= m)) {
+                const daysInMonth = new Date(ty, tm, 0).getDate();
+                const sameMonth = (ty === y && tm === m);
+                const fraction = (sameMonth && d > 1) ? (daysInMonth - d + 1) / daysInMonth : 1;
+                return { fraction, label: `${FIRST_PERIOD_MONTHS_ES[tm]} ${ty}`, isPartial: fraction < 1 };
+            }
+        }
+        return null;
+    }
 
     function getBasePrice() {
         if (isAdultMode) return priceConfig.adult_group;
@@ -140,8 +170,14 @@ document.addEventListener('DOMContentLoaded', function () {
         const container = document.getElementById('first-period-container');
         if (!container) return;
 
-        const fraction = parseFloat(cfg.firstPeriodFraction);
-        if (!cfg.firstPeriodIsPartial || !(fraction > 0 && fraction < 1) || !isFinite(final)) {
+        // Prefer the fraction/label derived from the start-date input; fall back
+        // to the server-computed "today" values when the field is empty/absent.
+        const info = startDateInput ? computeFirstPeriod(startDateInput.value) : null;
+        const fraction = info ? info.fraction : parseFloat(cfg.firstPeriodFraction);
+        const label = info ? info.label : cfg.firstPeriodLabel;
+        const isPartial = info ? info.isPartial : cfg.firstPeriodIsPartial;
+
+        if (!isPartial || !(fraction > 0 && fraction < 1) || !isFinite(final)) {
             container.classList.add('hidden');
             return;
         }
@@ -157,11 +193,15 @@ document.addEventListener('DOMContentLoaded', function () {
         if (priceEl) priceEl.textContent = firstAmount.toFixed(2);
         if (noteEl) {
             const pct = Math.round(fraction * 100);
-            noteEl.textContent = `${cfg.firstPeriodLabel} — ${pct}% del periodo; después ${final.toFixed(2)}€`;
+            noteEl.textContent = `${label} — ${pct}% del periodo; después ${final.toFixed(2)}€`;
         }
         container.classList.remove('hidden');
     }
 
+    if (startDateInput) {
+        startDateInput.addEventListener('change', updateCalculatedPrice);
+        startDateInput.addEventListener('input', updateCalculatedPrice);
+    }
     if (planSelect) planSelect.addEventListener('change', updateCalculatedPrice);
     if (specialCheckbox) specialCheckbox.addEventListener('change', updateCalculatedPrice);
     if (manualAmountInput) manualAmountInput.addEventListener('input', updateCalculatedPrice);

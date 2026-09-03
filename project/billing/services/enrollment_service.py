@@ -35,16 +35,22 @@ class EnrollmentService:
                 - is_sibling_discount: bool
                 - is_special: bool
                 - manual_amount: Decimal or None
+                - is_returning_student: bool (optional) — force the
+                  returning-student matrícula category ("Antiguo alumno")
+                - start_date: date or None — the day the student STARTS
+                  (defaults to today). Drives `enrollment_date`, and with it the
+                  academic year and where billing begins: a student signed up
+                  today for a 1 November start is billed from November.
             is_adult: bool
 
         Returns:
             Enrollment instance
         """
         config = SiteConfiguration.get_config()
-        academic_year = current_academic_year()
+        start_date = enrollment_data.get("start_date") or date.today()
+        academic_year = current_academic_year(start_date)
         start_year = int(academic_year.split("-")[0])
         end_year = int(academic_year.split("-")[1])
-        today = date.today()
 
         is_special = enrollment_data.get("is_special", False)
         manual_amount = enrollment_data.get("manual_amount")
@@ -55,7 +61,12 @@ class EnrollmentService:
             config, enrollment_data, is_adult, is_special, manual_amount
         )
         enrollment_type = EnrollmentService._resolve_enrollment_type(
-            student, is_adult, is_special, manual_amount, academic_year
+            student,
+            is_adult,
+            is_special,
+            manual_amount,
+            academic_year,
+            force_returning=enrollment_data.get("is_returning_student", False),
         )
 
         discount_pct, final_amount = EnrollmentService._apply_discounts(
@@ -77,10 +88,39 @@ class EnrollmentService:
                 discount_percentage=discount_pct,
                 final_amount=final_amount,
                 status="active",
-                enrollment_date=today,
+                enrollment_date=start_date,
             )
             enrollment.save()
         return enrollment
+
+    @staticmethod
+    def close_active_enrollments(student, status: str) -> int:
+        """
+        Move every ACTIVE enrollment of `student` to `status`, and return how
+        many were moved.
+
+        The one place enrollment status transitions happen, because the obvious
+        one-liner is wrong in a way nothing complains about:
+        `student.enrollments.filter(status="active").update(status=...)` is a
+        single UPDATE that **bypasses the `pre_save`/`post_save` receivers**.
+        `Enrollment` is in `core.audit_signals._TRACKED`, so every cancel and
+        every finish — moving a student to the waiting list, superseding a
+        matrícula on a plan change, re-enrolling — wrote NO `AuditLog` row, and
+        did not bump `updated_at` either (`auto_now` only fires on `save()`).
+        The audit trail recorded enrollments being created and never recorded
+        one being cancelled, which is exactly the half you would go looking for.
+
+        Saving row by row costs one UPDATE per active enrollment instead of one
+        for all of them. The `unique_active_enrollment_per_student` constraint
+        caps that at one row per student, so in practice it is the same query
+        either way.
+        """
+        closed = 0
+        for enrollment in student.enrollments.filter(status="active"):
+            enrollment.status = status
+            enrollment.save(update_fields=["status", "updated_at"])
+            closed += 1
+        return closed
 
     @staticmethod
     def is_returning_student(student, this_academic_year: str | None = None) -> bool:
@@ -99,11 +139,27 @@ class EnrollmentService:
         return student.enrollments.exclude(academic_year=this_academic_year).exists()
 
     @staticmethod
-    def compute_enrollment_fee(config, student, is_adult: bool, special_fee=None) -> tuple:
+    def compute_enrollment_fee(
+        config, student, is_adult: bool, special_fee=None, force_returning=False, this_academic_year=None
+    ) -> tuple:
         """
         Return `(final_fee, returning_discount_applied)` — the enrollment fee
         for this student, minus the returning-student discount when the
         student re-enrols in a later academic year.
+
+        `this_academic_year` is the year of the enrollment being charged
+        (defaults to the current signup year). Callers that just created the
+        enrollment must pass `enrollment.academic_year`: with a start date the
+        enrollment's year can differ from today's, and judged against today's
+        year the student's own brand-new enrollment would read as prior
+        history and wrongly grant the discount.
+
+        `force_returning` is the form's "Antiguo alumno" checkbox: the admin
+        vouching that this is a returning student even though the Student row
+        has no prior Enrollment (a fresh row for someone who studied here
+        before, e.g. promoted off the waiting list or re-registered after
+        years away). It grants the discount; it never revokes one the prior
+        enrollments already earn.
 
         Adults are NOT eligible for the returning-student discount (they
         already have `adult_enrollment_fee` which is a separate rate).
@@ -127,14 +183,16 @@ class EnrollmentService:
         if discount <= 0:
             return base, Decimal("0.00")
 
-        if not EnrollmentService.is_returning_student(student):
+        if not (force_returning or EnrollmentService.is_returning_student(student, this_academic_year)):
             return base, Decimal("0.00")
 
         final = max(base - discount, Decimal("0.00"))
         return final, discount
 
     @staticmethod
-    def _resolve_enrollment_type(student, is_adult, is_special, manual_amount, academic_year=None):
+    def _resolve_enrollment_type(
+        student, is_adult, is_special, manual_amount, academic_year=None, force_returning=False
+    ):
         """
         Pick the matrícula category this enrollment belongs to.
 
@@ -142,6 +200,9 @@ class EnrollmentService:
         hand-priced enrollment is `special` whoever it is for, an adult pays the adult
         matrícula, and a child is either re-enrolling (`returning_student`, the
         discounted matrícula) or signing up for the first time (`new_student`).
+        `force_returning` (the "Antiguo alumno" checkbox) marks a child as
+        re-enrolling even when no prior Enrollment row exists; it does not
+        outrank `special` or `adults`.
 
         This is deliberately independent of `enrollment_plan` — monthly vs quarterly is
         `payment_modality`, not a kind of matrícula.
@@ -157,7 +218,7 @@ class EnrollmentService:
             return _get_type("special")
         if is_adult:
             return _get_type("adults")
-        if EnrollmentService.is_returning_student(student, academic_year):
+        if force_returning or EnrollmentService.is_returning_student(student, academic_year):
             return _get_type("returning_student")
         return _get_type("new_student")
 

@@ -15,6 +15,7 @@ from core.views import (
     api_toggle_error_email,
     api_update_backlog_task,
     api_update_feature,
+    change_password,
     complete_todo,
     # Stripe (v1.11)
     create_checkout_link,
@@ -37,13 +38,14 @@ from core.views import (
     login_view,
     logout_view,
     # Parent portal (v1.9)
+    parent_portal_change_password,
     parent_portal_dashboard,
+    parent_portal_forgot_password,
     parent_portal_login,
     parent_portal_logout,
     parent_portal_payments,
     parent_portal_receipt,
     parent_portal_tax_certificate,
-    parent_portal_verify,
     # Reports & analytics (v1.7)
     reports_pdf,
     reports_view,
@@ -90,6 +92,8 @@ urlpatterns = [
         BrandedPasswordResetCompleteView.as_view(),
         name="password_reset_complete",
     ),
+    # Change your own password (authenticated) — the /management/ button
+    path("api/password-change/", change_password, name="change_password"),
     # PWA (v1.12) — must be at origin root to control the whole scope
     path("manifest.webmanifest", web_manifest, name="web_manifest"),
     path("sw.js", service_worker, name="service_worker"),
@@ -118,7 +122,8 @@ urlpatterns = [
     path("two-factor/verify/", two_factor_verify, name="two_factor_verify"),
     # Parent portal (v1.9) — magic-link auth, session separate from admin
     path("parent/login/", parent_portal_login, name="parent_portal_login"),
-    path("parent/login/<str:token>/", parent_portal_verify, name="parent_portal_verify"),
+    path("parent/forgot-password/", parent_portal_forgot_password, name="parent_portal_forgot_password"),
+    path("parent/change-password/", parent_portal_change_password, name="parent_portal_change_password"),
     path("parent/logout/", parent_portal_logout, name="parent_portal_logout"),
     path("parent/", parent_portal_dashboard, name="parent_portal_dashboard"),
     path("parent/payments/", parent_portal_payments, name="parent_portal_payments"),

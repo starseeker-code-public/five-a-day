@@ -19,7 +19,6 @@ from core.views import (
     language_cheque_students,
     payment_detail_view,
     payment_receipt_pdf,
-    payment_statistics,
     # Payments
     payments_list,
     quick_complete_payment,
@@ -76,7 +75,6 @@ urlpatterns = [
         get_payment_details,
         name="get_payment_details",
     ),
-    path("api/payments/statistics/", payment_statistics, name="payment_statistics"),
     path("payments/export/", export_payments, name="export_payments"),
     path("database/export/", export_database_excel, name="export_database_excel"),
     # ============================================================================

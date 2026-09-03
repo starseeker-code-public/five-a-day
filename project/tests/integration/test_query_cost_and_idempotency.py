@@ -967,3 +967,237 @@ class TestDatabaseConnectionSettings:
             "the socket path was clobbered - production cannot reach Cloud SQL without it"
         )
         assert "statement_timeout" in options.get("options", ""), "the merge must keep the ceiling too"
+
+
+class TestNoDuplicateIndexes:
+    """Django indexes every ForeignKey by default, and a `unique=True` field is
+    already a b-tree index in Postgres — so re-declaring either in
+    `Meta.indexes` builds a SECOND, byte-identical index on the same column.
+
+    Eleven of those had accumulated across the schema, three of them on
+    `payments`, the table `generate_payments` writes in bulk. They cost storage
+    and write amplification on every insert and buy nothing: the planner has
+    only ever needed one of each pair.
+
+    Asserted against the live schema rather than the model definitions, because
+    the failure is in what Postgres ends up holding — a model can look tidy
+    while an old `AddIndex` migration is still in force.
+    """
+
+    @staticmethod
+    def _duplicate_pairs():
+        with connection.cursor() as cur:
+            cur.execute(
+                r"""
+                SELECT t.tablename, string_agg(t.indexname, ' == ' ORDER BY t.indexname)
+                FROM (
+                    SELECT tablename, indexname,
+                           regexp_replace(indexdef, '^CREATE (UNIQUE )?INDEX \S+ ON ', '') AS body
+                    FROM pg_indexes WHERE schemaname = 'public'
+                ) t
+                -- Partial indexes are excluded by design (a partial unique index
+                -- and a plain one on the same column are NOT interchangeable), and
+                -- so are the `varchar_pattern_ops` companions Django adds for
+                -- LIKE queries on unique text columns.
+                WHERE t.body NOT LIKE '%%WHERE%%' AND t.body NOT LIKE '%%pattern_ops%%'
+                GROUP BY t.tablename, t.body
+                HAVING count(*) > 1
+                """
+            )
+            return cur.fetchall()
+
+    def test_no_column_carries_two_identical_indexes(self):
+        duplicates = self._duplicate_pairs()
+        assert not duplicates, "redundant indexes: " + "; ".join(f"{t}: {pair}" for t, pair in duplicates)
+
+    def test_the_foreign_keys_are_still_indexed(self):
+        """The fix is deleting the redundant *declaration*, not the index — if a
+        future change also drops Django's FK default, these lookups regress from
+        an index scan to a sequential one with nothing else to catch it."""
+        with connection.cursor() as cur:
+            cur.execute(
+                "SELECT indexdef FROM pg_indexes WHERE tablename = 'payments' AND indexdef NOT LIKE '%%WHERE%%'"
+            )
+            defs = " ".join(row[0] for row in cur.fetchall())
+        for column in ("student_id", "parent_id", "enrollment_id"):
+            assert f"({column})" in defs, f"payments.{column} is no longer indexed"
+
+
+class TestParentEmailLookupIsIndexed:
+    """The parent portal resolves a family by `email__iexact`, which Postgres
+    renders as `UPPER(email::text) = UPPER(%s)`. A plain b-tree on `email`
+    cannot answer that — with `enable_seqscan=off` the planner still chose a
+    full scan — so every attempt on a public, rate-limited login endpoint read
+    the whole `parents` table.
+    """
+
+    def test_a_functional_upper_index_exists(self):
+        with connection.cursor() as cur:
+            cur.execute("SELECT indexdef FROM pg_indexes WHERE tablename = 'parents' AND indexdef ILIKE '%%upper%%'")
+            assert cur.fetchall(), "no UPPER(email) index on parents — the portal login seq-scans"
+
+    def test_the_planner_actually_uses_it(self):
+        """`Upper` and not `Lower`: an index on the other one is never chosen,
+        and the whole point is the expression matching what the ORM emits."""
+        sql, params = Parent.objects.filter(email__iexact="a@b.com").only("id").query.sql_with_params()
+        with connection.cursor() as cur:
+            cur.execute("SET LOCAL enable_seqscan = off")
+            cur.execute("EXPLAIN " + sql, params)
+            plan = " ".join(row[0] for row in cur.fetchall())
+        assert "parents_email_upper_idx" in plan, f"iexact lookup is not using the index:\n{plan}"
+
+
+class TestSearchStudentsAgreesWithThePaymentGenerators:
+    """`search_students` fills "Padre/Tutor" on the create-payment form, so the
+    parent it returns becomes the TITULAR of the payment about to be created.
+
+    `enroll_student` and both payment generators pick that parent with an
+    explicit `order_by("id")`. This endpoint read `s.parents.all()[0]` off an
+    unordered prefetch, so for a student with two guardians the form could name
+    one parent while the schedule billed the other — for the same student, on
+    the same day.
+    """
+
+    def test_it_returns_the_same_parent_the_generators_bill(self, authenticated_client, student, parent, second_parent):
+        StudentParent.objects.create(student=student, parent=second_parent)
+        StudentParent.objects.create(student=student, parent=parent)
+        lowest = Parent.objects.filter(children=student).order_by("id").first()
+
+        response = authenticated_client.get(reverse("search_students"), {"q": student.first_name})
+
+        result = next(r for r in response.json()["results"] if r["id"] == student.id)
+        assert result["parent_id"] == lowest.pk
+        assert result["parent_name"] == lowest.full_name
+
+    def test_the_endpoint_is_flat_in_the_number_of_matches(
+        self, authenticated_client, teacher, django_assert_max_num_queries
+    ):
+        """`.first()` / `[0]` on the prefetched manager was one query per match,
+        on an endpoint that fires per keystroke."""
+        group = _make_groups(teacher, 1)[0]
+        for i in range(10):
+            p = Parent.objects.create(
+                first_name=f"S{i}", last_name="Buscable", dni=f"SB{i:07d}", phone="600", email=f"s{i}@x.test"
+            )
+            kid = Student.objects.create(first_name=f"Buscable{i}", last_name="Q", group=group, active=True)
+            StudentParent.objects.create(student=kid, parent=p)
+
+        with django_assert_max_num_queries(8):
+            response = authenticated_client.get(reverse("search_students"), {"q": "Buscable"})
+
+        assert len(response.json()["results"]) == 10
+
+    def test_an_adult_student_still_reports_no_parent(self, authenticated_client, adult_student):
+        """`parent_id: None` is a valid answer, not missing data — the submit
+        guard treats it as `noParent`."""
+        response = authenticated_client.get(reverse("search_students"), {"q": adult_student.first_name})
+
+        result = next(r for r in response.json()["results"] if r["id"] == adult_student.id)
+        assert result["parent_id"] is None
+        assert result["parent_name"] == ""
+
+
+class TestEnrollmentConfirmationDoesNotDiscardItsPrefetch:
+    """`prefetch_related("student__parents")` followed by
+    `parents.exclude(...).first()` — the `exclude()` builds a new queryset that
+    ignores the cache, so the prefetch was paid for and thrown away.
+    """
+
+    def test_two_queries_for_the_enrollment_and_its_parents(
+        self, student, parent, active_enrollment, django_assert_max_num_queries
+    ):
+        from comms.tasks import send_enrollment_confirmation_task
+
+        StudentParent.objects.create(student=student, parent=parent)
+
+        with patch("comms.services.email_functions.send_enrollment_confirmation_email", return_value=True):
+            with django_assert_max_num_queries(2):
+                send_enrollment_confirmation_task(active_enrollment.id)
+
+    def test_a_parent_without_an_email_is_still_skipped(self, student, parent, second_parent, active_enrollment):
+        """The email filter moved INTO the prefetch — it must still filter."""
+        from comms.tasks import send_enrollment_confirmation_task
+
+        parent.email = ""
+        parent.save(update_fields=["email"])
+        StudentParent.objects.create(student=student, parent=parent)
+        StudentParent.objects.create(student=student, parent=second_parent)
+
+        # Patched on the SOURCE module: the task imports the function inside its
+        # own body, so the name is resolved from `email_functions` at call time
+        # and never becomes an attribute of `comms.tasks`.
+        with patch("comms.services.email_functions.send_enrollment_confirmation_email", return_value=True) as send:
+            send_enrollment_confirmation_task(active_enrollment.id)
+
+        assert send.call_args.kwargs["parent_email"] == second_parent.email
+
+    def test_it_reports_an_error_when_nobody_has_an_email(self, student, parent, active_enrollment):
+        from comms.tasks import send_enrollment_confirmation_task
+
+        parent.email = ""
+        parent.save(update_fields=["email"])
+        StudentParent.objects.create(student=student, parent=parent)
+
+        result = send_enrollment_confirmation_task(active_enrollment.id)
+
+        assert result["status"] == "error"
+
+
+class TestStudentPaymentHistoryOrdering:
+    """`order_by("-payment_date")` put the entire unpaid backlog above the
+    history: `payment_date` is NULL until a payment is collected, and Postgres
+    sorts NULLs FIRST on a DESC ordering. Ordering on `due_date` — NOT NULL, and
+    what the table's "Vencimiento" column shows — makes the sort total.
+    """
+
+    @pytest.fixture
+    def history(self, student, parent, active_enrollment):
+        made = []
+        for month, status in ((1, "completed"), (5, "pending"), (3, "completed")):
+            made.append(
+                Payment.objects.create(
+                    student=student,
+                    parent=parent,
+                    payment_type="other",
+                    amount=Decimal("10.00"),
+                    due_date=date(2031, month, 28),
+                    payment_date=date(2031, month, 20) if status == "completed" else None,
+                    concept=f"M{month}",
+                    payment_status=status,
+                )
+            )
+        return made
+
+    def test_most_recent_first(self, authenticated_client, student, history):
+        response = authenticated_client.get(reverse("student_detail", args=[student.id]))
+
+        months = [p.due_date.month for p in response.context["payments"]]
+        assert months == sorted(months, reverse=True), f"not newest-first: {months}"
+
+    def test_a_pending_payment_does_not_float_to_the_top(self, authenticated_client, student, history):
+        """The May row is pending, so it sorts first here on merit — the March
+        row (completed, later than January) must still beat January."""
+        response = authenticated_client.get(reverse("student_detail", args=[student.id]))
+
+        concepts = [p.concept for p in response.context["payments"]]
+        assert concepts == ["M5", "M3", "M1"]
+
+    def test_payments_due_the_same_day_have_a_stable_order(self, authenticated_client, student, parent):
+        """The matrícula and the first cuota typically share a due date; without
+        the `-id` tie-break their order is whatever the planner returns."""
+        for concept in ("A", "B", "C"):
+            Payment.objects.create(
+                student=student,
+                parent=parent,
+                payment_type="other",
+                amount=Decimal("10.00"),
+                due_date=date(2031, 9, 30),
+                concept=concept,
+                payment_status="pending",
+            )
+
+        seen = set()
+        for _ in range(3):
+            response = authenticated_client.get(reverse("student_detail", args=[student.id]))
+            seen.add(tuple(p.concept for p in response.context["payments"]))
+        assert len(seen) == 1, f"ordering is not deterministic: {seen}"

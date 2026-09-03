@@ -82,6 +82,57 @@ class TestComputeEnrollmentFee:
         assert fee == Decimal("0.00")
 
 
+class TestForcedReturningStudent:
+    """The "Antiguo alumno" checkbox: the admin vouches the student is
+    returning even though the (fresh) Student row has no prior Enrollment."""
+
+    def test_forced_flag_grants_discount_without_prior_enrollment(self, student, site_config):
+        fee, discount = EnrollmentService.compute_enrollment_fee(
+            site_config, student, is_adult=False, force_returning=True
+        )
+        expected = site_config.returning_student_enrollment_discount
+        assert discount == expected
+        assert fee == site_config.children_enrollment_fee - expected
+
+    def test_forced_flag_never_applies_to_adults(self, adult_student, site_config):
+        fee, discount = EnrollmentService.compute_enrollment_fee(
+            site_config, adult_student, is_adult=True, force_returning=True
+        )
+        assert fee == site_config.adult_enrollment_fee
+        assert discount == Decimal("0.00")
+
+    def test_forced_flag_does_not_discount_a_special_fee(self, student, site_config):
+        """A hand-set matrícula is a negotiated figure — charged verbatim."""
+        fee, discount = EnrollmentService.compute_enrollment_fee(
+            site_config, student, is_adult=False, special_fee=Decimal("25.00"), force_returning=True
+        )
+        assert fee == Decimal("25.00")
+        assert discount == Decimal("0.00")
+
+    def test_create_enrollment_with_flag_resolves_returning_type(
+        self, student, site_config, enrollment_type_new_student, enrollment_type_returning_student
+    ):
+        enrollment = EnrollmentService.create_enrollment(
+            student,
+            {"enrollment_plan": "monthly_full", "is_returning_student": True},
+        )
+        assert enrollment.enrollment_type.name == "returning_student"
+
+    def test_special_still_outranks_forced_flag(
+        self, student, site_config, enrollment_type_special, enrollment_type_returning_student
+    ):
+        enrollment = EnrollmentService.create_enrollment(
+            student,
+            {
+                "enrollment_plan": "monthly_full",
+                "is_special": True,
+                "manual_amount": Decimal("30.00"),
+                "is_returning_student": True,
+            },
+        )
+        assert enrollment.enrollment_type.name == "special"
+
+
 class TestSiteConfigurationDefaults:
     def test_default_discount_is_20_euros(self):
         SiteConfiguration.objects.all().delete()

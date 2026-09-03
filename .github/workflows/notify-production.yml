@@ -101,45 +101,23 @@ jobs:
           username: ${{ secrets.EMAIL_HOST_USER }}
           password: ${{ secrets.EMAIL_SECRET }}
           from: "Five a Day CI <${{ secrets.EMAIL_HOST_USER }}>"
-          # hellofiveaday (the academy inbox) + support (set the SUPPORT_EMAIL secret).
-          to: hellofiveaday@gmail.com${{ secrets.SUPPORT_EMAIL && format(', {0}', secrets.SUPPORT_EMAIL) || '' }}
+          # Dev/support only — the academy inbox (hellofiveaday) is notified
+          # exclusively on successful deploys, and this is a release heads-up.
+          to: ${{ secrets.SUPPORT_EMAIL || secrets.OWNER_EMAILS }}
           subject: "[Five a Day] v${{ steps.info.outputs.new_version }} lista para producción"
           html_body: |
             <div style="font-family: sans-serif; color:#1f2937; max-width:640px;">
-              <h2 style="color:#6d28d9;">✅ Nueva versión lista para producción</h2>
-              <p style="font-size:15px; line-height:1.6;">
-                La versión <strong>v${{ steps.info.outputs.new_version }}</strong>
-                (antes <strong>v${{ steps.info.outputs.old_version }}</strong>) acaba de llegar a la rama
-                <strong>producción</strong> (<code>main</code>). Novedad principal:
-                <em>${{ steps.info.outputs.message }}</em>. El despliegue a producción está listo cuando queráis.
-              </p>
-              ${{ secrets.PRODUCTION_URL && format('<p style="text-align:center; margin:24px 0;"><a href="{0}" style="padding:12px 28px; background:#6d28d9; color:#fff; text-decoration:none; border-radius:8px; font-weight:600; font-size:15px;">Abrir producción →</a></p>', secrets.PRODUCTION_URL) || '' }}
-              <hr style="border:none; border-top:1px solid #e5e7eb; margin:24px 0;">
-              <h3 style="color:#6b7280; font-size:12px; text-transform:uppercase; letter-spacing:0.05em;">Detalles técnicos</h3>
+              <h2 style="color:#6d28d9;">✅ Versión en main — a la espera del despliegue CI/CD</h2>
               <table cellpadding="6" style="border-collapse: collapse; font-family: sans-serif; font-size:13px;">
-                <tr><td><strong>Entorno</strong></td><td>Producción (main)</td></tr>
+                <tr><td><strong>Situación</strong></td><td>v${{ steps.info.outputs.new_version }} fusionada en <code>main</code>; el workflow <em>Deploy production</em> se arma solo (visto bueno de QA + re-disparo nocturno) y espera aprobación en el entorno <code>production</code> — sin pasos manuales</td></tr>
                 <tr><td><strong>Versión</strong></td><td><code>${{ steps.info.outputs.old_version }}</code> → <code>${{ steps.info.outputs.new_version }}</code></td></tr>
                 <tr><td><strong>Etiqueta de release</strong></td><td><code>${{ steps.tag.outputs.tag }}</code> (${{ steps.tag.outputs.created == 'true' && 'recién creada' || 'ya existía — sin cambio de versión' }})</td></tr>
-                <tr><td><strong>Commit</strong></td><td><code>${{ steps.info.outputs.message }}</code></td></tr>
-                <tr><td><strong>Autor</strong></td><td>${{ steps.info.outputs.author }}</td></tr>
-                <tr><td><strong>SHA</strong></td><td><code>${{ steps.info.outputs.short_sha }}</code></td></tr>
+                <tr><td><strong>Commit</strong></td><td><a href="${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}"><code>${{ steps.info.outputs.short_sha }}</code></a> — ${{ steps.info.outputs.message }}</td></tr>
                 <tr><td><strong>Archivos cambiados</strong></td><td>${{ steps.info.outputs.files_changed }}</td></tr>
-                <tr><td><strong>Repositorio</strong></td><td>${{ github.repository }}</td></tr>
+                <tr><td><strong>Deploy production</strong></td><td><a href="${{ github.server_url }}/${{ github.repository }}/actions/workflows/deploy-production.yml">workflow (aprobar aquí cuando se arme)</a></td></tr>
+                <tr><td><strong>Actions</strong></td><td><a href="${{ github.server_url }}/${{ github.repository }}/actions">todas las ejecuciones</a></td></tr>
+                <tr><td><strong>Testing</strong></td><td><a href="${{ secrets.TESTING_URL || 'http://34.26.130.187:8000' }}">abrir</a> · <a href="${{ secrets.TESTING_URL || 'http://34.26.130.187:8000' }}/health/?deep=1">health deep</a> · <a href="${{ secrets.TESTING_URL || 'http://34.26.130.187:8000' }}/testing/">panel QA</a></td></tr>
+                <tr><td><strong>Producción</strong></td><td><a href="${{ secrets.PRODUCTION_URL || 'https://fiveaday-332600671945.europe-southwest1.run.app' }}">abrir</a> · <a href="${{ secrets.PRODUCTION_URL || 'https://fiveaday-332600671945.europe-southwest1.run.app' }}/health/">health</a></td></tr>
+                <tr><td><strong>Repo</strong></td><td><a href="${{ github.server_url }}/${{ github.repository }}">${{ github.repository }}</a> · <a href="${{ github.server_url }}/${{ github.repository }}/tree/main">rama main</a></td></tr>
               </table>
-              <p style="margin-top:16px;">
-                <a href="https://github.com/${{ github.repository }}/commit/${{ github.sha }}" style="padding:8px 16px; background:#6b46c1; color:#fff; text-decoration:none; border-radius:4px; font-size:13px;">Ver commit →</a>
-              </p>
-              <hr style="border:none; border-top:1px solid #e5e7eb; margin:16px 0;">
-              <h3 style="font-size:13px; color:#374151;">Pasos de despliegue</h3>
-              <ol style="font-size:13px; color:#4b5563;">
-                <li>Verificar que CI está en verde en este commit.</li>
-                <li>Desplegar en Cloud Run:
-                  <pre style="background:#f4f4f4; padding:8px; font-size:12px;">gcloud builds submit --tag $IMAGE .
-            gcloud run deploy fiveaday --image=$IMAGE --region=europe-southwest1</pre>
-                </li>
-                <li>Ejecutar migraciones si cambió el esquema:
-                  <pre style="background:#f4f4f4; padding:8px; font-size:12px;">gcloud run jobs execute fiveaday-migrate --region=europe-southwest1 --wait</pre>
-                </li>
-              </ol>
-              <p style="color:#9ca3af; font-size:12px;">Enviado automáticamente por el workflow notify-production en cada push a <code>main</code>.</p>
             </div>

@@ -1,22 +1,24 @@
 {% extends 'parent_portal/base_portal.html' %}
-{% block title %}Pagos · Portal Five a Day{% endblock %}
+{% block title %}Pagos · Portal de familias Five a Day{% endblock %}
 {% block content %}
 <h1 class="text-2xl font-bold text-neutral-800 mb-4">Historial de pagos · {{ year }}</h1>
+
 <form method="get" class="flex items-center gap-2 mb-6">
-    <label class="text-sm text-neutral-600">Año</label>
-    <input type="number" name="year" value="{{ year }}" min="2020" max="2100" class="px-2 py-1 border border-neutral-300 rounded-md text-sm w-24">
-    <button class="px-3 py-1 bg-primary-500 hover:bg-primary-600 text-white rounded-md text-sm">Actualizar</button>
+    <label for="year" class="text-sm text-neutral-600">Año</label>
+    <input type="number" id="year" name="year" value="{{ year }}" min="2020" max="2100"
+           class="px-2 py-1 border border-neutral-300 rounded-md text-sm w-24 bg-white text-neutral-800">
+    <button class="px-3 py-1 bg-primary-600 hover:bg-primary-700 text-white rounded-md text-sm">Actualizar</button>
 </form>
 
-<div class="bg-white rounded-lg shadow overflow-hidden">
+<div class="bg-white rounded-lg shadow overflow-x-auto">
     <table class="w-full text-sm">
         <thead class="bg-neutral-50 border-b border-neutral-200">
             <tr>
-                <th class="py-2 px-4 text-left">Concepto</th>
-                <th class="py-2 px-4 text-left">Alumno</th>
-                <th class="py-2 px-4 text-center">Estado</th>
-                <th class="py-2 px-4 text-right">Importe</th>
-                <th class="py-2 px-4 text-center"></th>
+                <th class="py-2 px-4 text-left text-neutral-600">Concepto</th>
+                <th class="py-2 px-4 text-left text-neutral-600">Alumno</th>
+                <th class="py-2 px-4 text-center text-neutral-600">Estado</th>
+                <th class="py-2 px-4 text-right text-neutral-600">Importe</th>
+                <th class="py-2 px-4 text-center text-neutral-600">Acciones</th>
             </tr>
         </thead>
         <tbody class="divide-y divide-neutral-100">
@@ -26,7 +28,7 @@
                     <div class="text-neutral-800">{{ p.concept }}</div>
                     <div class="text-xs text-neutral-500">Vence {{ p.due_date|date:"d/m/Y" }}</div>
                 </td>
-                <td class="py-3 px-4">{{ p.student.full_name }}</td>
+                <td class="py-3 px-4 text-neutral-700">{{ p.student.full_name }}</td>
                 <td class="py-3 px-4 text-center">
                     {% if p.payment_status == 'completed' %}
                         <span class="text-green-600 font-medium">Cobrado</span>
@@ -36,20 +38,24 @@
                         <span class="text-neutral-400">{{ p.get_payment_status_display }}</span>
                     {% endif %}
                 </td>
-                <td class="py-3 px-4 text-right font-medium">{{ p.amount|floatformat:2 }} €</td>
-                <td class="py-3 px-4 text-center">
+                <td class="py-3 px-4 text-right font-medium text-neutral-800">{{ p.amount|floatformat:2 }} €</td>
+                <td class="py-3 px-4 text-center whitespace-nowrap">
                     {% if p.payment_status == 'completed' %}
-                    <a href="{% url 'parent_portal_receipt' p.id %}" class="text-primary-700 hover:text-primary-900 no-underline">
-                        Recibo PDF
+                    <a href="{% url 'parent_portal_receipt' p.id %}"
+                       class="inline-flex items-center gap-1 px-3 py-1 bg-neutral-100 hover:bg-neutral-200 text-neutral-700 rounded-md text-xs font-medium no-underline">
+                        <span class="material-symbols-outlined text-sm leading-none">download</span>
+                        Recibo
                     </a>
                     {% elif p.payment_status == 'pending' %}
                     <button type="button"
                             data-payment-id="{{ p.id }}"
                             data-url="{% url 'stripe_create_checkout_link' p.id %}"
                             data-pay-online
-                            class="px-3 py-1 bg-primary-500 hover:bg-primary-600 text-white rounded-md text-xs font-medium">
+                            class="px-3 py-1 bg-primary-600 hover:bg-primary-700 text-white rounded-md text-xs font-medium">
                         Pagar online
                     </button>
+                    {% else %}
+                    <span class="text-neutral-300 text-xs">—</span>
                     {% endif %}
                 </td>
             </tr>
@@ -59,8 +65,19 @@
         </tbody>
     </table>
 </div>
+{% endblock %}
+
+{% block extra_js %}
 <script nonce="{{ csp_nonce }}">
+{% comment %}
+The token comes from the hidden {% csrf_token %} input rendered in
+base_portal.html, NOT from document.cookie: CSRF_COOKIE_HTTPONLY is True
+whenever DEBUG=False, so a cookie reader works in development and silently
+403s every "Pagar online" click in testing and production.
+{% endcomment %}
 function getCsrfToken() {
+    const field = document.querySelector('[name=csrfmiddlewaretoken]');
+    if (field && field.value) return field.value;
     const cookie = document.cookie.split(';').find(c => c.trim().startsWith('csrftoken='));
     return cookie ? cookie.split('=')[1] : '';
 }

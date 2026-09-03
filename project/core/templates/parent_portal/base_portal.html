@@ -4,35 +4,128 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>{% block title %}Portal · Five a Day{% endblock %}</title>
+<meta name="theme-color" content="#6d28d9">
+<title>{% block title %}Portal de familias · Five a Day{% endblock %}</title>
+
+{% comment %}
+Theme (light/dark): applied before first paint to avoid a flash, byte-for-byte
+the same rule as base.html — an explicit choice in localStorage wins, otherwise
+the default is time-based (light 10:00–16:59, dark the rest of the day). The
+portal shares the key, so a family that picked dark on one page keeps it here.
+{% endcomment %}
+<script nonce="{{ csp_nonce }}">
+(function () {
+    try {
+        var stored = localStorage.getItem('theme');
+        var dark;
+        if (stored === 'dark' || stored === 'light') {
+            dark = stored === 'dark';
+        } else {
+            var h = new Date().getHours();
+            dark = !(h >= 10 && h < 17);
+        }
+        if (dark) document.documentElement.classList.add('dark');
+    } catch (e) { /* default light */ }
+})();
+</script>
+
 <script src="{% static 'js/vendor/tailwindcss-play-3.4.17.js' %}"></script>
+{% comment %}
+The violet `primary` palette MUST be declared here as well as in base.html.
+Without it every `bg-primary-500` / `text-primary-700` in the portal is an
+undefined utility that Tailwind emits nothing for — which is exactly how the
+"Certificado fiscal" button rendered as white text on a white card and looked
+like a missing download for anyone not inspecting the DOM.
+{% endcomment %}
+<script nonce="{{ csp_nonce }}">
+tailwind.config = {
+    darkMode: 'class',
+    theme: {
+        extend: {
+            colors: {
+                primary: {
+                    50: '#f5f3ff', 100: '#ede9fe', 200: '#ddd6fe', 300: '#c4b5fd',
+                    400: '#a78bfa', 500: '#8b5cf6', 600: '#7c3aed', 700: '#6d28d9',
+                    800: '#5b21b6', 900: '#4c1d95',
+                }
+            },
+            fontFamily: {
+                sans: ['Trebuchet MS', 'ui-sans-serif', 'system-ui', 'sans-serif'],
+            }
+        }
+    }
+}
+</script>
+
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined" rel="stylesheet">
+<link rel="stylesheet" href="{% static 'css/theme.css' %}">
 <style>
-    body { background: #f8fafc; }
-    .brand { color: #6d28d9; }
-    .brand-bg { background: #6d28d9; }
-    .brand-border { border-color: #6d28d9; }
+    body { font-family: 'Trebuchet MS', ui-sans-serif, system-ui, sans-serif; }
 </style>
+{% block extra_css %}{% endblock %}
 </head>
-<body class="min-h-screen">
-<header class="bg-white border-b border-neutral-200 p-4">
-    <div class="max-w-4xl mx-auto flex items-center justify-between">
-        <a href="{% url 'parent_portal_dashboard' %}" class="text-2xl font-bold brand no-underline">Five a Day · Portal</a>
-        {% if parent %}
-        <nav class="flex items-center gap-4 text-sm">
-            <a href="{% url 'parent_portal_dashboard' %}" class="text-neutral-700 hover:text-primary-700 no-underline">Inicio</a>
-            <a href="{% url 'parent_portal_payments' %}" class="text-neutral-700 hover:text-primary-700 no-underline">Pagos</a>
-            <a href="{% url 'parent_portal_logout' %}" class="text-red-600 hover:text-red-800 no-underline">Salir</a>
-        </nav>
-        {% endif %}
+<body class="min-h-screen bg-neutral-50 text-neutral-800">
+
+{% comment %}
+Rendered globally so every AJAX POST in the portal can read the token from the
+hidden input. CSRF_COOKIE_HTTPONLY is True whenever DEBUG=False, so a
+cookie-only reader works in dev and silently 403s in testing/production.
+{% endcomment %}
+{% csrf_token %}
+
+<header class="bg-white border-b border-neutral-200">
+    <div class="max-w-4xl mx-auto flex items-center justify-between p-4">
+        {% comment %}
+        Keyed on the SESSION, not on a `parent` context variable, because a page
+        can legitimately hold a `parent` while the family is not fully logged in
+        — that rendered "Inicio / Pagos / Salir" links which all bounced back to
+        the login form.
+
+        `parent_must_change_password` is the same story one step further in:
+        that session IS logged in, but it came in on a temporary password and
+        `_require_parent` bounces every page except the change-password one, so
+        showing the nav would be showing three dead links.
+        {% endcomment %}
+        <a href="{% if request.session.parent_id %}{% url 'parent_portal_dashboard' %}{% else %}{% url 'parent_portal_login' %}{% endif %}"
+           class="text-xl sm:text-2xl font-bold text-primary-700 no-underline">
+            Five a Day <span class="text-neutral-400 font-normal">· Familias</span>
+        </a>
+        <div class="flex items-center gap-3">
+            {% if request.session.parent_id and not request.session.parent_must_change_password %}
+            <nav class="flex items-center gap-4 text-sm">
+                <a href="{% url 'parent_portal_dashboard' %}" class="text-neutral-600 hover:text-primary-700 no-underline">Inicio</a>
+                <a href="{% url 'parent_portal_payments' %}" class="text-neutral-600 hover:text-primary-700 no-underline">Pagos</a>
+                <a href="{% url 'parent_portal_change_password' %}" class="text-neutral-600 hover:text-primary-700 no-underline">Contraseña</a>
+                <a href="{% url 'parent_portal_logout' %}" class="text-red-600 hover:text-red-800 no-underline">Salir</a>
+            </nav>
+            {% endif %}
+            <button id="theme-toggle-btn" type="button"
+                    title="Cambiar tema claro/oscuro" aria-label="Cambiar tema claro/oscuro"
+                    class="p-2 rounded-md text-neutral-500 hover:bg-neutral-100 hover:text-primary-700 leading-none">
+                <span class="material-symbols-outlined theme-icon-light align-middle text-lg">dark_mode</span>
+                <span class="material-symbols-outlined theme-icon-dark align-middle text-lg">light_mode</span>
+            </button>
+        </div>
     </div>
 </header>
-<main class="max-w-4xl mx-auto p-6">
+
+<main class="max-w-4xl mx-auto p-4 sm:p-6">
     {% if messages %}
         {% for m in messages %}
-            <div class="mb-4 p-3 rounded-md {% if 'error' in m.tags %}bg-red-100 text-red-700{% else %}bg-green-100 text-green-700{% endif %}">{{ m }}</div>
+            <div class="mb-4 p-3 rounded-md text-sm
+                {% if 'error' in m.tags %}bg-red-100 text-red-700
+                {% elif 'warning' in m.tags %}bg-amber-100 text-amber-800
+                {% else %}bg-green-100 text-green-700{% endif %}">{{ m }}</div>
         {% endfor %}
     {% endif %}
     {% block content %}{% endblock %}
 </main>
+
+<footer class="max-w-4xl mx-auto px-4 sm:px-6 pb-8 pt-2 text-center text-xs text-neutral-400">
+    Five a Day English Academy · Albacete
+</footer>
+
+<script src="{% static 'js/theme.js' %}"></script>
+{% block extra_js %}{% endblock %}
 </body>
 </html>

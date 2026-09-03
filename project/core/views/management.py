@@ -11,6 +11,7 @@ from django.views.decorators.http import require_http_methods
 from billing import constants
 from billing.models import Enrollment, SiteConfiguration, current_academic_year, relevant_academic_years
 from core.models import HistoryLog
+from core.views.password_reset import can_change_own_password, send_password_setup_email
 from students.models import Group, Parent, Student, Teacher
 
 logger = logging.getLogger(__name__)
@@ -35,6 +36,10 @@ def gestion_view(request):
         "config": config,
         "teachers": teachers,
         "groups": groups,
+        # Gates the "Cambiar contraseña" button. False for Google-OAuth
+        # sessions (Google owns that identity) and for any account without a
+        # usable password (the dev env-var login) — see the helper's docstring.
+        "can_change_password": can_change_own_password(request),
     }
     return render(request, "management.html", context)
 
@@ -141,12 +146,26 @@ def create_teacher(request):
         # way seeded teachers do — via the password-reset flow.
         teacher.ensure_user()
 
+        # ...and mail them the link that sets it. Creating a teacher used to
+        # send nothing at all: the account arrived unusable and the admin was
+        # told to relay "go to ¿Olvidaste tu contraseña?" by hand, which never
+        # happened, so every teacher created here looked broken on first login.
+        # Fails soft — the Teacher is already committed, and a dead SMTP hop
+        # must not lose the account (the message below says which happened).
+        activation_sent = send_password_setup_email(request, teacher.email)
+
         HistoryLog.log("teacher_created", f"Profesor creado: {teacher.full_name}", icon="person_add")
 
         return JsonResponse(
             {
                 "success": True,
-                "message": "Profesor creado. Debe activar su cuenta desde “¿Olvidaste tu contraseña?”.",
+                "message": (
+                    f"Profesor creado. Se ha enviado un email a {teacher.email} para que establezca su contraseña."
+                    if activation_sent
+                    else "Profesor creado, pero no se pudo enviar el email de activación. "
+                    "Debe activar su cuenta desde “¿Olvidaste tu contraseña?”."
+                ),
+                "activation_email_sent": activation_sent,
                 "teacher": {
                     "id": teacher.id,
                     "full_name": teacher.full_name,

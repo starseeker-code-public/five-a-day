@@ -26,6 +26,7 @@ class Command(BaseCommand):
         )
 
     def handle(self, *args, **options):
+        from core.github_dispatch import notify_github_qa_signoff
         from core.models import QAConfiguration
 
         ready = options["state"] == "on"
@@ -33,3 +34,9 @@ class Command(BaseCommand):
         config.ready_for_prod = ready
         config.save()
         self.stdout.write(self.style.SUCCESS(f"ready_for_prod = {ready}"))
+
+        # A manual `on` is still a sign-off, so it must arm the production
+        # workflow the same way the /testing/ button does. Fail-soft: without a
+        # token (or outside the testing env) the nightly re-trigger covers it.
+        if ready and notify_github_qa_signoff():
+            self.stdout.write("repository_dispatch enviado — 'Deploy production' se está re-evaluando ahora")

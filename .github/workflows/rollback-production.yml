@@ -231,28 +231,25 @@ jobs:
           username: ${{ secrets.EMAIL_HOST_USER }}
           password: ${{ secrets.EMAIL_SECRET }}
           from: "Five a Day CI <${{ secrets.EMAIL_HOST_USER }}>"
-          to: hellofiveaday@gmail.com${{ secrets.SUPPORT_EMAIL && format(', {0}', secrets.SUPPORT_EMAIL) || '' }}
+          # Rollbacks go to dev/support only — the academy inbox (hellofiveaday)
+          # is notified exclusively on successful deploys.
+          to: ${{ secrets.SUPPORT_EMAIL || secrets.OWNER_EMAILS }}
           subject: "[Five a Day] ${{ job.status == 'success' && '⏪ Producción revertida a una versión anterior' || '🚨 El rollback de producción ha fallado' }}"
           html_body: |
             <div style="font-family: sans-serif; color:#1f2937; max-width:640px;">
               <h2 style="color:${{ job.status == 'success' && '#6d28d9' || '#b91c1c' }};">
                 ${{ job.status == 'success' && '⏪ Rollback de producción completado' || '🚨 Fallo en el rollback de producción' }}
               </h2>
-              <p style="font-size:15px; line-height:1.6;">
-                ${{ github.actor }} ha lanzado un <em>rollback</em> de producción a la imagen
-                <code>${{ steps.target.outputs.tag || 'sin resolver' }}</code>
-                (versión esperada:
-                <strong>v${{ steps.target.outputs.expected_version || 'desconocida' }}</strong>).
-                Estado del workflow: <strong>${{ job.status }}</strong>.
-              </p>
-              <p style="font-size:14px; color:#4b5563; line-height:1.6;">
-                La base de datos <strong>no</strong> se ha tocado: las migraciones de la versión
-                retirada siguen aplicadas, y restaurar una copia de seguridad es una decisión
-                manual. Los <em>jobs</em> de Cloud Run se han repuntado a la misma imagen que el
-                servicio.
-              </p>
-              <p style="margin-top:16px;">
-                <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-                   style="padding:8px 16px; background:#6b46c1; color:#fff; text-decoration:none; border-radius:4px; font-size:13px;">Ver el run →</a>
-              </p>
+              <table cellpadding="6" style="border-collapse:collapse; font-family:sans-serif; font-size:13px;">
+                <tr><td><strong>Estado</strong></td><td><strong>${{ job.status }}</strong></td></tr>
+                <tr><td><strong>Lanzado por</strong></td><td>${{ github.actor }}</td></tr>
+                <tr><td><strong>Imagen objetivo</strong></td><td><code>${{ steps.target.outputs.tag || 'sin resolver' }}</code></td></tr>
+                <tr><td><strong>Versión esperada</strong></td><td>v${{ steps.target.outputs.expected_version || 'desconocida' }}</td></tr>
+                <tr><td><strong>Base de datos</strong></td><td>no tocada — migraciones de la versión retirada siguen aplicadas; restaurar backup es decisión manual</td></tr>
+                <tr><td><strong>Jobs Cloud Run</strong></td><td>repuntados a la misma imagen que el servicio</td></tr>
+                <tr><td><strong>Run</strong></td><td><a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">logs</a></td></tr>
+                <tr><td><strong>Actions</strong></td><td><a href="${{ github.server_url }}/${{ github.repository }}/actions">todas las ejecuciones</a></td></tr>
+                <tr><td><strong>Producción</strong></td><td><a href="${{ secrets.PRODUCTION_URL || 'https://fiveaday-332600671945.europe-southwest1.run.app' }}">abrir</a> · <a href="${{ secrets.PRODUCTION_URL || 'https://fiveaday-332600671945.europe-southwest1.run.app' }}/health/">health</a></td></tr>
+                <tr><td><strong>Repo</strong></td><td><a href="${{ github.server_url }}/${{ github.repository }}">${{ github.repository }}</a></td></tr>
+              </table>
             </div>

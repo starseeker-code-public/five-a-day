@@ -8,7 +8,13 @@ environment uses env-var basic-auth, not Teacher login.
 Env var contract (N starts at 1, iteration stops at the first missing FIRST_NAME):
     TEACHER_SEED_<N>_FIRST_NAME     required
     TEACHER_SEED_<N>_LAST_NAME      required
-    TEACHER_SEED_<N>_EMAIL          required  (used as Django User.username + login)
+    TEACHER_SEED_<N>_EMAIL          required  (the Teacher's real email address)
+    TEACHER_SEED_<N>_USERNAME       optional — login id for the linked auth.User.
+                                    Defaults to EMAIL. Set it to a short handle
+                                    ("claudia") when typing a full address at the
+                                    login box is a nuisance; the email still works
+                                    as a login, because `login_view` falls back to
+                                    an email lookup when the handle does not match.
     TEACHER_SEED_<N>_PHONE          optional
     TEACHER_SEED_<N>_ADMIN          optional, default False  ("True"/"1"/"yes")
     TEACHER_SEED_<N>_PASSWORD       optional — if set, the linked User is activated
@@ -56,6 +62,7 @@ class Command(BaseCommand):
                 continue
 
             phone = os.getenv(f"{prefix}PHONE", "").strip()
+            login_username = os.getenv(f"{prefix}USERNAME", "").strip()
             is_admin = _env_bool(os.getenv(f"{prefix}ADMIN"))
             password = os.getenv(f"{prefix}PASSWORD") or None
 
@@ -100,11 +107,38 @@ class Command(BaseCommand):
                         set_pw = password
                     elif not teacher.user.has_usable_password():
                         set_pw = password
-                teacher.ensure_user(password=set_pw)
+                user = teacher.ensure_user(password=set_pw)
+
+                # `ensure_user` keys the auth.User on the email. A short login
+                # handle is applied afterwards, and survives: both `ensure_user`
+                # and the Teacher post_save signal only rewrite `username` when
+                # the *email* changed, which it has not.
+                if login_username and user.username != login_username:
+                    # A handle already taken by another account is a config
+                    # error in the env file, not a reason to abort the boot:
+                    # `seed_teachers` runs from entrypoint.sh and the teacher
+                    # can still log in with their email.
+                    from django.contrib.auth import get_user_model
+
+                    clash = get_user_model().objects.filter(username=login_username).exclude(pk=user.pk).exists()
+                    if clash:
+                        self.stdout.write(
+                            self.style.WARNING(
+                                f"⚠️  {prefix}USERNAME='{login_username}' is already taken — "
+                                f"keeping '{user.username}' as the login for {email}."
+                            )
+                        )
+                        login_username = ""
+                    else:
+                        user.username = login_username
+                        user.save(update_fields=["username"])
 
                 status = "created" if created else "updated"
                 role = "admin" if is_admin else "non-admin"
-                self.stdout.write(self.style.SUCCESS(f"✅ Teacher {status}: {teacher.full_name} <{email}> ({role})"))
+                login_as = f" login: {user.username}" if login_username else ""
+                self.stdout.write(
+                    self.style.SUCCESS(f"✅ Teacher {status}: {teacher.full_name} <{email}> ({role}){login_as}")
+                )
                 seeded += 1
 
             index += 1

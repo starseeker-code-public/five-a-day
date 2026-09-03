@@ -589,6 +589,16 @@ def quick_complete_payment(request, payment_id):
                 }
             )
 
+        # A cancelled payment stays visible for the audit trail but is dead:
+        # completing it would resurrect money the schedule may have re-billed
+        # (cancelling frees the month, and the pending-only unique constraint
+        # would not stop a completed duplicate).
+        if payment.payment_status == "cancelled":
+            return JsonResponse(
+                {"success": False, "error": "El pago está cancelado y no puede completarse."},
+                status=400,
+            )
+
         payment.payment_method = payment_method
         payment.payment_status = "completed"
         payment.payment_date = date.today()
@@ -662,28 +672,6 @@ def get_payment_details(request, payment_id):
             },
             status=500,
         )
-
-
-def payment_statistics(request):
-    """
-    Get payment statistics for dashboard
-    """
-    today = date.today()
-
-    stats = {
-        "total_payments": Payment.objects.count(),
-        "completed_payments": Payment.objects.filter(payment_status="completed").count(),
-        "pending_payments": Payment.objects.filter(payment_status="pending").count(),
-        "overdue_payments": Payment.objects.filter(payment_status="pending", due_date__lt=today).count(),
-        "total_amount_pending": Payment.objects.filter(payment_status="pending").aggregate(total=Sum("amount"))["total"]
-        or Decimal("0.00"),
-        "total_amount_completed": Payment.objects.filter(payment_status="completed").aggregate(total=Sum("amount"))[
-            "total"
-        ]
-        or Decimal("0.00"),
-    }
-
-    return JsonResponse(stats)
 
 
 def search_payments(request):

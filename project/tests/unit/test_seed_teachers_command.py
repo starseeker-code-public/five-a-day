@@ -19,6 +19,17 @@ def _call():
     return out.getvalue()
 
 
+@pytest.fixture(autouse=True)
+def _clear_teacher_seed_env(monkeypatch):
+    """`settings.py` calls `load_dotenv(".env")`, so the developer's own
+    TEACHER_SEED_* values are in `os.environ` for the whole test session. Each
+    test starts from an empty contract instead of inheriting them — otherwise
+    a var a test does not mention (USERNAME, say) silently applies."""
+    for index in range(1, 5):
+        for suffix in ("FIRST_NAME", "LAST_NAME", "EMAIL", "USERNAME", "PHONE", "ADMIN", "PASSWORD"):
+            monkeypatch.delenv(f"TEACHER_SEED_{index}_{suffix}", raising=False)
+
+
 class TestSeedTeachers:
     def test_empty_env_warns_nothing_to_seed(self, monkeypatch):
         monkeypatch.delenv("TEACHER_SEED_1_FIRST_NAME", raising=False)
@@ -143,3 +154,49 @@ class TestSeedTeachers:
             _call()
             t = Teacher.objects.get(email=f"t-{truthy}@example.com")
             assert t.admin is True, f"{truthy} should be parsed as True"
+
+    def test_username_override_sets_the_login_handle(self, monkeypatch):
+        monkeypatch.setenv("TEACHER_SEED_1_FIRST_NAME", "Claudia")
+        monkeypatch.setenv("TEACHER_SEED_1_LAST_NAME", "Moreno")
+        monkeypatch.setenv("TEACHER_SEED_1_EMAIL", "claudia@example.com")
+        monkeypatch.setenv("TEACHER_SEED_1_USERNAME", "claudia")
+        monkeypatch.setenv("TEACHER_SEED_1_ADMIN", "True")
+        monkeypatch.setenv("TEACHER_SEED_1_PASSWORD", "pw")
+        monkeypatch.delenv("TEACHER_SEED_2_FIRST_NAME", raising=False)
+
+        output = _call()
+
+        teacher = Teacher.objects.get(email="claudia@example.com")
+        assert teacher.user.username == "claudia"
+        # The Teacher's real email is unchanged — it is where mail goes.
+        assert teacher.email == "claudia@example.com"
+        assert teacher.user.email == "claudia@example.com"
+        assert "login: claudia" in output
+
+    def test_username_override_survives_a_re_run(self, monkeypatch):
+        # `ensure_user` and the Teacher post_save signal both rewrite
+        # `username` from the email — but only when the EMAIL changed. A second
+        # boot of the container must not silently take the handle away.
+        monkeypatch.setenv("TEACHER_SEED_1_FIRST_NAME", "Claudia")
+        monkeypatch.setenv("TEACHER_SEED_1_LAST_NAME", "Moreno")
+        monkeypatch.setenv("TEACHER_SEED_1_EMAIL", "claudia@example.com")
+        monkeypatch.setenv("TEACHER_SEED_1_USERNAME", "claudia")
+        monkeypatch.setenv("TEACHER_SEED_1_PASSWORD", "pw")
+        monkeypatch.delenv("TEACHER_SEED_2_FIRST_NAME", raising=False)
+
+        _call()
+        _call()
+
+        assert Teacher.objects.get(email="claudia@example.com").user.username == "claudia"
+        assert User.objects.filter(email="claudia@example.com").count() == 1
+
+    def test_without_username_the_handle_stays_the_email(self, monkeypatch):
+        monkeypatch.setenv("TEACHER_SEED_1_FIRST_NAME", "Plain")
+        monkeypatch.setenv("TEACHER_SEED_1_LAST_NAME", "Teacher")
+        monkeypatch.setenv("TEACHER_SEED_1_EMAIL", "plain@example.com")
+        monkeypatch.delenv("TEACHER_SEED_1_USERNAME", raising=False)
+        monkeypatch.setenv("TEACHER_SEED_1_PASSWORD", "pw")
+        monkeypatch.delenv("TEACHER_SEED_2_FIRST_NAME", raising=False)
+
+        _call()
+        assert Teacher.objects.get(email="plain@example.com").user.username == "plain@example.com"

@@ -4,61 +4,61 @@
 
 {% block content %}
 <div style="text-align: center; padding: 40px 20px;">
-    <h1 style="color: #6d28d9; font-size: 32px; margin-bottom: 20px;">
+    <h1 style="color: #b9a5f5; font-size: 32px; margin-bottom: 20px;">
         🎓 ¡Bienvenido/a a Five a Day!
     </h1>
 
-    <p style="font-size: 18px; color: #374151; line-height: 1.6; margin-bottom: 10px;">
+    <p style="font-size: 18px; color: #d5d0e6; line-height: 1.6; margin-bottom: 10px;">
         Estimado/a <strong>{{ parent_name }}</strong>,
     </p>
 
-    <p style="font-size: 16px; color: #6B7280; line-height: 1.6; margin-bottom: 20px;">
+    <p style="font-size: 16px; color: #b0aac9; line-height: 1.6; margin-bottom: 20px;">
         Nos alegra comunicarte que <strong>{{ student_name }}</strong>
         ha sido matriculado/a exitosamente en nuestra academia.
     </p>
 
-    <div style="background-color: #f5f3ff; border-radius: 12px; padding: 25px; margin: 30px 0; text-align: left;">
-        <h2 style="color: #6d28d9; font-size: 18px; margin: 0 0 15px 0;">
+    <div style="background-color: #272235; border-radius: 12px; padding: 25px; margin: 30px 0; text-align: left;">
+        <h2 style="color: #b9a5f5; font-size: 18px; margin: 0 0 15px 0;">
             📋 Detalles de la matrícula:
         </h2>
-        <table style="width: 100%; font-size: 14px; color: #374151;">
+        <table style="width: 100%; font-size: 14px; color: #d5d0e6;">
             <tr>
-                <td style="padding: 8px 0; border-bottom: 1px solid #ddd6fe;">
+                <td style="padding: 8px 0; border-bottom: 1px solid #3f3559;">
                     <strong>Estudiante:</strong>
                 </td>
-                <td style="padding: 8px 0; border-bottom: 1px solid #ddd6fe; text-align: right;">
+                <td style="padding: 8px 0; border-bottom: 1px solid #3f3559; text-align: right;">
                     {{ student_name }}
                 </td>
             </tr>
             <tr>
-                <td style="padding: 8px 0; border-bottom: 1px solid #ddd6fe;">
+                <td style="padding: 8px 0; border-bottom: 1px solid #3f3559;">
                     <strong>Grupo:</strong>
                 </td>
-                <td style="padding: 8px 0; border-bottom: 1px solid #ddd6fe; text-align: right;">
+                <td style="padding: 8px 0; border-bottom: 1px solid #3f3559; text-align: right;">
                     {{ group_name|default:"Por asignar" }}
                 </td>
             </tr>
             <tr>
-                <td style="padding: 8px 0; border-bottom: 1px solid #ddd6fe;">
+                <td style="padding: 8px 0; border-bottom: 1px solid #3f3559;">
                     <strong>Tipo de matrícula:</strong>
                 </td>
-                <td style="padding: 8px 0; border-bottom: 1px solid #ddd6fe; text-align: right;">
+                <td style="padding: 8px 0; border-bottom: 1px solid #3f3559; text-align: right;">
                     {{ enrollment_type|default:"Estándar" }}
                 </td>
             </tr>
             <tr>
-                <td style="padding: 8px 0; border-bottom: 1px solid #ddd6fe;">
+                <td style="padding: 8px 0; border-bottom: 1px solid #3f3559;">
                     <strong>Forma de pago:</strong>
                 </td>
-                <td style="padding: 8px 0; border-bottom: 1px solid #ddd6fe; text-align: right;">
+                <td style="padding: 8px 0; border-bottom: 1px solid #3f3559; text-align: right;">
                     {{ payment_modality|default:"Mensual" }}
                 </td>
             </tr>
             <tr>
-                <td style="padding: 8px 0; border-bottom: 1px solid #ddd6fe;">
+                <td style="padding: 8px 0; border-bottom: 1px solid #3f3559;">
                     <strong>Horario:</strong>
                 </td>
-                <td style="padding: 8px 0; border-bottom: 1px solid #ddd6fe; text-align: right;">
+                <td style="padding: 8px 0; border-bottom: 1px solid #3f3559; text-align: right;">
                     {% if schedule_lines %}{% for line in schedule_lines %}{{ line }}{% if not forloop.last %}<br>{% endif %}{% endfor %}{% else %}{{ schedule_type|default:"Por confirmar" }}{% endif %}
                 </td>
             </tr>
@@ -73,20 +73,20 @@
         </table>
     </div>
 
-    <p style="font-size: 16px; color: #6B7280; margin-bottom: 20px;">
+    <p style="font-size: 16px; color: #b0aac9; margin-bottom: 20px;">
         Nos llena de ilusión que forméis parte de nuestra comunidad y estamos encantadas de poder
         contribuir satisfactoriamente al proceso de aprendizaje del inglés. Estamos en contacto.
         Vuestro feedback es fundamental para seguir creciendo como academia.
     </p>
 
-    <div style="background-color: #F0FDF4; border-left: 4px solid #22C55E; padding: 15px; margin: 20px 0; text-align: left;">
-        <p style="color: #166534; margin: 0; font-size: 14px;">
+    <div style="background-color: #16261d; border-left: 4px solid #22C55E; padding: 15px; margin: 20px 0; text-align: left;">
+        <p style="color: #86efac; margin: 0; font-size: 14px;">
             <strong>📞 ¿Tienes alguna pregunta?</strong><br>
-            No dudes en contactarnos. Estamos aquí para ayudarte — <a href="https://wa.me/34613481141?text=Hola%2C%20tengo%20una%20pregunta%20sobre%20la%20matr%C3%ADcula" style="color: #166534; font-weight: 600;">escríbenos por WhatsApp</a> al <strong>613 481 141</strong>.
+            No dudes en contactarnos. Estamos aquí para ayudarte — <a href="https://wa.me/34613481141?text=Hola%2C%20tengo%20una%20pregunta%20sobre%20la%20matr%C3%ADcula" style="color: #86efac; font-weight: 600;">escríbenos por WhatsApp</a> al <strong>613 481 141</strong>.
         </p>
     </div>
 
-    <p style="font-size: 14px; color: #9CA3AF; margin-top: 30px;">
+    <p style="font-size: 14px; color: #b0aac9; margin-top: 30px;">
         Kind Regards,<br>
         <strong>El equipo de Five a Day</strong>
     </p>

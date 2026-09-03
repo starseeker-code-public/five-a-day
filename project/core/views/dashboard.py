@@ -15,6 +15,9 @@ from core.constants import SCHEDULED_APPS
 from core.models import TodoItem
 from students.models import Group, Student
 
+# Dates shown per recurring scheduled email on the home card (Fun Friday repeats weekly).
+MAX_EVENT_DATES = 2
+
 logger = logging.getLogger(__name__)
 
 _QUOTE_COOKIE = "last_quote"
@@ -193,8 +196,25 @@ def home(request):
                 upcoming_events.append({"name": app["name"], "date": d, "url_name": app["url_name"]})
 
     upcoming_events.sort(key=lambda x: x["date"])
-    upcoming_events_count = len(upcoming_events)
     next_event = upcoming_events[0] if upcoming_events else None
+
+    # A weekly send (Fun Friday) yields one event per remaining Friday, so the card
+    # listed the same name four times. Collapse repeats into a single entry showing
+    # the two nearest dates. The card's number counts these grouped entries — one
+    # per email that goes out this month, not one per individual send.
+    grouped_events: list[dict] = []
+    events_by_name: dict[str, dict] = {}
+    for event in upcoming_events:
+        entry = events_by_name.get(event["name"])
+        if entry is None:
+            entry = {**event, "dates": [event["date"]], "has_more_dates": False}
+            events_by_name[event["name"]] = entry
+            grouped_events.append(entry)
+        elif len(entry["dates"]) < MAX_EVENT_DATES:
+            entry["dates"].append(event["date"])
+        else:
+            entry["has_more_dates"] = True
+    upcoming_events_count = len(grouped_events)
 
     _zero = Decimal("0.00")
     revenue_stats = Payment.objects.aggregate(
@@ -273,7 +293,7 @@ def home(request):
         "has_more_birthdays": has_more_birthdays,
         "current_month_name": today.strftime("%B"),
         "upcoming_events_count": upcoming_events_count,
-        "upcoming_events": upcoming_events[:5],
+        "upcoming_events": grouped_events[:5],
         "next_event": next_event,
         "expected_revenue": expected_revenue,
         "monthly_income_count": monthly_income_count,

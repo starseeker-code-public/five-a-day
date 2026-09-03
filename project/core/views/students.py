@@ -4,9 +4,11 @@ from decimal import Decimal
 
 from django.contrib import messages
 from django.db import transaction
-from django.db.models import Q
+from django.db.models import Prefetch, Q
 from django.http import HttpResponseRedirect, JsonResponse
+from django.shortcuts import get_object_or_404
 from django.urls import reverse, reverse_lazy
+from django.views.decorators.http import require_http_methods
 from django.views.generic import CreateView, DetailView, ListView, UpdateView
 
 from billing.forms import EnrollmentForm
@@ -20,6 +22,60 @@ logger = logging.getLogger(__name__)
 # ============================================================================
 # PARENT AND STUDENT MANAGEMENT - Parent-First Flow
 # ============================================================================
+
+
+def _create_enrollment_fee_payment(student, parent, enrollment, enrollment_form):
+    """Create the one-time matrícula Payment for a freshly issued enrollment.
+
+    Shared by ``StudentCreateView.form_valid`` and ``enroll_student`` (the
+    "Nueva matrícula" modal) so the fee, the returning-student discount and the
+    concept wording cannot drift between the two entry points.
+
+    Due on the last day of the month the enrollment STARTS
+    (``enrollment.enrollment_date``), not of the month the ficha was created —
+    a student signed up today for a 1 November start owes the matrícula with
+    the November fees. Returns the fee charged.
+    """
+    import calendar
+
+    from billing.services.enrollment_service import EnrollmentService
+
+    config = SiteConfiguration.get_config()
+
+    # "Matrícula especial (€)" overrides the configured fee outright. It is
+    # its own field: `manual_amount` prices the recurring cuota, so a
+    # special monthly price left the matrícula on the standard rate.
+    special_fee = enrollment_form.cleaned_data.get("special_enrollment_fee")
+    enrollment_fee, returning_discount = EnrollmentService.compute_enrollment_fee(
+        config,
+        student,
+        is_adult=student.is_adult,
+        special_fee=special_fee,
+        force_returning=enrollment_form.cleaned_data.get("is_returning_student", False),
+        this_academic_year=enrollment.academic_year,
+    )
+    concept = f"Matrícula {enrollment.academic_year} — {student.full_name}"
+    if special_fee:
+        concept += " (matrícula especial)"
+    elif returning_discount:
+        concept += f" (dto. alumno recurrente −{returning_discount:.2f} €)"
+
+    start = enrollment.enrollment_date or date.today()
+    due_date = date(start.year, start.month, calendar.monthrange(start.year, start.month)[1])
+
+    Payment.objects.create(
+        student=student,
+        parent=parent,
+        enrollment=enrollment,
+        payment_type="enrollment",
+        payment_method="transfer",
+        amount=enrollment_fee,
+        currency="EUR",
+        payment_status="pending",
+        due_date=due_date,
+        concept=concept,
+    )
+    return enrollment_fee
 
 
 class StudentCreateView(CreateView):
@@ -80,11 +136,19 @@ class StudentCreateView(CreateView):
         if mode == "existing_parent":
             context["all_parents"] = Parent.objects.all().order_by("last_name", "first_name")
 
+        waiting_entry = self.get_waiting_entry()
         if "enrollment_form" not in context:
-            context["enrollment_form"] = EnrollmentForm(self.request.POST or None)
+            # A student promoted off the waiting list may carry enrollment
+            # history (moving them onto the list cancels the enrollment, it
+            # does not delete it) — that IS an "antiguo alumno", so pre-mark
+            # the checkbox. The admin can still untick it.
+            context["enrollment_form"] = EnrollmentForm(
+                self.request.POST or None,
+                initial={"is_returning_student": bool(waiting_entry and waiting_entry.enrollments.exists())},
+            )
 
         context["groups"] = Group.objects.filter(active=True)
-        context["waiting_entry"] = self.get_waiting_entry()
+        context["waiting_entry"] = waiting_entry
 
         config = SiteConfiguration.get_config()
         # Quarterly = 3 * full_time - 5%
@@ -104,6 +168,7 @@ class StudentCreateView(CreateView):
         context["enrollment_fee_adult"] = str(config.adult_enrollment_fee)
         context["language_cheque_discount"] = str(config.language_cheque_discount)
         context["sibling_discount"] = str(config.sibling_discount)
+        context["returning_student_discount"] = str(config.returning_student_enrollment_discount)
 
         # First-period proration. A student joining part-way through a month pays
         # only the remaining days OF THAT MONTH, so the first fee differs from the
@@ -133,8 +198,6 @@ class StudentCreateView(CreateView):
         return context
 
     def form_valid(self, form):
-        import calendar
-
         from comms.tasks import send_welcome_email_task
 
         is_waiting_mode = (
@@ -204,42 +267,11 @@ class StudentCreateView(CreateView):
                 # Create enrollment
                 enrollment = enrollment_form.create_enrollment(student, is_adult=is_adult_mode)
 
-                # Create enrollment fee payment (pending, due end of month).
-                # Applies the returning-student discount automatically when
-                # the student has any prior Enrollment for an earlier
-                # academic year (v1.13).
-                from billing.services.enrollment_service import EnrollmentService
-
-                config = SiteConfiguration.get_config()
-                today = date.today()
-                last_day = calendar.monthrange(today.year, today.month)[1]
-                due_date = date(today.year, today.month, last_day)
-
-                # "Matrícula especial (€)" overrides the configured fee outright. It is
-                # its own field: `manual_amount` prices the recurring cuota, so a
-                # special monthly price left the matrícula on the standard rate.
-                special_fee = enrollment_form.cleaned_data.get("special_enrollment_fee")
-                enrollment_fee, returning_discount = EnrollmentService.compute_enrollment_fee(
-                    config, student, is_adult=is_adult_mode, special_fee=special_fee
-                )
-                concept = f"Matrícula {enrollment.academic_year} — {student.full_name}"
-                if special_fee:
-                    concept += " (matrícula especial)"
-                elif returning_discount:
-                    concept += f" (dto. alumno recurrente −{returning_discount:.2f} €)"
-
-                Payment.objects.create(
-                    student=student,
-                    parent=parent,
-                    enrollment=enrollment,
-                    payment_type="enrollment",
-                    payment_method="transfer",
-                    amount=enrollment_fee,
-                    currency="EUR",
-                    payment_status="pending",
-                    due_date=due_date,
-                    concept=concept,
-                )
+                # Create enrollment fee payment (pending, due end of the month
+                # the enrollment STARTS). Applies the returning-student discount
+                # automatically when the student has any prior Enrollment for an
+                # earlier academic year (v1.13).
+                enrollment_fee = _create_enrollment_fee_payment(student, parent, enrollment, enrollment_form)
 
                 # Issue the period the student joined, prorated for the days
                 # already gone. Later periods are opened by the generate_payments
@@ -375,6 +407,11 @@ class StudentListView(ListView):
         # prefetched), so it was dead weight one edit away from becoming a full-table
         # render on a 2,000-student academy.
 
+        # The "Nueva matrícula" modal (book icon) renders the shared
+        # EnrollmentForm, so its plan choices, field ids and the start-date
+        # default (today) cannot drift from the student-create page.
+        context["enrollment_form"] = EnrollmentForm()
+
         context["this_week_ids"] = get_ff_student_ids(get_next_friday())
         context["last_week_ids"] = get_ff_student_ids(get_last_friday())
 
@@ -460,6 +497,8 @@ class StudentUpdateView(UpdateView):
         ) or current.is_sibling_discount != bool(data.get("is_sibling_discount"))
 
     def form_valid(self, form):
+        from billing.services.enrollment_service import EnrollmentService
+
         # Waiting-list students don't have an active enrollment, so we skip the
         # enrollment form. Once is_waiting is toggled off, a fresh enrollment is
         # created below.
@@ -478,7 +517,7 @@ class StudentUpdateView(UpdateView):
 
                 if is_waiting_now:
                     # Cancel any active enrollment — the student is off the roster.
-                    student.enrollments.filter(status="active").update(status="cancelled")
+                    EnrollmentService.close_active_enrollments(student, "cancelled")
                 else:
                     # Only re-issue the enrollment when the plan actually
                     # changed. This used to run unconditionally, so saving an
@@ -488,7 +527,7 @@ class StudentUpdateView(UpdateView):
                     # then attached to whichever one came back first.
                     current = student.enrollments.filter(status="active").order_by("-enrollment_date", "-id").first()
                     if current is None or self._enrollment_plan_changed(current, enrollment_form):
-                        student.enrollments.filter(status="active").update(status="finished")
+                        EnrollmentService.close_active_enrollments(student, "finished")
                         enrollment_form.create_enrollment(student, is_adult=student.is_adult)
 
                 messages.success(
@@ -525,7 +564,16 @@ class StudentDetailView(DetailView):
         context["parents"] = self.object.parents.all()
         # `enrollment.enrollment_type.display_name` is rendered per row.
         context["enrollments"] = self.object.enrollments.select_related("enrollment_type").order_by("-created_at")
-        context["payments"] = Payment.objects.filter(student=self.object).order_by("-payment_date")
+        # Most recent first, by DUE date — the month the payment is for, which is
+        # what the table's "Vencimiento" column shows and what `payments_list`
+        # orders by, so the two pages agree.
+        #
+        # Was `-payment_date`, which is NULL on every pending payment: Postgres
+        # sorts NULLs FIRST on a DESC ordering, so the whole unpaid backlog piled
+        # up above the history in no particular order. `due_date` is NOT NULL, so
+        # the ordering is total; `-id` breaks ties between payments due the same
+        # day (the matrícula and the first cuota, typically).
+        context["payments"] = Payment.objects.filter(student=self.object).order_by("-due_date", "-id")
         context["fun_friday_dates"] = self.object.fun_friday_dates.all()
         return context
 
@@ -589,12 +637,22 @@ def search_students(request):
         Student.objects.filter(active=True)
         .filter(Q(first_name__icontains=query) | Q(last_name__icontains=query))
         .select_related("group")
-        .prefetch_related("parents")[:10]
+        # `order_by("id")` is not cosmetic: the parent returned here is the one
+        # the create-payment form fills into "Padre/Tutor", i.e. the TITULAR of
+        # the payment about to be created. `enroll_student` and both payment
+        # generators pick the titular with an explicit `order_by("id")`, and no
+        # model in `students.models` sets `Meta.ordering` — so an unordered read
+        # here could name a different parent than the one the schedule bills,
+        # for the same student.
+        .prefetch_related(Prefetch("parents", queryset=Parent.objects.order_by("id")))[:10]
     )
 
     results = []
     for s in students:
-        parent = s.parents.all()[0] if s.parents.all() else None
+        # `next(iter(...))` and not `.first()`: `.first()` on an unordered
+        # queryset adds `order_by("pk")`, which clones the queryset and drops
+        # the prefetch cache — one extra query per student, ten per keystroke.
+        parent = next(iter(s.parents.all()), None)
         results.append(
             {
                 "id": s.id,
@@ -605,3 +663,79 @@ def search_students(request):
             }
         )
     return JsonResponse({"results": results})
+
+
+@require_http_methods(["POST"])
+def enroll_student(request, student_id):
+    """AJAX: issue a NEW enrollment for an existing student (the book icon on the list).
+
+    Mirrors the enrollment leg of ``StudentCreateView.form_valid`` for a student
+    who already has a ficha: finishes the current active enrollment (the DB
+    enforces one active enrollment per student), creates the new one from the
+    same ``EnrollmentForm``, optionally charges the matrícula, and issues the
+    periodic payments from the chosen start date — ``billing_periods`` reads
+    ``enrollment.enrollment_date``, so a student re-enrolled today with a
+    1 November start is billed from November, not from today.
+
+    Returns ``{"success": bool, ...}`` JSON, like every AJAX endpoint.
+    """
+    student = get_object_or_404(Student, id=student_id, active=True)
+
+    enrollment_form = EnrollmentForm(request.POST)
+    if not enrollment_form.is_valid():
+        # Form ValidationError text is Django's written-for-humans copy — safe
+        # (and useful) to echo, unlike exception text.
+        error_text = " ".join(msg for errors in enrollment_form.errors.values() for msg in errors)
+        return JsonResponse(
+            {"success": False, "error": error_text or "Datos de matrícula no válidos."},
+            status=400,
+        )
+
+    charge_fee = request.POST.get("charge_enrollment_fee") in ("on", "true", "1")
+
+    try:
+        from billing.services.enrollment_service import EnrollmentService
+        from billing.services.payment_service import PaymentService
+
+        with transaction.atomic():
+            # One ACTIVE enrollment per student (DB constraint) — the new
+            # matrícula supersedes the current one, same as StudentUpdateView
+            # does on a plan change.
+            EnrollmentService.close_active_enrollments(student, "finished")
+
+            enrollment = enrollment_form.create_enrollment(student, is_adult=student.is_adult)
+
+            # Adults legitimately have no parent/guardian; for children the
+            # first parent is the titular — same explicit ordering the payment
+            # generators use.
+            parent = None if student.is_adult else student.parents.order_by("id").first()
+
+            enrollment_fee = None
+            if charge_fee:
+                enrollment_fee = _create_enrollment_fee_payment(student, parent, enrollment, enrollment_form)
+
+            payments_created = PaymentService.schedule_academic_year_payments(enrollment, parent)
+
+            HistoryLog.log(
+                "student_enrolled",
+                f"Nueva matrícula: {student.full_name} — {enrollment.academic_year} "
+                f"({enrollment.get_schedule_type_display()})",
+                icon="school",
+            )
+    except Exception:
+        # Never echo str(e): an IntegrityError carries table/constraint names.
+        logger.exception("Error creating new enrollment for student %d", int(student_id))
+        return JsonResponse(
+            {"success": False, "error": "Error al crear la matrícula. Revisa los datos e inténtalo de nuevo."},
+            status=500,
+        )
+
+    return JsonResponse(
+        {
+            "success": True,
+            "enrollment_id": enrollment.id,
+            "academic_year": enrollment.academic_year,
+            "payments_created": payments_created,
+            "enrollment_fee": str(enrollment_fee) if enrollment_fee is not None else None,
+        }
+    )

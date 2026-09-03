@@ -10,8 +10,8 @@ body {
     font-family: 'Trebuchet MS', 'Arial', sans-serif;
     font-size: 16px;
     line-height: 1.6;
-    color: #333333;
-    background-color: #f4f4f4;
+    color: #d5d0e6;
+    background-color: #141220;
 }
 
 /* Contenedor principal del email */
@@ -19,33 +19,33 @@ body {
     width: 100%;
     max-width: 600px;
     margin: 0 auto;
-    background-color: #ffffff;
-    padding: 0;
+    padding: 16px 8px;
 }
 
 /* Contenido del email */
 .email-content {
-    padding: 30px 20px;
-    background-color: #ffffff;
+    padding: 30px 24px;
+    background-color: #1e1a2e;
+    border-radius: 12px;
 }
 
 /* Encabezados */
 h1, h2, h3, h4, h5, h6 {
     margin: 0 0 15px 0;
     font-weight: bold;
-    color: #292929;
+    color: #ece9f6;
 }
 
 h1 {
     font-size: 32px;
     line-height: 1.2;
-    color: #6d28d9;
+    color: #b9a5f5;
 }
 
 h2 {
     font-size: 18px;
     line-height: 1.3;
-    color: #6d28d9;
+    color: #b9a5f5;
 }
 
 h3 {
@@ -56,17 +56,17 @@ h3 {
 /* Párrafos */
 p {
     margin: 0 0 15px 0;
-    color: #333333;
+    color: #d5d0e6;
 }
 
 /* Enlaces */
 a {
-    color: #7c3aed;
+    color: #b9a5f5;
     text-decoration: underline;
 }
 
 a:hover {
-    color: #6d28d9;
+    color: #c4b5fd;
 }
 
 /* Listas */
@@ -89,11 +89,11 @@ table {
 table td, table th {
     padding: 10px;
     text-align: left;
-    border-bottom: 1px solid #e0e0e0;
+    border-bottom: 1px solid #3f3559;
 }
 
 table th {
-    background-color: #f8f8f8;
+    background-color: #272235;
     font-weight: bold;
 }
 
@@ -116,21 +116,21 @@ table th {
 
 /* Secciones destacadas */
 .highlight-box {
-    background-color: #f5f3ff;
+    background-color: #272235;
     border-left: 4px solid #7c3aed;
     padding: 15px;
     margin: 20px 0;
 }
 
 .info-box {
-    background-color: #e8f4ff;
+    background-color: #272235;
     border-left: 4px solid #4a90e2;
     padding: 15px;
     margin: 20px 0;
 }
 
 .warning-box {
-    background-color: #fff8e6;
+    background-color: #2e2410;
     border-left: 4px solid #ffb84d;
     padding: 15px;
     margin: 20px 0;
@@ -138,27 +138,27 @@ table th {
 
 /* Detalles del evento */
 .event-details {
-    background-color: #f8f8f8;
+    background-color: #272235;
     padding: 20px;
     border-radius: 8px;
     margin: 20px 0;
 }
 
 .event-details strong {
-    color: #7c3aed;
+    color: #b9a5f5;
     font-weight: bold;
 }
 
 /* Separadores */
 hr {
     border: none;
-    border-top: 2px solid #e0e0e0;
+    border-top: 2px solid #3f3559;
     margin: 25px 0;
 }
 
 /* Footer del email */
 .email-footer {
-    background-color: #292929;
+    background-color: #241f36;
     color: #ffffff;
     padding: 30px 20px;
     text-align: center;
@@ -177,7 +177,7 @@ hr {
 /* Texto enfatizado */
 strong, b {
     font-weight: bold;
-    color: #292929;
+    color: #ece9f6;
 }
 
 em, i {
@@ -214,7 +214,7 @@ img {
 }
 
 .color-dark {
-    color: #292929;
+    color: #ece9f6;
 }
 
 .bg-primary {
@@ -255,22 +255,4 @@ img {
     mso-line-height-rule: exactly;
 }
 
-/* Dark mode */
-@media (prefers-color-scheme: dark) {
-    body {
-        background-color: #1a1a1a !important;
-    }
-    
-    .email-container {
-        background-color: #2d2d2d !important;
-    }
-    
-    .email-content {
-        background-color: #2d2d2d !important;
-        color: #e0e0e0 !important;
-    }
-    
-    p, li {
-        color: #e0e0e0 !important;
-    }
-}
+/* Dark mode: the dark violet theme IS the default — no media query needed. */

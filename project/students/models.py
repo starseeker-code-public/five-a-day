@@ -1,8 +1,40 @@
+import secrets
+
 from django.conf import settings
+from django.contrib.auth.hashers import check_password, make_password
 from django.core.validators import EmailValidator
 from django.db import models
+from django.db.models.functions import Upper
 from django.db.models.signals import post_save, pre_save
 from django.dispatch import receiver
+from django.utils import timezone
+
+# What `Parent.authenticate_portal` returns, so callers branch on a name rather
+# than on which of two hashes happened to match.
+PORTAL_AUTH_PASSWORD = "password"
+PORTAL_AUTH_TEMPORARY = "temporary"
+
+#: Alphabet for generated temporary passwords. Deliberately excludes the
+#: characters families misread when copying one out of an email — 0/O, 1/l/I —
+#: because the whole point of a temporary password is that it gets typed in by
+#: hand exactly once.
+_TEMP_PASSWORD_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789"
+
+#: Hashed once at import so refusing a parent who has no credential at all
+#: still costs one hash. The value is a constant, never a usable password.
+_NO_CREDENTIAL_DUMMY_HASH = make_password("fad-portal-no-credential-set")
+
+
+def generate_temporary_password() -> str:
+    """
+    A 12-character random password, grouped as ``xxxx-xxxx-xxxx``.
+
+    ~68 bits over the unambiguous alphabet above, which is far past anything the
+    5-per-minute login throttle would let an attacker reach. Grouped with dashes
+    because it is read off a phone screen and typed into a laptop.
+    """
+    body = "".join(secrets.choice(_TEMP_PASSWORD_ALPHABET) for _ in range(12))
+    return f"{body[:4]}-{body[4:8]}-{body[8:]}"
 
 
 class Teacher(models.Model):
@@ -52,7 +84,10 @@ class Teacher(models.Model):
         verbose_name = "Profesor"
         verbose_name_plural = "Profesores"
         indexes = [
-            models.Index(fields=["email"]),
+            # No `Index(fields=["email"])`: the field is `unique=True`, and a
+            # unique constraint IS a b-tree index in Postgres. Declaring both
+            # built two identical indexes on one column — see the note on
+            # `Payment.Meta.indexes` for why that is not free.
             models.Index(fields=["active"]),
         ]
 
@@ -177,10 +212,9 @@ class Group(models.Model):
         db_table = "groups"
         verbose_name = "Grupo"
         verbose_name_plural = "Grupos"
-        indexes = [
-            models.Index(fields=["group_name"]),
-            models.Index(fields=["teacher"]),
-        ]
+        # No `indexes`: `group_name` is unique and `teacher` is a ForeignKey, so
+        # both columns are already indexed — by the unique constraint and by
+        # Django's FK default. See the note on `Payment.Meta.indexes`.
 
     def __str__(self):
         return self.group_name
@@ -220,6 +254,44 @@ class Parent(models.Model):
         verbose_name="SMS opt-in",
         help_text="v1.8: True if the parent has opted in to SMS notifications (payment reminders, urgent comms).",
     )
+    # Parent-portal credential (v1.27). Deliberately a hashed password field on
+    # Parent rather than a linked `auth.User`: `core.views.auth._authenticate_teacher`
+    # authenticates ANY auth.User, so giving a family an auth.User would hand
+    # them a staff login into the academy's admin app. The portal keeps its own
+    # session (`parent_id`), so it never touches django.contrib.auth at all.
+    # Blank until the parent follows the emailed set-password link.
+    password = models.CharField(
+        max_length=128,
+        blank=True,
+        verbose_name="Contraseña del portal",
+        help_text="Hash de la contraseña del portal de familias. Vacío hasta que el padre/tutor la crea.",
+    )
+    # Hash of a one-off password emailed to the family — the way in when they
+    # have not onboarded yet, or have forgotten the password they chose.
+    #
+    # A SECOND field and not an overwrite of `password`: "he olvidado mi
+    # contraseña" is unauthenticated, so writing over the real credential would
+    # let anyone who knows a family's address lock them out. Both are accepted
+    # at login until the family sets their own, which clears this one.
+    temporary_password = models.CharField(
+        max_length=128,
+        blank=True,
+        verbose_name="Contraseña temporal",
+        help_text="Hash de la contraseña temporal enviada por email. Se borra en cuanto el padre/tutor elige la suya.",
+    )
+    temporary_password_issued_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        verbose_name="Contraseña temporal enviada",
+    )
+    # Once-only guard for the portal invitation. A family with three children
+    # must receive exactly ONE invite, so the send is keyed on this timestamp
+    # and not on the number of students linked.
+    portal_invite_sent_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        verbose_name="Invitación al portal enviada",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)  # Added for consistency
 
@@ -228,8 +300,18 @@ class Parent(models.Model):
         verbose_name = "Padre/Tutor"
         verbose_name_plural = "Padres y tutores"
         indexes = [
-            models.Index(fields=["dni"]),
+            # No `Index(fields=["dni"])` — the field is `unique=True`, which is
+            # already a b-tree index. See the note on `Payment.Meta.indexes`.
             models.Index(fields=["email"]),
+            # Case-insensitive lookups need their own index: the parent-portal
+            # login resolves a family by `email__iexact`, which Postgres renders
+            # as `UPPER(email::text) = UPPER(%s)`. A plain b-tree on `email`
+            # cannot answer that — verified with `enable_seqscan=off`, where the
+            # planner still chose a sequential scan over the whole table — so
+            # every login attempt on a public, rate-limited endpoint scanned
+            # `parents` end to end. `Upper("email")` matches the expression the
+            # ORM actually emits; an index on `Lower("email")` would not.
+            models.Index(Upper("email"), name="parents_email_upper_idx"),
         ]
 
     def __str__(self):
@@ -238,6 +320,96 @@ class Parent(models.Model):
     @property
     def full_name(self):
         return f"{self.first_name} {self.last_name}"
+
+    # ── Portal credential ───────────────────────────────────────────────────
+
+    @property
+    def has_portal_password(self) -> bool:
+        """True once the parent has chosen a password of their own."""
+        return bool(self.password)
+
+    @property
+    def has_temporary_password(self) -> bool:
+        """True while an emailed temporary password is still outstanding."""
+        return bool(self.temporary_password)
+
+    def set_portal_password(self, raw_password: str, *, save: bool = True) -> None:
+        """
+        Store the parent's OWN password and retire any outstanding temporary
+        one.
+
+        Clearing `temporary_password` here is the whole reason the two are
+        separate fields: the moment the family chooses a credential, the one
+        sitting in their inbox stops working. Leave it set and every old
+        recovery email remains a live key to the account.
+        """
+        self.password = make_password(raw_password)
+        self.temporary_password = ""
+        self.temporary_password_issued_at = None
+        if save:
+            self.save(
+                update_fields=[
+                    "password",
+                    "temporary_password",
+                    "temporary_password_issued_at",
+                    "updated_at",
+                ]
+            )
+
+    def issue_temporary_password(self, *, save: bool = True) -> str:
+        """
+        Generate, store (hashed) and RETURN a one-off password to email.
+
+        The plaintext is returned exactly once and never persisted — the caller
+        puts it in the email and drops it.
+
+        Deliberately stored beside `password` rather than over it: "he olvidado
+        mi contraseña" is an unauthenticated endpoint, so overwriting the real
+        credential would let anyone who knows a family's address lock them out
+        of their own payment history. Both work until the family picks a new
+        password, at which point `set_portal_password` clears this one.
+
+        It does NOT expire, by design — an expiring credential is the thing this
+        flow exists to get rid of. The cost is that an unused temporary password
+        stays valid in the family's mailbox until they set their own; that is
+        why logging in with one forces an immediate change.
+        """
+        raw = generate_temporary_password()
+        self.temporary_password = make_password(raw)
+        self.temporary_password_issued_at = timezone.now()
+        if save:
+            self.save(update_fields=["temporary_password", "temporary_password_issued_at", "updated_at"])
+        return raw
+
+    def authenticate_portal(self, raw_password: str) -> str | None:
+        """
+        Check a submitted password against both credentials.
+
+        Returns ``"password"`` when it matched the parent's own, ``"temporary"``
+        when it matched an emailed one (the caller must then force a change),
+        and ``None`` when it matched neither.
+
+        A parent with NO credential at all still pays for one hash against a
+        dummy value before being refused. Returning early would make "never
+        onboarded" measurably faster than "wrong password", which is a timing
+        oracle for which of the academy's families have signed up.
+        """
+
+        def _persist(new_hash: str) -> None:
+            # Transparent upgrade when the configured hasher changes.
+            self.password = new_hash
+            self.save(update_fields=["password", "updated_at"])
+
+        if self.password and check_password(raw_password, self.password, setter=_persist):
+            return PORTAL_AUTH_PASSWORD
+
+        if self.temporary_password and check_password(raw_password, self.temporary_password):
+            return PORTAL_AUTH_TEMPORARY
+
+        if not self.password and not self.temporary_password:
+            check_password(raw_password, _NO_CREDENTIAL_DUMMY_HASH)
+
+        return None
 
 
 class Student(models.Model):
@@ -320,7 +492,8 @@ class Student(models.Model):
         verbose_name = "Alumno"
         verbose_name_plural = "Alumnos"
         indexes = [
-            models.Index(fields=["group"]),
+            # No `Index(fields=["group"])` — `group` is a ForeignKey and Django
+            # indexes those by default. See the note on `Payment.Meta.indexes`.
             models.Index(fields=["active"]),
             models.Index(fields=["birth_date"]),
             models.Index(fields=["is_waiting"]),
@@ -379,12 +552,6 @@ class StudentParent(models.Model):
         return f"{self.parent} -> {self.student}"
 
 
-# v1.9 — parent portal magic-link tokens. Kept in a sibling module so the
-# top-level student data model stays focused. Re-exported here (and named in
-# `__all__`) so `from students.models import ParentSessionToken` keeps working.
-from students.parent_portal_models import ParentSessionToken  # noqa: E402
-
-
 @receiver(pre_save, sender=Student)
 def _capture_active_transition(sender, instance, **kwargs):
     """Stash the DB value of `active` so post_save can detect True→False.
@@ -428,12 +595,10 @@ def _notify_group_spot_freed(sender, instance, created, **kwargs):
     notify_capacity_freed(instance)
 
 
-# Public model surface of this module, including the `ParentSessionToken`
-# re-export above.
+# Public model surface of this module.
 __all__ = [
     "Group",
     "Parent",
-    "ParentSessionToken",
     "Student",
     "StudentParent",
     "Teacher",

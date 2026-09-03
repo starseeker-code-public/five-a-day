@@ -33,9 +33,13 @@ def get_all_payments_unrestricted():
             "student__group",
             "student__group__teacher",
         )
-        .prefetch_related(
-            "student__parents",
-            "student__enrollments",
-        )
+        # Deliberately NO `prefetch_related("student__parents", "student__enrollments")`.
+        # `all_info` is this helper's only caller and the payments table in
+        # `all_info.html` renders neither — it reads `payment.parent` (a direct
+        # FK, joined above) and never touches the student's other parents or
+        # enrollments. The two prefetches were therefore two extra queries per
+        # page load fetching rows nothing displays. If a future caller does need
+        # them, add them there rather than here, so the cost lands on the page
+        # that asked for it.
         .order_by("-created_at", "-id")  # tie-break — see helper above
     )

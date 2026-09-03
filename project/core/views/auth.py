@@ -23,12 +23,27 @@ def _is_dev_env() -> bool:
     return getattr(settings, "ENVIRONMENT", "development") == "development"
 
 
-def _ensure_dev_user(username: str) -> "User":
+def _ensure_dev_user(username: str, password: str | None = None) -> "User":
     """
     Dev basic-auth path: get-or-create a Django superuser that matches the
     env-var username. OAuth and admin access all work through Django's auth
-    system, so dev needs a concrete User too (even though password check is
-    handled upstream by env-var comparison).
+    system, so dev needs a concrete User too (even though the credential check
+    is handled upstream by env-var comparison).
+
+    The env-var password is MIRRORED onto that user, because a user with no
+    usable password is indistinguishable from a not-yet-activated teacher: the
+    /management/ "Cambiar contraseña" button hides itself for such accounts
+    (`can_change_own_password`) and `/password-reset/` cannot reach them, so the
+    dev login could not exercise either flow at all. This is safe in dev and
+    only in dev — `LOGIN_PASSWORD` is already the plaintext login credential in
+    `.env`, so storing its hash adds no exposure, and `_is_dev_env()` gates the
+    only caller.
+
+    Set only when the stored password is UNUSABLE, matching `seed_teachers`:
+    a password the developer later changed through the UI must survive the next
+    login, or the button would appear to do nothing. Note the env-var branch in
+    `login_view` runs first, so the `.env` value keeps working regardless —
+    changing the password here cannot lock anyone out of their own dev box.
     """
     User = get_user_model()
     user, created = User.objects.get_or_create(
@@ -39,14 +54,51 @@ def _ensure_dev_user(username: str) -> "User":
             "is_superuser": True,
         },
     )
-    if created:
-        user.set_unusable_password()
-        user.save(update_fields=["password"])
-    elif not (user.is_staff and user.is_superuser):
+    update_fields = []
+    if created or not user.has_usable_password():
+        # `created` is not enough on its own: every dev box provisioned before
+        # this had the superuser written with set_unusable_password(), and those
+        # rows are only ever re-read from here.
+        if password:
+            user.set_password(password)
+        else:
+            user.set_unusable_password()
+        update_fields.append("password")
+    if not (user.is_staff and user.is_superuser):
         user.is_staff = True
         user.is_superuser = True
-        user.save(update_fields=["is_staff", "is_superuser"])
+        update_fields += ["is_staff", "is_superuser"]
+    if update_fields:
+        user.save(update_fields=update_fields)
     return user
+
+
+def _authenticate_teacher(request, identifier: str, password: str):
+    """
+    Authenticate against auth.User, accepting EITHER the login handle or the
+    email address as the identifier.
+
+    `seed_teachers` can give a Teacher a short `TEACHER_SEED_<N>_USERNAME`
+    ("claudia") while `Teacher.email` stays the real address. Django's
+    ModelBackend only ever matches `User.username`, so without this fallback
+    setting a handle would silently REVOKE the email login that teacher had
+    been using. Both are accepted; the handle is tried first.
+    """
+    user = _django_authenticate(request, username=identifier, password=password)
+    if user is not None:
+        return user
+
+    if "@" not in identifier:
+        return None
+
+    User = get_user_model()
+    # `.only()` — we need the username to re-authenticate, nothing else. Emails
+    # are not unique on auth.User, so an ambiguous match is refused rather than
+    # resolved arbitrarily.
+    candidates = list(User.objects.filter(email__iexact=identifier).only("username")[:2])
+    if len(candidates) != 1:
+        return None
+    return _django_authenticate(request, username=candidates[0].username, password=password)
 
 
 def _finalize_session_login(request, user, display_name: str, *, google: bool = False):
@@ -99,42 +151,44 @@ def login_view(request):
         username = (request.POST.get("username") or "").strip()
         password = request.POST.get("password") or ""
 
-        if _is_dev_env():
+        dev_env = _is_dev_env()
+        dev_creds_configured = False
+
+        if dev_env:
             valid_username = os.getenv("LOGIN_USERNAME")
             valid_password = os.getenv("LOGIN_PASSWORD")
+            dev_creds_configured = bool(valid_username and valid_password)
 
-            if not valid_username or not valid_password:
-                messages.error(
-                    request,
-                    "Login credentials not configured. Set LOGIN_USERNAME and LOGIN_PASSWORD in .env.development.",
-                )
-                return render(
-                    request,
-                    "login.html",
-                    {
-                        "google_oauth_available": False,
-                        "password_reset_available": False,
-                    },
-                )
-
-            if username == valid_username and password == valid_password:
-                user = _ensure_dev_user(username)
+            if dev_creds_configured and username == valid_username and password == valid_password:
+                user = _ensure_dev_user(username, valid_password)
                 # Dev-mode users never have a Teacher record → no 2FA gate.
                 _finalize_session_login(request, user, username)
                 return redirect("home")
-            messages.error(request, "❌ Usuario o contraseña incorrectos")
-        else:
-            # Testing / production: authenticate Teachers via their linked User.
-            user = _django_authenticate(request, username=username, password=password)
-            if user is not None and user.is_active:
-                if _needs_two_factor(user):
-                    # Password OK but 2FA enrolled → force the second factor.
-                    _stage_pending_2fa(request, user)
-                    return redirect("two_factor_verify")
 
-                display = getattr(user, "first_name", "") or user.get_username()
-                _finalize_session_login(request, user, display)
-                return redirect("home")
+        # Teacher auth via the linked auth.User. This is the ONLY path in
+        # testing/production, and in development it is the fallback after the
+        # env-var admin login above — which is what makes a seeded non-admin
+        # Teacher (TEACHER_SEED_1_* in .env.development) usable locally. Without
+        # it, dev could only ever log in as a superuser, so the trimmed
+        # non-admin UI and NON_ADMIN_ALLOWED_URL_NAMES were untestable outside
+        # the QA VM.
+        user = _authenticate_teacher(request, username, password)
+        if user is not None and user.is_active:
+            if _needs_two_factor(user):
+                # Password OK but 2FA enrolled → force the second factor.
+                _stage_pending_2fa(request, user)
+                return redirect("two_factor_verify")
+
+            display = getattr(user, "first_name", "") or user.get_username()
+            _finalize_session_login(request, user, display)
+            return redirect("home")
+
+        if dev_env and not dev_creds_configured:
+            messages.error(
+                request,
+                "Login credentials not configured. Set LOGIN_USERNAME and LOGIN_PASSWORD in .env.development.",
+            )
+        else:
             messages.error(request, "❌ Usuario o contraseña incorrectos")
 
     google_oauth_available = bool(os.getenv("GOOGLE_CLIENT_ID") and os.getenv("GOOGLE_CLIENT_SECRET"))

@@ -129,7 +129,13 @@ class TestApiSeedDatabase:
             )
         assert response.status_code == 200
         assert response.json()["success"] is True
-        mock_cmd.assert_called_once()
+        # Two commands: the QA dataset, then the demo parent — without the
+        # latter there is no way to open /parent/login/ on the VM, because the
+        # real flow needs a mailbox to read the invitation from.
+        commands = [call.args[0] for call in mock_cmd.call_args_list]
+        assert commands == ["seed_testdata", "seed_demo_parents"], (
+            "the demo parent must be seeded AFTER seed_testdata, whose --reset wipes every Parent"
+        )
 
     @QA_SETTINGS
     def test_success_with_reset(self, qa_client):
@@ -141,9 +147,28 @@ class TestApiSeedDatabase:
             )
         assert response.status_code == 200
         assert response.json()["success"] is True
-        # reset=True should be forwarded as kwarg
-        call_kwargs = mock_cmd.call_args.kwargs
-        assert call_kwargs.get("reset") is True
+        # reset=True should be forwarded as a kwarg — to seed_testdata, which is
+        # the command that understands it.
+        seed_call = next(call for call in mock_cmd.call_args_list if call.args[0] == "seed_testdata")
+        assert seed_call.kwargs.get("reset") is True
+
+    @QA_SETTINGS
+    def test_a_failing_demo_parent_seed_does_not_fail_the_qa_seed(self, qa_client):
+        """The QA dataset is the point; the demo parent is a bonus."""
+
+        def _fail_on_demo(name, *args, **kwargs):
+            if name == "seed_demo_parents":
+                raise RuntimeError("boom")
+
+        with patch("django.core.management.call_command", side_effect=_fail_on_demo):
+            response = qa_client.post(
+                reverse("api_seed_database"),
+                data=json.dumps({"reset": False}),
+                content_type="application/json",
+            )
+
+        assert response.status_code == 200
+        assert response.json()["success"] is True
 
     @QA_SETTINGS
     def test_command_error_returns_500(self, qa_client):
@@ -463,37 +488,63 @@ class TestBacklogOrdering:
 
 
 class TestApiMarkReady:
-    """The '¿Listo para desplegar?' button: emails support AND sets
-    QAConfiguration.ready_for_prod, the flag deploy-production.yml's preflight
-    reads through /health/?deep=1. The flag is set only when the email actually
-    went out, so success always means both happened."""
+    """The '¿Listo para desplegar?' button: emails support, sets
+    QAConfiguration.ready_for_prod (the flag deploy-production.yml's preflight
+    reads through /health/?deep=1) AND fires the repository_dispatch that arms
+    the production workflow immediately. The flag is set only when the email
+    actually went out, so success always means both happened; the dispatch is
+    fail-soft, so its outcome never changes the response status."""
 
     @override_settings(IS_TESTING_ENV=True, SUPPORT_EMAIL="sup@test.com")
-    def test_success_sends_email_and_opens_the_production_gate(self, qa_client, mailoutbox):
+    def test_success_sends_email_opens_the_gate_and_arms_the_deploy(self, qa_client, mailoutbox):
         from core.models import QAConfiguration
 
         assert QAConfiguration.get_config().ready_for_prod is False
 
-        response = qa_client.post(reverse("api_mark_ready"), data="{}", content_type="application/json")
+        with patch("core.views.testing_tools.notify_github_qa_signoff", return_value=True) as notify:
+            response = qa_client.post(reverse("api_mark_ready"), data="{}", content_type="application/json")
 
         body = response.json()
         assert response.status_code == 200
         assert body["success"] is True
         assert body["ready_for_prod"] is True
+        assert body["deploy_dispatched"] is True
         assert len(mailoutbox) == 1
         assert mailoutbox[0].to == ["sup@test.com"]
+        assert QAConfiguration.get_config().ready_for_prod is True
+        notify.assert_called_once_with()
+
+    @override_settings(IS_TESTING_ENV=True, SUPPORT_EMAIL="sup@test.com")
+    def test_dispatch_failure_never_fails_the_signoff(self, qa_client, mailoutbox):
+        """A missing token or an unreachable GitHub API must not break the
+        button: the flag is the source of truth and the nightly workflow_run
+        re-trigger remains the fallback arming path."""
+        from core.models import QAConfiguration
+
+        with patch("core.views.testing_tools.notify_github_qa_signoff", return_value=False):
+            response = qa_client.post(reverse("api_mark_ready"), data="{}", content_type="application/json")
+
+        body = response.json()
+        assert response.status_code == 200
+        assert body["success"] is True
+        assert body["deploy_dispatched"] is False
         assert QAConfiguration.get_config().ready_for_prod is True
 
     @override_settings(IS_TESTING_ENV=True, SUPPORT_EMAIL="sup@test.com")
     def test_email_failure_keeps_the_gate_closed(self, qa_client):
         from core.models import QAConfiguration
 
-        with patch("core.views.testing_tools.send_mail", side_effect=RuntimeError("smtp down")):
+        with (
+            patch("core.views.testing_tools.send_mail", side_effect=RuntimeError("smtp down")),
+            patch("core.views.testing_tools.notify_github_qa_signoff") as notify,
+        ):
             response = qa_client.post(reverse("api_mark_ready"), data="{}", content_type="application/json")
 
         assert response.status_code == 500
         assert response.json()["success"] is False
         assert QAConfiguration.get_config().ready_for_prod is False
+        # No sign-off happened, so nothing may arm the production workflow.
+        notify.assert_not_called()
 
     @override_settings(IS_TESTING_ENV=True, SUPPORT_EMAIL=None)
     def test_missing_support_email_keeps_the_gate_closed(self, qa_client):
@@ -572,3 +623,17 @@ class TestSetReadyForProdCommand:
 
         with pytest.raises(CommandError):
             call_command("set_ready_for_prod", "maybe")
+
+    def test_on_arms_the_production_workflow_and_off_does_not(self):
+        """A manual `on` is still a sign-off, so it fires the same
+        repository_dispatch as the /testing/ button; `off` (the nightly
+        deploy's reset) must never dispatch anything."""
+        from django.core.management import call_command
+
+        with patch("core.github_dispatch.notify_github_qa_signoff", return_value=True) as notify:
+            call_command("set_ready_for_prod", "on")
+        notify.assert_called_once_with()
+
+        with patch("core.github_dispatch.notify_github_qa_signoff") as notify:
+            call_command("set_ready_for_prod", "off")
+        notify.assert_not_called()

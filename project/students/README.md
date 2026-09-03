@@ -8,10 +8,9 @@ The `students` app owns all people-related models: students, parents, teachers, 
 | ----- | ----- | ---------- | ------------- |
 | **Teacher** | `teachers` | first_name, last_name, email (unique), phone, active, admin, user (OneToOne → `auth.User`), two_factor_secret / _enabled / _backup_codes (v1.13) | Has many Groups; linked to a Django auth user for login |
 | **Group** | `groups` | group_name (unique), color (hex), max_students (v1.1 capacity), active | FK to Teacher; has many Students |
-| **Parent** | `parents` | first_name, last_name, dni (unique), phone, email, iban, sms_opt_in (v1.8) | M2M to Students via StudentParent |
+| **Parent** | `parents` | first_name, last_name, dni (unique), phone, email, iban, sms_opt_in (v1.8), password + portal_invite_sent_at (v1.27) | M2M to Students via StudentParent |
 | **Student** | `students` | first_name, last_name (blank, v1.20.0), birth_date (nullable, v1.15), gender (m/f), is_adult, school, allergies, gdpr_signed, active, is_waiting / waiting_since (v1.1) / waiting_priority (v1.20.0), withdrawal_date / withdrawal_reason, course / observations / waiting_contact_name / waiting_contact_phone (v1.15) | FK to Group (nullable, v1.15); M2M to Parents |
 | **StudentParent** | `student_parents` | student, parent | Through table for Student-Parent M2M |
-| **ParentSessionToken** | `parent_session_tokens` | parent, token (hashed), expires_at, used_at — in `parent_portal_models.py` (v1.9) | FK to Parent; single-use magic-link token for the parent portal |
 
 ### Key Properties
 
@@ -23,7 +22,9 @@ The `students` app owns all people-related models: students, parents, teachers, 
 - `Group.max_students` / capacity properties — occupancy and free seats, used by the waiting list (v1.1)
 - `Student.is_waiting` / `waiting_since` — waiting students are excluded from the main student list (v1.1)
 - `Student.waiting_priority` (v1.20.0) — jumps the FIFO queue. It is part of the waiting list's `ORDER BY` (`-waiting_priority, waiting_since, created_at`), not just a badge. Set on the create form, edited afterwards from `/admin/`
-- `ParentSessionToken.consume()` — single-use redemption under `SELECT FOR UPDATE`, so a magic link can't be redeemed twice concurrently (v1.9)
+- `Parent.set_portal_password()` / `authenticate_portal()` / `has_portal_password` — the family-portal credential, hashed with Django's configured hashers (v1.27). Deliberately **not** an `auth.User`: `core.views.auth._authenticate_teacher` authenticates any `auth.User`, so a family holding one would hold a staff login. `authenticate_portal` runs the hasher against a dummy value before refusing a parent who has no credential at all, so "not onboarded" is not measurably faster than "wrong password"
+- `Parent.issue_temporary_password()` / `temporary_password` / `temporary_password_issued_at` / `has_temporary_password` (v1.27) — generates a one-off password, stores it hashed and returns the plaintext exactly once (the caller emails it and drops it). Stored in a **second column, beside `password` and not over it**: "he olvidado mi contraseña" is unauthenticated, so overwriting the real credential would let anyone who knows a family's address lock them out of their own payment history. `authenticate_portal()` accepts either and reports which matched, so the view can force a change after a temporary one; `set_portal_password()` clears it, which is what stops an old recovery email remaining a live key. It deliberately does **not** expire — that forced change is what substitutes for a TTL
+- `Parent.portal_invite_sent_at` — once-only guard for the portal invitation, so a family with three children receives exactly one
 
 ### Teacher → auth.User link
 
@@ -78,6 +79,7 @@ Dev environment (`DJANGO_ENV=development`) keeps using the legacy env-var basic-
 | `students/<id>/waiting/add/` | add_to_waiting_list | `add_to_waiting_list` |
 | `students/<id>/` | StudentDetailView | `student_detail` |
 | `students/<id>/update/` | StudentUpdateView | `student_update` |
+| `api/students/<id>/enroll/` | enroll_student | `enroll_student` |
 | `api/students/<id>/fun-friday/toggle/` | toggle_fun_friday_this_week | `toggle_fun_friday_this_week` |
 | `api/students/<id>/fun-friday/add/` | add_fun_friday_attendance | `add_fun_friday_attendance` |
 | `api/students/<id>/fun-friday/remove/` | remove_fun_friday_attendance | `remove_fun_friday_attendance` |
