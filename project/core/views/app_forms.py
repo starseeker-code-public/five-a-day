@@ -32,6 +32,20 @@ from students.models import Group, Parent, Student
 logger = logging.getLogger(__name__)
 
 
+def _birthday_image_path():
+    """Absolute path to the inline birthday card image.
+
+    The template's `<img src="cid:birthday_image">` renders BROKEN without a
+    matching `inline_images` attachment — the cron passes it, but the manual
+    test-send and mass-send here did not, so the admin's own test could never
+    reproduce what parents complained about. Same file the cron and
+    test_all_emails use.
+    """
+    from django.conf import settings
+
+    return os.path.join(settings.BASE_DIR, "core/static/images/happy-birthday.png")
+
+
 #: Parents of a Student who actually have an email address, exposed as the plain
 #: list `student.emailable_parents`.
 #:
@@ -868,6 +882,7 @@ def birthday_form(request):
                 recipients=_recipients,
                 subject=f"[TEST] 🎉 ¡Feliz Cumpleaños {_name}!",
                 context=_ctx,
+                inline_images={"birthday_image": _birthday_image_path()},
             )
             if _ok:
                 return JsonResponse(
@@ -881,31 +896,44 @@ def birthday_form(request):
 
         success_count = 0
         error_count = 0
-        for student in birthday_students:
-            parent = next(iter(student.emailable_parents), None)
-            if not parent:
-                continue
-            try:
-                result = email_service.send_email(
-                    template_name="happy_birthday",
-                    recipients=parent.email,
-                    subject=f"🎉 ¡Feliz Cumpleaños {student.first_name}!",
-                    context={"name": student.first_name},
-                )
-                if result:
-                    success_count += 1
-                else:
+        image_path = _birthday_image_path()
+        # ONE SMTP session for the whole batch. `with` opens the connection on
+        # entry and closes it on exit; while it is open Django's backend reuses
+        # it for every send instead of a connect+TLS+AUTH per student. Passing an
+        # UNOPENED connection would defeat this — the backend would open and close
+        # it on each message.
+        with email_service.open_connection() as connection:
+            for student in birthday_students:
+                # EVERY emailable parent, not just the first — a birthday card that
+                # goes to one of two guardians looks like a snub to the other. The
+                # cron's fan-out task does the same; this manual path had kept the
+                # single-parent `.first()` bug the task was fixed for.
+                recipients = [p.email for p in student.emailable_parents]
+                if not recipients:
+                    continue
+                try:
+                    result = email_service.send_email(
+                        template_name="happy_birthday",
+                        recipients=recipients,
+                        subject=f"🎉 ¡Feliz Cumpleaños {student.first_name}!",
+                        context={"name": student.first_name},
+                        inline_images={"birthday_image": image_path},
+                        connection=connection,
+                    )
+                    if result:
+                        success_count += 1
+                    else:
+                        error_count += 1
+                except Exception:
+                    # Never silent: this is the academy's outbound channel, and an
+                    # operator who sees only a count cannot tell a bad address from
+                    # an SMTP outage. The recipient is NOT logged — the exception
+                    # text can carry it, so `logger.exception` alone is the record.
+                    logger.exception(
+                        "Email send failed in %s",
+                        request.resolver_match.url_name if request.resolver_match else "app_forms",
+                    )
                     error_count += 1
-            except Exception:
-                # Never silent: this is the academy's outbound channel, and an
-                # operator who sees only a count cannot tell a bad address from
-                # an SMTP outage. The recipient is NOT logged — the exception
-                # text can carry it, so `logger.exception` alone is the record.
-                logger.exception(
-                    "Email send failed in %s",
-                    request.resolver_match.url_name if request.resolver_match else "app_forms",
-                )
-                error_count += 1
 
         if success_count > 0:
             HistoryLog.log("email_sent", f"Cumpleaños: {success_count} email(s) enviados", icon="mail")
@@ -1257,14 +1285,17 @@ def enrollment_form(request):
     GET: Muestra formulario con selector de estudiante
     POST: Envía confirmación al padre del estudiante seleccionado
     """
+    from billing.models import academic_year_for_month
+
     today = date.today()
     current_month = MESES_ES[today.month - 1]
     students = Student.objects.filter(active=True).select_related("group").order_by("last_name", "first_name")
 
-    if today.month >= 9:
-        default_academic_year = f"{today.year}-{today.year + 1}"
-    else:
-        default_academic_year = f"{today.year - 1}-{today.year}"
+    # The academic year the CURRENT teaching month belongs to. This was a
+    # hand-rolled September-rollover that disagreed with the helper every
+    # May–August, so the matriculation-confirmation email named a different
+    # course from the enrollment record it was confirming.
+    default_academic_year = academic_year_for_month(today)
 
     if request.method == "POST":
         action = request.POST.get("action", "")
@@ -1351,8 +1382,11 @@ def enrollment_form(request):
             messages.error(request, "❌ Selecciona un estudiante")
         elif email_type == "welcome":
             try:
-                student = Student.objects.select_related("group").prefetch_related("parents").get(id=student_id)
-                parent = student.parents.exclude(email="").exclude(email__isnull=True).first()
+                # No prefetch_related("parents"): the .exclude().first() below builds a
+                # NEW queryset off the manager, discarding the prefetch cache, so it
+                # was a wasted query. Query the emailable parent directly.
+                student = Student.objects.select_related("group").get(id=student_id)
+                parent = student.parents.exclude(email="").exclude(email__isnull=True).order_by("id").first()
                 if not parent:
                     messages.error(request, f"❌ {student.full_name} no tiene padre con email registrado")
                 else:
@@ -1375,8 +1409,8 @@ def enrollment_form(request):
             academic_year = request.POST.get("academic_year", default_academic_year)
             month = request.POST.get("month", current_month)
             try:
-                student = Student.objects.prefetch_related("parents").get(id=student_id)
-                parent = student.parents.exclude(email="").exclude(email__isnull=True).first()
+                student = Student.objects.get(id=student_id)
+                parent = student.parents.exclude(email="").exclude(email__isnull=True).order_by("id").first()
                 if not parent:
                     messages.error(request, f"❌ {student.full_name} no tiene padre con email registrado")
                 else:

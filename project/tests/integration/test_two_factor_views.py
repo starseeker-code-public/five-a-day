@@ -102,12 +102,30 @@ class TestManageView:
         teacher.refresh_from_db()
         assert teacher.two_factor_backup_codes != old_hashes
 
-    def test_disable_action_wipes(self, admin_client, admin_teacher_with_user):
+    def test_disable_requires_a_current_code(self, admin_client, admin_teacher_with_user):
+        """Disabling without a code is refused — otherwise a stolen session
+        could remove and re-enrol the second factor with no re-auth."""
         teacher, _ = admin_teacher_with_user
         tfs.begin_enrolment(teacher)
         teacher.two_factor_enabled = True
         teacher.save()
         response = admin_client.post(reverse("two_factor_manage"), {"action": "disable"})
+        assert response.status_code == 302
+        assert response.url == reverse("two_factor_manage")
+        teacher.refresh_from_db()
+        assert teacher.two_factor_enabled is True
+        assert teacher.two_factor_secret != ""
+
+    def test_disable_action_wipes_with_valid_code(self, admin_client, admin_teacher_with_user):
+        import pyotp
+
+        teacher, _ = admin_teacher_with_user
+        tfs.begin_enrolment(teacher)
+        teacher.two_factor_enabled = True
+        teacher.save()
+        teacher.refresh_from_db()
+        code = pyotp.TOTP(teacher.two_factor_secret).now()
+        response = admin_client.post(reverse("two_factor_manage"), {"action": "disable", "code": code})
         assert response.status_code == 302
         assert response.url == reverse("home")
         teacher.refresh_from_db()

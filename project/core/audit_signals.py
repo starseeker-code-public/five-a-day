@@ -11,7 +11,6 @@ import contextvars
 from typing import Any
 
 from django.db.models.signals import post_delete, post_save, pre_save
-from django.dispatch import receiver
 
 # Actor propagated from the middleware. `contextvars.ContextVar` is
 # request-local under WSGI + async-safe under ASGI — safer than threadlocals.
@@ -41,6 +40,9 @@ _TRACKED: dict[tuple[str, str], _TrackedFields] = {
         "group_id",
         "active",
         "is_waiting",
+        # A queue-jumping decision ("Jumps ahead of the FIFO order") that carried
+        # no audit trace because it wasn't listed here.
+        "waiting_priority",
         "waiting_since",
         "withdrawal_date",
         "withdrawal_reason",
@@ -101,6 +103,11 @@ _TRACKED: dict[tuple[str, str], _TrackedFields] = {
         "expense_date",
         "is_recurring",
         "recurring_day",
+        # The recurrence cadence fields (added in billing/0006) were untracked,
+        # so switching a template from monthly to weekly left no audit record.
+        "recurring_frequency",
+        "recurring_month",
+        "recurring_weekdays",
     ),
 }
 
@@ -160,7 +167,6 @@ def _diff(old: dict[str, Any], new: dict[str, Any]) -> dict[str, list]:
     return diff
 
 
-@receiver(pre_save)
 def _capture_pre_save_snapshot(sender, instance, **kwargs):
     if not _is_tracked(sender):
         return
@@ -179,7 +185,6 @@ def _capture_pre_save_snapshot(sender, instance, **kwargs):
         instance._audit_pre = None
 
 
-@receiver(post_save)
 def _record_save(sender, instance, created, **kwargs):
     if not _is_tracked(sender):
         return
@@ -211,7 +216,6 @@ def _record_save(sender, instance, created, **kwargs):
         )
 
 
-@receiver(post_delete)
 def _record_delete(sender, instance, **kwargs):
     if not _is_tracked(sender):
         return
@@ -224,6 +228,28 @@ def _record_delete(sender, instance, **kwargs):
         actor=actor,
         actor_label=_actor_label(actor),
     )
+
+
+def connect() -> None:
+    """Bind the audit receivers to EACH tracked model, by sender.
+
+    Deliberately NOT senderless `@receiver(post_delete)`: a receiver connected
+    with no `sender=` matches every model, and Django's
+    `deletion.Collector.can_fast_delete` returns False for any model that has a
+    post_delete listener — so a single senderless receiver disabled the
+    single-DELETE fast path for the ENTIRE project. `prune_audit_log` then
+    loaded ~64k rows (with their JSON blobs) into memory to delete them one
+    object at a time. Connecting per sender keeps the audit trail and leaves
+    fast-delete intact for every untracked model.
+    """
+    from django.apps import apps
+
+    for app_label, object_name in _TRACKED:
+        model = apps.get_model(app_label, object_name)
+        uid_base = f"audit.{app_label}.{object_name}"
+        pre_save.connect(_capture_pre_save_snapshot, sender=model, dispatch_uid=f"{uid_base}.pre_save")
+        post_save.connect(_record_save, sender=model, dispatch_uid=f"{uid_base}.post_save")
+        post_delete.connect(_record_delete, sender=model, dispatch_uid=f"{uid_base}.post_delete")
 
 
 def _actor_label(actor) -> str:

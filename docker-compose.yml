@@ -73,6 +73,8 @@ services:
       CELERY_BROKER_URL: redis://redis:6379/0
       CELERY_RESULT_BACKEND: redis://redis:6379/0
       POSTGRES_HOST: db
+      # Academy runs on Madrid time; the image is UTC otherwise. See Dockerfile.
+      TZ: Europe/Madrid
 
     # Live-mount source code so template/CSS/Python changes are visible
     # without a full rebuild. The anonymous .venv volume keeps the
@@ -129,6 +131,8 @@ services:
       CELERY_BROKER_URL: redis://redis:6379/0
       CELERY_RESULT_BACKEND: redis://redis:6379/0
       POSTGRES_HOST: db
+      # Academy runs on Madrid time; the image is UTC otherwise. See Dockerfile.
+      TZ: Europe/Madrid
     volumes:
       - .:/app
       - /app/.venv
@@ -170,6 +174,8 @@ services:
       CELERY_BROKER_URL: redis://redis:6379/0
       CELERY_RESULT_BACKEND: redis://redis:6379/0
       POSTGRES_HOST: db
+      # Academy runs on Madrid time; the image is UTC otherwise. See Dockerfile.
+      TZ: Europe/Madrid
     volumes:
       - .:/app
       - /app/.venv

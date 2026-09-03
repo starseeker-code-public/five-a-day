@@ -742,39 +742,13 @@ def send_enrollment_confirmation_task(self, enrollment_id: int, attachments_path
         return {"status": "error", "message": "Enrollment not found"}
 
 
-@shared_task(name="comms.tasks.send_fun_friday_emails_task", bind=True)
-def send_fun_friday_emails_task(
-    self,
-    recipients: list,
-    day_name: str,
-    day_number: int,
-    month: str,
-    start_time: str,
-    end_time: str,
-    activity_description: str,
-    minimum_age=None,
-    maximum_age=None,
-    meeting_point=None,
-):
-    """Send the Fun Friday announcement to every recipient immediately.
-
-    Kept for direct/manual sends; the scheduled path persists a
-    ``FunFridayScheduledSend`` row that ``send_due_fun_friday_emails_task``
-    drains at the right moment (``apply_async(eta=...)`` is NOT used — the
-    ETA is silently ignored under ``CELERY_TASK_ALWAYS_EAGER=True``).
-    """
-    return _send_fun_friday_batch(
-        recipients=recipients,
-        day_name=day_name,
-        day_number=day_number,
-        month=month,
-        start_time=start_time,
-        end_time=end_time,
-        activity_description=activity_description,
-        minimum_age=minimum_age,
-        maximum_age=maximum_age,
-        meeting_point=meeting_point,
-    )
+# NOTE: the old `send_fun_friday_emails_task` (an immediate fan-out taking a raw
+# `recipients` list) was removed. It had NO code callers, but was advertised as
+# the "manual send" path while bypassing the `FunFridayScheduledSend` claim guard
+# (`WHERE sent_at IS NULL`) that `_send_fun_friday_batch` implements below — so
+# anyone following the README could double-mail every family. All sends now go
+# through a persisted `FunFridayScheduledSend` row (drained immediately if its
+# slot has already passed), so the claim guard always applies.
 
 
 def _send_fun_friday_batch(

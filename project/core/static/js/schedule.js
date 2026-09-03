@@ -136,10 +136,25 @@ document.addEventListener('DOMContentLoaded', function () {
 
     // ── Save slot via API ───────────────────────────────────────
     function saveSlot(row, day, col, groupId) {
-        fetch('/api/schedule/slot/save/', {
+        // The dropped promise here made a failed save INVISIBLE: a session that
+        // expired mid-session (302 to /login/) or a stale CSRF token (403) still
+        // left the grid showing the new group, so the timetable emailed to
+        // parents reflected an assignment the server never stored. Surface the
+        // failure and tell the user their change did not save.
+        return fetch('/api/schedule/slot/save/', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCsrf() },
             body: JSON.stringify({ row, day, col, group_id: groupId }),
+        })
+        .then(r => {
+            if (!r.ok) throw new Error('HTTP ' + r.status);
+            return r.json();
+        })
+        .then(data => {
+            if (!data || data.success !== true) throw new Error((data && data.error) || 'save failed');
+        })
+        .catch(() => {
+            alert('No se pudo guardar el horario. Puede que tu sesión haya caducado — recarga la página y vuelve a intentarlo.');
         });
     }
 

@@ -96,7 +96,18 @@ class GroupAdmin(admin.ModelAdmin):
         return (
             super()
             .get_queryset(request)
-            .annotate(_enrolled=Count("students", filter=Q(students__active=True), distinct=True))
+            # `is_waiting=False` matches Group.enrolled_count and
+            # group_capacity_summary — without it, waiting-list students (who
+            # carry their preferred group FK) counted as enrolled, so a group
+            # with free places read "0 plazas libres" and the admin refused to
+            # promote anyone into it.
+            .annotate(
+                _enrolled=Count(
+                    "students",
+                    filter=Q(students__active=True, students__is_waiting=False),
+                    distinct=True,
+                )
+            )
         )
 
     @admin.display(description="Matriculados", ordering="_enrolled")
@@ -169,10 +180,23 @@ class StudentAdmin(admin.ModelAdmin):
 
 @admin.register(Parent)
 class ParentAdmin(admin.ModelAdmin):
-    list_display = ["first_name", "last_name", "dni", "phone", "email", "sms_opt_in"]
+    list_display = ["first_name", "last_name", "dni", "phone", "email", "sms_opt_in", "portal_status"]
     list_filter = ["sms_opt_in"]
     search_fields = ["first_name", "last_name", "dni", "email"]
     inlines = [ParentStudentInline]
+    # The credential itself is NEVER shown or editable (it is a hash, and a
+    # revoke path that printed it would be a hazard); but the invite/reset
+    # TIMESTAMPS must be reachable. Without them there was no way to see that a
+    # family had been invited (the once-only guard is keyed on
+    # `portal_invite_sent_at`) or to fix a bounced invite, and no revoke path at
+    # all short of a DB shell. `portal_actions` provides re-invite + revoke.
+    readonly_fields = [
+        "portal_status",
+        "portal_invite_sent_at",
+        "temporary_password_issued_at",
+        "portal_credential_changed_at",
+    ]
+    actions = ["revoke_portal_access", "resend_portal_invitation"]
 
     fieldsets = (
         ("Personal Information", {"fields": ("first_name", "last_name", "dni")}),
@@ -185,7 +209,71 @@ class ParentAdmin(admin.ModelAdmin):
                 "description": "«SMS opt-in» es el consentimiento para recibir avisos por SMS.",
             },
         ),
+        (
+            "Portal de familias",
+            {
+                "fields": (
+                    "portal_status",
+                    "portal_invite_sent_at",
+                    "temporary_password_issued_at",
+                    "portal_credential_changed_at",
+                ),
+                "description": (
+                    "La contraseña nunca se muestra. Usa las acciones de la lista para reenviar "
+                    "la invitación o revocar el acceso."
+                ),
+            },
+        ),
     )
+
+    @admin.display(description="Portal")
+    def portal_status(self, obj):
+        if obj.password:
+            return "Con contraseña"
+        if obj.temporary_password:
+            return "Invitado (temporal)"
+        return "Sin acceso"
+
+    @admin.action(description="Revocar acceso al portal (borra la contraseña)")
+    def revoke_portal_access(self, request, queryset):
+        from django.utils import timezone
+
+        count = 0
+        for parent in queryset:
+            parent.password = ""
+            parent.temporary_password = ""
+            parent.temporary_password_issued_at = None
+            # Bump so any live session for this family is invalidated at once.
+            parent.portal_credential_changed_at = timezone.now()
+            parent.save(
+                update_fields=[
+                    "password",
+                    "temporary_password",
+                    "temporary_password_issued_at",
+                    "portal_credential_changed_at",
+                    "updated_at",
+                ]
+            )
+            count += 1
+        self.message_user(request, f"Acceso al portal revocado para {count} familia(s).")
+
+    @admin.action(description="Reenviar invitación al portal (nueva contraseña temporal)")
+    def resend_portal_invitation(self, request, queryset):
+        from core.views.parent_portal import send_portal_temporary_password
+
+        sent = skipped = 0
+        for parent in queryset:
+            if not parent.email:
+                skipped += 1
+                continue
+            # Clear the once-only guard so the invitation actually re-fires.
+            parent.portal_invite_sent_at = None
+            parent.save(update_fields=["portal_invite_sent_at", "updated_at"])
+            if send_portal_temporary_password(request, parent, reset=True):
+                sent += 1
+            else:
+                skipped += 1
+        self.message_user(request, f"Invitaciones reenviadas: {sent}. Omitidas (sin email o error): {skipped}.")
 
 
 @admin.register(StudentParent)

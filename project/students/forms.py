@@ -55,6 +55,34 @@ class StudentForm(ModelForm):
             raise forms.ValidationError("La fecha de nacimiento no puede ser futura")
         return birth_date
 
+    def clean_group(self):
+        """Enforce `Group.max_students` on the actual write path.
+
+        The cap was only ever checked on the `assign_from_waiting_list` GET
+        redirect, so every real write — creating a student, editing one into a
+        different group, the admin — ignored it. Enforcing it in the form means
+        `StudentCreateView`/`StudentUpdateView` both get it for free.
+
+        A waiting-list save is exempt: a waiting entry does not occupy a place.
+        Editing a student who is already IN this group must not be blocked by
+        the group being full, so the current occupant is discounted.
+        """
+        group = self.cleaned_data.get("group")
+        if not group or self.cleaned_data.get("is_waiting"):
+            return group
+        if not group.max_students:  # 0 = no cap
+            return group
+
+        occupied = group.students.filter(active=True, is_waiting=False)
+        if self.instance and self.instance.pk:
+            occupied = occupied.exclude(pk=self.instance.pk)
+        if occupied.count() >= group.max_students:
+            raise forms.ValidationError(
+                f"El grupo «{group.group_name}» está completo ({group.max_students} plazas). "
+                f"Elige otro grupo o amplía el cupo."
+            )
+        return group
+
 
 class WaitingListForm(ModelForm):
     """Deliberately minimal form for taking a waiting-list entry.

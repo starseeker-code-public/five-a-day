@@ -5,10 +5,11 @@ Extracted from EnrollmentForm.create_enrollment() in forms.py.
 
 import logging
 from datetime import date
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 
 from django.db import transaction
 
+from billing.constants import PERIODIC_PAYMENT_TYPES
 from billing.models import (
     Enrollment,
     EnrollmentType,
@@ -16,6 +17,7 @@ from billing.models import (
     academic_year_end_date,
     academic_year_start_date,
     current_academic_year,
+    enrollment_academic_year,
 )
 
 logger = logging.getLogger(__name__)
@@ -48,7 +50,13 @@ class EnrollmentService:
         """
         config = SiteConfiguration.get_config()
         start_date = enrollment_data.get("start_date") or date.today()
-        academic_year = current_academic_year(start_date)
+        # NOT `current_academic_year`: its May rollover stamped a 15 May starter
+        # with the NEXT course, whose teaching months begin in September — so the
+        # May and June they actually attend were structurally unbillable and the
+        # enrollment was invisible to the May-August cron runs. See
+        # `enrollment_academic_year` for the full rule (Sep-Jun joins the running
+        # course, Jul/Aug joins the one starting in September).
+        academic_year = enrollment_academic_year(start_date)
         start_year = int(academic_year.split("-")[0])
         end_year = int(academic_year.split("-")[1])
 
@@ -94,10 +102,40 @@ class EnrollmentService:
         return enrollment
 
     @staticmethod
-    def close_active_enrollments(student, status: str) -> int:
+    def close_active_enrollments(
+        student,
+        status: str,
+        cancel_pending_periodic: bool = False,
+        keep_payment_type: str | None = None,
+        cancel_from: date | None = None,
+    ) -> int:
         """
         Move every ACTIVE enrollment of `student` to `status`, and return how
         many were moved.
+
+        `cancel_pending_periodic=True` also cancels the closed enrollments'
+        PENDING monthly/quarterly payments — the recurring schedule the closed
+        enrollment issued. Without it, a plan change that switches modality
+        double-bills the overlap: the old enrollment's pending March mensualidad
+        survives while the new quarterly enrollment re-bills March inside its
+        first quarter, and neither the Python idempotency check nor
+        `unique_pending_periodic_payment_per_month` can see the collision
+        because the two rows carry different `payment_type`s. Completed money is
+        never touched, and matrícula (`enrollment`) / `other` payments are not
+        part of the recurring schedule so they stay owed.
+
+        `keep_payment_type` preserves pending rows of that type: on a
+        same-modality plan change ("monthly_full" → "monthly_part") the old rows
+        keep occupying their months — the generator's month-level idempotency
+        already prevents a duplicate, and cancelling them would leave the month
+        half-taught and unbilled (a cancelled row still occupies its month, by
+        design, so it could not be re-created at the new price).
+
+        `cancel_from` limits the cancellation to rows due ON OR AFTER that date.
+        Months already taught under the closed enrollment stay owed: a student
+        moved to the waiting list on 20 March still owes March, and a
+        re-enrollment starting 1 November must not void the September/October
+        cuotas the old plan legitimately billed.
 
         The one place enrollment status transitions happen, because the obvious
         one-liner is wrong in a way nothing complains about:
@@ -120,6 +158,26 @@ class EnrollmentService:
             enrollment.status = status
             enrollment.save(update_fields=["status", "updated_at"])
             closed += 1
+
+            if cancel_pending_periodic:
+                # Row-by-row save, not `.update()`: Payment is audit-tracked and a
+                # bulk UPDATE bypasses the pre/post_save receivers, so the cancel
+                # would leave no AuditLog row and not bump `updated_at` — the same
+                # reason this method itself loops (see docstring above).
+                stale = enrollment.payments.filter(payment_status="pending", payment_type__in=PERIODIC_PAYMENT_TYPES)
+                if keep_payment_type:
+                    stale = stale.exclude(payment_type=keep_payment_type)
+                if cancel_from is not None:
+                    stale = stale.filter(due_date__gte=cancel_from)
+                for payment in stale:
+                    payment.payment_status = "cancelled"
+                    payment.save(update_fields=["payment_status", "updated_at"])
+                    logger.info(
+                        "Cancelled pending %s payment %d of superseded enrollment %d.",
+                        payment.payment_type,
+                        int(payment.pk),
+                        int(enrollment.pk),
+                    )
         return closed
 
     @staticmethod
@@ -271,4 +329,9 @@ class EnrollmentService:
         if final_amount < Decimal("0.01"):
             final_amount = Decimal("0.01")
 
-        return discount_pct, final_amount
+        # Quantize with the SAME rounding the payment generator uses. Unquantized,
+        # the DecimalField save path rounds HALF_EVEN while Payment.amount is
+        # quantized HALF_UP, so a half-cent intermediate (quarterly + sibling on the
+        # default prices lands exactly on 146.205) stored 146.20 on the ficha and
+        # billed 146.21 on the invoice.
+        return discount_pct, final_amount.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)

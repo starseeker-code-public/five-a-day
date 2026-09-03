@@ -6,11 +6,13 @@
 {% block page_subtitle %}Registra y categoriza los gastos de la academia{% endblock %}
 
 {% block header_actions %}
-{# TODO: replace the href with the real Google Drive receipts folder URL #}
-<a href="https://drive.google.com/" target="_blank" rel="noopener"
+{# Only shown when GOOGLE_DRIVE_RECEIPTS_URL is configured — otherwise the button pointed at Drive's generic home page (a dead-end that looked functional). #}
+{% if drive_receipts_url %}
+<a href="{{ drive_receipts_url }}" target="_blank" rel="noopener"
    class="header-action-btn bg-primary-500 hover:bg-primary-600 text-white px-6 py-3 rounded-md flex items-center gap-2 transition-all duration-200 transform hover:scale-105 hover:shadow-md text-base font-semibold leading-none no-underline">
     <span class="material-symbols-outlined text-xl">receipt_long</span> Consultar recibos
 </a>
+{% endif %}
 {% endblock %}
 
 {% block help_content %}
@@ -38,8 +40,10 @@
     <li>Más abajo, <strong>Plantillas recurrentes</strong> muestra las reglas activas con su frecuencia. Borrar una plantilla detiene la generación futura de ese gasto.</li>
 </ul>
 
+{% if drive_receipts_url %}
 <h4 style="font-weight:700;margin-top:1rem;">Recibos</h4>
 <p>El botón <strong>Consultar recibos</strong> (cabecera) abre la carpeta de Google Drive donde se guardan los justificantes.</p>
+{% endif %}
 
 <h4 style="font-weight:700;margin-top:1rem;">Consejos</h4>
 <ul style="list-style:disc;margin:0.4rem 0 0 1.25rem;line-height:1.7;">

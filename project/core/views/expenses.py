@@ -159,7 +159,10 @@ def _expense_fields_from(request):
 
         if recurring_frequency == "weekly":
             selected = request.POST.getlist("recurring_weekdays")
-            valid = sorted({int(d) for d in selected if d.isdigit() and 0 <= int(d) <= 6})
+            # isdecimal(), not isdigit(): "²".isdigit() is True but int("²") raises,
+            # so a crafted POST escaped as an unhandled ValueError 500 (reachable
+            # by non-admin teachers).
+            valid = sorted({int(d) for d in selected if d.isdecimal() and 0 <= int(d) <= 6})
             if not valid:
                 return None, "Un gasto semanal debe tener al menos un día de la semana."
             recurring_weekdays = ",".join(str(d) for d in valid)

@@ -2,7 +2,9 @@ import csv
 from datetime import date
 from decimal import Decimal
 
+from django import forms
 from django.contrib import admin, messages
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import IntegrityError, transaction
 from django.db.models import Count, DecimalField, Q, Sum, Value
 from django.db.models.functions import Coalesce
@@ -211,7 +213,13 @@ class PaymentAdmin(admin.ModelAdmin):
         """
         from core.views.payments import _queue_payment_receipt
 
-        pending = list(queryset.exclude(payment_status="completed"))
+        # ONLY pending rows. `exclude("completed")` also caught `cancelled`,
+        # `failed` and `refunded` — so this action resurrected them, dated them
+        # today (re-booking the money as this month's income) and emailed a
+        # receipt for a refund. Cancelling frees the month under the pending-only
+        # unique index, so a cancelled duplicate completed here would double-bill
+        # with nothing to stop it — exactly what `quick_complete_payment` refuses.
+        pending = list(queryset.filter(payment_status="pending"))
         today = date.today()
         for payment in pending:
             payment.payment_status = "completed"
@@ -222,7 +230,7 @@ class PaymentAdmin(admin.ModelAdmin):
         skipped = queryset.count() - len(pending)
         message = f"{len(pending)} payments marked as completed."
         if skipped:
-            message += f" {skipped} already completed and left untouched."
+            message += f" {skipped} no pendientes (completados/cancelados/fallidos) sin tocar."
         self.message_user(request, message)
 
     mark_as_completed.short_description = "Marcar como completados"
@@ -316,14 +324,33 @@ class PaymentAdmin(admin.ModelAdmin):
 
     mark_as_pending.short_description = "Marcar como pendientes"
 
+    def _bulk_set_status(self, queryset, status: str) -> int:
+        """Set `payment_status` row by row so the audit signals fire.
+
+        `queryset.update()` fires NEITHER the pre/post_save receivers (Payment is
+        audit-tracked, so a bulk status change left no AuditLog row for money
+        being voided) NOR `auto_now` on `updated_at` (the row kept its original
+        timestamp). Voiding billed money with no trace is exactly what the audit
+        log exists to prevent — and `_reopen_to_pending` already loops for the
+        same reason.
+        """
+        changed = 0
+        for payment in queryset:
+            if payment.payment_status == status:
+                continue
+            payment.payment_status = status
+            payment.save(update_fields=["payment_status", "updated_at"])
+            changed += 1
+        return changed
+
     def mark_as_failed(self, request, queryset):
-        updated = queryset.update(payment_status="failed")
+        updated = self._bulk_set_status(queryset, "failed")
         self.message_user(request, f"{updated} payments marked as failed.")
 
     mark_as_failed.short_description = "Marcar como fallidos"
 
     def soft_delete_payments(self, request, queryset):
-        updated = queryset.update(payment_status="cancelled")
+        updated = self._bulk_set_status(queryset, "cancelled")
         self.message_user(request, f"{updated} payments cancelled (soft deleted).")
 
     soft_delete_payments.short_description = "Cancelar los pagos seleccionados"
@@ -535,9 +562,36 @@ class EnrollmentAdmin(admin.ModelAdmin):
     payment_status_display.short_description = "Estado de pago"
 
 
+class ExpenseAdminForm(forms.ModelForm):
+    class Meta:
+        model = Expense
+        fields = "__all__"
+
+    def clean(self):
+        cleaned = super().clean()
+        # Run the model's own per-frequency rules (including the recurring_weekdays
+        # parse) so the admin cannot save a template the app path would reject.
+        # Without this, typing "L,M,V" into recurring_weekdays saved a row whose
+        # `weekday_set()` then raised ValueError — a 500 on /expenses/ for
+        # everyone and an aborted daily materialiser for all weekly/yearly rows.
+        instance = self.instance
+        for field, value in cleaned.items():
+            setattr(instance, field, value)
+        try:
+            instance.clean()
+        except DjangoValidationError as exc:
+            raise forms.ValidationError(exc.messages) from exc
+        return cleaned
+
+
 @admin.register(Expense)
 class ExpenseAdmin(admin.ModelAdmin):
-    list_display = ["expense_date", "description", "category", "amount", "is_recurring"]
+    form = ExpenseAdminForm
+    list_display = ["expense_date", "description", "category", "amount", "is_recurring", "recurring_summary"]
     list_filter = ["category", "is_recurring", "expense_date"]
     search_fields = ["description", "notes"]
     readonly_fields = ["created_at", "updated_at", "generated_from"]
+
+    @admin.display(description="Recurrencia")
+    def recurring_summary(self, obj):
+        return obj.recurring_summary() or "—"

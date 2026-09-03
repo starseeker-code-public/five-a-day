@@ -189,12 +189,13 @@
                     <span class="material-symbols-outlined text-amber-600" style="font-size:2rem;">admin_panel_settings</span>
                     <span class="text-[11px] font-semibold text-neutral-600">Admin</span>
                 </a>
-                {# TODO: replace with the real Google Drive folder URL #}
-                <a href="https://drive.google.com/" target="_blank" rel="noopener" title="Google Drive"
+                {% if drive_receipts_url %}
+                <a href="{{ drive_receipts_url }}" target="_blank" rel="noopener" title="Google Drive"
                    class="qa-card no-underline flex flex-col items-center justify-center gap-1 flex-1" style="padding:1rem;">
                     <span class="material-symbols-outlined text-emerald-600" style="font-size:2rem;">hard_drive</span>
                     <span class="text-[11px] font-semibold text-neutral-600">Drive</span>
                 </a>
+                {% endif %}
                 <a href="https://console.cloud.google.com/" target="_blank" rel="noopener" title="Google Cloud Platform"
                    class="qa-card no-underline flex flex-col items-center justify-center gap-1 flex-1" style="padding:1rem;">
                     <span class="material-symbols-outlined text-blue-600" style="font-size:2rem;">cloud</span>

@@ -42,16 +42,25 @@ FROM python:3.12-slim@sha256:e5c9fa26ffb76e11e0f054f30dc2523a2f9693f0c36c0cf1e39
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     DJANGO_SETTINGS_MODULE=project.settings \
-    PATH="/app/.venv/bin:$PATH"
+    PATH="/app/.venv/bin:$PATH" \
+    # The academy runs on Madrid time. python:slim is UTC, so naive date.today()
+    # / datetime.now() returned the UTC calendar date — a day behind local for
+    # 1–2 h after midnight — and a cash payment recorded at 00:40 on the 1st
+    # booked into the previous month (every income figure filters on
+    # payment_date). USE_TZ=True still stores aware UTC in the DB; this only
+    # aligns the naive local clock the ~65 date.today() call sites read.
+    TZ=Europe/Madrid
 
 # Install only runtime system deps
 # git: used by the QA testing dashboard to show the last commit (branch, hash,
 #      author, date) — see core/views/testing_tools._git_info.
+# tzdata: so the TZ env var above resolves to a real zoneinfo (Madrid DST).
 # hadolint ignore=DL3008
 RUN apt-get update && apt-get install -y --no-install-recommends \
     postgresql-client \
     libpq-dev \
     git \
+    tzdata \
     && rm -rf /var/lib/apt/lists/*
 
 # Cloud Run ignores HEALTHCHECK (it probes the service), but on the Compose

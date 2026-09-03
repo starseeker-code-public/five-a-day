@@ -79,8 +79,12 @@ document.addEventListener('DOMContentLoaded', function () {
         const parts = dateStr.split('-').map(Number);
         if (parts.length !== 3 || parts.some(isNaN)) return null;
         const [y, m, d] = parts;
-        // The academic year rolls over in May, like current_academic_year().
-        const startYear = m >= 5 ? y : y - 1;
+        // Mirrors billing.models.enrollment_academic_year: a start in Sep–Jun
+        // joins the RUNNING course (startYear = y for Sep–Dec, y-1 for Jan–Jun);
+        // a Jul/Aug start joins the course beginning that September (startYear = y).
+        // So startYear is y for months 7–12 and y-1 for months 1–6. (Was `m >= 5`,
+        // which billed a May/June starter into next September instead of now.)
+        const startYear = m >= 7 ? y : y - 1;
         for (const tm of [9, 10, 11, 12, 1, 2, 3, 4, 5, 6]) {
             const ty = tm >= 9 ? startYear : startYear + 1;
             // First teaching month whose last day is on/after the start date.

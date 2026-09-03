@@ -38,15 +38,31 @@ case "$FIRST_ARG" in
         echo "⏭️  Skipping migrations + collectstatic + seeding (Celery container)"
         ;;
     *)
-        echo "📦 Applying database migrations..."
-        python project/manage.py migrate --noinput
+        # RUN_MIGRATIONS_ON_START=false lets a deploy pipeline that OWNS
+        # migrations (backup → repoint jobs → fiveaday-migrate → roll service)
+        # stop the Cloud Run *service* from self-migrating on every cold start,
+        # which otherwise bypassed that ordering and its pre-deploy backup. Left
+        # unset it defaults to true, so dev and the testing VM are unchanged.
+        _RUN_MIGRATIONS=$(printf '%s' "${RUN_MIGRATIONS_ON_START:-true}" | tr '[:upper:]' '[:lower:]')
+        if [ "$_RUN_MIGRATIONS" = "true" ] || [ "$_RUN_MIGRATIONS" = "1" ] || [ "$_RUN_MIGRATIONS" = "t" ]; then
+            echo "📦 Applying database migrations..."
+            python project/manage.py migrate --noinput
+        else
+            echo "⏭️  Skipping migrations (RUN_MIGRATIONS_ON_START=$RUN_MIGRATIONS_ON_START) — pipeline owns them"
+        fi
 
-        # Cache table for CACHE_DB=1 (the DatabaseCache backend). Idempotent —
-        # it prints "already exists" and exits 0 on every boot after the first,
+        # Cache table for CACHE_DB (the DatabaseCache backend). Idempotent — it
+        # prints "already exists" and exits 0 on every boot after the first,
         # which is why it lives here rather than in a migration. The rate
         # limiter is cache-backed, so without a SHARED cache the login throttle
         # is per-Gunicorn-worker and per-instance; see settings.py CACHES.
-        if [ "${CACHE_DB:-False}" = "True" ] || [ "${CACHE_DB:-false}" = "true" ] || [ "${CACHE_DB:-0}" = "1" ]; then
+        #
+        # Parsed case-insensitively to MATCH settings.py, which accepts
+        # true/1/t/TRUE/… — the old exact-literal check (`= "True"`) meant
+        # CACHE_DB=TRUE selected DatabaseCache in Django while skipping the table
+        # here, so every cache.add() raised and the limiter failed open silently.
+        _CACHE_DB=$(printf '%s' "${CACHE_DB:-false}" | tr '[:upper:]' '[:lower:]')
+        if [ "$_CACHE_DB" = "true" ] || [ "$_CACHE_DB" = "1" ] || [ "$_CACHE_DB" = "t" ]; then
             echo "🗃️  Ensuring the database cache table exists..."
             python project/manage.py createcachetable || echo "⚠️  createcachetable reported an issue (non-fatal)"
         fi

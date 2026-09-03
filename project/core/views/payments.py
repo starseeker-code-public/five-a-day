@@ -8,7 +8,7 @@ from django.contrib import messages
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError
 from django.db.models import Case, DecimalField, Max, Min, Q, Sum, Value, When
-from django.http import HttpResponse, JsonResponse
+from django.http import Http404, HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_http_methods
 
@@ -16,7 +16,7 @@ from billing import constants
 from billing.models import Payment
 from core.constants import MESES_ES
 from core.models import HistoryLog
-from core.utils import csv_safe_row, safe_int
+from core.utils import MAX_QUERY_YEAR, MIN_QUERY_YEAR, csv_safe_row, safe_int
 from students.models import Parent, Student
 
 logger = logging.getLogger(__name__)
@@ -69,16 +69,6 @@ def _validated_choice(value, choices, default):
     return value if value in {key for key, _ in choices} else default
 
 
-def _safe_int(raw, *, default, low=None, high=None):
-    """Parse a query-string int, rejected to `default` outside [low, high].
-
-    Thin alias for `core.utils.safe_int` — this helper existed here, in
-    `app_forms` and in `reports` as three separate copies, and two other views
-    were still missing it entirely.
-    """
-    return safe_int(raw, default=default, low=low, high=high)
-
-
 def payments_list(request):
     """
     Main payments list view with pagination
@@ -106,8 +96,8 @@ def payments_list(request):
 
     # Month/year filter (server-side, so it narrows the whole dataset rather
     # than only the rows already rendered). Empty month = the whole year.
-    selected_month = _safe_int(request.GET.get("month"), default=None, low=1, high=12)
-    selected_year = _safe_int(request.GET.get("year"), default=current_year, low=2000, high=2100)
+    selected_month = safe_int(request.GET.get("month"), default=None, low=1, high=12)
+    selected_year = safe_int(request.GET.get("year"), default=current_year, low=MIN_QUERY_YEAR, high=MAX_QUERY_YEAR)
     payments_queryset = payments_queryset.filter(due_date__year=selected_year)
     if selected_month:
         payments_queryset = payments_queryset.filter(due_date__month=selected_month)
@@ -133,9 +123,11 @@ def payments_list(request):
     # — three different periods in one line, which is a large part of why
     # "esperado" was reported as unintelligible.
     _zero = Decimal("0.00")
-    period_payments = Payment.objects.filter(due_date__year=selected_year)
-    if selected_month:
-        period_payments = period_payments.filter(due_date__month=selected_month)
+    # Same filters as the rows — INCLUDING the search. Rebuilding from
+    # `Payment.objects` without it meant `?search=Ana` showed Ana's two payments
+    # under academy-wide totals ("2 resultados" next to a 214-payment summary),
+    # which contradicts the very comment above.
+    period_payments = payments_queryset
 
     stats = period_payments.aggregate(
         # Money still expected in this period. Cancelled / failed / refunded are
@@ -350,7 +342,14 @@ def payment_detail_view(request, payment_id):
     """
     Detailed view of a payment (read-only)
     """
-    payment = get_object_or_404(Payment, id=payment_id)
+    # The template walks student (+ group), parent, enrollment and its type —
+    # unjoined that page cost 6 queries for one row.
+    payment = get_object_or_404(
+        Payment.objects.select_related(
+            "student", "student__group", "parent", "enrollment", "enrollment__enrollment_type"
+        ),
+        id=payment_id,
+    )
 
     context = {
         "payment": payment,
@@ -385,7 +384,7 @@ def student_payments_pdf(request, student_id):
 
     payments = Payment.objects.filter(student=student).select_related("enrollment").order_by("due_date", "id")
 
-    year = _safe_int(request.GET.get("year"), default=None, low=2000, high=2100)
+    year = safe_int(request.GET.get("year"), default=None, low=MIN_QUERY_YEAR, high=MAX_QUERY_YEAR)
     suffix = ""
     if year:
         payments = payments.filter(due_date__year=year)
@@ -404,8 +403,10 @@ def update_payment(request, payment_id):
     """
     AJAX endpoint to update existing payment
     """
+    # Outside the try: Http404 subclasses Exception, so inside it the catch-all
+    # converted a plain missing row into a 500 + traceback in the logs.
+    payment = get_object_or_404(Payment, id=payment_id)
     try:
-        payment = get_object_or_404(Payment, id=payment_id)
         was_completed = payment.payment_status == "completed"
 
         # Parse data
@@ -502,6 +503,29 @@ def update_payment(request, payment_id):
             return JsonResponse({"success": False, "error": error_msg}, status=400)
         messages.error(request, error_msg)
         return redirect("payments_list")
+    except Http404:
+        # The student_id/parent_id lookups above — a missing row is a 404, not a
+        # server error to be swallowed by the catch-all.
+        raise
+    except IntegrityError as e:
+        # `full_clean(exclude=["student", ...])` SKIPS the unique-month constraint:
+        # Django's UniqueConstraint.validate() returns early when any of its
+        # expressions references an excluded field, and this one is keyed on
+        # F("student"). So an edit that moves a due date into an occupied month
+        # only surfaces here, at the database. Same actionable message
+        # create_payment gives; anything else stays generic.
+        logger.exception("IntegrityError while updating payment %d", int(payment_id))
+        if "unique_pending_periodic_payment_per_month" in str(e):
+            error_msg = (
+                "Ya existe un pago pendiente de ese tipo para ese alumno en ese mes. "
+                "Edita o cancela el pago existente en lugar de crear otro."
+            )
+        else:
+            error_msg = "Error al actualizar el pago. Inténtalo de nuevo."
+        if request.content_type == "application/json":
+            return JsonResponse({"success": False, "error": error_msg}, status=400)
+        messages.error(request, error_msg)
+        return redirect("payments_list")
     except Exception:
         logger.exception("Error updating payment %d", int(payment_id))
         error_msg = "Error al actualizar el pago. Inténtalo de nuevo."
@@ -516,8 +540,10 @@ def delete_payment(request, payment_id):
     """
     AJAX endpoint to delete payment
     """
+    # Outside the try — a double-clicked delete used to 500 ("Error al eliminar")
+    # on the second request while the first had already succeeded.
+    payment = get_object_or_404(Payment.objects.select_related("student"), id=payment_id)
     try:
-        payment = get_object_or_404(Payment, id=payment_id)
         student_name = payment.student.full_name
 
         payment.delete()
@@ -544,8 +570,8 @@ def deactivate_payment(request, payment_id):
     """
     Soft delete - deactivate payment instead of deleting
     """
+    payment = get_object_or_404(Payment, id=payment_id)
     try:
-        payment = get_object_or_404(Payment, id=payment_id)
         payment.payment_status = "cancelled"
         payment.save()
 
@@ -565,9 +591,8 @@ def quick_complete_payment(request, payment_id):
     AJAX endpoint to quickly complete a payment by setting its payment method.
     Expects JSON body: {"payment_method": "cash"|"transfer"|"credit_card"}
     """
-
+    payment = get_object_or_404(Payment.objects.select_related("student"), id=payment_id)
     try:
-        payment = get_object_or_404(Payment, id=payment_id)
         data = json.loads(request.body)
         payment_method = data.get("payment_method")
 
@@ -635,19 +660,20 @@ def get_payment_details(request, payment_id):
     """
     AJAX endpoint to get payment details
     """
+    payment = get_object_or_404(Payment.objects.select_related("student", "parent"), id=payment_id)
     try:
-        payment = get_object_or_404(Payment, id=payment_id)
-
         return JsonResponse(
             {
                 "success": True,
                 "payment": {
                     "id": payment.id,
-                    "student_id": payment.student.id,
+                    "student_id": payment.student_id,
                     "student_name": payment.student.full_name,
-                    "parent_id": payment.parent.id if payment.parent else None,
+                    # `_id` reads the FK column already on the row; `payment.parent.id`
+                    # fetched the whole related object just to return its pk.
+                    "parent_id": payment.parent_id,
                     "parent_name": payment.parent.full_name if payment.parent else "",
-                    "enrollment_id": (payment.enrollment.id if payment.enrollment else None),
+                    "enrollment_id": payment.enrollment_id,
                     "payment_type": payment.payment_type,
                     "payment_method": payment.payment_method,
                     "amount": str(payment.amount),
@@ -674,6 +700,7 @@ def get_payment_details(request, payment_id):
         )
 
 
+@require_http_methods(["GET"])
 def search_payments(request):
     """
     AJAX endpoint to search payments
@@ -718,6 +745,7 @@ def search_payments(request):
     return JsonResponse({"results": results})
 
 
+@require_http_methods(["GET"])
 def export_payments(request):
     """
     Export payments to CSV
@@ -741,9 +769,11 @@ def export_payments(request):
         ]
     )
 
+    # `.iterator()` streams from the server-side cursor instead of materialising
+    # the entire payments table as model objects before the first row is written.
     payments = Payment.objects.all().select_related("student", "parent").order_by("-created_at")
 
-    for payment in payments:
+    for payment in payments.iterator(chunk_size=2000):
         # csv_safe_row: names and concepts are free text set by any teacher, and
         # a leading =/+/-/@ makes the cell a formula in the admin's spreadsheet.
         writer.writerow(
@@ -767,6 +797,7 @@ def export_payments(request):
     return response
 
 
+@require_http_methods(["GET"])
 def export_database_excel(request):
     """Export Estudiantes, Matrículas and Pagos as a single .xlsx file."""
     from billing.exports import build_database_workbook
@@ -779,6 +810,7 @@ def export_database_excel(request):
     return response
 
 
+@require_http_methods(["GET"])
 def search_parents(request):
     """AJAX endpoint to search parents"""
     query = request.GET.get("q", "").strip()
@@ -853,6 +885,8 @@ def validate_student_parent(request):
 
     except json.JSONDecodeError:
         return JsonResponse({"valid": False, "message": "Invalid JSON data"}, status=400)
+    except Http404:
+        raise
     except Exception:
         logger.exception("Error validating payment payload")
         return JsonResponse({"valid": False, "message": "Datos de pago inválidos."}, status=400)

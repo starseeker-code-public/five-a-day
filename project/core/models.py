@@ -274,14 +274,14 @@ class BacklogTask(models.Model):
     """QA backlog tasks — created by testers, optionally emailed to support."""
 
     PRIORITY_CHOICES = [
-        ("low", "Low"),
-        ("medium", "Medium"),
-        ("high", "High"),
+        ("low", "Baja"),
+        ("medium", "Media"),
+        ("high", "Alta"),
     ]
     STATUS_CHOICES = [
-        ("open", "Open"),
-        ("in_progress", "In Progress"),
-        ("done", "Done"),
+        ("open", "Abierta"),
+        ("in_progress", "En progreso"),
+        ("done", "Hecha"),
     ]
 
     title = models.CharField(max_length=300)

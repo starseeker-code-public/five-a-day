@@ -29,9 +29,9 @@ class AuditLog(models.Model):
     """
 
     ACTION_CHOICES = [
-        ("create", "Create"),
-        ("update", "Update"),
-        ("delete", "Delete"),
+        ("create", "Creación"),
+        ("update", "Modificación"),
+        ("delete", "Eliminación"),
     ]
 
     actor = models.ForeignKey(

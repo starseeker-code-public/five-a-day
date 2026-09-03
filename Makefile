@@ -435,10 +435,13 @@ pc-run:
 			echo "Updated version $$CURRENT with new version $$NEW (pyproject.toml, README badge, uv.lock; settings.py derives)"; \
 			echo "Reminder: Recent Versions + Version History in README were NOT touched - run '/update-readme' skill to refresh them."; \
 		fi; \
-	fi
-	@if [ -n "$$(git status --porcelain uv.lock 2>/dev/null)" ]; then \
-		git add uv.lock; \
-		echo "Staged updated uv.lock"; \
+		if [ -n "$$(git status --porcelain uv.lock 2>/dev/null)" ]; then \
+			git add uv.lock; \
+			echo "Staged updated uv.lock"; \
+		fi; \
+	else \
+		echo "❌ pre-commit FAILED — fix the reported issues before committing."; \
+		exit 1; \
 	fi
 
 # ============================================================================

@@ -55,7 +55,15 @@ _PARENT_SESSION_KEY = "parent_id"
 #: Set when the session was opened with an emailed temporary password. While it
 #: is set the portal is closed except for the change-password page.
 _PARENT_MUST_CHANGE_KEY = "parent_must_change_password"
+#: ISO stamp of the parent's credential at session-open. A password change bumps
+#: `Parent.portal_credential_changed_at`, so a session carrying an older stamp is
+#: rejected — that is how a reset logs out every OTHER device.
+_PARENT_CRED_STAMP_KEY = "parent_credential_stamp"
 _PARENT_SESSION_MAX_AGE = 60 * 60 * 6  # 6 hours
+
+
+def _credential_stamp(parent: Parent) -> str:
+    return parent.portal_credential_changed_at.isoformat() if parent.portal_credential_changed_at else ""
 
 
 def _start_parent_session(request, parent_id: int, *, must_change_password: bool = False) -> None:
@@ -75,6 +83,9 @@ def _start_parent_session(request, parent_id: int, *, must_change_password: bool
     """
     request.session.flush()
     request.session[_PARENT_SESSION_KEY] = parent_id
+    parent = Parent.objects.filter(id=parent_id).first()
+    if parent is not None:
+        request.session[_PARENT_CRED_STAMP_KEY] = _credential_stamp(parent)
     if must_change_password:
         request.session[_PARENT_MUST_CHANGE_KEY] = True
     request.session.set_expiry(_PARENT_SESSION_MAX_AGE)
@@ -84,7 +95,16 @@ def _current_parent(request) -> Parent | None:
     pid = request.session.get(_PARENT_SESSION_KEY)
     if not pid:
         return None
-    return Parent.objects.filter(id=pid).first()
+    parent = Parent.objects.filter(id=pid).first()
+    if parent is None:
+        return None
+    # A password change since this session was opened invalidates it — this is
+    # how a reset ends every OTHER device. The session that performed the change
+    # is re-stamped there (see parent_portal_change_password), so it survives.
+    if request.session.get(_PARENT_CRED_STAMP_KEY, "") != _credential_stamp(parent):
+        request.session.flush()
+        return None
+    return parent
 
 
 def _require_parent(request, *, allow_pending_change: bool = False):
@@ -237,15 +257,30 @@ def parent_portal_login(request):
     history and downloads their tax certificate, so it is worth as much to an
     attacker as the staff login is.
     """
-    if request.session.get(_PARENT_SESSION_KEY):
+    # Resolve the row, not just the session key: if the Parent was deleted while
+    # a session lingered (admin delete, or a QA `seed_database --reset`), keying
+    # on the bare id sent them to the dashboard, which `_require_parent` bounced
+    # back to login, which bounced back here — an infinite redirect. A stale
+    # session is cleared so this renders the login form normally.
+    if _current_parent(request) is not None:
         return redirect("parent_portal_dashboard")
+    request.session.pop(_PARENT_SESSION_KEY, None)
 
     if request.method == "POST":
         email = (request.POST.get("email") or "").strip().lower()
         password = request.POST.get("password") or ""
 
         parent = _parent_by_email(email)
-        matched = parent.authenticate_portal(password) if parent is not None else None
+        if parent is not None:
+            matched = parent.authenticate_portal(password)
+        else:
+            # Spend the same hashing work a real failed login costs, so an
+            # unknown address cannot be told from a known one by response time —
+            # the enumeration defence the unified error message assumes.
+            from students.models import burn_portal_login_work
+
+            burn_portal_login_work(password)
+            matched = None
         if matched is not None:
             # A temporary password is a credential sitting in plaintext in the
             # family's inbox, so it buys exactly one thing: the right to replace
@@ -282,9 +317,12 @@ def parent_portal_forgot_password(request):
     overwrite here would let anyone who knows a family's address lock them out
     of their own payment history.
 
-    The response is identical for a known and an unknown address, and the send
-    is queued rather than performed inline so response time cannot be used to
-    tell them apart either.
+    The response is identical for a known and an unknown address. The dominant
+    per-request work is a password hash; an unknown address burns an equivalent
+    one so hashing time cannot separate the two. (The email send for a known
+    address is still additional work; the rate limit and the identical response
+    body are what bound that residual, and production has no broker to defer it
+    to — do not "fix" that by branching the response.)
     """
     if request.method == "POST":
         email = (request.POST.get("email") or "").strip().lower()
@@ -296,9 +334,13 @@ def parent_portal_forgot_password(request):
         if parent is not None:
             send_portal_temporary_password(request, parent, reset=True)
         else:
-            # Deliberately not logging the address — this endpoint exists to
-            # not reveal whether an email is registered, and the log is a place
-            # that story leaks from.
+            # Match the make_password() cost the known branch pays inside
+            # issue_temporary_password, so an unknown address is not measurably
+            # faster. Deliberately not logging the address — the log is a place
+            # the "is this email registered" story leaks from.
+            from students.models import burn_portal_login_work
+
+            burn_portal_login_work(email)
             logger.info("Parent portal recovery requested for an unregistered email")
 
         return render(request, "parent_portal/login_sent.html", {"email": email})
@@ -353,6 +395,14 @@ def parent_portal_change_password(request):
             errors.append("Las contraseñas no coinciden.")
         elif not forced and password == current:
             errors.append("La contraseña nueva debe ser distinta de la actual.")
+        elif forced and parent.authenticate_portal(password) == PORTAL_AUTH_TEMPORARY:
+            # The forced flow exists BECAUSE the credential in play is a
+            # plaintext temporary password sitting in an inbox — keeping it as
+            # the permanent one defeats the whole point (and the email tells the
+            # family "la temporal deja de funcionar"). The voluntary flow's
+            # `password == current` guard cannot catch this because `current` is
+            # deliberately not asked for here.
+            errors.append("La contraseña nueva debe ser distinta de la contraseña temporal.")
         else:
             try:
                 validate_password(password, password_validators=_parent_password_validators())
@@ -369,9 +419,13 @@ def parent_portal_change_password(request):
             )
 
         # Clears `temporary_password` as a side effect, so the credential that
-        # is sitting in the family's inbox stops working right here.
+        # is sitting in the family's inbox stops working right here. Also bumps
+        # `portal_credential_changed_at`, invalidating every OTHER portal session.
         parent.set_portal_password(password)
         request.session.pop(_PARENT_MUST_CHANGE_KEY, None)
+        # Re-stamp THIS session with the new credential marker so the device
+        # that just changed the password is not logged out by its own change.
+        request.session[_PARENT_CRED_STAMP_KEY] = _credential_stamp(parent)
         # Cycle the key on a credential change, the same reason login does:
         # anything that captured the old session id must not keep the account.
         request.session.cycle_key()

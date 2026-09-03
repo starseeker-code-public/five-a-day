@@ -108,6 +108,11 @@ def _finalize_session_login(request, user, display_name: str, *, google: bool = 
     request.session["username"] = display_name
     if google:
         request.session["google_authenticated"] = True
+    # Reset the expiry to the configured age. A 2FA login arrives here via
+    # `_stage_pending_2fa`, which set a 5-minute expiry to bound the OTP step;
+    # cycle_key preserves it, so without this a 2FA-enabled admin got a session
+    # that idle-expired in 5 minutes instead of the normal 6 hours.
+    request.session.set_expiry(settings.SESSION_COOKIE_AGE)
 
 
 def _needs_two_factor(user) -> bool:
@@ -286,11 +291,24 @@ def _ensure_oauth_superuser(email: str, first_name: str) -> "User":
 
     # If a Teacher exists with this email but isn't linked, link it now so the
     # whitelist logic in middleware sees the relationship.
+    #
+    # `Teacher.email` is unique, but Postgres uniqueness is case-SENSITIVE while
+    # this lookup is iexact — so `Ana@x.com` and `ana@x.com` can coexist and
+    # `.first()` would pick the lower pk, which decides the linked account's
+    # admin status. Refuse an ambiguous match (link nothing) rather than guess;
+    # an admin resolves the duplicate. `linked_user` on the Teacher signal keeps
+    # the flags in sync once linked.
     from students.models import Teacher
 
-    teacher = Teacher.objects.filter(email__iexact=email).first()
-    if teacher and teacher.user_id != user.pk:
-        Teacher.objects.filter(pk=teacher.pk).update(user=user)
+    matches = list(Teacher.objects.filter(email__iexact=email)[:2])
+    if len(matches) == 1:
+        teacher = matches[0]
+        if teacher.user_id != user.pk:
+            Teacher.objects.filter(pk=teacher.pk).update(user=user)
+    elif len(matches) > 1:
+        _oauth_log.error(
+            "OAuth link: refusing an ambiguous Teacher email match (%d rows differ only by case)", len(matches)
+        )
 
     return user
 

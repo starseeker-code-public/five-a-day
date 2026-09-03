@@ -107,16 +107,28 @@ if (btnCancelEdit) btnCancelEdit.addEventListener('click', cancelEdit);
 const btnSaveConfig = document.getElementById('btn-save-config');
 if (btnSaveConfig) btnSaveConfig.addEventListener('click', async function() {
     const data = {};
+    let invalid = null;
     document.querySelectorAll('.config-input').forEach(input => {
         if (!input.disabled && input.name) {
             const parsedValue = Number.parseFloat(String(input.value).replace(',', '.'));
             if (Number.isNaN(parsedValue)) {
-                showToast('Revisa los importes antes de guardar', 'error');
+                // `return` here only skipped ONE input — the loop finished, the
+                // bad field was dropped from `data`, the request fired anyway
+                // and update_site_config saved the rest, so a mistyped fee
+                // showed a green "guardado" while the OLD price stayed live.
+                // Record it and ABORT the whole save below.
+                if (!invalid) invalid = input;
                 return;
             }
             data[input.name] = parsedValue;
         }
     });
+
+    if (invalid) {
+        showToast('Revisa los importes: hay un valor no válido. No se ha guardado nada.', 'error');
+        if (invalid.focus) invalid.focus();
+        return;
+    }
 
     try {
         const response = await fetch(window.MANAGEMENT_CONFIG.updateConfigUrl, {

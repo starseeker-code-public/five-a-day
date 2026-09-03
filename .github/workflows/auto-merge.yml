@@ -4,6 +4,8 @@ name: Auto-merge development → testing
 #   1. development has commits not yet in testing
 #   2. the last commit on development is at least 3h old
 #   3. CI is passing on the latest development commit
+#   4. the version named in the last commit subject (if any) matches pyproject.toml
+#      — a mismatch FAILS the run (red), it does not quietly skip
 # After a successful merge, creates a PR from testing → main (if one doesn't exist).
 
 on:
@@ -99,6 +101,20 @@ jobs:
           # output and must never be interpolated into a shell or JS body later —
           # see the `env:` blocks on the merge and PR steps.
           LAST_MSG=$(git log origin/development -1 --format="%s")
+
+          # 4. If the commit subject names a version, it must be pyproject's.
+          # A release commit titled "v1.26.8" whose tree carried pyproject
+          # 1.27.0 produced PR #65 with a v1.26.8 title over a v1.27.0 body
+          # and staging tag — a reviewer cannot tell which half to trust.
+          # This is a repo-state ERROR, not a "not yet" state, so it fails
+          # the run loudly instead of the quiet should_merge=false skip.
+          # (The subject is only ever read through the quoted variable, and
+          # SUBJECT_VERSION is regex-constrained to digits and dots.)
+          SUBJECT_VERSION=$(printf '%s' "$LAST_MSG" | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' | head -1 | sed 's/^v//')
+          if [ -n "$SUBJECT_VERSION" ] && [ "$SUBJECT_VERSION" != "$DEV_VERSION" ]; then
+            echo "::error::Last development commit subject names v${SUBJECT_VERSION} but pyproject.toml on development says ${DEV_VERSION}. The subject of the LAST commit becomes the merge message and the release PR title, so fix the mismatch before this can merge: push a commit whose subject carries v${DEV_VERSION}, or correct pyproject.toml with 'make version'."
+            exit 1
+          fi
 
           echo "should_merge=true"    >> "$GITHUB_OUTPUT"
           echo "last_sha=$LAST_SHA"   >> "$GITHUB_OUTPUT"

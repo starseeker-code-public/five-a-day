@@ -49,6 +49,28 @@ def _version_from_pyproject() -> str:
 # rebuild. See CLAUDE.md — a legacy APP_VERSION line in .env silently overrides.
 APP_VERSION = os.getenv("APP_VERSION") or _version_from_pyproject()
 
+
+def _env_int(name: str, default: int) -> int:
+    """An int env var that survives sloppy values.
+
+    `int(os.getenv(name, "N"))` bricks the whole process at settings import —
+    gunicorn, migrate, every Cloud Run Job — the moment the var exists but is
+    empty (a `KEY=` line left in .env, or a value blanked by --update-env-vars)
+    or carries junk. A bad value here should mean "the default", loudly, not an
+    academy-wide outage.
+    """
+    raw = (os.getenv(name) or "").strip()
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        import logging
+
+        logging.getLogger(__name__).error("Invalid integer for env %s; using default %d", name, default)
+        return default
+
+
 # ============================================================================
 # SECURITY SETTINGS
 # ============================================================================
@@ -61,8 +83,11 @@ DEBUG = os.getenv("DJANGO_DEBUG", "False").lower() in ("true", "1", "t")
 if not DEBUG and SECRET_KEY == "dev-secret-key-change-in-production":
     raise ValueError("⚠️  DJANGO_SECRET_KEY debe ser cambiado en producción!")
 
-# Parse ALLOWED_HOSTS from comma-separated string
-ALLOWED_HOSTS = os.getenv("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1").split(",")
+# Parse ALLOWED_HOSTS from comma-separated string. Each entry is stripped (the
+# CSRF list below always was): "host1, host2" produced " host2", which matches
+# no Host header, and that host answered 400 DisallowedHost while /health/ on
+# the first one stayed green.
+ALLOWED_HOSTS = [h.strip() for h in os.getenv("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1").split(",") if h.strip()]
 
 # Security settings for production
 if not DEBUG:
@@ -72,7 +97,7 @@ if not DEBUG:
     CSRF_COOKIE_SECURE = os.getenv("CSRF_COOKIE_SECURE", "True").lower() == "true"
 
     # HSTS (HTTP Strict Transport Security)
-    SECURE_HSTS_SECONDS = int(os.getenv("SECURE_HSTS_SECONDS", "31536000"))  # 1 año
+    SECURE_HSTS_SECONDS = _env_int("SECURE_HSTS_SECONDS", 31536000)  # 1 año
     SECURE_HSTS_INCLUDE_SUBDOMAINS = os.getenv("SECURE_HSTS_INCLUDE_SUBDOMAINS", "True").lower() == "true"
     SECURE_HSTS_PRELOAD = os.getenv("SECURE_HSTS_PRELOAD", "True").lower() == "true"
 
@@ -119,7 +144,7 @@ HEALTH_PROBE_TOKEN = os.getenv("HEALTH_PROBE_TOKEN", "")
 # ============================================================================
 # SESSION CONFIGURATION
 # ============================================================================
-SESSION_COOKIE_AGE = int(os.getenv("SESSION_COOKIE_AGE", "21600"))  # 6 horas
+SESSION_COOKIE_AGE = _env_int("SESSION_COOKIE_AGE", 21600)  # 6 horas
 # Re-save the session on every request so the 6h window is INACTIVITY-based:
 # any activity resets the timer, and 6h with no activity auto-logs-out.
 SESSION_SAVE_EVERY_REQUEST = os.getenv("SESSION_SAVE_EVERY_REQUEST", "True").lower() == "true"
@@ -138,6 +163,11 @@ SESSION_COOKIE_SAMESITE = os.getenv("SESSION_COOKIE_SAMESITE", "Lax")
 # ============================================================================
 SUPPORT_EMAIL = os.getenv("SUPPORT_EMAIL", None)
 
+# Google Drive folder where expense receipts / justificantes live. Empty by
+# default: the "Consultar recibos" buttons are HIDDEN when it is unset, rather
+# than shipping a link to Drive's generic home page (the old placeholder).
+GOOGLE_DRIVE_RECEIPTS_URL = os.getenv("GOOGLE_DRIVE_RECEIPTS_URL", "")
+
 # ============================================================================
 # RATE LIMITING
 # ============================================================================
@@ -146,7 +176,14 @@ SUPPORT_EMAIL = os.getenv("SUPPORT_EMAIL", None)
 # APPENDS what it saw — everything to the left of our own hops is attacker
 # controlled. Cloud Run and a single nginx are both 1. Use 0 when the app is
 # reached directly, so X-Forwarded-For is ignored entirely.
-TRUSTED_PROXY_COUNT = int(os.getenv("TRUSTED_PROXY_COUNT", "1"))
+#
+# The DEFAULT is environment-aware: production sits behind Cloud Run's front end
+# (exactly one trusted hop), but the QA VM and the dev stack bind Gunicorn
+# straight to the interface with NO proxy — there, a default of 1 meant the
+# bucket key was read from a header only the client wrote, so a rotating
+# X-Forwarded-For gave every request a fresh window and defeated every
+# credential throttle on an internet-exposed host.
+TRUSTED_PROXY_COUNT = _env_int("TRUSTED_PROXY_COUNT", 1 if ENVIRONMENT == "production" else 0)
 
 # The rate limiter is backed by the cache, so the cache backend decides whether
 # the limit is real. Django's default LocMemCache is PER-PROCESS: with Gunicorn's
@@ -455,7 +492,11 @@ USE_TZ = True
 # ============================================================================
 # LOGGING CONFIGURATION
 # ============================================================================
-LOG_LEVEL = os.getenv("LOG_LEVEL", "DEBUG" if DEBUG else "INFO")
+# Normalised + validated: dictConfig raises on an unknown level, and a
+# well-meaning `LOG_LEVEL=info` (lowercase) prevented the whole app from booting.
+LOG_LEVEL = (os.getenv("LOG_LEVEL") or ("DEBUG" if DEBUG else "INFO")).strip().upper()
+if LOG_LEVEL not in ("CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG"):
+    LOG_LEVEL = "DEBUG" if DEBUG else "INFO"
 
 LOGGING = {
     "version": 1,
@@ -518,13 +559,25 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 # ============================================================================
 # EMAIL CONFIGURATION
 # ============================================================================
-EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
-EMAIL_HOST = "smtp.gmail.com"
-EMAIL_PORT = 587
-EMAIL_USE_TLS = True
+# Backend is env-overridable so a non-production environment can opt OUT of real
+# SMTP. The QA/testing VM runs the full Celery Beat schedule (birthday, payment
+# reminders, monthly report, Fun Friday) and, hard-wired to Gmail, would
+# autonomously mail whatever addresses its database holds — a real hazard the
+# moment a production dump is restored onto it. Set
+# EMAIL_BACKEND=django.core.mail.backends.console.EmailBackend (or .dummy) in
+# .env.testing to neutralise that; production leaves it at the SMTP default.
+EMAIL_BACKEND = os.getenv("EMAIL_BACKEND", "django.core.mail.backends.smtp.EmailBackend")
+EMAIL_HOST = os.getenv("EMAIL_HOST", "smtp.gmail.com")
+EMAIL_PORT = _env_int("EMAIL_PORT", 587)
+EMAIL_USE_TLS = os.getenv("EMAIL_USE_TLS", "True").lower() in ("true", "1", "t")
 EMAIL_HOST_USER = os.getenv("EMAIL_HOST_USER", "")
 EMAIL_HOST_PASSWORD = os.getenv("EMAIL_SECRET", "")
 DEFAULT_FROM_EMAIL = EMAIL_HOST_USER
+# A hung SMTP socket must not park a Gunicorn worker forever. Without this,
+# smtplib inherits the OS default connect timeout (minutes), and the mass-mail
+# views send synchronously in the request — one blackholed port 587 could wedge
+# a worker until it was killed. 20 s is generous for Gmail.
+EMAIL_TIMEOUT = _env_int("EMAIL_TIMEOUT", 20)
 
 # ============================================================================
 # CELERY CONFIGURATION

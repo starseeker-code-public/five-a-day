@@ -63,7 +63,20 @@ def _create_enrollment_fee_payment(student, parent, enrollment, enrollment_form)
     start = enrollment.enrollment_date or date.today()
     due_date = date(start.year, start.month, calendar.monthrange(start.year, start.month)[1])
 
-    Payment.objects.create(
+    # A fully discounted matrícula (fee minus returning-student discount can reach
+    # 0.00) means there is nothing to collect — creating a €0.00 pending Payment
+    # would bypass `Payment.amount`'s MinValueValidator (objects.create() never
+    # validates), sit on the ficha as an uncollectable debt, and be chased by the
+    # reminder cron forever.
+    if enrollment_fee <= Decimal("0.00"):
+        logger.info(
+            "Matrícula for student %d is fully discounted (%.2f); no enrollment-fee payment created.",
+            int(student.pk),
+            enrollment_fee,
+        )
+        return enrollment_fee
+
+    payment = Payment(
         student=student,
         parent=parent,
         enrollment=enrollment,
@@ -75,7 +88,64 @@ def _create_enrollment_fee_payment(student, parent, enrollment, enrollment_form)
         due_date=due_date,
         concept=concept,
     )
+    # `objects.create()` skips validation entirely; run the model's own rules
+    # (amount floor, student-parent relationship) before persisting.
+    payment.full_clean()
+    payment.save()
     return enrollment_fee
+
+
+def _first_day_of_next_month(today=None):
+    today = today or date.today()
+    if today.month == 12:
+        return date(today.year + 1, 1, 1)
+    return date(today.year, today.month + 1, 1)
+
+
+def _supersede_enrollment(student, current, enrollment_form):
+    """Close the active enrollment ahead of the replacement `enrollment_form` will issue.
+
+    Shared by ``StudentUpdateView`` (plan change) and ``enroll_student`` (the
+    "Nueva matrícula" modal), because the two hazards it manages are identical:
+
+    * **The gap.** A future-dated re-enrollment (today, starting 1 November)
+      used to finish the old enrollment immediately — so the cron, which only
+      visits ACTIVE enrollments, never opened October, and no back-fill could
+      repair it because the new enrollment's schedule starts in November. The
+      old enrollment's remaining periods up to the day before the new start are
+      issued here, before it is closed.
+    * **The overlap.** The old enrollment's pending periodic rows for months the
+      new schedule will re-bill are cancelled — under a modality switch they
+      carry a different `payment_type`, so neither the month-level idempotency
+      nor the DB constraint would stop the same month being billed twice.
+      Same-type rows are kept (the month-level idempotency already covers them,
+      and a cancelled row still occupies its month so it could not be re-billed
+      at the new price). Months before the new start stay owed.
+
+    A pending QUARTER that spans the switch date is cancelled with the rest —
+    re-billing its already-taught head months is `reconcile_payment_schedule`'s
+    job, not something to improvise here.
+    """
+    from datetime import timedelta
+
+    from billing.services.enrollment_service import EnrollmentService
+    from billing.services.payment_service import PaymentService
+
+    data = enrollment_form.cleaned_data
+    new_start = data.get("start_date") or date.today()
+    new_type = "quarterly" if data.get("enrollment_plan") == "quarterly" else "monthly"
+
+    if current is not None and new_start > date.today():
+        parent = None if student.is_adult else student.parents.order_by("id").first()
+        PaymentService.schedule_academic_year_payments(current, parent, as_of=new_start - timedelta(days=1))
+
+    EnrollmentService.close_active_enrollments(
+        student,
+        "finished",
+        cancel_pending_periodic=True,
+        keep_payment_type=new_type,
+        cancel_from=date(new_start.year, new_start.month, 1),
+    )
 
 
 class StudentCreateView(CreateView):
@@ -150,10 +220,15 @@ class StudentCreateView(CreateView):
         context["groups"] = Group.objects.filter(active=True)
         context["waiting_entry"] = waiting_entry
 
+        from billing.services.pricing_service import PricingService
+
         config = SiteConfiguration.get_config()
-        # Quarterly = 3 * full_time - 5%
+        # Quarterly = 3 * full_time - discount%. Through PricingService — this
+        # strike-through widget is what the admin sanity-checks the price against,
+        # so it must be the same derivation the advertised prices use, not a
+        # fourth hand-rolled copy of the formula.
         quarterly_gross = config.full_time_monthly_fee * 3
-        quarterly_price = quarterly_gross * (1 - config.quarterly_enrollment_discount / 100)
+        quarterly_price = PricingService.calculate_quarterly_price(config)
         context["price_config"] = {
             "monthly_full": str(config.full_time_monthly_fee),
             "monthly_part": str(config.part_time_monthly_fee),
@@ -173,11 +248,14 @@ class StudentCreateView(CreateView):
         # First-period proration. A student joining part-way through a month pays
         # only the remaining days OF THAT MONTH, so the first fee differs from the
         # recurring one and the form has to say so before the admin saves.
-        from billing.models import current_academic_year
+        from billing.models import enrollment_academic_year
         from billing.services.payment_service import MONTH_NAMES_ES, PaymentService
 
         today = date.today()
-        sequence = PaymentService.teaching_months(current_academic_year(today))
+        # Same year rule the enrollment itself will be stamped with — a 15 May
+        # signup attends the RUNNING course, so its first period is May, not the
+        # September of the next course. `student-create.js` mirrors this.
+        sequence = PaymentService.teaching_months(enrollment_academic_year(today))
         first = next(((m, y) for m, y in sequence if PaymentService._last_day(m, y) >= today), None)
         if first is not None:
             first_month, first_year = first
@@ -313,7 +391,11 @@ class StudentCreateView(CreateView):
                             enrollment_id=_enrollment_id,
                         )
                     except Exception:
-                        pass  # never fail the request over email dispatch
+                        # Never fail the request over email dispatch — but DO
+                        # record it, unlike the sibling helpers _queue_payment_receipt
+                        # and send_portal_temporary_password which log. A silent
+                        # `pass` left an unsent welcome email with no trace at all.
+                        logger.exception("Failed to enqueue welcome email for student %s", _student_id)
 
                 transaction.on_commit(_queue_welcome)
 
@@ -461,10 +543,23 @@ class StudentUpdateView(UpdateView):
                     initial["enrollment_plan"] = "monthly_part"
                 else:
                     initial["enrollment_plan"] = "monthly_full"
-                initial["discount"] = str(int(enrollment.discount_percentage))
                 initial["has_language_cheque"] = enrollment.has_language_cheque
                 initial["is_sibling_discount"] = enrollment.is_sibling_discount
-            context["enrollment_form"] = EnrollmentForm(self.request.POST or None, initial=initial)
+                # Pre-fill the price fields from the live enrollment. Without these,
+                # the form rendered its field DEFAULTS (start_date = today, special
+                # unticked), so `_enrollment_plan_changed` could not compare them —
+                # and an edit that only changed "Precio especial" or the start date
+                # was a silent no-op reported as success.
+                initial["start_date"] = enrollment.enrollment_date
+                is_special_now = enrollment.enrollment_type is not None and enrollment.enrollment_type.name == "special"
+                initial["is_special"] = is_special_now
+                if is_special_now:
+                    initial["manual_amount"] = enrollment.final_amount
+            context["enrollment_form"] = EnrollmentForm(
+                self.request.POST or None,
+                initial=initial,
+                current_start=enrollment.enrollment_date if enrollment else None,
+            )
 
         context["parents"] = self.object.parents.all()
         context["groups"] = Group.objects.filter(active=True)
@@ -492,9 +587,26 @@ class StudentUpdateView(UpdateView):
         # the plan widget, so compare only the discount flags for them.
         if current.schedule_type != "adult_group" and (current.payment_modality, current.schedule_type) != wanted:
             return True
-        return current.has_language_cheque != bool(
-            data.get("has_language_cheque")
-        ) or current.is_sibling_discount != bool(data.get("is_sibling_discount"))
+        if current.has_language_cheque != bool(data.get("has_language_cheque")) or current.is_sibling_discount != bool(
+            data.get("is_sibling_discount")
+        ):
+            return True
+
+        # Price fields the edit form also submits. Comparing only the plan meant
+        # ticking "Precio especial" + typing €25 returned False here, no new
+        # enrollment was issued, and the page still said "actualizado
+        # exitosamente" while the generator kept billing the standard rate.
+        current_is_special = current.enrollment_type is not None and current.enrollment_type.name == "special"
+        wants_special = bool(data.get("is_special") and data.get("manual_amount"))
+        if current_is_special != wants_special:
+            return True
+        if wants_special and data.get("manual_amount") != current.final_amount:
+            return True
+
+        # The form pre-fills start_date from the live enrollment, so a changed
+        # value here is the admin deliberately moving the start.
+        start = data.get("start_date")
+        return bool(start and current.enrollment_date and start != current.enrollment_date)
 
     def form_valid(self, form):
         from billing.services.enrollment_service import EnrollmentService
@@ -505,9 +617,20 @@ class StudentUpdateView(UpdateView):
         is_waiting_now = form.cleaned_data.get("is_waiting", False)
         student_pk = self.object.pk if self.object else None
 
+        current = None
+        if student_pk:
+            current = (
+                Student.objects.get(pk=student_pk)
+                .enrollments.filter(status="active")
+                .order_by("-enrollment_date", "-id")
+                .first()
+            )
+
         enrollment_form = None
         if not is_waiting_now:
-            enrollment_form = EnrollmentForm(self.request.POST)
+            enrollment_form = EnrollmentForm(
+                self.request.POST, current_start=current.enrollment_date if current else None
+            )
             if not enrollment_form.is_valid():
                 return self.form_invalid(form)
 
@@ -516,8 +639,17 @@ class StudentUpdateView(UpdateView):
                 student = form.save()
 
                 if is_waiting_now:
-                    # Cancel any active enrollment — the student is off the roster.
-                    EnrollmentService.close_active_enrollments(student, "cancelled")
+                    # Cancel any active enrollment — the student is off the roster —
+                    # and with it the FUTURE months of its recurring schedule.
+                    # Already-taught months (due up to the end of this one) stay
+                    # owed; leaving the future ones pending kept billing and
+                    # chasing a family whose child no longer attends.
+                    EnrollmentService.close_active_enrollments(
+                        student,
+                        "cancelled",
+                        cancel_pending_periodic=True,
+                        cancel_from=_first_day_of_next_month(),
+                    )
                 else:
                     # Only re-issue the enrollment when the plan actually
                     # changed. This used to run unconditionally, so saving an
@@ -525,9 +657,8 @@ class StudentUpdateView(UpdateView):
                     # enrollment "finished" and created a duplicate — students
                     # accumulated a new enrollment row per edit, and payments
                     # then attached to whichever one came back first.
-                    current = student.enrollments.filter(status="active").order_by("-enrollment_date", "-id").first()
                     if current is None or self._enrollment_plan_changed(current, enrollment_form):
-                        EnrollmentService.close_active_enrollments(student, "finished")
+                        _supersede_enrollment(student, current, enrollment_form)
                         enrollment_form.create_enrollment(student, is_adult=student.is_adult)
 
                 messages.success(
@@ -546,9 +677,11 @@ class StudentUpdateView(UpdateView):
         return HttpResponseRedirect(self.get_success_url())
 
     def form_invalid(self, form):
-        context = self.get_context_data(form=form)
-        context["enrollment_form"] = EnrollmentForm(self.request.POST)
-        return self.render_to_response(context)
+        # get_context_data already builds the bound enrollment form (with
+        # `current_start`, which the date-window validation needs) — overriding
+        # it here with a bare EnrollmentForm(self.request.POST) would re-validate
+        # without that context and reject an unchanged past start date.
+        return self.render_to_response(self.get_context_data(form=form))
 
 
 class StudentDetailView(DetailView):
@@ -694,14 +827,16 @@ def enroll_student(request, student_id):
     charge_fee = request.POST.get("charge_enrollment_fee") in ("on", "true", "1")
 
     try:
-        from billing.services.enrollment_service import EnrollmentService
         from billing.services.payment_service import PaymentService
 
         with transaction.atomic():
             # One ACTIVE enrollment per student (DB constraint) — the new
             # matrícula supersedes the current one, same as StudentUpdateView
-            # does on a plan change.
-            EnrollmentService.close_active_enrollments(student, "finished")
+            # does on a plan change. `_supersede_enrollment` also gap-fills the
+            # months up to a future start and cancels the pending rows the new
+            # schedule re-bills.
+            current = student.enrollments.filter(status="active").order_by("-enrollment_date", "-id").first()
+            _supersede_enrollment(student, current, enrollment_form)
 
             enrollment = enrollment_form.create_enrollment(student, is_adult=student.is_adult)
 

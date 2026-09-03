@@ -495,8 +495,12 @@ class Command(BaseCommand):
         enrollment.enrollment_date = self.sept_start
         enrollment.save(update_fields=["enrollment_date"])
 
-        # Matrícula (enrollment fee) — same helper the real view uses.
-        fee, returning_discount = EnrollmentService.compute_enrollment_fee(self.config, student, is_adult=is_adult)
+        # Matrícula (enrollment fee) — same helper the real view uses, including
+        # `this_academic_year` so a start-dated enrollment does not misread as
+        # prior history and wrongly earn the returning-student discount.
+        fee, returning_discount = EnrollmentService.compute_enrollment_fee(
+            self.config, student, is_adult=is_adult, this_academic_year=enrollment.academic_year
+        )
         concept = f"Matrícula {enrollment.academic_year} — {student.full_name}"
         if returning_discount:
             concept += f" (dto. alumno recurrente −{returning_discount:.2f} €)"

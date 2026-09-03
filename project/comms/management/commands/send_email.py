@@ -26,6 +26,7 @@ from comms.services.email_functions import (
     send_vacation_closure_email,
 )
 from comms.services.email_service import email_service
+from core.constants import DIAS_ES, MESES_ES
 from students.models import Parent, Student
 
 
@@ -52,9 +53,14 @@ class Command(BaseCommand):
         parser.add_argument("--month", type=str, help="Mes del pago")
         parser.add_argument("--payment-start", type=str, default="1", help="Día inicio pago")
         parser.add_argument("--payment-end", type=str, default="5", help="Día fin pago")
-        parser.add_argument("--iban", type=str, default="ES00 0000 0000 0000 0000 0000")
-        parser.add_argument("--cheque-idioma-price", type=str, default="40")
-        parser.add_argument("--bizum-phone", type=str, default="613 481 141")
+        # Defaults are None so the real sources (SiteConfiguration / env) are used
+        # when the flag is omitted. The old literal defaults shipped a PLACEHOLDER
+        # IBAN nobody could pay into and a cheque-idioma price of 40€ where the app
+        # derives 34€ — argparse always populates options, so the `.get(..., "")`
+        # fallbacks in the send code never fired.
+        parser.add_argument("--iban", type=str, default=None)
+        parser.add_argument("--cheque-idioma-price", type=str, default=None)
+        parser.add_argument("--bizum-phone", type=str, default=None)
         parser.add_argument("--vacation-closure", action="store_true", help="Cierre vacaciones")
         parser.add_argument("--reason", type=str, help="Motivo del cierre")
         parser.add_argument("--start", type=str, help="Fecha inicio cierre")
@@ -204,21 +210,6 @@ class Command(BaseCommand):
         except ValueError as err:
             raise CommandError("Formato de fecha inválido") from err
         start_time, end_time = options["time"].split("-")
-        DAYS_ES = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
-        MONTHS_ES = [
-            "enero",
-            "febrero",
-            "marzo",
-            "abril",
-            "mayo",
-            "junio",
-            "julio",
-            "agosto",
-            "septiembre",
-            "octubre",
-            "noviembre",
-            "diciembre",
-        ]
         parents = Parent.objects.filter(email__isnull=False, children__active=True).distinct()
         recipient_emails = [p.email for p in parents if p.email]
         # Send one email per parent. Previously the whole list was passed as
@@ -228,9 +219,9 @@ class Command(BaseCommand):
         for email in recipient_emails:
             if send_fun_friday_email(
                 recipients=email,
-                day_name=DAYS_ES[event_date.weekday()],
+                day_name=DIAS_ES[event_date.weekday()],
                 day_number=event_date.day,
-                month=MONTHS_ES[event_date.month - 1],
+                month=MESES_ES[event_date.month - 1],
                 start_time=start_time,
                 end_time=end_time,
                 activity_description=options["activity"],
@@ -245,7 +236,24 @@ class Command(BaseCommand):
     def send_payment_reminder_emails(self, options):
         if not options.get("month"):
             raise CommandError("Se requiere --month")
-        DAYS_ES = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
+
+        # Resolve the fee/IBAN from the real sources when the flags are omitted,
+        # so this command bills the same numbers the app does — SiteConfiguration
+        # is the single source of truth for prices.
+        import os
+
+        from billing.models import SiteConfiguration
+
+        config = SiteConfiguration.get_config()
+        iban = options.get("iban") or os.getenv("ACADEMY_IBAN", "")
+        # ACADEMY_PHONE, matching app_forms.py — production stores the Bizum
+        # number there (= the old hard-coded 613 481 141), and no
+        # ACADEMY_BIZUM_PHONE var exists on the service.
+        bizum_phone = options.get("bizum_phone") or os.getenv("ACADEMY_PHONE", "")
+        cheque_price = options.get("cheque_idioma_price")
+        if cheque_price is None:
+            cheque_price = f"{config.full_time_monthly_fee - config.language_cheque_discount:.0f}€"
+
         parents = Parent.objects.filter(email__isnull=False, children__active=True).exclude(email="").distinct()
         recipient_emails = list(parents.values_list("email", flat=True))
         # Per-parent loop — see send_fun_friday_emails for the "batch in To:"
@@ -254,14 +262,14 @@ class Command(BaseCommand):
         for email in recipient_emails:
             if send_payment_reminder_email(
                 recipients=email,
-                payment_start_day_name=DAYS_ES[0],
+                payment_start_day_name=DIAS_ES[0],
                 payment_start_day_number=int(options.get("payment_start", 1)),
-                payment_end_day_name=DAYS_ES[4],
+                payment_end_day_name=DIAS_ES[4],
                 payment_end_day_number=int(options.get("payment_end", 5)),
                 month=options["month"],
-                iban_number=options.get("iban", ""),
-                reduced_price_cheque_idioma=options.get("cheque_idioma_price", "40"),
-                telephone_number_bizum=options.get("bizum_phone", ""),
+                iban_number=iban,
+                reduced_price_cheque_idioma=cheque_price,
+                telephone_number_bizum=bizum_phone,
             ):
                 sent += 1
         self.stdout.write(self.style.SUCCESS(f"Enviado a {sent}/{len(recipient_emails)} padres"))
@@ -273,21 +281,6 @@ class Command(BaseCommand):
         start_date = datetime.strptime(options["start"], "%Y-%m-%d")
         end_date = datetime.strptime(options["end"], "%Y-%m-%d")
         reopen_date = datetime.strptime(options["reopen"], "%Y-%m-%d")
-        DAYS_ES = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
-        MONTHS_ES = [
-            "enero",
-            "febrero",
-            "marzo",
-            "abril",
-            "mayo",
-            "junio",
-            "julio",
-            "agosto",
-            "septiembre",
-            "octubre",
-            "noviembre",
-            "diciembre",
-        ]
         parents = Parent.objects.filter(email__isnull=False, children__active=True).exclude(email="").distinct()
         recipient_emails = list(parents.values_list("email", flat=True))
         # Per-parent loop — see send_fun_friday_emails for the "batch in To:"
@@ -296,20 +289,20 @@ class Command(BaseCommand):
         for email in recipient_emails:
             if send_vacation_closure_email(
                 recipients=email,
-                start_closure_day_name=DAYS_ES[start_date.weekday()],
+                start_closure_day_name=DIAS_ES[start_date.weekday()],
                 start_closure_day_number=start_date.day,
-                end_closure_day_name=DAYS_ES[end_date.weekday()],
+                end_closure_day_name=DIAS_ES[end_date.weekday()],
                 end_closure_day_number=end_date.day,
-                month_closure=MONTHS_ES[start_date.month - 1],
+                month_closure=MESES_ES[start_date.month - 1],
                 # The end month can differ from the start month (Christmas
                 # closure = Dec 23 → Jan 3). Pass both so the template can
                 # render "23 de diciembre" and "3 de enero" correctly instead
                 # of collapsing to a single month.
-                month_closure_end=MONTHS_ES[end_date.month - 1],
+                month_closure_end=MESES_ES[end_date.month - 1],
                 closure_reason=options["reason"],
-                reopening_day_name=DAYS_ES[reopen_date.weekday()],
+                reopening_day_name=DIAS_ES[reopen_date.weekday()],
                 reopening_day_number=reopen_date.day,
-                month_reopening=MONTHS_ES[reopen_date.month - 1],
+                month_reopening=MESES_ES[reopen_date.month - 1],
             ):
                 sent += 1
         self.stdout.write(self.style.SUCCESS(f"Enviado a {sent}/{len(recipient_emails)} padres"))
@@ -320,7 +313,18 @@ class Command(BaseCommand):
         year = options["year"]
         if options.get("recipient"):
             try:
-                parent = Parent.objects.get(email=options["recipient"])
+                # iexact + explicit ambiguity handling: Parent.email is not
+                # unique and Postgres compares it case-sensitively, so a bare
+                # `.get(email=...)` both missed a differently-cased address and
+                # raised an opaque MultipleObjectsReturned on a shared mailbox.
+                matches = list(Parent.objects.filter(email__iexact=options["recipient"])[:2])
+                if not matches:
+                    raise CommandError(f"No se encontró padre con email {options['recipient']}")
+                if len(matches) > 1:
+                    raise CommandError(
+                        f"Hay varios padres con el email {options['recipient']}; resuélvelo antes de enviar."
+                    )
+                parent = matches[0]
             except Parent.DoesNotExist as err:
                 raise CommandError(f"No se encontró padre con email {options['recipient']}") from err
             success = send_tax_certificate_email(parent=parent, year=year)
@@ -341,7 +345,7 @@ class Command(BaseCommand):
         if not options.get("months"):
             raise CommandError("Se requiere --months (mes1,mes2,mes3)")
         student = Student.objects.get(pk=options["student_id"])
-        parent = student.parents.exclude(email="").exclude(email__isnull=True).first()
+        parent = student.parents.exclude(email="").exclude(email__isnull=True).order_by("id").first()
         if not parent:
             raise CommandError(f"{student.full_name} no tiene padre con email")
         months = options["months"].split(",")

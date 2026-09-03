@@ -12,14 +12,17 @@ logger = logging.getLogger(__name__)
 def today_notifications(request):
     today = date.today()
 
-    # Teacher-role flags for template-level gating of admin-only UI.
-    # Anyone who isn't a linked non-admin teacher is treated as admin
-    # (dev basic-auth, OAuth, and admin Teachers all count as admin).
+    # Teacher-role flags for template-level gating of admin-only UI. THE SAME
+    # predicate the middleware enforces with — computed independently, the two
+    # disagreed for an authenticated user with no Teacher row (the UI trimmed
+    # itself while the middleware treated the session as admin, or vice versa).
+    from core.middleware import _is_non_admin_teacher
+
     user = getattr(request, "user", None)
     teacher = None
     if user is not None and getattr(user, "is_authenticated", False):
         teacher = getattr(user, "teacher", None)
-    is_non_admin_teacher = teacher is not None and not teacher.admin
+    is_non_admin_teacher = _is_non_admin_teacher(request)
     is_admin_user = not is_non_admin_teacher
 
     # QA testing tools visibility — logged-in ADMIN Teacher in the testing
@@ -38,6 +41,7 @@ def today_notifications(request):
             "show_testing_tools": show_testing_tools,
             "is_admin_user": is_admin_user,
             "is_non_admin_teacher": is_non_admin_teacher,
+            "drive_receipts_url": getattr(settings, "GOOGLE_DRIVE_RECEIPTS_URL", ""),
         }
 
     # Todos due today
@@ -78,6 +82,7 @@ def today_notifications(request):
         "show_testing_tools": show_testing_tools,
         "is_admin_user": is_admin_user,
         "is_non_admin_teacher": is_non_admin_teacher,
+        "drive_receipts_url": getattr(settings, "GOOGLE_DRIVE_RECEIPTS_URL", ""),
     }
 
 

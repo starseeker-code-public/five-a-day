@@ -118,6 +118,8 @@
                 <span class="material-symbols-outlined">person</span>
                 Información del Padre/Tutor
             </h3>
+            {# Payment.parent is nullable — an adult student legitimately has no guardian. Guard the whole card, or it rendered an empty avatar, a blank name and a bare email icon. #}
+            {% if payment.parent %}
             <div class="space-y-3">
                 <div class="flex items-center gap-3">
                     <div class="w-12 h-12 bg-secondary-100 rounded-full flex items-center justify-center">
@@ -138,6 +140,12 @@
                 </div>
                 {% endif %}
             </div>
+            {% else %}
+            <div class="flex items-center gap-3 text-sm text-neutral-500">
+                <span class="material-symbols-outlined">person_off</span>
+                <span>Estudiante adulto — sin padre/tutor.</span>
+            </div>
+            {% endif %}
         </div>
     </div>
 
@@ -166,11 +174,11 @@
             </div>
             <div>
                 <label class="block text-sm font-medium text-neutral-600 mb-1">ID Estudiante</label>
-                <p class="text-neutral-800">{{ payment.student.id }}</p>
+                <p class="text-neutral-800">{{ payment.student_id }}</p>
             </div>
             <div>
                 <label class="block text-sm font-medium text-neutral-600 mb-1">ID Padre/Tutor</label>
-                <p class="text-neutral-800">{{ payment.parent.id }}</p>
+                <p class="text-neutral-800">{{ payment.parent_id|default:"—" }}</p>
             </div>
         </div>
     </div>

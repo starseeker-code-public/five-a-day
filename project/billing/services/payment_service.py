@@ -92,7 +92,7 @@ class PaymentService:
         special = PaymentService.hand_priced_amount(enrollment)
         if special is not None:
             whole_period = Decimal(3) if quarterly else Decimal(1)
-            return max(special * (effective / whole_period), Decimal("0.01"))
+            return PaymentService._round_money(special * (effective / whole_period))
 
         base = PaymentService._get_base_monthly_fee(enrollment, config)
         total = base * effective
@@ -102,7 +102,7 @@ class PaymentService:
 
         # Adult groups pay a flat rate — no sibling / cheque / June discounts.
         if enrollment.schedule_type == "adult_group":
-            return max(total, Decimal("0.01"))
+            return PaymentService._round_money(total)
 
         if enrollment.is_sibling_discount:
             total -= total * (config.sibling_discount / Decimal("100"))
@@ -114,7 +114,21 @@ class PaymentService:
         if 6 in months:  # June carries the "complete the year" discount
             total -= config.june_discount
 
-        return max(total, Decimal("0.01"))
+        return PaymentService._round_money(total)
+
+    @staticmethod
+    def _round_money(value):
+        """Floor at €0.01 and quantize HALF_UP — the ONE rounding for a period price.
+
+        Every consumer must see the same cents: unquantized, the DecimalField save
+        path rounds HALF_EVEN, `schedule_academic_year_payments` rounded HALF_UP,
+        and the dry-run's `f"{amount:.2f}"` rounded HALF_EVEN again — so a
+        half-cent intermediate (quarterly + sibling on the default prices is
+        exactly 146.205) printed 146.20 in the preview and billed 146.21 on the
+        invoice. Quantizing here, at the single pricing point, makes the ficha,
+        the dry run and the payment agree by construction.
+        """
+        return max(value, Decimal("0.01")).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
     @staticmethod
     def calculate_monthly_amount(enrollment, config, month, fraction=Decimal("1")):
@@ -350,6 +364,23 @@ class PaymentService:
         quarterly = enrollment.payment_modality == "quarterly"
         payment_type = "quarterly" if quarterly else "monthly"
 
+        # An active enrollment with NO billable periods at all is a data problem,
+        # not a normal state — it means `enrollment_date` falls outside
+        # `academic_year`'s teaching window (e.g. the year was edited to a past
+        # course in /admin/). Every caller treats "0 created" as success, and the
+        # cron cannot back-fill because it goes through this same helper, so say
+        # so loudly instead of returning 0 in silence.
+        if not PaymentService.billing_periods(enrollment):
+            logger.warning(
+                "Enrollment %d (student %d) has no billable periods: enrollment_date %s "
+                "falls outside academic year %s. No payments will ever be generated for it.",
+                int(enrollment.pk),
+                int(enrollment.student_id),
+                enrollment.enrollment_date.isoformat() if enrollment.enrollment_date else "None",
+                enrollment.academic_year,
+            )
+            return 0
+
         created = 0
         for period in PaymentService.pending_periods(enrollment, as_of=today, billed_months=billed_months):
             amount = PaymentService.calculate_period_amount(
@@ -371,7 +402,7 @@ class PaymentService:
                         enrollment=enrollment,
                         payment_type=payment_type,
                         payment_method="transfer",
-                        amount=amount.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
+                        amount=amount,  # already quantized by calculate_period_amount
                         payment_status="pending",
                         due_date=period["due"],
                         concept=PaymentService.period_concept(period, quarterly),

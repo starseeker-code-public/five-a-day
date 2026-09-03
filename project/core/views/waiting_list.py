@@ -187,7 +187,12 @@ def discard_waiting_entry(waiting, new_student=None):
     except ProtectedError:
         waiting.active = False
         waiting.is_waiting = False
-        waiting.save(update_fields=["active", "is_waiting", "updated_at"])
+        # `waiting_since` too: Student.save() clears it on the is_waiting→False
+        # transition, but omitting it from update_fields dropped that clear, so
+        # the row read as a live waiting entry (waiting_since set) that was not
+        # actually on the list.
+        waiting.waiting_since = None
+        waiting.save(update_fields=["active", "is_waiting", "waiting_since", "updated_at"])
         outcome = "archivada (tenía pagos asociados)"
 
     detail = f" → nueva ficha: {new_student.full_name}" if new_student else ""
@@ -218,8 +223,18 @@ def add_to_waiting_list(request, student_id):
         # the student kept generating pending payments while off the roster,
         # and `assign_from_waiting_list` later hit the
         # unique_active_enrollment_per_student constraint and 500'd, so they
-        # could never be promoted back.
-        cancelled = EnrollmentService.close_active_enrollments(student, "cancelled")
+        # could never be promoted back. Also cancel the FUTURE pending periodic
+        # rows — a student off the roster must stop being billed and chased for
+        # months they will not attend; already-taught months (up to this one)
+        # stay owed.
+        from core.views.students import _first_day_of_next_month
+
+        cancelled = EnrollmentService.close_active_enrollments(
+            student,
+            "cancelled",
+            cancel_pending_periodic=True,
+            cancel_from=_first_day_of_next_month(),
+        )
 
     group_name = student.group.group_name if student.group else "sin grupo"
     HistoryLog.log(

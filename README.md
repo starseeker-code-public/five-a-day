@@ -3784,7 +3784,7 @@ five-a-day/
 │   │   │                         and waiting_list_create (v1.15), features/feature_detail
 │   │   │                         and qa/_qa_styles (v1.21.0)
 │   │   ├── static/               CSS (app.css, theme.css, email.css, admin_custom.css)
-│   │   │                         + JS (17 modules) + images
+│   │   │                         + JS (16 modules) + images
 │   │   └── management/commands/  seed_teachers (v1.26.8: optional USERNAME handle),
 │   │                             seed_demo_parents (v1.26.8 — parent-portal demo family,
 │   │                             refused in production), seed_testdata, export_to_sheets (v1.2),
@@ -3898,7 +3898,7 @@ Dashboard, authentication, scheduling, and shared utilities. Owns all views and 
 | **Services** | 3 — analytics_service, google_sheets_service, two_factor_service |
 | **Middleware** | 4 — NoHtmlCacheMiddleware (no-cache on dynamic HTML), QAErrorEmailMiddleware, SimpleAuthMiddleware (session auth public allow-list incl. `/password-reset/` + non-admin teacher URL-name whitelist), AuditActorMiddleware |
 | **Templates** | base.html (layout — v1.26.8 renders the global flash-message block and gates the bell / history feed / per-view help on `is_admin_user`), 25 page templates (v1.21.0: `features.html`, `feature_detail.html`) + the shared `qa/_qa_styles.html` partial, 19 email templates + `base_email.html` (v1.26.8: the violet **dark** palette is now inline and unconditional, not a `prefers-color-scheme` overlay), error pages, plus `templates/registration/` for the password-reset and teacher-activation flows |
-| **Static** | 4 CSS files (app.css, theme.css, email.css, admin_custom.css), 17 JS modules, images |
+| **Static** | 4 CSS files (app.css, theme.css, email.css, admin_custom.css), 16 JS modules, images |
 | **Commands** | seed_teachers (Teacher + auth.User from env vars; v1.26.8 optional `USERNAME` login handle), seed_demo_parents (v1.26.8 — the parent-portal demo family, `CommandError` in production), seed_testdata, export_to_sheets, reset_two_factor, cleanup_backlog_tasks, prune_audit_log (v1.15), backup_retention (v1.26.0), purge_sessions (v1.23.0), set_ready_for_prod (v1.26.4; since v1.26.7 `on` also fires the repository_dispatch that arms `Deploy production`) |
 | **URLs** | 54 patterns: dashboard, auth, password reset + **password change** (v1.26.8), schedule, todos, support, QA (backlog + export, Desarrollos board/detail/API/export), PWA, 2FA, parent portal (login, forgot / change password, dashboard, payments, receipt, tax certificate) |
 

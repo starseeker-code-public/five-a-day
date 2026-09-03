@@ -779,6 +779,16 @@ jobs:
           fi
           echo "version $LIVE is live"
 
+          echo "--- environment must still be production ---"
+          # A dropped or mistyped DJANGO_ENV silently switches OFF the settings.py
+          # production posture guard (DEBUG-off, Secure cookies, HSTS, no '*' in
+          # ALLOWED_HOSTS) — or flips on IS_TESTING_ENV, exposing /testing/ and the
+          # QA error-body emails on live data. The version compare above passes
+          # either way, so assert it explicitly here.
+          LIVE_ENV=$(curl -fsS --max-time 20 "$PROD_URL/health/" 2>/dev/null | jq -r '.environment // empty' || true)
+          [ "$LIVE_ENV" = "production" ] || { echo "::error::/health/ reports environment='${LIVE_ENV:-<none>}', expected 'production' — check DJANGO_ENV"; exit 1; }
+          echo "environment is production"
+
           echo "--- Cloud SQL attachment ---"
           SQL=$(gcloud run services describe "$SERVICE" --project="$GCP_PROJECT" --region="$GCP_REGION" \
             --format='value(spec.template.metadata.annotations."run.googleapis.com/cloudsql-instances")')

@@ -1,3 +1,4 @@
+import functools
 import secrets
 
 from django.conf import settings
@@ -5,7 +6,7 @@ from django.contrib.auth.hashers import check_password, make_password
 from django.core.validators import EmailValidator
 from django.db import models
 from django.db.models.functions import Upper
-from django.db.models.signals import post_save, pre_save
+from django.db.models.signals import post_delete, post_save, pre_save
 from django.dispatch import receiver
 from django.utils import timezone
 
@@ -20,9 +21,30 @@ PORTAL_AUTH_TEMPORARY = "temporary"
 #: hand exactly once.
 _TEMP_PASSWORD_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789"
 
-#: Hashed once at import so refusing a parent who has no credential at all
-#: still costs one hash. The value is a constant, never a usable password.
-_NO_CREDENTIAL_DUMMY_HASH = make_password("fad-portal-no-credential-set")
+
+@functools.cache
+def _no_credential_dummy_hash() -> str:
+    """Dummy hash for equalising failed-login work. Never a usable password.
+
+    Computed LAZILY (and memoised): evaluated at module import, this ran a full
+    PBKDF2 (~0.3 s of CPU, 1.2M iterations) in every process that imports the
+    models — each Gunicorn worker, every manage.py invocation, all the Cloud Run
+    Jobs — most of which never authenticate a parent at all. The test settings
+    swap in a fast hasher, which is exactly why the suite never noticed.
+    """
+    return make_password("fad-portal-no-credential-set")
+
+
+def burn_portal_login_work(raw_password: str) -> None:
+    """Spend the same hashing work a failed `authenticate_portal` costs.
+
+    For callers that resolved NO parent for the submitted address: without this,
+    an unknown email returned in milliseconds while a known one paid two hash
+    verifications — a remote timing oracle for exactly which addresses belong to
+    families of the academy (the fact the unified error message exists to hide).
+    """
+    check_password(raw_password, _no_credential_dummy_hash())
+    check_password(raw_password, _no_credential_dummy_hash())
 
 
 def generate_temporary_password() -> str:
@@ -130,6 +152,12 @@ class Teacher(models.Model):
             if user.is_superuser != self.admin:
                 user.is_superuser = self.admin
                 dirty = True
+            if user.is_active != self.active:
+                # `active` is the offboarding switch (the admin fieldset is
+                # literally titled "Acceso"). Unmirrored, unticking it removed
+                # the teacher from every dropdown and left their login working.
+                user.is_active = self.active
+                dirty = True
             if password is not None:
                 user.set_password(password)
                 dirty = True
@@ -146,6 +174,7 @@ class Teacher(models.Model):
                 "last_name": self.last_name,
                 "is_staff": self.admin,
                 "is_superuser": self.admin,
+                "is_active": self.active,
             },
         )
         if not created:
@@ -155,6 +184,7 @@ class Teacher(models.Model):
             user.last_name = self.last_name
             user.is_staff = self.admin
             user.is_superuser = self.admin
+            user.is_active = self.active
 
         if password is not None:
             user.set_password(password)
@@ -181,6 +211,9 @@ def _sync_linked_user_flags(sender, instance, **kwargs):
     if user.is_superuser != instance.admin:
         user.is_superuser = instance.admin
         dirty = True
+    if user.is_active != instance.active:
+        user.is_active = instance.active
+        dirty = True
     if user.email != instance.email:
         user.email = instance.email
         user.username = instance.email
@@ -193,6 +226,22 @@ def _sync_linked_user_flags(sender, instance, **kwargs):
         dirty = True
     if dirty:
         user.save()
+
+
+@receiver(post_delete, sender=Teacher)
+def _deactivate_orphaned_user(sender, instance, **kwargs):
+    """Deleting a Teacher must not ESCALATE its login.
+
+    `Teacher.user` survives the delete (the FK is on Teacher), and an auth.User
+    with no Teacher row used to bypass both the 2FA requirement and the
+    non-admin URL whitelist (each is keyed off the Teacher). Deactivate the
+    orphaned account; an admin can re-link or re-enable it deliberately from
+    /admin/ if the delete was a mistake.
+    """
+    if instance.user_id:
+        from django.contrib.auth import get_user_model
+
+        get_user_model().objects.filter(pk=instance.user_id, is_active=True).update(is_active=False)
 
 
 class Group(models.Model):
@@ -292,6 +341,17 @@ class Parent(models.Model):
         blank=True,
         verbose_name="Invitación al portal enviada",
     )
+    # Bumped whenever the portal credential changes (set-password). Every portal
+    # session stores the value it was opened with; a session older than this is
+    # rejected, so changing the password logs out every OTHER device — the
+    # portal equivalent of Django's session-auth-hash. Without it, a reset only
+    # ended the browser that performed it and any other logged-in session
+    # survived on its rolling 6-hour expiry.
+    portal_credential_changed_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        verbose_name="Credencial del portal cambiada",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)  # Added for consistency
 
@@ -346,12 +406,15 @@ class Parent(models.Model):
         self.password = make_password(raw_password)
         self.temporary_password = ""
         self.temporary_password_issued_at = None
+        # Invalidate every existing portal session (see the field's comment).
+        self.portal_credential_changed_at = timezone.now()
         if save:
             self.save(
                 update_fields=[
                     "password",
                     "temporary_password",
                     "temporary_password_issued_at",
+                    "portal_credential_changed_at",
                     "updated_at",
                 ]
             )
@@ -389,10 +452,9 @@ class Parent(models.Model):
         when it matched an emailed one (the caller must then force a change),
         and ``None`` when it matched neither.
 
-        A parent with NO credential at all still pays for one hash against a
-        dummy value before being refused. Returning early would make "never
-        onboarded" measurably faster than "wrong password", which is a timing
-        oracle for which of the academy's families have signed up.
+        A failed attempt costs the SAME hashing work whatever the parent's
+        onboarding state — see the comment below. Callers that resolve no
+        parent at all must call `burn_portal_login_work` to match.
         """
 
         def _persist(new_hash: str) -> None:
@@ -400,14 +462,22 @@ class Parent(models.Model):
             self.password = new_hash
             self.save(update_fields=["password", "updated_at"])
 
-        if self.password and check_password(raw_password, self.password, setter=_persist):
-            return PORTAL_AUTH_PASSWORD
+        # Every FAILED attempt costs exactly two hash verifications, whatever
+        # credentials exist. The old shape charged 2 hashes to a family with its
+        # own password, 1 to one still on the emailed temporary, and 1 to one
+        # with neither — a ~300 ms tell for which families held an unopened
+        # temporary password, the highest-value target this endpoint has.
+        if self.password:
+            if check_password(raw_password, self.password, setter=_persist):
+                return PORTAL_AUTH_PASSWORD
+        else:
+            check_password(raw_password, _no_credential_dummy_hash())
 
-        if self.temporary_password and check_password(raw_password, self.temporary_password):
-            return PORTAL_AUTH_TEMPORARY
-
-        if not self.password and not self.temporary_password:
-            check_password(raw_password, _NO_CREDENTIAL_DUMMY_HASH)
+        if self.temporary_password:
+            if check_password(raw_password, self.temporary_password):
+                return PORTAL_AUTH_TEMPORARY
+        else:
+            check_password(raw_password, _no_credential_dummy_hash())
 
         return None
 

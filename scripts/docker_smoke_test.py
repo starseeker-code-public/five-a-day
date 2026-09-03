@@ -1,6 +1,18 @@
+from datetime import date
+
 from django.test import Client
 
-from core.models import Enrollment, EnrollmentType, Group, Parent, Payment, Student, Teacher
+# students.models / billing.models — not core.models (which exports none of
+# these). The old import made this end-to-end smoke test fail on load, so it had
+# never once passed.
+from billing.models import Enrollment, EnrollmentType, Payment, Student
+from students.models import Group, Parent, Teacher
+
+
+def _current_course() -> str:
+    from billing.models import academic_year_for_month
+
+    return academic_year_for_month()
 
 
 def run():
@@ -58,10 +70,13 @@ def run():
         "group": str(group.id),
         "parent_id": str(parent.id),
         "enrollment_type": str(enrollment_type.id),
-        "academic_year": "2025-2026",
+        # Anchored to today's course, not a hard-coded year — the old fixed
+        # "2025-2026" / "27/02/2026" fell out of every "current" queryset the
+        # moment the calendar rolled over.
+        "academic_year": _current_course(),
         "schedule_type": "full_time",
         "discount_percentage": "0",
-        "enrollment_date": "27/02/2026",
+        "enrollment_date": date.today().strftime("%d/%m/%Y"),
         "status": "active",
         "notes": "Smoke test",
     }

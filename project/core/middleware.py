@@ -40,6 +40,13 @@ class QAErrorEmailMiddleware:
             "new_password1",
             "new_password2",
             "old_password",
+            # Parent-portal change form + /api/password-change/ JSON contract.
+            # Missing, these mailed a family's live password to SUPPORT_EMAIL
+            # whenever the change view 500'd ("password" was redacted but
+            # "password_confirm" carried the same value).
+            "current_password",
+            "new_password",
+            "password_confirm",
             "code",
             "token",
             "csrfmiddlewaretoken",
@@ -65,6 +72,11 @@ class QAErrorEmailMiddleware:
         """
         if "Content-Disposition:" in raw and "name=" in raw:
             return cls._redact_multipart(raw)
+        # JSON bodies (every /api/ POST, including the password-change
+        # endpoints) used to fall straight through the `"=" not in raw` bail-out
+        # and reach the inbox verbatim.
+        if raw.lstrip().startswith(("{", "[")):
+            return cls._redact_json(raw)
         if "=" not in raw:
             return raw
         out = []
@@ -75,6 +87,24 @@ class QAErrorEmailMiddleware:
             else:
                 out.append(pair)
         return "&".join(out)
+
+    @classmethod
+    def _redact_json(cls, raw: str) -> str:
+        """Blank sensitive values in a (possibly truncated) JSON body preview.
+
+        Regex-based for the same reason `_redact_multipart` is: the 500-char
+        preview is usually cut mid-document, so `json.loads` would fail and
+        leave the secret in place.
+        """
+        import re
+
+        def _replace(match: "re.Match[str]") -> str:
+            if match.group("key").strip().lower() not in cls.REDACT_KEYS:
+                return match.group(0)
+            return f'{match.group("head")}"[REDACTED]"'
+
+        pattern = re.compile(r'(?P<head>"(?P<key>[^"]+)"\s*:\s*)"(?:[^"\\]|\\.)*(?:"|$)')
+        return pattern.sub(_replace, raw)
 
     @classmethod
     def _redact_multipart(cls, raw: str) -> str:
@@ -195,13 +225,15 @@ NON_ADMIN_ALLOWED_URL_NAMES = frozenset(
         "students_list",
         "student_detail",
         "search_students",
-        # Waiting list (v1.1) — non-admins manage the QUEUE, but not the
-        # promotion out of it: `assign_from_waiting_list` redirects into the
-        # parent_create -> student_create enrollment flow, which is enrolling by
-        # another name, so it stays admin-only.
+        # Waiting list (v1.1) — non-admins manage the QUEUE (browse it, take a
+        # new entry over the phone), but neither door out of it: promotion
+        # (`assign_from_waiting_list`) is enrolling by another name, and
+        # `add_to_waiting_list` cancels the student's ACTIVE enrollment — a
+        # one-way financial write that stops billing the family, with the only
+        # undo path (re-enrolment) being admin-only. Both stay admin-only,
+        # consistent with students being read-only for this role since v1.26.8.
         "waiting_list",
         "waiting_list_create",
-        "add_to_waiting_list",
         # Schedule — view-only for non-admin teachers (save_schedule_slot stays admin-only)
         "schedule_view",
         # Fun Friday (attendance view + attendance API)
@@ -218,14 +250,15 @@ NON_ADMIN_ALLOWED_URL_NAMES = frozenset(
         # view only ever touches request.user and refuses OAuth sessions.
         "change_password",
         "language_cheque_students",
-        # Expenses (v1.5) — visible to non-admin teachers for read + create
+        # Expenses (v1.5) — read + create ONLY, exactly what this comment always
+        # claimed. `update_expense` and `delete_expense` had crept in: a
+        # destructive financial write held by the least-privileged role, on a
+        # page the sidebar hides from them (`base.html` gates the Gastos link on
+        # is_admin_user). Reports (`reports_view`/`reports_pdf`) are gone too —
+        # income, receivables and collection rate are the exact figures the
+        # trimmed non-admin dashboard exists to withhold.
         "expenses_list",
         "create_expense",
-        "update_expense",
-        "delete_expense",
-        # Reports (v1.7) — read-only for non-admin teachers
-        "reports_view",
-        "reports_pdf",
         # Two-factor auth (v1.13) — verify is reached mid-login (pre-session)
         # so it's already in PUBLIC_PREFIXES. Setup/manage are admin-only and
         # deliberately absent from this whitelist.
@@ -247,7 +280,16 @@ NON_ADMIN_ALLOWED_URL_NAMES = frozenset(
 
 
 def _is_non_admin_teacher(request) -> bool:
-    """True iff the request's auth.User is linked to a Teacher with admin=False."""
+    """True iff the request's session must be restricted to the URL whitelist.
+
+    DEFAULT-DENY: an authenticated auth.User with NO linked Teacher row is
+    restricted, not trusted. `_authenticate_teacher` logs in any auth.User, so
+    `teacher is None → full access` meant a bare user added at
+    /admin/auth/user/add/ (a bookkeeper, an integration account) — or a teacher
+    whose OneToOne an admin cleared intending to REVOKE access — walked straight
+    past the whitelist into /database/, /payments/ and the config endpoints.
+    Admin access is an explicit grant: a superuser/staff flag or Teacher.admin.
+    """
     user = getattr(request, "user", None)
     if user is None or not getattr(user, "is_authenticated", False):
         return False
@@ -256,7 +298,7 @@ def _is_non_admin_teacher(request) -> bool:
     # Reverse accessor defined in students.Teacher.user's related_name="teacher".
     teacher = getattr(user, "teacher", None)
     if teacher is None:
-        return False
+        return True
     return not teacher.admin
 
 

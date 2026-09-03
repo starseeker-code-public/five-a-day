@@ -59,12 +59,28 @@ class ParentCreateView(CreateView):
                     f"El padre/tutor {existing_parent.full_name} ya existe. Serás redirigido para crear un estudiante.",
                 )
                 self.object = existing_parent
-                # Deliberately NOT invited here. Reaching this branch means a
-                # second (or third) child for a family that already exists, and
-                # the whole point of the once-only guard is that they get one
-                # invitation. `send_portal_invitation_once` would no-op anyway;
-                # not calling it is what makes that obvious to the next reader.
+                # Invite them too — `send_portal_invitation_once` is guarded by
+                # `portal_invite_sent_at`, so a family reached here for a second
+                # child still gets exactly ONE invitation, but a parent who
+                # predates the portal (invite timestamp NULL) would otherwise
+                # NEVER be invited by any path. The guard, not this branch, is
+                # what enforces once-only.
+                send_portal_invitation_once(self.request, existing_parent)
                 return HttpResponseRedirect(self.get_success_url())
+
+            # Email is the portal LOGIN identity but is not unique, and
+            # `_parent_by_email` refuses an ambiguous match — so two rows sharing
+            # an address lock BOTH families out of login and recovery. Warn the
+            # admin at creation, where it can still be fixed, rather than leaving
+            # it to surface as a mystery "email o contraseña incorrectos".
+            email = (form.cleaned_data.get("email") or "").strip()
+            if email and Parent.objects.filter(email__iexact=email).exists():
+                messages.warning(
+                    self.request,
+                    "Aviso: ya existe otro padre/tutor con ese email. El portal de familias identifica "
+                    "a cada familia por su email, así que dos cuentas con el mismo email no podrán acceder. "
+                    "Usa un email distinto para cada tutor si ambos van a usar el portal.",
+                )
 
             self.object = form.save()
 

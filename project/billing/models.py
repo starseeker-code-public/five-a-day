@@ -1,6 +1,6 @@
 from contextvars import ContextVar
 from datetime import date, timedelta
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 from typing import NamedTuple
 
 from django.core.exceptions import ValidationError
@@ -77,6 +77,31 @@ def academic_year_for_month(reference_date=None):
     """
     reference_date = reference_date or date.today()
     return _academic_year_from(reference_date, TEACHING_YEAR_START_MONTH)
+
+
+def enrollment_academic_year(start_date=None):
+    """
+    Return the academic year an enrollment STARTING on `start_date` belongs to.
+
+    Neither existing helper answers this question:
+
+    - `current_academic_year` rolls over in May, so a student starting 15 May —
+      mid-course, attending NOW — was stamped with the NEXT year. Their May and
+      June are not in that year's `teaching_months()`, so they were structurally
+      unbillable, and the enrollment was invisible to the May-August cron runs
+      (which filter on `academic_year_for_month`). Two months taught for free.
+    - `academic_year_for_month` maps July/August BACK to the finished course, so
+      a summer signup would land in a year with no teaching months left and
+      `billing_periods()` would return `[]` — zero payments, silently.
+
+    The rule an enrollment actually needs: a start date inside the teaching
+    calendar (Sep-Jun) joins the course that is running; a summer start (Jul/Aug)
+    joins the course that begins in September.
+    """
+    start_date = start_date or date.today()
+    if start_date.month in (7, 8):
+        return f"{start_date.year}-{start_date.year + 1}"
+    return academic_year_for_month(start_date)
 
 
 def relevant_academic_years(reference_date=None):
@@ -429,9 +454,14 @@ class Enrollment(models.Model):
             else:
                 base_amount = config.full_time_monthly_fee
             if self.payment_modality == "quarterly":
+                # A quarter is three months MINUS the quarterly discount — the same
+                # figure EnrollmentService._resolve_plan computes. Omitting the
+                # discount here made an admin/shell-created quarterly enrollment
+                # show 162.00 on the ficha while the generator billed 153.90.
                 base_amount = base_amount * 3
+                base_amount -= base_amount * (config.quarterly_enrollment_discount / Decimal("100"))
             discount_amount = base_amount * (self.discount_percentage / Decimal("100"))
-            self.final_amount = base_amount - discount_amount
+            self.final_amount = (base_amount - discount_amount).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
         # Deliberately OUTSIDE the block above. It used to be nested inside it,
         # so passing final_amount but not enrollment_amount skipped the
@@ -630,6 +660,21 @@ class Payment(models.Model):
     def clean(self):
         """Validation logic"""
 
+        # A cancelled/refunded payment must not be resurrected to completed.
+        # Cancelling frees the month under `unique_pending_periodic_payment_per_month`
+        # (it is pending-only), so the schedule may already have re-billed it —
+        # completing the dead row again double-collects the family. The guard used to
+        # live only in `quick_complete_payment`; putting it on the model covers every
+        # write path that runs `full_clean()` (the Stripe webhook and admin actions
+        # guard themselves, since they save without validating).
+        if self.pk and self.payment_status == "completed":
+            previous = type(self).objects.filter(pk=self.pk).values_list("payment_status", flat=True).first()
+            if previous in ("cancelled", "refunded"):
+                raise ValidationError(
+                    "Este pago está cancelado o reembolsado y no puede marcarse como completado. "
+                    "Crea un pago nuevo si hay que volver a cobrarlo."
+                )
+
         # If payment is completed, payment_date should be set
         if self.payment_status == "completed" and not self.payment_date:
             self.payment_date = date.today()
@@ -817,7 +862,13 @@ class Expense(models.Model):
             return f"Anual · {self.recurring_day} de {months.get(self.recurring_month, '?')}"
         if self.recurring_frequency == "weekly":
             labels = dict(self.WEEKDAY_CHOICES)
-            days = ", ".join(labels[d] for d in sorted(self.weekday_set()))
+            # Defensive: a malformed CSV written past validation (`objects.create()`
+            # never runs clean()) must not 500 the whole expenses page via this
+            # template property.
+            try:
+                days = ", ".join(labels.get(d, "?") for d in sorted(self.weekday_set()))
+            except ValueError:
+                return "Semanal · (días no válidos)"
             return f"Semanal · {days}"
         return ""
 
@@ -840,7 +891,16 @@ class Expense(models.Model):
             if not (1 <= self.recurring_month <= 12):
                 raise ValidationError("recurring_month must be between 1 and 12.")
         elif self.recurring_frequency == "weekly":
-            weekdays = self.weekday_set()
+            # `weekday_set()` int()s the CSV and raises ValueError on junk ("L,M,V",
+            # "lunes"). ModelForm._post_clean only catches ValidationError, so from
+            # the admin — which has no validated form of its own — that was an
+            # unhandled 500 instead of a field error.
+            try:
+                weekdays = self.weekday_set()
+            except ValueError as err:
+                raise ValidationError(
+                    "recurring_weekdays debe ser una lista de números 0-6 separados por comas (0=lunes)."
+                ) from err
             if not weekdays:
                 raise ValidationError("Weekly recurring expenses must select at least one weekday.")
             if any(not (0 <= d <= 6) for d in weekdays):

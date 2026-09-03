@@ -1,5 +1,16 @@
 // payments.js — merged from payments_list.html and payment_create.html
 
+// Local calendar date as YYYY-MM-DD. NOT `new Date().toISOString()`, which is
+// the UTC date: between local midnight and 01:00/02:00 (Madrid is UTC+1/+2) it
+// returns YESTERDAY. Recording a cash payment just after midnight on the 1st
+// therefore dated it to the previous month, and every income figure filters on
+// payment_date, so the money booked into the wrong (already-reported) month.
+function localDateISO(d) {
+    d = d || new Date();
+    const p = n => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
 // ============================================================
 // PAYMENTS LIST (payments_list.html)
 // ============================================================
@@ -285,11 +296,33 @@
     // Soft-delete: sets payment_status='cancelled' so the row stays for the
     // audit trail but stops counting toward "esperado". Used for duplicates
     // and for students who drop out before a due date.
-    // No confirm() gate: embedded browsers (sandboxed webviews) silently
-    // return false from confirm(), which made the button a no-op there.
+    //
+    // Two-CLICK confirmation instead of native confirm(): a mis-click here
+    // soft-deletes a payment, and completing a cancelled row is now refused
+    // (quick_complete_payment), so the only undo is /admin/ — unreachable for
+    // the non-admin teachers who use this page. Native confirm() is avoided on
+    // purpose (sandboxed webviews silently return false and make it a no-op),
+    // so the first click arms the button and a second within 4s commits.
     document.querySelectorAll('.payment-cancel-btn').forEach(btn => {
+        let armed = false;
+        let armTimer = null;
+        const originalHtml = btn.innerHTML;
+        const disarm = () => {
+            armed = false;
+            btn.innerHTML = originalHtml;
+            btn.classList.remove('cancel-armed');
+            if (armTimer) { clearTimeout(armTimer); armTimer = null; }
+        };
         btn.addEventListener('click', function (e) {
             e.stopPropagation();
+            if (!armed) {
+                armed = true;
+                btn.innerHTML = '<span class="material-symbols-outlined text-sm">warning</span>¿Seguro?';
+                btn.classList.add('cancel-armed');
+                armTimer = setTimeout(disarm, 4000);
+                return;
+            }
+            disarm();
             const paymentId = this.dataset.paymentId;
             fetch(`/payments/${paymentId}/deactivate/`, {
                 method: 'POST',
@@ -341,13 +374,13 @@
     let selectedParent = null;
 
     // Set today as default due date
-    document.getElementById('due_date').value = new Date().toISOString().split('T')[0];
+    document.getElementById('due_date').value = localDateISO();
 
     // Auto-fill payment date when status changes to completed
     document.getElementById('payment_status').addEventListener('change', function() {
         const paymentDate = document.getElementById('payment_date');
         if (this.value === 'completed' && !paymentDate.value) {
-            paymentDate.value = new Date().toISOString().split('T')[0];
+            paymentDate.value = localDateISO();
         }
     });
 
@@ -464,7 +497,7 @@
         const paymentStatus = document.getElementById('payment_status').value;
         const paymentDate = document.getElementById('payment_date');
         if (paymentStatus === 'completed' && !paymentDate.value) {
-            paymentDate.value = new Date().toISOString().split('T')[0];
+            paymentDate.value = localDateISO();
         }
     });
 })();

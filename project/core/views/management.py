@@ -1,5 +1,6 @@
 import json
 import logging
+from datetime import date
 from decimal import Decimal
 
 from django.core.exceptions import ValidationError
@@ -63,16 +64,18 @@ def update_site_config(request):
         if "adult_group_monthly_fee" in data:
             config.adult_group_monthly_fee = Decimal(str(data["adult_group_monthly_fee"]))
 
+        # Only the discount fields the pricing code actually READS. The five
+        # dropped here (old_student_discount, full_year_bonus, half_month_discount,
+        # one_week_discount, three_week_discount) are not rendered by the form and
+        # are consumed by no service/view/task — accepting them let a crafted
+        # payload persist a value nothing would ever apply, and old_student_discount
+        # is visually the twin of the LIVE returning_student_enrollment_discount.
+        # The columns remain (a later migration can drop them); nothing writes them.
         for field in [
             "language_cheque_discount",
             "quarterly_enrollment_discount",
-            "old_student_discount",
             "june_discount",
-            "full_year_bonus",
             "sibling_discount",
-            "half_month_discount",
-            "one_week_discount",
-            "three_week_discount",
             # v1.13 — returning-student enrollment discount (flat €)
             "returning_student_enrollment_discount",
         ]:
@@ -83,6 +86,16 @@ def update_site_config(request):
         # 100) used to persist straight through and quietly break every price.
         config.full_clean()
         config.save()
+
+        # Re-derive the EnrollmentType.base_amount_* mirror from the new prices.
+        # `ensure_enrollment_types` is the single writer of that mirror, and only
+        # the seed commands called it — so after a price edit here the admin's
+        # /admin/billing/enrollmenttype/ column showed the OLD matrícula fee until
+        # the next container restart, which its own docstring says exists to make
+        # drift VISIBLE.
+        from billing.services.enrollment_type_service import ensure_enrollment_types
+
+        ensure_enrollment_types(config)
 
         HistoryLog.log("config_updated", "Precios o descuentos actualizados", icon="tune")
 
@@ -270,6 +283,7 @@ def create_group(request):
         )
 
 
+@require_http_methods(["GET"])
 def api_get_teachers(request):
     """API para obtener lista de profesores activos (para select de grupos)."""
     teachers = Teacher.objects.filter(active=True).order_by("first_name", "last_name")
@@ -283,8 +297,10 @@ def update_enrollment_modality(request, student_id):
     AJAX endpoint to change a student's payment modality (monthly/quarterly).
     Expects JSON body: {"payment_modality": "monthly"|"quarterly"}
     """
+    # Outside the try: Http404 subclasses Exception, and the catch-all turned a
+    # missing student into a 500 (pinned by a test that asserted exactly that).
+    student = get_object_or_404(Student, id=student_id)
     try:
-        student = get_object_or_404(Student, id=student_id)
         data = json.loads(request.body)
         modality = data.get("payment_modality")
 
@@ -294,15 +310,61 @@ def update_enrollment_modality(request, student_id):
                 status=400,
             )
 
-        enrollment = student.enrollments.filter(status="active").first()
+        enrollment = student.enrollments.filter(status="active").select_related("enrollment_type").first()
         if not enrollment:
             return JsonResponse(
                 {"success": False, "error": "No tiene matrícula activa"},
                 status=404,
             )
 
+        if modality == enrollment.payment_modality:
+            return JsonResponse(
+                {
+                    "success": True,
+                    "message": f"La modalidad ya era {enrollment.get_payment_modality_display()}.",
+                    "payment_modality": modality,
+                    "payment_modality_display": enrollment.get_payment_modality_display(),
+                }
+            )
+
+        # A hand-priced (`special`) enrollment stores the AGREED price of one
+        # period in `final_amount` — per month, or per quarter. Flipping the
+        # modality without renegotiating the figure turned a €25/month special
+        # into €25 per QUARTER (the generator scales `final_amount` by the
+        # period, as it must). That price change needs a human, not a toggle.
+        if enrollment.enrollment_type is not None and enrollment.enrollment_type.name == "special":
+            return JsonResponse(
+                {
+                    "success": False,
+                    "error": (
+                        "Esta matrícula tiene precio especial: su importe es por periodo. "
+                        "Emite una nueva matrícula con el precio acordado en lugar de cambiar la modalidad."
+                    ),
+                },
+                status=400,
+            )
+
         enrollment.payment_modality = modality
+        # `Enrollment.save()` only derives `final_amount` when it is falsy, so a
+        # modality flip kept the OLD period price (monthly fee billed per
+        # quarter, or a whole quarter billed monthly). Clear both so save()
+        # recomputes them from SiteConfiguration for the new modality.
+        enrollment.final_amount = None
+        enrollment.enrollment_amount = None
         enrollment.save()
+
+        # The pending rows of the old cadence would double-bill the months the
+        # new one re-bills (different payment_type: invisible to both the
+        # idempotency check and the unique-month constraint). Cancel them from
+        # this month on; past months stay owed. Row-by-row save so the audit
+        # signals fire, as everywhere else.
+        for payment in enrollment.payments.filter(
+            payment_status="pending",
+            payment_type="quarterly" if modality == "monthly" else "monthly",
+            due_date__gte=date.today().replace(day=1),
+        ):
+            payment.payment_status = "cancelled"
+            payment.save(update_fields=["payment_status", "updated_at"])
 
         return JsonResponse(
             {

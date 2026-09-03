@@ -45,6 +45,19 @@ class EmailService:
         """Obtiene la ruta absoluta al logo de la academia"""
         return os.path.join(settings.BASE_DIR, self.LOGO_PATH)
 
+    @staticmethod
+    def open_connection():
+        """A single reusable SMTP connection for a batch of sends.
+
+        Use as a context manager and pass the result to `send_email(...,
+        connection=conn)` for every message in the batch, so a mass send opens
+        one TCP+TLS+AUTH session instead of one per recipient. Honours
+        EMAIL_TIMEOUT, so a stalled server cannot wedge the request forever.
+        """
+        from django.core.mail import get_connection
+
+        return get_connection()
+
     def send_email(
         self,
         template_name: str,
@@ -56,6 +69,7 @@ class EmailService:
         fail_silently: bool = False,
         attachments: list | None = None,
         inline_images: dict[str, str] | None = None,
+        connection=None,
     ) -> bool:
         """
         Envia un email usando un template HTML
@@ -71,6 +85,11 @@ class EmailService:
             attachments: Lista de tuplas (filename, content, mimetype)
             inline_images: Dict de {content_id: file_path} para imagenes inline
                            En el template usar: <img src="cid:content_id">
+            connection: SMTP connection to REUSE across a batch. Passing one
+                        (see `open_connection`) opens a single TCP+TLS+AUTH
+                        session for every message in a mass send instead of one
+                        per recipient — the difference between N handshakes and 1
+                        on the payment-reminder / tax-certificate loops.
 
         Returns:
             True si se envio correctamente, False en caso contrario
@@ -100,7 +119,13 @@ class EmailService:
 
             # Crear email con alternativas (texto y HTML)
             email = EmailMultiAlternatives(
-                subject=subject, body=text_content, from_email=self.from_email, to=recipients, cc=cc, bcc=bcc
+                subject=subject,
+                body=text_content,
+                from_email=self.from_email,
+                to=recipients,
+                cc=cc,
+                bcc=bcc,
+                connection=connection,
             )
             email.attach_alternative(html_content, "text/html")
 
@@ -129,8 +154,16 @@ class EmailService:
                 for filename, content, mimetype in attachments:
                     email.attach(filename, content, mimetype)
 
-            # Enviar email
-            email.send(fail_silently=fail_silently)
+            # Enviar email. `send()` devuelve el nº de mensajes ACEPTADOS por el
+            # backend; con fail_silently=True un fallo total de SMTP devuelve 0
+            # sin lanzar. Descartar ese valor y devolver True siempre hacía que
+            # toda la app informara de un envío correcto durante una caída de
+            # correo (contadores "0 fallidos", tickets de HistoryLog, el portal
+            # diciendo a una familia que revise un buzón al que no llegó nada).
+            sent = email.send(fail_silently=fail_silently)
+            if not sent:
+                logger.error("Email '%s' NO se envió (backend aceptó 0 mensajes)", safe_log(template_name))
+                return False
 
             logger.info("Email '%s' enviado a %s destinatario(s)", safe_log(template_name), len(recipients))
             return True
