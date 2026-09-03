@@ -213,12 +213,6 @@ class TestPaymentViews:
         )
         assert response.status_code == 400
 
-    def test_payment_statistics(self, authenticated_client):
-        response = authenticated_client.get(reverse("payment_statistics"))
-        assert response.status_code == 200
-        data = response.json()
-        assert "total_payments" in data
-
     def test_export_payments_csv(self, authenticated_client, completed_payment):
         response = authenticated_client.get(reverse("export_payments"))
         assert response.status_code == 200

@@ -6,7 +6,9 @@
 # Behaviour is driven entirely by env vars:
 #   - DATABASE_URL set       → Cloud SQL via socket, skip the wait-for-Postgres
 #   - DATABASE_URL unset     → TCP Postgres (Docker), wait until it answers
-#   - DJANGO_ENV != dev      → collectstatic + seed_teachers + seed_enrollment_types run
+#   - DJANGO_ENV != dev      → collectstatic runs
+#   - Always                 → seed_teachers + seed_enrollment_types (idempotent)
+#   - DJANGO_ENV != production → seed_demo_parents (portal demo data)
 #   - Always                 → migrate, then exec the Dockerfile CMD (gunicorn)
 # ============================================================================
 
@@ -52,13 +54,27 @@ case "$FIRST_ARG" in
         if [ "$DJANGO_ENV" = "testing" ] || [ "$DJANGO_ENV" = "production" ]; then
             echo "📁 Collecting static files..."
             python project/manage.py collectstatic --noinput --clear
+        fi
 
-            echo "🧑‍🏫 Seeding teachers from TEACHER_SEED_* env vars..."
-            python project/manage.py seed_teachers || echo "⚠️  seed_teachers reported an issue (non-fatal)"
-            # Reference data, not test data: without these rows EnrollmentService
-            # raises and no student can be enrolled. Idempotent, so it runs every boot.
-            echo "🎓 Ensuring enrollment types exist..."
-            python project/manage.py seed_enrollment_types || echo "⚠️  seed_enrollment_types reported an issue (non-fatal)"
+        # Teacher seeding runs in DEVELOPMENT too. It is a no-op without
+        # TEACHER_SEED_* vars, and where they are set it is the only way to log
+        # in locally as a NON-ADMIN teacher — the env-var admin login in
+        # `login_view` always mints a superuser, so the trimmed non-admin UI and
+        # NON_ADMIN_ALLOWED_URL_NAMES were untestable outside the QA VM.
+        echo "🧑‍🏫 Seeding teachers from TEACHER_SEED_* env vars..."
+        python project/manage.py seed_teachers || echo "⚠️  seed_teachers reported an issue (non-fatal)"
+
+        # Reference data, not test data: without these rows EnrollmentService
+        # raises and no student can be enrolled. Idempotent, so it runs every boot.
+        echo "🎓 Ensuring enrollment types exist..."
+        python project/manage.py seed_enrollment_types || echo "⚠️  seed_enrollment_types reported an issue (non-fatal)"
+
+        # Parent-portal demo data. Refused outright in production by the
+        # command itself (and the portal's password login is refused there too),
+        # so this is a belt-and-braces guard, not the only one.
+        if [ "$DJANGO_ENV" != "production" ]; then
+            echo "👪 Seeding demo parents from DEMO_PARENT_* env vars..."
+            python project/manage.py seed_demo_parents || echo "⚠️  seed_demo_parents reported an issue (non-fatal)"
         fi
         ;;
 esac

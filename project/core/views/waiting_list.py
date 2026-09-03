@@ -202,6 +202,8 @@ def discard_waiting_entry(waiting, new_student=None):
 def add_to_waiting_list(request, student_id):
     """Flip an existing student back onto the waiting list (rare — usually used on
     admin's request when a spot needs to be freed without deleting the student)."""
+    from billing.services.enrollment_service import EnrollmentService
+
     student = get_object_or_404(Student, id=student_id, active=True)
     if student.is_waiting:
         messages.info(request, f"{student.full_name} ya está en la lista de espera.")
@@ -217,7 +219,7 @@ def add_to_waiting_list(request, student_id):
         # and `assign_from_waiting_list` later hit the
         # unique_active_enrollment_per_student constraint and 500'd, so they
         # could never be promoted back.
-        cancelled = student.enrollments.filter(status="active").update(status="cancelled")
+        cancelled = EnrollmentService.close_active_enrollments(student, "cancelled")
 
     group_name = student.group.group_name if student.group else "sin grupo"
     HistoryLog.log(

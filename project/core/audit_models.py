@@ -61,7 +61,8 @@ class AuditLog(models.Model):
         indexes = [
             models.Index(fields=["-created_at"]),
             models.Index(fields=["model", "object_id"]),
-            models.Index(fields=["actor"]),
+            # No `Index(fields=["actor"])` — it is a ForeignKey and Django
+            # indexes those by default. See the note on `Payment.Meta.indexes`.
         ]
 
     def __str__(self):

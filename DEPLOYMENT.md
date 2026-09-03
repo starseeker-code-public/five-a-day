@@ -121,9 +121,13 @@ docker compose --env-file .env.testing up -d
 Because docker-compose uses `restart: unless-stopped`, all containers come back automatically after a
 VM reboot — no manual intervention needed.
 
-**Teacher seeding (testing/production only)** — `entrypoint.sh` runs `manage.py seed_teachers` on container start when `DJANGO_ENV` is `testing` or `production`. The command reads numbered `TEACHER_SEED_<N>_*` env vars (see [README → .env template](../README.md#env-template)) and idempotently creates Teacher rows + linked `auth.User` accounts so teachers can log in with email + password.
+**Teacher seeding (every environment)** — `entrypoint.sh` runs `manage.py seed_teachers` on container start in **all** environments (it is a no-op without the vars; development gained it so a non-admin Teacher can be logged in as locally). The command reads numbered `TEACHER_SEED_<N>_*` env vars (see [README → .env template](../README.md#env-template)) and idempotently creates Teacher rows + linked `auth.User` accounts so teachers can log in with email + password.
 
-**Enrollment-type seeding (testing/production only)** — `entrypoint.sh` also runs `manage.py seed_enrollment_types` on container start for the same environments. It provisions the `EnrollmentType` reference table (`monthly`, `quarterly`, `adults`, `special`) from `SiteConfiguration`. This is **not** optional test data: nothing else creates these rows, and without them `EnrollmentService` raises and no student can be enrolled. The command is idempotent, so it is a no-op once the rows exist.
+On the QA VM the two admins have **two accounts each**: the EMAIL logins (`lope.carlin@gmail.com`, `mocasylvia@gmail.com`, seeds #1-#2) are the admin accounts, and the HANDLE logins (`claudia`, `silvia`, seeds #4-#5, `@fiveaday.test` addresses) are non-admin accounts for the same people, so the ordinary-teacher view can be checked without giving up an admin session. `TEACHER_SEED_<N>_USERNAME` sets the handle; the email still works as a login either way.
+
+**Enrollment-type seeding (every environment)** — `entrypoint.sh` also runs `manage.py seed_enrollment_types` on container start. It provisions the `EnrollmentType` reference table (`monthly`, `quarterly`, `adults`, `special`) from `SiteConfiguration`. This is **not** optional test data: nothing else creates these rows, and without them `EnrollmentService` raises and no student can be enrolled. The command is idempotent, so it is a no-op once the rows exist.
+
+**Parent-portal demo family (never production)** — `entrypoint.sh` runs `manage.py seed_demo_parents` when `DJANGO_ENV` is not `production`, and the QA dashboard's "Seed database" button runs it after `seed_testdata`. It reads `DEMO_PARENT_<N>_*` (`USERNAME`, `PASSWORD`, `EMAIL` required; `CHILDREN` a comma-separated list of first names), creates the parent, their children, enrollments and payments, and sets `PASSWORD` as the parent's real portal password (stored **hashed** on the `Parent` row). The demo family then signs in through the ordinary `/parent/login/` form — since v1.27 there is no demo-only login mode, so what QA exercises is exactly what a real family runs. On the VM the block is `fernando`; log in with `DEMO_PARENT_1_EMAIL`, not the username. **The command raises `CommandError` when `DJANGO_ENV=production`** and production's env has no `DEMO_PARENT_*` var in the first place. Do not add one — it would plant a fake family in the academy's real roll holding a password that also lives in the env set. Real families set their own password from the single-use link emailed once when their record is created, and recover it from `¿Has olvidado tu contraseña?`.
 
 Keep these vars directly in `.env.testing` (alongside the rest of the testing config). There is no overlay file system — `.env.testing` is self-contained and is renamed to `.env` on the VM before bringing the stack up. It's gitignored via `.env*`.
 
@@ -680,8 +684,9 @@ run inline):
 > **`purge_sessions` is security housekeeping, not cosmetics (v1.23.0).** `django_session`
 > is the default database session backend and its payloads are base64 — signed, not
 > encrypted — so anything a view puts in a session is readable by anyone who can read the
-> table, and rows outlived their cookies indefinitely. `parent_session_tokens` likewise kept
-> every magic link ever issued. Neither was purged before this release. Schedule it in
+> table, and rows outlived their cookies indefinitely. Nothing purged them before this
+> release. (It also swept `parent_session_tokens` until v1.27, when the parent portal moved
+> to a temporary password on the `Parent` row and that table was dropped.) Schedule it in
 > production like the others; skipping it is not a no-op.
 >
 > **`archive_gcp_costs` needs the BigQuery billing export + env vars before it does

@@ -408,6 +408,30 @@ AUTH_PASSWORD_VALIDATORS = [
     },
 ]
 
+# Parent-portal passwords are validated against THIS list, not the one above.
+# `AUTH_PASSWORD_VALIDATORS` is tuned for staff accounts — they are effectively
+# superusers over a database of minors' personal data, so 12 characters is a
+# deliberate, defensible cost. A family reaches a read-only view of their own
+# children and their own invoices; holding them to the staff bar buys almost
+# nothing and costs onboarding, which for this academy means phone calls.
+#
+# Django's own defaults, minus the similarity check (which compares the password
+# against `user.username / first_name / last_name / email` and is a no-op here
+# anyway, because the portal validates before it has anything to compare to).
+# The floor is 8, not lower: a family portal still exposes payment history.
+PARENT_PASSWORD_VALIDATORS = [
+    {
+        "NAME": "django.contrib.auth.password_validation.MinimumLengthValidator",
+        "OPTIONS": {"min_length": 8},
+    },
+    {
+        "NAME": "django.contrib.auth.password_validation.CommonPasswordValidator",
+    },
+    {
+        "NAME": "django.contrib.auth.password_validation.NumericPasswordValidator",
+    },
+]
+
 LANGUAGE_CODE = "es-es"
 
 TIME_ZONE = "Europe/Madrid"

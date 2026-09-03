@@ -178,8 +178,10 @@
                         {% else %}
                         <span class="text-sm text-neutral-400">Sin preferencia</span>
                         {% endif %}
-{# `group_capacity` is attached in the view from group_capacity_summary(); reading
-   student.group.is_full / .available_spots here cost four COUNT queries per row. #}
+{% comment %}
+   `group_capacity` is attached in the view from group_capacity_summary(); reading
+   student.group.is_full / .available_spots here cost four COUNT queries per row.
+{% endcomment %}
                         {% if student.group_capacity.is_full %}
                             <div class="text-xs text-red-500 mt-1">Grupo completo</div>
                         {% elif student.group_capacity.max_students %}
@@ -214,6 +216,14 @@
                     </td>
                     <td class="px-6 py-4 text-center">
                         <div class="flex items-center justify-center gap-2">
+                            {% comment %}
+                                Matricular is the enrollment flow (it redirects into
+                                parent_create -> student_create), so it is admin-only —
+                                `assign_from_waiting_list` is out of the non-admin
+                                whitelist to match. Non-admin teachers still manage the
+                                queue itself and can open each ficha.
+                            {% endcomment %}
+                            {% if is_admin_user %}
                             {% if student.group_capacity.is_full %}
                             <span class="inline-flex items-center gap-1 px-3 py-1.5 bg-green-500 text-white rounded-md text-sm font-medium opacity-40 cursor-not-allowed"
                                   title="El grupo está completo">
@@ -227,6 +237,7 @@
                                 <span class="material-symbols-outlined text-sm">person_add</span>
                                 Matricular
                             </a>
+                            {% endif %}
                             {% endif %}
                             <a href="{% url 'student_detail' student.id %}"
                                class="inline-flex items-center gap-1 px-3 py-1.5 bg-neutral-100 hover:bg-neutral-200 text-neutral-700 rounded-md text-sm font-medium transition-colors no-underline"

@@ -164,6 +164,18 @@ def api_seed_database(request):
             kwargs["reset"] = True
 
         call_command(*args, **kwargs)
+
+        # The demo family is part of "seed the QA database": without it there
+        # is no way to open /parent/login/ on the VM, because the real flow
+        # needs a mailbox. Idempotent, and it refuses to run in production.
+        # Run AFTER seed_testdata so `--reset` (which wipes every Parent and
+        # Student) cannot delete the family we just made.
+        try:
+            call_command("seed_demo_parents", stdout=out)
+        except Exception:  # noqa: BLE001 — the QA dataset is the point; the demo parent is a bonus
+            logger.exception("seed_demo_parents failed during the QA seed")
+            out.write(os.linesep + "⚠️  seed_demo_parents ha fallado — revisa los logs." + os.linesep)
+
         output = out.getvalue()
         return JsonResponse({"success": True, "message": output})
     except Exception:

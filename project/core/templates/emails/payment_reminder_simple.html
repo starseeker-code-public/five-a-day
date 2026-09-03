@@ -4,33 +4,29 @@
 
 {% block content %}
 <div style="text-align: center; padding: 40px 20px;">
-    <h1 style="color: #6d28d9; font-size: 32px; margin-bottom: 20px;">
+    <h1 style="color: #b9a5f5; font-size: 32px; margin-bottom: 20px;">
         ⏰ Recordatorio de pago
     </h1>
 
-    <p style="font-size: 18px; color: #374151; line-height: 1.6; margin-bottom: 10px;">
+    <p style="font-size: 18px; color: #d5d0e6; line-height: 1.6; margin-bottom: 10px;">
         Hola,
     </p>
 
-    <div style="background-color: #FFFBEB; border-left: 4px solid #F59E0B; padding: 15px; margin: 20px 0; text-align: left;">
-        <p style="color: #92400E; margin: 0; font-size: 14px;">
+    <div style="background-color: #2e2410; border-left: 4px solid #F59E0B; padding: 15px; margin: 20px 0; text-align: left;">
+        <p style="color: #fcd34d; margin: 0; font-size: 14px;">
             Este es un recordatorio automático: tenéis un pago pendiente para <strong>{{ student_name }}</strong> por importe de <strong>{{ amount }} €</strong>, con vencimiento el <strong>{{ due_date }}</strong>.
         </p>
     </div>
 
-    <p style="font-size: 16px; color: #6B7280; line-height: 1.6; margin-bottom: 20px;">
+    <p style="font-size: 16px; color: #b0aac9; line-height: 1.6; margin-bottom: 20px;">
         Si ya habéis realizado el pago, ignorad este mensaje.
     </p>
 
-    <div style="background-color: #F0FDF4; border-left: 4px solid #22C55E; padding: 15px; margin: 20px 0; text-align: left;">
-        <p style="color: #166534; margin: 0; font-size: 14px;">
+    <div style="background-color: #16261d; border-left: 4px solid #22C55E; padding: 15px; margin: 20px 0; text-align: left;">
+        <p style="color: #86efac; margin: 0; font-size: 14px;">
             <strong>📞 ¿Tienes alguna duda?</strong><br>
-            No dudes en contactarnos. Estamos aquí para ayudarte y os atenderemos lo antes posible — <a href="https://wa.me/34613481141?text=Hola%2C%20tengo%20una%20pregunta%20sobre%20un%20pago" style="color: #166534; font-weight: 600;">escríbenos por WhatsApp</a> al <strong>613 481 141</strong>.
+            No dudes en contactarnos. Estamos aquí para ayudarte y os atenderemos lo antes posible — <a href="https://wa.me/34613481141?text=Hola%2C%20tengo%20una%20pregunta%20sobre%20un%20pago" style="color: #86efac; font-weight: 600;">escríbenos por WhatsApp</a> al <strong>613 481 141</strong>.
         </p>
     </div>
-
-    <p style="font-size: 14px; color: #9CA3AF; margin-top: 30px;">
-        El recordatorio se genera automáticamente cada semana para pagos que vencen en los próximos 7 días.
-    </p>
 </div>
 {% endblock %}

@@ -174,32 +174,59 @@ class TestParentPortalSessionHandling:
     only popped `parent_id` and left the admin session intact.
     """
 
-    def test_login_cycles_the_session_key(self, parent):
-        from students.models import ParentSessionToken
+    PORTAL_PASSWORD = "Portal-Fam-2026"
 
+    def _log_in(self, client, parent):
+        """Both ways in start a session and so must both cycle the key."""
+        parent.set_portal_password(self.PORTAL_PASSWORD)
+        return client.post(
+            reverse("parent_portal_login"),
+            {"email": parent.email, "password": self.PORTAL_PASSWORD},
+        )
+
+    def test_login_cycles_the_session_key(self, parent):
         client = Client()
         client.get(reverse("parent_portal_login"))
         before = client.session.session_key
-        token = ParentSessionToken.issue(parent)
-        client.get(reverse("parent_portal_verify", args=[token.token]))
+
+        self._log_in(client, parent)
+
+        assert client.session.session_key != before
+
+    def test_changing_a_password_cycles_the_session_key(self, parent):
+        """A credential change must not leave the old session id usable —
+        `parent_portal_change_password` calls `cycle_key()` for the same reason
+        the login flushes."""
+        client = Client()
+        self._log_in(client, parent)
+        before = client.session.session_key
+
+        client.post(
+            reverse("parent_portal_change_password"),
+            {
+                "current_password": self.PORTAL_PASSWORD,
+                "password": "Otra-Clave-Portal-9",
+                "password_confirm": "Otra-Clave-Portal-9",
+            },
+        )
+
+        assert client.session.get("parent_id") == parent.id
         assert client.session.session_key != before
 
     def test_admin_state_does_not_survive_a_parent_login(self, parent):
-        from students.models import ParentSessionToken
-
         client = _client()
-        token = ParentSessionToken.issue(parent)
-        client.get(reverse("parent_portal_verify", args=[token.token]))
+
+        self._log_in(client, parent)
+
         assert client.session.get("parent_id") == parent.id
         assert client.session.get("is_authenticated") is None
 
     def test_logout_clears_the_whole_session(self, parent):
-        from students.models import ParentSessionToken
-
         client = Client()
-        token = ParentSessionToken.issue(parent)
-        client.get(reverse("parent_portal_verify", args=[token.token]))
+        self._log_in(client, parent)
+
         client.get(reverse("parent_portal_logout"))
+
         assert client.session.get("parent_id") is None
 
 

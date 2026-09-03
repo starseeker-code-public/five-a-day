@@ -2,40 +2,40 @@
 {% block title %}Informe mensual · Five a Day{% endblock %}
 {% block content %}
 <div style="text-align: center; padding: 40px 20px;">
-    <h1 style="color: #6d28d9; font-size: 32px; margin-bottom: 20px;">
+    <h1 style="color: #b9a5f5; font-size: 32px; margin-bottom: 20px;">
         📊 Informe mensual
     </h1>
 
-    <p style="text-align: center; color: #9CA3AF; font-size: 14px; margin-bottom: 30px;">
+    <p style="text-align: center; color: #b0aac9; font-size: 14px; margin-bottom: 30px;">
         {{ period }} · Resumen financiero automático de Five a Day
     </p>
 
-    <div style="background-color: #f5f3ff; border-radius: 12px; padding: 25px; margin: 30px 0; text-align: left;">
-        <h2 style="color: #6d28d9; font-size: 18px; margin: 0 0 15px 0;">
+    <div style="background-color: #272235; border-radius: 12px; padding: 25px; margin: 30px 0; text-align: left;">
+        <h2 style="color: #b9a5f5; font-size: 18px; margin: 0 0 15px 0;">
             💶 Resumen financiero
         </h2>
-        <table style="width: 100%; font-size: 14px; color: #374151;">
+        <table style="width: 100%; font-size: 14px; color: #d5d0e6;">
             <tr>
-                <td style="padding: 8px 0; border-bottom: 1px solid #ddd6fe;">
+                <td style="padding: 8px 0; border-bottom: 1px solid #3f3559;">
                     <strong>Esperado</strong>
                 </td>
-                <td style="padding: 8px 0; border-bottom: 1px solid #ddd6fe; text-align: right; font-family: monospace;">
+                <td style="padding: 8px 0; border-bottom: 1px solid #3f3559; text-align: right; font-family: monospace;">
                     {{ expected }} €
                 </td>
             </tr>
             <tr>
-                <td style="padding: 8px 0; border-bottom: 1px solid #ddd6fe;">
+                <td style="padding: 8px 0; border-bottom: 1px solid #3f3559;">
                     <strong>Cobrado</strong>
                 </td>
-                <td style="padding: 8px 0; border-bottom: 1px solid #ddd6fe; text-align: right; font-family: monospace; color: #16a34a;">
+                <td style="padding: 8px 0; border-bottom: 1px solid #3f3559; text-align: right; font-family: monospace; color: #4ade80;">
                     {{ collected }} €
                 </td>
             </tr>
             <tr>
-                <td style="padding: 8px 0; border-bottom: 1px solid #ddd6fe;">
+                <td style="padding: 8px 0; border-bottom: 1px solid #3f3559;">
                     <strong>Pendiente</strong>
                 </td>
-                <td style="padding: 8px 0; border-bottom: 1px solid #ddd6fe; text-align: right; font-family: monospace; color: #dc2626;">
+                <td style="padding: 8px 0; border-bottom: 1px solid #3f3559; text-align: right; font-family: monospace; color: #f87171;">
                     {{ outstanding }} €
                 </td>
             </tr>
@@ -50,8 +50,8 @@
         </table>
     </div>
 
-    <div style="background-color: #f5f3ff; border-left: 4px solid #8b5cf6; padding: 15px; margin: 20px 0; text-align: left;">
-        <p style="color: #5b21b6; margin: 0; font-size: 14px; line-height: 1.6;">
+    <div style="background-color: #272235; border-left: 4px solid #8b5cf6; padding: 15px; margin: 20px 0; text-align: left;">
+        <p style="color: #b9a5f5; margin: 0; font-size: 14px; line-height: 1.6;">
             Este correo se genera automáticamente el día 28 de cada mes.
             Los importes usan <code>due_date</code> como criterio de agrupación (esperado = todo lo que vencía este mes, cobrado = lo que se cobró de esos pagos).
         </p>

@@ -156,6 +156,74 @@ class TestNonAdminTeacherMiddleware:
         response = non_admin_client.get("/students/")
         assert response.status_code == 200
 
+    def test_non_admin_can_open_a_student_detail(self, non_admin_client, student):
+        """The ficha is the ONLY student page a non-admin teacher may reach."""
+        response = non_admin_client.get(reverse("student_detail", args=[student.id]))
+        assert response.status_code == 200
+
+    @pytest.mark.parametrize("url_name", ["student_create", "parent_create"])
+    def test_non_admin_blocked_from_student_writes(self, non_admin_client, url_name):
+        """Creating and enrolling a student are admin-only."""
+        response = non_admin_client.get(reverse(url_name))
+        assert response.status_code == 302
+        assert response.url == reverse("home")
+
+    def test_non_admin_blocked_from_history_feed(self, non_admin_client):
+        """`history_list` lives under /api/, so the middleware answers 403 JSON."""
+        response = non_admin_client.get(reverse("history_list"))
+        assert response.status_code == 403
+        assert response.json()["success"] is False
+
+    @pytest.mark.parametrize(
+        "url_name",
+        ["student_update", "assign_from_waiting_list"],
+    )
+    def test_non_admin_blocked_from_per_student_writes(self, non_admin_client, student, url_name):
+        """Editing a ficha, and promoting a waiting entry (which redirects into
+        the parent_create -> student_create enrollment flow), are admin-only."""
+        response = non_admin_client.get(reverse(url_name, args=[student.id]))
+        assert response.status_code == 302
+        assert response.url == reverse("home")
+
+    def test_non_admin_enroll_api_returns_403(self, non_admin_client, student):
+        response = non_admin_client.post(
+            reverse("enroll_student", args=[student.id]),
+            data="{}",
+            content_type="application/json",
+        )
+        assert response.status_code == 403
+
+    def test_non_admin_can_use_the_waiting_list(self, non_admin_client):
+        assert non_admin_client.get(reverse("waiting_list")).status_code == 200
+        assert non_admin_client.get(reverse("waiting_list_create")).status_code == 200
+
+    def test_non_admin_header_hides_history_and_notifications(self, non_admin_client):
+        """The bell and the history feed must not render for a non-admin."""
+        response = non_admin_client.get("/")
+        html = response.content.decode()
+        assert 'id="history-btn"' not in html
+        assert 'id="notif-btn"' not in html
+        assert response.context["history_count"] == 0
+        assert response.context["notifications_count"] == 0
+
+    def test_admin_header_shows_history_and_notifications(self, admin_client):
+        html = admin_client.get("/").content.decode()
+        assert 'id="history-btn"' in html
+        assert 'id="notif-btn"' in html
+
+    def test_non_admin_has_no_per_view_help_modal(self, non_admin_client):
+        """The help texts walk through admin-only workflows, so the "?" button
+        is not rendered for a non-admin teacher on any page."""
+        for path in ("/", "/students/", "/students/waiting/", "/schedule/"):
+            html = non_admin_client.get(path).content.decode()
+            assert 'id="view-help-btn"' not in html, path
+            assert 'id="view-help-modal"' not in html, path
+
+    def test_admin_still_has_the_per_view_help_modal(self, admin_client):
+        html = admin_client.get("/students/").content.decode()
+        assert 'id="view-help-btn"' in html
+        assert 'id="view-help-modal"' in html
+
     def test_admin_sees_payments(self, admin_client):
         response = admin_client.get("/payments/")
         # Admin bypasses the non-admin check — whatever status the view returns

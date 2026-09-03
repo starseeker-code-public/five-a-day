@@ -14,6 +14,7 @@
 {% endblock %}
 
 {% block header_actions %}
+{% if is_admin_user %}
 <div class="relative" id="newStudentDropdown">
     <button type="button" id="newStudentBtn" class="header-action-btn bg-primary-500 hover:bg-primary-600 text-white px-6 py-3 rounded-md flex items-center gap-2 transition-all duration-200 transform hover:scale-105 hover:shadow-md text-base font-semibold leading-none">
         <span class="material-symbols-outlined text-[20px]">school</span> Nuevo Estudiante
@@ -43,6 +44,7 @@
         </a>
     </div>
 </div>
+{% endif %}
 {% endblock %}
 
 {% block help_content %}
@@ -58,7 +60,7 @@
 <p style="margin-top:0.4rem;">Al matricular se asigna el grupo, se crea la <strong>matrícula</strong> y se generan automáticamente los <strong>pagos de todo el curso</strong> (la cuota de matrícula y las mensualidades o trimestres correspondientes). No tienes que crear los pagos a mano.</p>
 
 <h4 style="font-weight:700;margin-top:1rem;">La tabla de alumnos</h4>
-<p>Cada fila muestra: nombre y colegio, edad, grupo (con su color), padres/tutores, tipo de matrícula, estado del <strong>GDPR</strong> (Firmado / Pendiente) y el <strong>Fun Friday</strong>. El icono del ojo, al final de la fila, abre la <strong>ficha completa</strong> del alumno.</p>
+<p>Cada fila muestra: nombre y colegio, edad, grupo (con su color), padres/tutores, tipo de matrícula, estado del <strong>GDPR</strong> (Firmado / Pendiente) y el <strong>Fun Friday</strong>. Al final de la fila: el <strong>ojo</strong> abre la <strong>ficha completa</strong> del alumno, el <strong>libro</strong> crea una <strong>nueva matrícula</strong> (elige plan y fecha de inicio — la matrícula actual se cierra y los pagos se generan desde esa fecha), y el <strong>lápiz</strong> edita la ficha.</p>
 <p style="margin-top:0.4rem;">En la ficha verás sus datos, los padres/tutores, las matrículas (donde puedes cambiar la modalidad de pago entre <strong>mensual</strong> y <strong>trimestral</strong>), la asistencia a Fun Friday y el historial de pagos del alumno.</p>
 
 <h4 style="font-weight:700;margin-top:1rem;">El botón de Fun Friday</h4>
@@ -239,9 +241,14 @@
                             <a href="{% url 'student_detail' student.id %}" class="inline-flex p-2 text-primary-600 hover:bg-primary-100 rounded-full transition-all duration-200" style="text-decoration:none;" title="Ver estudiante">
                                 <span class="material-symbols-outlined text-base">visibility</span>
                             </a>
+                            {% if is_admin_user %}
+                            <button type="button" class="enroll-btn inline-flex p-2 text-neutral-500 hover:bg-primary-100 hover:text-primary-600 rounded-full transition-all duration-200" style="background:none;border:none;cursor:pointer;" title="Nueva matrícula" data-student-id="{{ student.id }}" data-student-name="{{ student.full_name }}" data-is-adult="{% if student.is_adult %}1{% else %}0{% endif %}">
+                                <span class="material-symbols-outlined text-base">menu_book</span>
+                            </button>
                             <a href="{% url 'student_update' student.id %}" class="inline-flex p-2 text-neutral-500 hover:bg-primary-100 hover:text-primary-600 rounded-full transition-all duration-200" style="text-decoration:none;" title="Editar estudiante">
                                 <span class="material-symbols-outlined text-base">edit</span>
                             </a>
+                            {% endif %}
                         </div>
                     </td>
                 </tr>
@@ -261,6 +268,82 @@
     </div>
 </div>
 
+{% endblock %}
+
+{% block modals %}
+{% if is_admin_user %}
+<!-- Nueva matrícula (book icon). Reuses the shared EnrollmentForm widgets so the
+     plan choices and field ids match student_create; the endpoint is the same
+     form's server-side validation. -->
+<div id="enrollModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:100;align-items:center;justify-content:center;">
+    <div class="bg-white rounded-lg shadow-xl p-6 max-w-md w-full mx-4" style="max-height:90vh;overflow-y:auto;">
+        <div class="flex items-center justify-between mb-1">
+            <h3 class="text-lg font-bold text-neutral-800 flex items-center gap-2">
+                <span class="material-symbols-outlined text-primary-600">menu_book</span>
+                Nueva matrícula
+            </h3>
+            <button type="button" id="enrollModalClose" class="text-neutral-400 hover:text-neutral-600" style="background:none;border:none;cursor:pointer;padding:0;">
+                <span class="material-symbols-outlined">close</span>
+            </button>
+        </div>
+        <p class="text-sm text-neutral-600 mb-4">Alumno: <strong id="enrollStudentName"></strong></p>
+
+        <form id="enrollForm" novalidate>
+            <div class="space-y-4">
+                <div class="enroll-child-only">
+                    <label for="id_enrollment_plan" class="block text-sm font-medium text-neutral-700 mb-2">Tipo de matrícula</label>
+                    {{ enrollment_form.enrollment_plan }}
+                </div>
+                <div>
+                    <label for="id_start_date" class="block text-sm font-medium text-neutral-700 mb-2">Fecha de inicio</label>
+                    {{ enrollment_form.start_date }}
+                    <p class="text-xs text-neutral-500 mt-1">Por defecto, hoy (curso actual). El curso y los pagos se generan desde esta fecha — el alumno puede empezar más adelante.</p>
+                </div>
+
+                <div class="space-y-3">
+                    <div class="flex items-center space-x-3 enroll-child-only">
+                        {{ enrollment_form.has_language_cheque }}
+                        <label for="id_has_language_cheque" class="text-sm font-medium text-neutral-700">Cheque idioma</label>
+                    </div>
+                    <div class="flex items-center space-x-3 enroll-child-only">
+                        {{ enrollment_form.is_sibling_discount }}
+                        <label for="id_is_sibling_discount" class="text-sm font-medium text-neutral-700">Descuento hermano</label>
+                    </div>
+                    <div class="flex items-center space-x-3">
+                        {{ enrollment_form.is_special }}
+                        <label for="id_is_special" class="text-sm font-medium text-neutral-700">Precio especial</label>
+                    </div>
+                </div>
+
+                <div id="enrollManualRow" style="display:none;">
+                    <label for="id_manual_amount" class="block text-sm font-medium text-neutral-700 mb-2">Precio manual (€)</label>
+                    {{ enrollment_form.manual_amount }}
+                    <p class="text-xs text-neutral-500 mt-1">Cuota periódica (por mes, o por trimestre en plan trimestral).</p>
+                </div>
+                <div id="enrollSpecialFeeRow" style="display:none;">
+                    <label for="id_special_enrollment_fee" class="block text-sm font-medium text-neutral-700 mb-2">Matrícula especial (€)</label>
+                    {{ enrollment_form.special_enrollment_fee }}
+                    <p class="text-xs text-neutral-500 mt-1">Pago único de matrícula. Vacío = matrícula estándar.</p>
+                </div>
+
+                <div class="flex items-center space-x-3 pt-2 border-t border-neutral-200">
+                    <input type="checkbox" name="charge_enrollment_fee" id="enroll_charge_fee" class="form-check-input" checked>
+                    <label for="enroll_charge_fee" class="text-sm font-medium text-neutral-700">
+                        Cobrar matrícula <span class="text-xs text-neutral-500">(pago único; con dto. de antiguo alumno si procede)</span>
+                    </label>
+                </div>
+            </div>
+
+            <p id="enrollError" class="text-sm mt-3" style="display:none;color:#dc2626;"></p>
+
+            <div class="flex justify-end gap-3 mt-6 pt-4 border-t border-neutral-200">
+                <button type="button" id="enrollCancelBtn" class="px-5 py-2 text-neutral-600 bg-neutral-100 rounded-md hover:bg-neutral-200 transition-colors" style="border:none;cursor:pointer;">Cancelar</button>
+                <button type="submit" id="enrollSubmitBtn" class="px-5 py-2 bg-primary-500 text-white rounded-md hover:bg-primary-600 transition-colors" style="border:none;cursor:pointer;">Crear matrícula</button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endif %}
 {% endblock %}
 
 {% block extra_js %}

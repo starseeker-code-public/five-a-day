@@ -5,39 +5,39 @@
 
 {% block content %}
 <div style="text-align: center; padding: 40px 20px;">
-    <h1 style="color: #6d28d9; font-size: 32px; margin-bottom: 20px;">
+    <h1 style="color: #b9a5f5; font-size: 32px; margin-bottom: 20px;">
         ⏰ Recordatorio de pago
     </h1>
 
-    <p style="font-size: 18px; color: #374151; line-height: 1.6; margin-bottom: 10px;">
+    <p style="font-size: 18px; color: #d5d0e6; line-height: 1.6; margin-bottom: 10px;">
         Buenos días familias,
     </p>
 
-    <div style="background-color: #FFFBEB; border-left: 4px solid #F59E0B; padding: 15px; margin: 20px 0; text-align: left;">
-        <p style="color: #92400E; margin: 0; font-size: 14px;">
+    <div style="background-color: #2e2410; border-left: 4px solid #F59E0B; padding: 15px; margin: 20px 0; text-align: left;">
+        <p style="color: #fcd34d; margin: 0; font-size: 14px;">
             <strong>📅 Plazo de pago</strong><br>
             Nos ponemos en contacto con vosotros para recordaros que se debe realizar el pago de este mes entre el {{ payment_start_day_name }} {{ payment_start_day_number }} y {{ payment_end_day_name }} {{ payment_end_day_number }} de {{ month }}.
         </p>
     </div>
 
-    <div style="background-color: #EEF2FF; border-radius: 12px; padding: 25px; margin: 30px 0; text-align: left;">
-        <h2 style="color: #6d28d9; font-size: 18px; margin: 0 0 15px 0;">
+    <div style="background-color: #272235; border-radius: 12px; padding: 25px; margin: 30px 0; text-align: left;">
+        <h2 style="color: #b9a5f5; font-size: 18px; margin: 0 0 15px 0;">
             🏦 Datos para el pago
         </h2>
-        <table style="width: 100%; font-size: 14px; color: #374151;">
+        <table style="width: 100%; font-size: 14px; color: #d5d0e6;">
             <tr>
-                <td style="padding: 8px 0; border-bottom: 1px solid #C7D2FE;">
+                <td style="padding: 8px 0; border-bottom: 1px solid #3f3559;">
                     <strong>IBAN:</strong>
                 </td>
-                <td style="padding: 8px 0; border-bottom: 1px solid #C7D2FE; text-align: right;">
+                <td style="padding: 8px 0; border-bottom: 1px solid #3f3559; text-align: right;">
                     <strong>{{ iban_number }}</strong>
                 </td>
             </tr>
             <tr>
-                <td style="padding: 8px 0; border-bottom: 1px solid #C7D2FE;">
+                <td style="padding: 8px 0; border-bottom: 1px solid #3f3559;">
                     <strong>Titular:</strong>
                 </td>
-                <td style="padding: 8px 0; border-bottom: 1px solid #C7D2FE; text-align: right;">
+                <td style="padding: 8px 0; border-bottom: 1px solid #3f3559; text-align: right;">
                     <strong>{{ iban_holder }}</strong>
                 </td>
             </tr>
@@ -46,46 +46,46 @@
                     <strong>Bizum:</strong>
                 </td>
                 <td style="padding: 8px 0; text-align: right;">
-                    <a href="https://wa.me/34{{ telephone_number_bizum|cut:' ' }}" style="color: #6d28d9;">{{ telephone_number_bizum }}</a>
+                    <a href="https://wa.me/34{{ telephone_number_bizum|cut:' ' }}" style="color: #b9a5f5;">{{ telephone_number_bizum }}</a>
                 </td>
             </tr>
         </table>
     </div>
 
-    <div style="background-color: #EEF2FF; border-radius: 12px; padding: 25px; margin: 30px 0; text-align: left;">
-        <h2 style="color: #6d28d9; font-size: 18px; margin: 0 0 15px 0;">
+    <div style="background-color: #272235; border-radius: 12px; padding: 25px; margin: 30px 0; text-align: left;">
+        <h2 style="color: #b9a5f5; font-size: 18px; margin: 0 0 15px 0;">
             💶 Tarifas
         </h2>
-        <table style="width: 100%; font-size: 14px; color: #374151;">
+        <table style="width: 100%; font-size: 14px; color: #d5d0e6;">
             <tr>
-                <td style="padding: 8px 0; border-bottom: 1px solid #C7D2FE;">
+                <td style="padding: 8px 0; border-bottom: 1px solid #3f3559;">
                     Cuota trimestral
                 </td>
-                <td style="padding: 8px 0; border-bottom: 1px solid #C7D2FE; text-align: right;">
+                <td style="padding: 8px 0; border-bottom: 1px solid #3f3559; text-align: right;">
                     {{ quarterly_fee }} euros
                 </td>
             </tr>
             <tr>
-                <td style="padding: 8px 0; border-bottom: 1px solid #C7D2FE;">
+                <td style="padding: 8px 0; border-bottom: 1px solid #3f3559;">
                     Cuota 2 sesiones semanales
                 </td>
-                <td style="padding: 8px 0; border-bottom: 1px solid #C7D2FE; text-align: right;">
+                <td style="padding: 8px 0; border-bottom: 1px solid #3f3559; text-align: right;">
                     {{ full_time_fee }} euros
                 </td>
             </tr>
             <tr>
-                <td style="padding: 8px 0; border-bottom: 1px solid #C7D2FE;">
+                <td style="padding: 8px 0; border-bottom: 1px solid #3f3559;">
                     Cuota 2 sesiones semanales descuento hermano
                 </td>
-                <td style="padding: 8px 0; border-bottom: 1px solid #C7D2FE; text-align: right;">
+                <td style="padding: 8px 0; border-bottom: 1px solid #3f3559; text-align: right;">
                     {{ sibling_full_time_fee }} euros
                 </td>
             </tr>
             <tr>
-                <td style="padding: 8px 0; border-bottom: 1px solid #C7D2FE;">
+                <td style="padding: 8px 0; border-bottom: 1px solid #3f3559;">
                     Cuota 1 sesión semanal
                 </td>
-                <td style="padding: 8px 0; border-bottom: 1px solid #C7D2FE; text-align: right;">
+                <td style="padding: 8px 0; border-bottom: 1px solid #3f3559; text-align: right;">
                     {{ part_time_fee }} euros
                 </td>
             </tr>
@@ -100,32 +100,32 @@
         </table>
     </div>
 
-    <div style="background-color: #FEF2F2; border-left: 4px solid #EF4444; padding: 15px; margin: 20px 0; text-align: left;">
-        <p style="color: #991B1B; margin: 0; font-size: 14px;">
+    <div style="background-color: #2e1616; border-left: 4px solid #EF4444; padding: 15px; margin: 20px 0; text-align: left;">
+        <p style="color: #fca5a5; margin: 0; font-size: 14px;">
             Si os beneficiáis del Cheque Idioma, la cuota sería de {{ reduced_price_cheque_idioma }} euros y tenéis que venir a la academia a <strong>firmar</strong> el recibo.
         </p>
     </div>
 
-    <div style="background-color: #EEF2FF; border-radius: 12px; padding: 25px; margin: 30px 0; text-align: left;">
-        <h2 style="color: #6d28d9; font-size: 18px; margin: 0 0 15px 0;">
+    <div style="background-color: #272235; border-radius: 12px; padding: 25px; margin: 30px 0; text-align: left;">
+        <h2 style="color: #b9a5f5; font-size: 18px; margin: 0 0 15px 0;">
             🕘 Horario de atención al público
         </h2>
-        <p style="margin: 0 0 8px 0; font-size: 14px; color: #374151;">De lunes a jueves de 11:30 a 13:30 y de 16:00 a 20:30</p>
-        <p style="margin: 0; font-size: 14px; color: #374151;">Viernes de 12:00 a 14:00 y de 16:00 a 18:30</p>
+        <p style="margin: 0 0 8px 0; font-size: 14px; color: #d5d0e6;">De lunes a jueves de 11:30 a 13:30 y de 16:00 a 20:30</p>
+        <p style="margin: 0; font-size: 14px; color: #d5d0e6;">Viernes de 12:00 a 14:00 y de 16:00 a 18:30</p>
     </div>
 
-    <p style="font-size: 16px; color: #6B7280; line-height: 1.6; margin-bottom: 20px;">
+    <p style="font-size: 16px; color: #b0aac9; line-height: 1.6; margin-bottom: 20px;">
         Muchas gracias y buen día.
     </p>
 
-    <div style="background-color: #F0FDF4; border-left: 4px solid #22C55E; padding: 15px; margin: 20px 0; text-align: left;">
-        <p style="color: #166534; margin: 0; font-size: 14px;">
+    <div style="background-color: #16261d; border-left: 4px solid #22C55E; padding: 15px; margin: 20px 0; text-align: left;">
+        <p style="color: #86efac; margin: 0; font-size: 14px;">
             <strong>📞 ¿Tienes alguna pregunta sobre tu pago?</strong><br>
-            No dudes en contactarnos. Estamos aquí para ayudarte — <a href="https://wa.me/34613481141?text=Hola%2C%20tengo%20una%20pregunta%20sobre%20un%20pago" style="color: #166534; font-weight: 600;">escríbenos por WhatsApp</a> al <strong>613 481 141</strong>.
+            No dudes en contactarnos. Estamos aquí para ayudarte — <a href="https://wa.me/34613481141?text=Hola%2C%20tengo%20una%20pregunta%20sobre%20un%20pago" style="color: #86efac; font-weight: 600;">escríbenos por WhatsApp</a> al <strong>613 481 141</strong>.
         </p>
     </div>
 
-    <p style="font-size: 14px; color: #9CA3AF; margin-top: 30px;">
+    <p style="font-size: 14px; color: #b0aac9; margin-top: 30px;">
         Kind regards,
     </p>
 </div>

@@ -1,5 +1,6 @@
-"""Tests for the two new email tasks added during the review pass:
-- comms.tasks.send_parent_magic_link_task  (v1.9 async fix)
+"""Tests for two email tasks added during the review pass:
+- comms.tasks.send_parent_temporary_password_task  (v1.9 async fix; portal
+  credential email since v1.27)
 - comms.tasks.send_payment_receipt_email_task  (v1.11 receipt email)
 """
 
@@ -7,36 +8,83 @@ from unittest.mock import patch
 
 import pytest
 
-from comms.tasks import send_parent_magic_link_task, send_payment_receipt_email_task
+from comms.tasks import send_parent_temporary_password_task, send_payment_receipt_email_task
 
 pytestmark = pytest.mark.django_db
 
+LOGIN_URL = "http://x/parent/login/"
 
-class TestSendParentMagicLinkTask:
+
+class TestSendParentTemporaryPasswordTask:
     def test_returns_error_when_parent_missing(self):
-        result = send_parent_magic_link_task.run(999_999, "http://x/")
+        result = send_parent_temporary_password_task.run(999_999, LOGIN_URL)
         assert result["status"] == "error"
 
     def test_skipped_when_parent_has_no_email(self, parent):
         parent.email = ""
         parent.save()
-        result = send_parent_magic_link_task.run(parent.id, "http://x/")
+        result = send_parent_temporary_password_task.run(parent.id, LOGIN_URL)
         assert result["status"] == "skipped"
 
     def test_calls_email_service_with_expected_template(self, parent):
         with patch("comms.services.email_service.EmailService.send_email", return_value=True) as mock_send:
-            result = send_parent_magic_link_task.run(parent.id, "http://x/parent/login/abc/")
+            result = send_parent_temporary_password_task.run(parent.id, LOGIN_URL)
         assert result["status"] == "success"
         _, kwargs = mock_send.call_args
-        assert kwargs["template_name"] == "parent_magic_link"
+        assert kwargs["template_name"] == "parent_temporary_password"
         assert kwargs["recipients"] == parent.email
-        assert kwargs["context"]["link"] == "http://x/parent/login/abc/"
+        assert kwargs["context"]["login_url"] == LOGIN_URL
         assert kwargs["context"]["parent_name"] == parent.first_name
-        assert kwargs["context"]["expires_minutes"] == 30
+        assert kwargs["context"]["reset"] is False
+
+    def test_the_emailed_password_is_the_one_that_was_stored(self, parent):
+        """The plaintext exists only in the email; the row keeps a hash."""
+        with patch("comms.services.email_service.EmailService.send_email", return_value=True) as mock_send:
+            send_parent_temporary_password_task.run(parent.id, LOGIN_URL)
+
+        emailed = mock_send.call_args[1]["context"]["temporary_password"]
+        parent.refresh_from_db()
+        assert parent.temporary_password != emailed, "the plaintext must never be persisted"
+        assert parent.authenticate_portal(emailed) == "temporary"
+
+    def test_the_password_is_generated_inside_the_task(self, parent):
+        """It is a live credential, so it must not travel as a task argument —
+        those are serialised into the broker and printed by Celery's logging.
+        The signature is (parent_id, login_url, reset) and nothing else."""
+        with patch("comms.services.email_service.EmailService.send_email", return_value=True):
+            result = send_parent_temporary_password_task.run(parent.id, LOGIN_URL)
+
+        # ...and it must not come back out in the return value either, which the
+        # result backend stores.
+        assert "temporary_password" not in result
+        assert set(result) == {"status", "recipient"}
+
+    def test_an_existing_password_keeps_working(self, parent):
+        """Recovery is unauthenticated, so issuing a temporary password must not
+        overwrite the credential the family may still be using — otherwise
+        anyone who knows an address can lock them out."""
+        parent.set_portal_password("Portal-Fam-2026")
+
+        with patch("comms.services.email_service.EmailService.send_email", return_value=True) as mock_send:
+            send_parent_temporary_password_task.run(parent.id, LOGIN_URL, True)
+
+        emailed = mock_send.call_args[1]["context"]["temporary_password"]
+        parent.refresh_from_db()
+        assert parent.authenticate_portal("Portal-Fam-2026") == "password"
+        assert parent.authenticate_portal(emailed) == "temporary"
+
+    def test_the_reset_flavour_changes_the_subject(self, parent):
+        """One template, two callers — the invitation and the recovery form
+        differ in copy, not in mechanism."""
+        with patch("comms.services.email_service.EmailService.send_email", return_value=True) as mock_send:
+            send_parent_temporary_password_task.run(parent.id, LOGIN_URL, True)
+        _, kwargs = mock_send.call_args
+        assert kwargs["context"]["reset"] is True
+        assert "temporal" in kwargs["subject"].lower()
 
     def test_failure_reported(self, parent):
         with patch("comms.services.email_service.EmailService.send_email", return_value=False):
-            result = send_parent_magic_link_task.run(parent.id, "http://x/")
+            result = send_parent_temporary_password_task.run(parent.id, LOGIN_URL)
         assert result["status"] == "failed"
 
 

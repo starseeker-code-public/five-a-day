@@ -95,6 +95,35 @@ def get_email_apps():
             "description": "Aviso de cierre por vacaciones (manual)",
         },
         {
+            "key": "parent_invite",
+            "template": "parent_temporary_password",
+            "subject": "[TEST] Acceso al portal de familias · Five a Day",
+            "context": {
+                "parent_name": "Padre de Prueba",
+                "parent_email": "padre.prueba@example.com",
+                # A sample of the real generated shape, never a real credential.
+                "temporary_password": "Kf7q-Mx3v-Rn9t",
+                "reset": False,
+                "login_url": "https://example.com/parent/login/",
+            },
+            "description": "Invitación al portal de familias (al crear el padre/tutor)",
+        },
+        {
+            "key": "parent_reset",
+            "template": "parent_temporary_password",
+            "subject": "[TEST] Tu contraseña temporal · Five a Day",
+            "context": {
+                "parent_name": "Padre de Prueba",
+                "parent_email": "padre.prueba@example.com",
+                "temporary_password": "Kf7q-Mx3v-Rn9t",
+                # Same template, `reset` flipped — the two flavours must both be
+                # previewable, because the branch is where the copy diverges.
+                "reset": True,
+                "login_url": "https://example.com/parent/login/",
+            },
+            "description": "Recuperación de contraseña del portal de familias",
+        },
+        {
             "key": "tax_certificate",
             "template": "tax_certificate",
             "subject": f"[TEST] Certificado Fiscal {today.year - 1}",
@@ -137,6 +166,9 @@ def get_email_apps():
             "subject": "[TEST] Feliz Cumpleaños Alumno!",
             "context": {"name": "Alumno de Prueba"},
             "description": "Cumpleaños (diario 8:00 AM)",
+            # Same cid the real task attaches — without it the template's
+            # <img src="cid:birthday_image"> renders broken.
+            "inline_images": {"birthday_image": "core/static/images/happy-birthday.png"},
         },
         {
             "key": "receipt_quarterly",

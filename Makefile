@@ -139,7 +139,7 @@ rebuild:
 	@if [ -z "$(SERVICE)" ]; then \
 		docker compose down; \
 		docker compose build --no-cache; \
-		docker compose up -d; \
+		docker compose up -d -V; \
 		echo "Rebuilt and started: http://localhost:8000"; \
 	else \
 		docker compose stop $(SERVICE); \

@@ -93,26 +93,56 @@ class TestMaterializeRecurringExpensesDailyTask:
 
 
 class TestSendMonthlyReportTask:
-    def test_skips_when_no_recipient(self):
-        with override_settings(SUPPORT_EMAIL=None):
+    # Every test here pins BOTH SUPPORT_EMAIL and DEFAULT_FROM_EMAIL. The
+    # default recipient set is built from the two of them, and
+    # `DEFAULT_FROM_EMAIL` is `os.getenv("EMAIL_HOST_USER", "")` — so a test
+    # that leaves it ambient passes or fails depending on whether the machine
+    # running it has a mail account in its .env. That is what made
+    # `test_skips_when_no_recipient` green in CI and red on a dev box.
+    def test_skips_when_nobody_is_configured(self):
+        # Both empty is the only way to reach the skip branch: an unset
+        # SUPPORT_EMAIL alone still leaves the academy's own Gmail address.
+        with override_settings(SUPPORT_EMAIL=None, DEFAULT_FROM_EMAIL=""):
             result = send_monthly_report_task.run()
         assert result["status"] == "skipped"
 
+    def test_falls_back_to_the_from_address_when_support_is_unset(self):
+        with override_settings(SUPPORT_EMAIL=None, DEFAULT_FROM_EMAIL="academy@example.com"):
+            with patch("comms.services.email_service.EmailService.send_email", return_value=True) as mock_send:
+                result = send_monthly_report_task.run()
+        assert result["status"] == "success"
+        _, kwargs = mock_send.call_args
+        assert kwargs["recipients"] == ["academy@example.com"]
+
     def test_sends_when_recipient_configured(self, pending_payment, completed_payment):
-        with override_settings(SUPPORT_EMAIL="admin@example.com"):
+        with override_settings(SUPPORT_EMAIL="admin@example.com", DEFAULT_FROM_EMAIL="academy@example.com"):
             with patch("comms.services.email_service.EmailService.send_email", return_value=True) as mock_send:
                 result = send_monthly_report_task.run()
         assert result["status"] == "success"
         assert float(result["expected"]) >= 0
         assert float(result["collected"]) >= 0
+        # One send, two inboxes: the academy reads this at the support address
+        # and in its own Gmail account.
         mock_send.assert_called_once()
+        _, kwargs = mock_send.call_args
+        assert kwargs["recipients"] == ["admin@example.com", "academy@example.com"]
+
+    def test_deduplicates_when_both_addresses_match(self):
+        with override_settings(SUPPORT_EMAIL="same@example.com", DEFAULT_FROM_EMAIL="same@example.com"):
+            with patch("comms.services.email_service.EmailService.send_email", return_value=True) as mock_send:
+                send_monthly_report_task.run()
+        _, kwargs = mock_send.call_args
+        assert kwargs["recipients"] == ["same@example.com"]
 
     def test_uses_explicit_recipient_when_given(self):
-        with patch("comms.services.email_service.EmailService.send_email", return_value=True) as mock_send:
-            result = send_monthly_report_task.run(recipient_email="custom@example.com")
+        # `--recipient` is an override, not an addition: that one run goes only
+        # where it was pointed, never to the configured inboxes as well.
+        with override_settings(SUPPORT_EMAIL="admin@example.com", DEFAULT_FROM_EMAIL="academy@example.com"):
+            with patch("comms.services.email_service.EmailService.send_email", return_value=True) as mock_send:
+                result = send_monthly_report_task.run(recipient_email="custom@example.com")
         assert result["status"] == "success"
         _, kwargs = mock_send.call_args
-        assert kwargs["recipients"] == "custom@example.com"
+        assert kwargs["recipients"] == ["custom@example.com"]
 
     def test_uses_admin_monthly_report_template(self):
         """Regression: v1.4 initially used the parent-facing `monthly_report`

@@ -129,7 +129,13 @@ class TestApiSeedDatabase:
             )
         assert response.status_code == 200
         assert response.json()["success"] is True
-        mock_cmd.assert_called_once()
+        # Two commands: the QA dataset, then the demo parent — without the
+        # latter there is no way to open /parent/login/ on the VM, because the
+        # real flow needs a mailbox to read the invitation from.
+        commands = [call.args[0] for call in mock_cmd.call_args_list]
+        assert commands == ["seed_testdata", "seed_demo_parents"], (
+            "the demo parent must be seeded AFTER seed_testdata, whose --reset wipes every Parent"
+        )
 
     @QA_SETTINGS
     def test_success_with_reset(self, qa_client):
@@ -141,9 +147,28 @@ class TestApiSeedDatabase:
             )
         assert response.status_code == 200
         assert response.json()["success"] is True
-        # reset=True should be forwarded as kwarg
-        call_kwargs = mock_cmd.call_args.kwargs
-        assert call_kwargs.get("reset") is True
+        # reset=True should be forwarded as a kwarg — to seed_testdata, which is
+        # the command that understands it.
+        seed_call = next(call for call in mock_cmd.call_args_list if call.args[0] == "seed_testdata")
+        assert seed_call.kwargs.get("reset") is True
+
+    @QA_SETTINGS
+    def test_a_failing_demo_parent_seed_does_not_fail_the_qa_seed(self, qa_client):
+        """The QA dataset is the point; the demo parent is a bonus."""
+
+        def _fail_on_demo(name, *args, **kwargs):
+            if name == "seed_demo_parents":
+                raise RuntimeError("boom")
+
+        with patch("django.core.management.call_command", side_effect=_fail_on_demo):
+            response = qa_client.post(
+                reverse("api_seed_database"),
+                data=json.dumps({"reset": False}),
+                content_type="application/json",
+            )
+
+        assert response.status_code == 200
+        assert response.json()["success"] is True
 
     @QA_SETTINGS
     def test_command_error_returns_500(self, qa_client):

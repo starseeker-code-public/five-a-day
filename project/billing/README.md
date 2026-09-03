@@ -30,11 +30,11 @@ The `billing` app owns all financial logic: pricing configuration, enrollment pl
 
 ### EnrollmentService (`billing/services/enrollment_service.py`)
 
-- `create_enrollment(student, enrollment_data, is_adult)` — creates an Enrollment within `transaction.atomic()` with proper pricing and discounts. Raises `ValueError` if required EnrollmentType is missing.
-- `_resolve_enrollment_type(student, is_adult, is_special, manual_amount, academic_year)` — picks the matrícula category by precedence: hand-priced → `special`, adult → `adults`, has an earlier academic year → `returning_student`, otherwise `new_student`. Independent of `enrollment_plan`.
+- `create_enrollment(student, enrollment_data, is_adult)` — creates an Enrollment within `transaction.atomic()` with proper pricing and discounts. Raises `ValueError` if required EnrollmentType is missing. v1.26.8: `enrollment_data["start_date"]` (blank ⇒ today) sets `enrollment_date` **and** selects the academic year via `current_academic_year(start_date)`, so an enrollment created today for a 1 November start belongs to — and is billed from — November; `enrollment_data["is_returning_student"]` is the form's "Antiguo alumno" override.
+- `_resolve_enrollment_type(student, is_adult, is_special, manual_amount, academic_year, force_returning=False)` — picks the matrícula category by precedence: hand-priced → `special`, adult → `adults`, has an earlier academic year → `returning_student`, otherwise `new_student`. Independent of `enrollment_plan`. `force_returning` (v1.26.8) marks a child as re-enrolling when no prior `Enrollment` row exists; it does **not** outrank `special` or `adults`.
 - `_resolve_plan(config, data, is_adult, is_special, manual_amount)` — returns `(base_amount, schedule_type, payment_modality)`, i.e. the recurring period fee and how it is scheduled.
 - `_apply_discounts(config, base, ...)` — applies sibling and language cheque discounts
-- `compute_enrollment_fee(config, student, is_adult, special_fee=None)` — returns `(final_fee, returning_discount_applied)`. `special_fee` (v1.20.0) is the form's optional **Matrícula especial (€)**: a negotiated figure, so it is returned verbatim with no returning-student discount taken off it. It is deliberately separate from `manual_amount`, which prices the *recurring* fee only — a special monthly price does not imply a special matrícula, and before v1.20.0 such an enrollment was silently charged the standard one.
+- `compute_enrollment_fee(config, student, is_adult, special_fee=None, force_returning=False, this_academic_year=None)` — returns `(final_fee, returning_discount_applied)`. **`this_academic_year` must be passed by any caller that has just created the enrollment** (`enrollment.academic_year`): judged against today's year instead, a future-dated enrollment reads as the student's own prior history and wrongly wins the discount. `force_returning` is the "Antiguo alumno" checkbox — it grants the discount, never revokes one the prior enrollments already earn. `special_fee` (v1.20.0) is the form's optional **Matrícula especial (€)**: a negotiated figure, so it is returned verbatim with no returning-student discount taken off it. It is deliberately separate from `manual_amount`, which prices the *recurring* fee only — a special monthly price does not imply a special matrícula, and before v1.20.0 such an enrollment was silently charged the standard one.
 - `is_returning_student(student)` / returning-student enrollment discount (v1.13) — a student who previously had an enrollment pays a reduced enrollment fee
 
 ### EnrollmentTypeService (`billing/services/enrollment_type_service.py`)
@@ -119,6 +119,13 @@ Implemented directly against the Stripe REST API with `httpx` — **no Stripe SD
   ModelForm): it validates, and `create_enrollment(student, is_adult)` is a thin bridge to
   `EnrollmentService.create_enrollment`.
   - `enrollment_plan`, `has_language_cheque`, `is_sibling_discount`, `sibling_id`, `is_special`
+  - `start_date` (v1.26.8) — **Fecha de inicio**, the day the student actually STARTS, which need
+    not be the day the ficha is created. Blank means today (`initial` is the `date.today` callable,
+    so it is evaluated per render, not at import). It becomes `Enrollment.enrollment_date`, and with
+    it the academic year, the matrícula's due month, the first billing period and its proration.
+  - `is_returning_student` (v1.26.8) — **Antiguo alumno**. Forces the returning-student matrícula
+    for a `Student` row with no prior `Enrollment` (someone re-registering after years away, or
+    promoted off the waiting list, which creates a fresh row). It only ever adds the discount.
   - `manual_amount` — **Precio manual (€)**, the *recurring* fee (per month, or per quarter on a
     quarterly plan). Required when `is_special` is ticked.
   - `special_enrollment_fee` (v1.20.0) — **Matrícula especial (€)**, the optional *one-time*
@@ -143,7 +150,7 @@ Implemented directly against the Stripe REST API with `httpx` — **no Stripe SD
 python manage.py seed_enrollment_types
 ```
 
-Provisions the `EnrollmentType` reference table. **Required in every environment** — nothing else creates these rows (`0001_initial` builds the table and inserts nothing), and without them `EnrollmentService._resolve_enrollment_type` raises `EnrollmentType '<name>' not found` and no student can be enrolled. `entrypoint.sh` runs it on every testing/production boot beside `seed_teachers`. Idempotent.
+Provisions the `EnrollmentType` reference table. **Required in every environment** — nothing else creates these rows (`0001_initial` builds the table and inserts nothing), and without them `EnrollmentService._resolve_enrollment_type` raises `EnrollmentType '<name>' not found` and no student can be enrolled. `entrypoint.sh` runs it on every testing/production boot beside `seed_teachers`. Idempotent. Since v1.26.8 `entrypoint.sh` runs it in **every** environment, not just testing/production.
 
 ### `generate_payments`
 
@@ -220,7 +227,7 @@ immediately.
 
 Payment CRUD, enrollment API, management panel, expenses (create / **update** (v1.20.0) / delete),
 reports, search/statistics, Stripe endpoints, CSV/Excel export, per-student payment-history PDF
-(v1.15). **25 URL patterns** total.
+(v1.15). **24 URL patterns** total.
 
 ## Cross-App Communication
 

@@ -188,19 +188,20 @@ NON_ADMIN_ALLOWED_URL_NAMES = frozenset(
         "health_check",
         # Dashboard
         "home",
-        # Students (list, detail, create, update — full access per user request)
+        # Students — READ-ONLY. A non-admin teacher may browse the roll and open
+        # a ficha, nothing else: `student_create`, `student_update`,
+        # `enroll_student` and `parent_create` are deliberately absent, so
+        # creating, enrolling and editing a student are admin-only.
         "students_list",
-        "student_create",
         "student_detail",
-        "student_update",
         "search_students",
-        # Waiting list (v1.1) — same authority level as regular student management
+        # Waiting list (v1.1) — non-admins manage the QUEUE, but not the
+        # promotion out of it: `assign_from_waiting_list` redirects into the
+        # parent_create -> student_create enrollment flow, which is enrolling by
+        # another name, so it stays admin-only.
         "waiting_list",
         "waiting_list_create",
-        "assign_from_waiting_list",
         "add_to_waiting_list",
-        # Parents
-        "parent_create",
         # Schedule — view-only for non-admin teachers (save_schedule_slot stays admin-only)
         "schedule_view",
         # Fun Friday (attendance view + attendance API)
@@ -213,6 +214,9 @@ NON_ADMIN_ALLOWED_URL_NAMES = frozenset(
         #   update_enrollment_modality  (admin-only writes)
         "management",
         "api_get_teachers",
+        # Changing your OWN password is self-service, not an admin write: the
+        # view only ever touches request.user and refuses OAuth sessions.
+        "change_password",
         "language_cheque_students",
         # Expenses (v1.5) — visible to non-admin teachers for read + create
         "expenses_list",
@@ -226,10 +230,11 @@ NON_ADMIN_ALLOWED_URL_NAMES = frozenset(
         # so it's already in PUBLIC_PREFIXES. Setup/manage are admin-only and
         # deliberately absent from this whitelist.
         "two_factor_verify",
-        # Todos, history, support
+        # Todos + support. `history_list` is admin-only — the actions-history
+        # feed and the notifications bell are both hidden from non-admin
+        # teachers in `base.html`, and the endpoint has to agree.
         "create_todo",
         "complete_todo",
-        "history_list",
         "submit_support_ticket",
         # Error test pages (harmless)
         "test_error_400",
@@ -273,7 +278,7 @@ class SimpleAuthMiddleware:
         "/media/",
         "/auth/google/",
         "/password-reset/",
-        "/parent/",  # v1.9: parent portal uses its own magic-link session
+        "/parent/",  # v1.9: the parent portal has its own email+password session
         "/api/stripe/webhook/",  # v1.11: called by Stripe's servers, signed via header
         "/manifest.webmanifest",  # v1.12: PWA manifest, must be public
         "/sw.js",  # v1.12: service worker, must be public

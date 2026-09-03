@@ -54,3 +54,22 @@ class TestServiceWorker:
     def test_accessible_without_auth(self, client):
         response = client.get(reverse("service_worker"))
         assert response.status_code == 200
+
+    def test_static_is_cache_first_when_not_debug(self, client, settings):
+        """Production serves content-hashed filenames, so cache-first is
+        optimal there and must stay."""
+        settings.DEBUG = False
+        body = client.get(reverse("service_worker")).content.decode()
+        assert "const DEV = false;" in body
+
+    def test_static_bypasses_the_sw_in_development(self, client, settings):
+        """Dev serves the BARE path (/static/js/management.js) and CACHE_NAME is
+        keyed on APP_VERSION, so between releases an edited asset was served
+        from cache forever. The symptom is nasty: the HTML is `no-cache` so a
+        template change lands instantly while its script stays stale — a new
+        button renders and clicking it does nothing."""
+        settings.DEBUG = True
+        body = client.get(reverse("service_worker")).content.decode()
+        assert "const DEV = true;" in body
+        # The bypass has to be wired into isCacheable, not just declared.
+        assert 'if (path.startsWith("/static/") || path.startsWith("/media/")) return !DEV;' in body

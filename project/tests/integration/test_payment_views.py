@@ -321,6 +321,20 @@ class TestQuickCompletePayment:
         assert pending_payment.payment_status == "completed"
         assert pending_payment.payment_date is not None
 
+    def test_cancelled_payment_cannot_be_completed(self, authenticated_client, pending_payment):
+        pending_payment.payment_status = "cancelled"
+        pending_payment.save()
+        response = authenticated_client.post(
+            self._url(pending_payment.id),
+            data=json.dumps({"payment_method": "cash"}),
+            content_type="application/json",
+        )
+        assert response.status_code == 400
+        assert response.json()["success"] is False
+        pending_payment.refresh_from_db()
+        assert pending_payment.payment_status == "cancelled"
+        assert pending_payment.payment_date is None
+
     def test_invalid_method_returns_400(self, authenticated_client, pending_payment):
         response = authenticated_client.post(
             self._url(pending_payment.id),

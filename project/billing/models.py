@@ -391,7 +391,10 @@ class Enrollment(models.Model):
         verbose_name = "Matrícula"
         verbose_name_plural = "Matrículas"
         indexes = [
-            models.Index(fields=["student"]),
+            # No `Index(fields=["student"])` — see the note on
+            # `Payment.Meta.indexes`. `student_id` here carries the FK index
+            # plus `unique_active_enrollment_per_student`, so it was covered
+            # twice over already.
             models.Index(fields=["status"]),
             models.Index(fields=["academic_year"]),
             models.Index(fields=["enrollment_date"]),
@@ -553,12 +556,21 @@ class Payment(models.Model):
         verbose_name = "Pago"
         verbose_name_plural = "Pagos"
         indexes = [
-            models.Index(fields=["student"]),
-            models.Index(fields=["parent"]),
+            # `student`, `parent` and `enrollment` are ForeignKeys, and Django
+            # sets `db_index=True` on those by default — so declaring them here
+            # built a SECOND, byte-identical b-tree on each column. Verified
+            # against the live schema: `payments_student_5b85b3_idx` duplicated
+            # `payments_student_id_afd7e8d1`, and likewise for the other two.
+            #
+            # Not free: `payments` is the table the billing generators write in
+            # bulk (`generate_payments` opens a period for every active
+            # enrollment), and every insert had to maintain three redundant
+            # indexes. Only declare an index here for a column Django does not
+            # already cover — a non-FK field, or a multi-column shape like
+            # `payment_status_due_idx` below.
             models.Index(fields=["payment_status"]),
             models.Index(fields=["due_date"]),
             models.Index(fields=["payment_date"]),
-            models.Index(fields=["enrollment"]),
             # The dominant filter shape across the app: `payments_list` stats,
             # `dashboard.home`, `analytics_service` and the reminder cron all ask
             # "pending/completed money in this date window". Postgres can bitmap-AND

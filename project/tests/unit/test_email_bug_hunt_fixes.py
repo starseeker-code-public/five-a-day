@@ -52,15 +52,35 @@ class TestPaymentReminderSimpleTemplate:
 
 
 class TestBirthdayEmailTemplate:
-    def test_template_no_longer_references_missing_image(self):
+    def test_template_embeds_inline_cid_image(self):
         tpl = get_template("emails/happy_birthday.html")
         rendered = tpl.render({"name": "Lucas"})
-        # Old template had `<img src="cid:birthday_image">` but no code path
-        # ever attached the image — remove the broken reference.
-        assert "cid:birthday_image" not in rendered
+        # The image must be a cid: inline part. A {% static %} src renders a
+        # relative URL that no mail client can resolve — the round-2 fix
+        # removed a cid nothing attached; the task now attaches it (below).
+        assert "cid:birthday_image" in rendered
         # Still shows the birthday greeting
         assert "Birthday" in rendered
         assert "Lucas" in rendered
+
+    def test_task_attaches_the_image_the_template_references(self, student_with_parent):
+        """The cid in the template is only real if the task ships the file."""
+        import os
+
+        from comms.tasks import send_birthday_email_task
+
+        captured = {}
+
+        def _capture(**kwargs):
+            captured.update(kwargs)
+            return True
+
+        with patch("comms.services.email_service.EmailService.send_email", side_effect=_capture):
+            result = send_birthday_email_task.run(student_with_parent.id)
+
+        assert result["status"] == "success"
+        assert list(captured["inline_images"].keys()) == ["birthday_image"]
+        assert os.path.exists(captured["inline_images"]["birthday_image"])
 
 
 # ── fun_friday event_image guard ───────────────────────────────────────────

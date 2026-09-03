@@ -1,0 +1,14 @@
+{% autoescape off %}Hola{% if user.first_name %} {{ user.first_name }}{% endif %},
+
+Se ha creado tu cuenta de profesor/a en Five a Day eVolution.
+
+Para elegir tu contraseña y activar el acceso, abre este enlace en tu navegador:
+
+{{ protocol }}://{{ domain }}{% url 'password_reset_confirm' uidb64=uid token=token %}
+
+Después de establecerla, entra con tu email ({{ email }}) y esa contraseña.
+
+El enlace caducará en unas horas por motivos de seguridad. Si caduca, puedes pedir uno nuevo en {{ protocol }}://{{ domain }}{% url 'password_reset' %}.
+
+— Five a Day English Academy
+{% endautoescape %}
