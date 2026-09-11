@@ -624,6 +624,50 @@ def send_payment_receipt_email_task(self, payment_id: int):
     return {"status": "success", "recipient": recipient, "payment_id": payment_id}
 
 
+@shared_task(name="comms.tasks.upload_receipt_to_drive_task", bind=True)
+def upload_receipt_to_drive_task(self, payment_id: int):
+    """Best-effort: archive a completed payment's receipt PDF to Google Drive.
+
+    Deliberately NOT auto-retrying and NOT raising: the Drive archive is a
+    convenience on top of the `Payment` row and the emailed receipt, so a Drive
+    problem must never fail the payment flow or spawn a retry storm (production
+    runs eager, so a raise here would surface inside the completion request). The
+    upload service already swallows every error and returns a status; this task
+    just resolves the payment, renders the PDF and records the outcome.
+    """
+    from billing.models import Payment
+    from billing.services.pdf_service import generate_payment_receipt
+    from core.services.drive_service import get_service as get_drive_service
+
+    drive = get_drive_service()
+    if not drive.is_configured():
+        return {"status": "not_configured", "payment_id": payment_id}
+
+    try:
+        payment = Payment.objects.select_related("student", "parent").get(id=payment_id)
+    except Payment.DoesNotExist:
+        logger.warning("upload_receipt_to_drive_task: payment %s not found", payment_id)
+        return {"status": "error", "message": "payment not found"}
+
+    # Only completed payments have a real receipt to archive.
+    if payment.payment_status != "completed":
+        return {"status": "skipped", "reason": "not completed", "payment_id": payment_id}
+
+    try:
+        pdf_bytes = generate_payment_receipt(payment)
+    except Exception:
+        # Rendering failing is worth knowing about, but still must not blow up the
+        # completion flow — log and stop.
+        logger.exception("upload_receipt_to_drive_task: failed to render PDF for payment %s", payment_id)
+        return {"status": "error", "message": "pdf render failed", "payment_id": payment_id}
+
+    result = drive.upload_receipt(payment, pdf_bytes)
+    if not result.success and result.status == "error":
+        # result.error is one of the service's own fixed messages, not user input.
+        logger.warning("upload_receipt_to_drive_task: payment %s not archived (%s)", payment_id, result.error)
+    return {"payment_id": payment_id, **result.as_dict()}
+
+
 @shared_task(
     name="comms.tasks.send_generic_email_task",
     bind=True,

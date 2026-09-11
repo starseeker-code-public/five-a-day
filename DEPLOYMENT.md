@@ -531,6 +531,12 @@ harmless when unset. Add them to the same `gcloud run deploy` invocation:
   # Expense receipts folder (v1.28.1). The "Consultar recibos" buttons are HIDDEN when
   # unset, rather than linking Drive's generic home page.
   --set-env-vars="GOOGLE_DRIVE_RECEIPTS_URL=<drive-folder-url>" \
+  # Receipt ARCHIVE base folder id (v1.29.0). When set, completed-payment receipts
+  # are uploaded to <folder>/Curso YYYY/YYYY+1/Recibos/<Mes> YY/. The Sheets
+  # service account (GOOGLE_SHEETS_SERVICE_ACCOUNT_JSON) must have EDITOR access to
+  # this folder; it authenticates with the `drive` scope. Best-effort, so a Drive
+  # problem never fails payment completion. Unset = feature disabled.
+  --set-env-vars="GOOGLE_DRIVE_RECEIPTS_FOLDER_ID=<drive-folder-id>" \
   # SMTP socket timeout (v1.28.1). Leave at the 20 s default unless you have a reason:
   # smtplib's OS default is minutes and the mass-mail views send inside the request, so
   # one blackholed port 587 parks a Gunicorn worker until it is killed.

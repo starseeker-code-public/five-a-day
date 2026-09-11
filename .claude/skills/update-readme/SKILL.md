@@ -139,7 +139,7 @@ If a roadmap item shipped, move its content to the Version History block for the
 
 Update every line that's wrong:
 
-- `tests/` line: `pytest suite (N tests, X% coverage)` — get N from `grep -r "^def test_" project/tests/ | wc -l` and X from the latest coverage report (`make test coverage`)
+- `tests/` line: `pytest suite (N tests, X% coverage)` — get N the way the Testing section does (see k below: COLLECTED cases, not `def test_` lines) and X from the latest coverage report (`make test coverage`)
 - `core/views/` annotation: view module count must be accurate
 - `Makefile` line: command count
 - New top-level files or directories (e.g. `.github/`, `docs/`, `scripts/`)
@@ -154,7 +154,12 @@ Also refresh the App: core/students/billing/comms summary tables if models, view
 
 #### k. Testing
 
-- Total test count must match `grep -r "^def test_" project/tests/ | wc -l`
+- **The total test count is the number of tests pytest COLLECTS, not the number of `def test_` lines** (changed 2026-09-11). Get it from:
+  `docker compose exec -T -e DJANGO_SETTINGS_MODULE=project.settings_test -e TEST_DB_HOST=db web python -m pytest project/tests/ --collect-only -q --no-cov -p no:randomly | tail -1`
+  It reports what `make test` reports, which is the number a reader sees and can verify. A `def test_` grep undercounts every `@pytest.mark.parametrize` case — at the time of the switch that was 1,939 written functions against 2,226 collected cases, a gap of 287 across 61 parametrize decorators, which made the README look like tests had been LOST after a release that added them. Use the same metric for the two per-suite headers (`**N files, M tests.**`) and for every row of the per-file tables, so the rows SUM to the headline — that reconciliation is the check that the section is right, and it was impossible while the two metrics were mixed (96 of 106 rows were already collected counts and 10 were `def` counts).
+- Per-file counts come from the same run:
+  `... --collect-only -q --no-cov -p no:randomly | grep -E '^tests/(unit|integration)/.*\.py::' | awk -F'::' '{print $1}' | sort | uniq -c`
+  Node IDs are relative to the container rootdir (`/app/project`), so they start `tests/`, not `project/tests/` — strip that prefix to match the README's link text.
 - Coverage % must match the latest local coverage report (`make test coverage`; `make coverage-badge` renders an offline SVG)
 - Per-file test tables: test counts per file must match
 - **Coverage Report subsection** (see section k.1 below)

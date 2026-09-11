@@ -227,6 +227,17 @@ python manage.py reconcile_payment_schedule --academic-year 2025-2026
 
 One-off migration aid for v1.22.0, which anchored quarters to the enrollment month. Payments written under the old fixed Oct/Jan/Apr calendar do **not** repair themselves — the idempotency check matches on due month/year and the new due dates differ, so a plain `generate_payments` re-run would create a second, overlapping set. This command reconciles instead: it creates periods the new schedule wants but that have no payment, cancels (never deletes) **pending** rows matching no period, and refuses to touch any enrollment with a **completed** payment, reporting it as `REVIEW` for a human instead — rewriting a settled schedule corrupts the books. Dry run unless `--apply`; idempotent, so re-running reports `0 payment(s) to create`. Since v1.26.1 it **cancels before it creates** — a stale pending row still occupies its month's slot under `unique_pending_periodic_payment_per_month`, and the v1.22.0 re-anchoring moves due dates *within* overlapping months, so creating first made the repair collide with the very row it was superseding. It also reads every enrollment's payments in one query rather than one per row, and the per-enrollment transaction is taken only when `--apply` is given (the dry run keeps its rollback net as one outer transaction instead of a savepoint per enrollment). See DEPLOYMENT.md for the testing and production runbooks.
 
+### `backfill_drive_receipts`
+
+```bash
+python manage.py backfill_drive_receipts                        # DRY RUN — count only
+python manage.py backfill_drive_receipts --apply                # upload
+python manage.py backfill_drive_receipts --apply --academic-year 2026-2027
+python manage.py backfill_drive_receipts --apply --limit 50     # first-batch test
+```
+
+One-off (v1.29.0) that uploads receipts for payments **already completed** before the Drive archive existed — the on-completion upload only covers new ones. Idempotent: the service skips any payment whose receipt is already in its month folder, so it is safe to re-run. Best-effort per payment (one render/upload failure is reported and the run continues), and it errors out immediately if `GOOGLE_DRIVE_RECEIPTS_FOLDER_ID` / the service account are not configured. See `core/services/drive_service.py`.
+
 ### `materialize_recurring_expenses`
 
 ```bash

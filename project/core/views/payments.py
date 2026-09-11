@@ -70,6 +70,15 @@ def _queue_payment_receipt(payment_id: int) -> None:
             send_payment_receipt_email_task.delay(int(payment_id))
         except Exception:  # noqa: BLE001 — receipt is nice-to-have
             logger.exception("Failed to enqueue payment receipt for payment %d", int(payment_id))
+        try:
+            # Archive the same receipt to the Drive folder (v1.29.0). Separate
+            # try/except so a Drive problem can never stop the email, and vice
+            # versa; the task itself is a no-op when Drive is not configured.
+            from comms.tasks import upload_receipt_to_drive_task
+
+            upload_receipt_to_drive_task.delay(int(payment_id))
+        except Exception:  # noqa: BLE001 — Drive archive is nice-to-have
+            logger.exception("Failed to enqueue Drive receipt upload for payment %d", int(payment_id))
 
     transaction.on_commit(_dispatch)
 

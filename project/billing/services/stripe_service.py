@@ -246,6 +246,14 @@ class StripeService:
             except Exception:  # noqa: BLE001 — email is nice-to-have, never fail the webhook
                 logger.exception("Failed to enqueue receipt email for payment %s", payment.id)
 
+            # Archive the receipt to Drive too (v1.29.0) — no-op unless configured.
+            try:
+                from comms.tasks import upload_receipt_to_drive_task
+
+                upload_receipt_to_drive_task.delay(payment.id)
+            except Exception:  # noqa: BLE001 — Drive archive is nice-to-have, never fail the webhook
+                logger.exception("Failed to enqueue Drive receipt upload for payment %s", payment.id)
+
             return {"status": "completed", "payment_id": payment.id}
 
         if event_type == "checkout.session.expired":
