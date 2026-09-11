@@ -79,10 +79,13 @@
                 body: data,
             })
             .then(function (d) {
-                feedback.className = d.ok
+                // The endpoint's contract is {"success": bool, ...} (project-wide
+                // AJAX shape) — `d.ok` never exists, so every successful test send
+                // used to render its ✅ message inside the red error box.
+                feedback.className = d.success
                     ? 'mb-3 p-3 rounded-lg text-sm font-medium border bg-green-50 text-green-800 border-green-200'
                     : 'mb-3 p-3 rounded-lg text-sm font-medium border bg-red-50 text-red-800 border-red-200';
-                feedback.textContent = d.message || (d.ok ? '✅ Enviado' : '❌ Error');
+                feedback.textContent = d.message || (d.success ? '✅ Enviado' : '❌ Error');
                 feedback.classList.remove('hidden');
                 testSendBtn.disabled = false;
                 testSendBtn.innerHTML = '<span class="material-symbols-outlined">science</span> Enviar prueba';

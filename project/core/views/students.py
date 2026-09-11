@@ -6,7 +6,7 @@ from django.contrib import messages
 from django.db import transaction
 from django.db.models import Prefetch, Q
 from django.http import HttpResponseRedirect, JsonResponse
-from django.shortcuts import get_object_or_404
+from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse, reverse_lazy
 from django.utils.decorators import method_decorator
 from django.views.decorators.http import require_http_methods
@@ -14,6 +14,7 @@ from django.views.generic import CreateView, DetailView, ListView, UpdateView
 
 from billing.forms import EnrollmentForm
 from billing.models import Enrollment, Payment, SiteConfiguration, relevant_academic_years
+from core.date_utils import first_day_of_next_month
 from core.decorators import admin_required
 from core.models import FunFridayAttendance, HistoryLog
 from students.forms import StudentForm
@@ -97,11 +98,10 @@ def _create_enrollment_fee_payment(student, parent, enrollment, enrollment_form)
     return enrollment_fee
 
 
-def _first_day_of_next_month(today=None):
-    today = today or date.today()
-    if today.month == 12:
-        return date(today.year + 1, 1, 1)
-    return date(today.year, today.month + 1, 1)
+# Re-exported from the leaf `core.date_utils` so `core.views.waiting_list` can
+# use it WITHOUT importing this module (which imports waiting_list — the cycle
+# CodeQL flagged). Kept under the old private name for this module's callers.
+_first_day_of_next_month = first_day_of_next_month
 
 
 #: Spanish notice the create page shows when a picker list was capped. The
@@ -169,10 +169,14 @@ class StudentCreateView(CreateView):
         mean the form validated one intent and the view saved the other.
         """
         kwargs = super().get_form_kwargs()
-        kwargs["waiting"] = (
-            self.request.POST.get("is_waiting") in ("on", "true", "1") or self.request.GET.get("mode") == "waiting"
-        )
+        kwargs["waiting"] = self._is_waiting_request()
         return kwargs
+
+    def _is_waiting_request(self):
+        """One reading of the waiting-mode intent, shared by `get_form_kwargs` and
+        `form_valid` so the form can never validate one intent while the view
+        saves the other."""
+        return self.request.POST.get("is_waiting") in ("on", "true", "1") or self.request.GET.get("mode") == "waiting"
 
     def get_waiting_entry(self):
         """Waiting-list entry this enrollment came from (`?from_waiting=<id>`), if any."""
@@ -325,9 +329,7 @@ class StudentCreateView(CreateView):
     def form_valid(self, form):
         from comms.tasks import send_welcome_email_task
 
-        is_waiting_mode = (
-            self.request.POST.get("is_waiting") in ("on", "true", "1") or self.request.GET.get("mode") == "waiting"
-        )
+        is_waiting_mode = self._is_waiting_request()
         is_adult_mode = self.request.POST.get("is_adult_mode") == "true"
 
         # For waiting-list students we skip the enrollment form entirely — no
@@ -602,7 +604,18 @@ class StudentUpdateView(UpdateView):
                 is_special_now = enrollment.is_hand_priced
                 initial["is_special"] = is_special_now
                 if is_special_now:
-                    initial["manual_amount"] = enrollment.final_amount
+                    # `customize_recurring` must be pre-ticked or EnrollmentForm.clean()
+                    # DISCARDS manual_amount and then rejects the special — which made
+                    # every save of a hand-priced student's ficha (even a phone-number
+                    # edit) a silent no-op, since this form's non-field errors were the
+                    # only signal.
+                    initial["customize_recurring"] = True
+                    # Pre-fill the MANUAL BASE (`enrollment_amount`), never
+                    # `final_amount`: the final figure already carries the sibling /
+                    # cheque discounts, and a re-issue runs `_apply_discounts` again —
+                    # round-tripping the discounted figure compounded the discount on
+                    # every plan/start-date change (50 → 47.50 → 45.13).
+                    initial["manual_amount"] = enrollment.enrollment_amount
             context["enrollment_form"] = EnrollmentForm(
                 self.request.POST or None,
                 initial=initial,
@@ -648,7 +661,10 @@ class StudentUpdateView(UpdateView):
         wants_special = bool(data.get("is_special") and data.get("manual_amount"))
         if current_is_special != wants_special:
             return True
-        if wants_special and data.get("manual_amount") != current.final_amount:
+        # Compare against the MANUAL BASE the admin typed (`enrollment_amount`),
+        # matching the pre-fill above — `final_amount` is the discounted figure,
+        # so comparing it flagged every discounted special as "price changed".
+        if wants_special and data.get("manual_amount") != current.enrollment_amount:
             return True
 
         # The form pre-fills start_date from the live enrollment, so a changed
@@ -708,7 +724,7 @@ class StudentUpdateView(UpdateView):
                     if current is None or self._enrollment_plan_changed(current, enrollment_form):
                         from billing.services.payment_service import PaymentService
 
-                        parent = None if student.is_adult else student.parents.order_by("id").first()
+                        parent = student.titular_parent()
                         requested_start = enrollment_form.cleaned_data.get("start_date") or date.today()
                         effective_start = _superseding_start(student, current, enrollment_form, parent=parent)
 
@@ -922,11 +938,9 @@ def enroll_student(request, student_id):
         from billing.services.payment_service import PaymentService
 
         with transaction.atomic():
-            # Adults legitimately have no parent/guardian; for children the
-            # first parent is the titular — same explicit ordering the payment
-            # generators use. Resolved BEFORE the supersede, which bills the
-            # closing enrollment's unbilled months to the same titular.
-            parent = None if student.is_adult else student.parents.order_by("id").first()
+            # Resolved BEFORE the supersede, which bills the closing
+            # enrollment's unbilled months to the same titular.
+            parent = student.titular_parent()
 
             # One ACTIVE enrollment per student (DB constraint) — the new
             # matrícula supersedes the current one, same as StudentUpdateView
@@ -981,3 +995,126 @@ def enroll_student(request, student_id):
             "effective_start": effective_start.isoformat(),
         }
     )
+
+
+def _reenroll_candidates():
+    """Students eligible for the 'Antiguo estudiante' bulk flow.
+
+    A candidate is any non-waiting student who is NOT already enrolled this
+    academic year — the pool of prior students (usually inactive, but also an
+    active student whose enrollment lapsed) who could be re-enrolled. Waiting-list
+    placeholders are excluded: they are not real students and have their own page.
+    """
+    academic_years = relevant_academic_years()
+    enrolled_ids = Enrollment.objects.filter(status="active", academic_year__in=academic_years).values_list(
+        "student_id", flat=True
+    )
+    return (
+        Student.objects.filter(is_waiting=False)
+        .exclude(id__in=enrolled_ids)
+        .select_related("group")
+        .prefetch_related("enrollments")
+        .order_by("first_name", "last_name")
+    )
+
+
+@require_http_methods(["GET", "POST"])
+@admin_required
+def reenroll_old_students(request):
+    """Re-enroll one or more prior ("antiguo") students in one action.
+
+    The 4th "Nuevo Estudiante" option. Pick existing students from the list,
+    choose the plan / start date / whether to charge the matrícula ONCE, and a
+    new enrollment is created for each — every one treated as a returning student
+    (the antiguo-alumno matrícula). Inactive students are reactivated. Each
+    student is committed in its own transaction so one failure does not lose the
+    rest; the response reports how many succeeded and names any that did not.
+    """
+    from billing.services.payment_service import PaymentService
+
+    if request.method == "GET":
+        return render(
+            request,
+            "reenroll_old.html",
+            {
+                "candidates": _reenroll_candidates(),
+                "today": date.today().isoformat(),
+            },
+        )
+
+    ids = request.POST.getlist("student_ids")
+    if not ids:
+        messages.error(request, "Selecciona al menos un alumno para matricular.")
+        return redirect("reenroll_old_students")
+
+    # The plan / start date / matrícula choice is shared by every selected
+    # student, so validate it ONCE with a throwaway form (a child form: adults
+    # ignore the plan anyway). is_returning_student is forced on — the whole
+    # point of this flow is the antiguo-alumno matrícula.
+    shared = EnrollmentForm(
+        {
+            "enrollment_plan": request.POST.get("enrollment_plan", "monthly_full"),
+            "start_date": request.POST.get("start_date") or "",
+            "is_returning_student": "on",
+        }
+    )
+    if not shared.is_valid():
+        error_text = " ".join(msg for errors in shared.errors.values() for msg in errors)
+        messages.error(request, error_text or "Datos de matrícula no válidos.")
+        return redirect("reenroll_old_students")
+
+    charge_fee = request.POST.get("charge_enrollment_fee") in ("on", "true", "1")
+
+    # Re-resolve candidates so a stale checkbox can't enrol a student who was
+    # already enrolled in another tab since the page loaded.
+    selectable = {s.id: s for s in _reenroll_candidates()}
+
+    created, skipped, failed = 0, 0, []
+    for raw_id in ids:
+        try:
+            student = selectable.get(int(raw_id))
+        except (TypeError, ValueError):
+            continue
+        if student is None:
+            skipped += 1
+            continue
+        try:
+            with transaction.atomic():
+                if not student.active:
+                    student.active = True
+                    student.save(update_fields=["active", "updated_at"])
+                parent = student.titular_parent()
+                # A lapsed student usually still carries an ACTIVE enrollment from a
+                # prior course (nothing finishes enrollments at year end), and
+                # `unique_active_enrollment_per_student` is year-blind — without this
+                # close, create_enrollment raised IntegrityError for exactly the
+                # population this flow exists for. Cuotas the old plan legitimately
+                # billed stay owed: `cancel_from` voids only pending periodic rows due
+                # on/after the NEW start, mirroring `supersede_enrollment`.
+                from billing.services.enrollment_service import EnrollmentService
+
+                new_start = shared.cleaned_data.get("start_date") or date.today()
+                EnrollmentService.close_active_enrollments(
+                    student, "finished", cancel_pending_periodic=True, cancel_from=new_start
+                )
+                enrollment = shared.create_enrollment(student, is_adult=student.is_adult)
+                if charge_fee:
+                    _create_enrollment_fee_payment(student, parent, enrollment, shared)
+                PaymentService.schedule_academic_year_payments(enrollment, parent)
+                HistoryLog.log(
+                    "student_enrolled",
+                    f"Rematrícula (antiguo alumno): {student.full_name} — {enrollment.academic_year}",
+                    icon="school",
+                )
+            created += 1
+        except Exception:
+            logger.exception("Bulk re-enrollment failed for student %d", int(raw_id))
+            failed.append(student.full_name)
+
+    if created:
+        messages.success(request, f"✅ {created} alumno(s) rematriculado(s) correctamente.")
+    if skipped:
+        messages.info(request, f"{skipped} ya estaban matriculados este curso y se omitieron.")
+    if failed:
+        messages.error(request, "No se pudo matricular a: " + ", ".join(failed))
+    return redirect("students_list")

@@ -244,6 +244,19 @@
                                title="Ver ficha" aria-label="Ver la ficha del estudiante">
                                 <span class="material-symbols-outlined text-sm">visibility</span>
                             </a>
+                            {% if is_admin_user %}
+                            {# A waiting entry is a phone placeholder, not a real student — admins can drop one that never enrols. #}
+                            <form method="post" action="{% url 'remove_from_waiting_list' student.id %}"
+                                  onsubmit="return confirm('¿Quitar a {{ student.full_name|escapejs }} de la lista de espera? Esta acción no se puede deshacer.');"
+                                  style="display:inline;">
+                                {% csrf_token %}
+                                <button type="submit"
+                                        class="inline-flex items-center gap-1 px-3 py-1.5 bg-red-50 hover:bg-red-100 text-red-600 rounded-md text-sm font-medium transition-colors"
+                                        title="Quitar de la lista de espera" aria-label="Quitar de la lista de espera">
+                                    <span class="material-symbols-outlined text-sm">delete</span>
+                                </button>
+                            </form>
+                            {% endif %}
                         </div>
                     </td>
                 </tr>

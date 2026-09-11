@@ -62,6 +62,25 @@ class TestZeroMatriculaSkipped:
         site_config.returning_student_enrollment_discount = Decimal("40.00")
         site_config.save()
 
+        # The discount needs prior history strictly EARLIER than the new
+        # 2020-2021 course — the fixture's active enrollment is anchored to the
+        # CURRENT (later) course and no longer counts (`is_returning_student`
+        # is earlier-years-only; a future-year row granting it was a bug).
+        Enrollment.objects.create(
+            student=student_with_parent,
+            enrollment_type=enrollment_type_returning_student,
+            enrollment_period_start=date(2019, 9, 15),
+            enrollment_period_end=date(2020, 6, 27),
+            academic_year="2019-2020",
+            schedule_type="full_time",
+            payment_modality="monthly",
+            enrollment_amount=Decimal("54.00"),
+            discount_percentage=Decimal("0.00"),
+            final_amount=Decimal("54.00"),
+            status="finished",
+            enrollment_date=date(2019, 9, 1),
+        )
+
         from unittest import mock
 
         # Anchor the window so the elapsed start date passes validation.
@@ -86,9 +105,6 @@ class TestModalityChangeCancelsOldSchedule:
         self, authenticated_client, student_with_parent, active_enrollment, site_config
     ):
         # active_enrollment is monthly; give it a future pending monthly row.
-        future = date.today().replace(day=28)
-        if future <= date.today():
-            future = future.replace(day=1)
         superseded = Payment.objects.create(
             student=student_with_parent,
             parent=student_with_parent.parents.first(),

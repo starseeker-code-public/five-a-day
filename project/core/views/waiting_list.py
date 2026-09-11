@@ -18,6 +18,7 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.views.decorators.http import require_http_methods
 
+from core.date_utils import first_day_of_next_month
 from core.decorators import admin_required
 from core.models import HistoryLog
 from students.forms import WaitingListForm
@@ -230,13 +231,11 @@ def add_to_waiting_list(request, student_id):
         # rows — a student off the roster must stop being billed and chased for
         # months they will not attend; already-taught months (up to this one)
         # stay owed.
-        from core.views.students import _first_day_of_next_month
-
         cancelled = EnrollmentService.close_active_enrollments(
             student,
             "cancelled",
             cancel_pending_periodic=True,
-            cancel_from=_first_day_of_next_month(),
+            cancel_from=first_day_of_next_month(),
         )
 
     group_name = student.group.group_name if student.group else "sin grupo"
@@ -248,6 +247,25 @@ def add_to_waiting_list(request, student_id):
 
     note = " Su matrícula activa se ha cancelado." if cancelled else ""
     messages.success(request, f"✅ {student.full_name} añadido/a a la lista de espera.{note}")
+    return redirect("waiting_list")
+
+
+@require_http_methods(["POST"])
+@admin_required
+def remove_from_waiting_list(request, student_id):
+    """Delete a waiting-list entry outright.
+
+    A waiting entry is a placeholder taken over the phone — not a real student —
+    so QA needs a way to drop one that never enrols (wrong number, changed their
+    mind, duplicate). Reuses `discard_waiting_entry`, which deletes the row when
+    nothing references it and archives it (`active=False`) only if a payment
+    history protects the FK — the case of a student who was moved BACK onto the
+    list, whose record must not be destroyed.
+    """
+    waiting = get_object_or_404(Student, id=student_id, is_waiting=True, active=True)
+    name = waiting.full_name
+    discard_waiting_entry(waiting)
+    messages.success(request, f"🗑️ {name} eliminado/a de la lista de espera.")
     return redirect("waiting_list")
 
 

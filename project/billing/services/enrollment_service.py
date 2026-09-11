@@ -357,10 +357,20 @@ class EnrollmentService:
           - Any enrollment for a prior year → True
 
         `this_academic_year` defaults to the current academic year.
+
+        The filter is `__lt`, meaning strictly EARLIER — lexicographic `<` on the
+        fixed "YYYY-YYYY" format is chronological. It used to be
+        `.exclude(academic_year=...)` ("any DIFFERENT year"), so during the
+        May–August two-cohort window a brand-new family who enrolled for the NEXT
+        course first and then added a start in the RUNNING course was granted the
+        returning-student discount off a future-year enrollment, with zero prior
+        history. Cancelled enrollments still count on purpose — see the
+        "antiguo alumno" tests: moving a student to the waiting list cancels, it
+        does not erase history.
         """
         if this_academic_year is None:
             this_academic_year = current_academic_year()
-        return student.enrollments.exclude(academic_year=this_academic_year).exists()
+        return student.enrollments.filter(academic_year__lt=this_academic_year).exists()
 
     @staticmethod
     def compute_enrollment_fee(

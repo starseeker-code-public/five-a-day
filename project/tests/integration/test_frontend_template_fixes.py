@@ -316,20 +316,17 @@ def test_payments_js_addresses_cells_by_name_not_column_index():
 def test_no_dead_sidebar_expanded_css():
     """The `.sidebar-expanded` block was unreachable — nothing added the class.
 
-    Its only observable consequence was that `.sidebar-session` ("Sesión
-    activa") never rendered anywhere, because that was the sole selector
-    revealing it. The dead half is deleted and `.sidebar-session` is folded into
-    the live `expandable-sidebar:hover` group.
+    The "Sesión activa: <user>" block (`.sidebar-session`) was removed from
+    base.html entirely in v1.28.2 at QA's request, so neither the class nor the
+    dead `.sidebar-expanded` state should be referenced anywhere.
     """
     app_css = _without_comments(_read(CSS_DIR / "app.css"))
     assert "sidebar-expanded" not in app_css, "the dead .sidebar-expanded rules are back"
-    assert "expandable-sidebar:hover .sidebar-session" in app_css, (
-        "'Sesión activa' is only revealed by the hover group; without it the block in base.html renders nowhere"
-    )
+    assert "sidebar-session" not in app_css, "the removed .sidebar-session rules are back"
     for path in _templates():
-        assert "sidebar-expanded" not in _without_comments(_read(path)), (
-            f"{_rel(path)} references the removed sidebar-expanded state"
-        )
+        stripped = _without_comments(_read(path))
+        assert "sidebar-expanded" not in stripped, f"{_rel(path)} references the removed sidebar-expanded state"
+        assert "sidebar-session" not in stripped, f"{_rel(path)} references the removed 'Sesión activa' block"
 
 
 # The closed set of inline light background hexes that theme.css rewrites for
@@ -386,7 +383,8 @@ def test_no_unmatched_inline_light_background_hex():
     pattern = re.compile(r"background(?:-color)?\s*:\s*(#[0-9a-fA-F]{3,8})")
     offenders = []
     for path in _templates():
-        # Emails are deliberately dark-only and never load theme.css.
+        # Emails are a single light theme declared `color-scheme: light` (they opt
+        # out of client dark-mode) and never load theme.css (v1.28.2).
         if "emails" in path.parts:
             continue
         source = _without_comments(_read(path))

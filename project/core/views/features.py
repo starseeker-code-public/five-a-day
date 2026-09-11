@@ -23,7 +23,7 @@ from django.views.decorators.http import require_http_methods
 from core.decorators import qa_access_required
 from core.models import BacklogTask, Feature
 from core.utils import csv_safe
-from core.views.testing_tools import VALID_PRIORITIES, email_backlog_task_created
+from core.views.testing_tools import VALID_PRIORITIES, backlog_task_json, email_backlog_task_created
 
 logger = logging.getLogger(__name__)
 
@@ -317,17 +317,7 @@ def api_create_feature_task(request, feature_id):
         return JsonResponse(
             {
                 "success": True,
-                "task": {
-                    "id": task.id,
-                    "title": task.title,
-                    "description": task.description,
-                    "priority": task.priority,
-                    "priority_display": task.get_priority_display(),
-                    "status": task.status,
-                    "status_display": task.get_status_display(),
-                    "created_by": task.created_by,
-                    "created_at": task.created_at.strftime("%d/%m/%Y %H:%M"),
-                },
+                "task": backlog_task_json(task),
                 "task_count": feature.task_count,
                 "done_task_count": feature.done_task_count,
             }

@@ -6,7 +6,7 @@ The `billing` app owns all financial logic: pricing configuration, enrollment pl
 
 | Model | Table | Key Fields |
 | ----- | ----- | ---------- |
-| **SiteConfiguration** | `site_configuration` | Singleton (pk=1). All pricing: enrollment fees, monthly fees, discount percentages/amounts. Plus the five `academy_*` fiscal fields (v1.27.1, migration `0013`): `academy_name`, `academy_cif`, `academy_address`, `academy_phone`, `academy_website` |
+| **SiteConfiguration** | `site_configuration` | Singleton (pk=1). All pricing: enrollment fees, monthly fees, discount percentages/amounts. The five `academy_*` fiscal fields (v1.27.1, migration `0013`). Plus `receipt_offset_year` / `receipt_offset` (v1.28.2, migration `0014`) — the legacy paper-receipt seed: for the offset year (2026) receipt numbering starts after `receipt_offset` (632), every other year at 0 |
 | **EnrollmentType** | `enrollment_types` | The matrícula category: name (new_student, returning_student, adults, special), display_name, and `base_amount_*` = the one-time matrícula fee. Payment cadence lives on `Enrollment.payment_modality`, not here. |
 | **Enrollment** | `enrollments` | FK to Student + EnrollmentType. schedule_type, payment_modality, discounts, amounts, status, academic_year. Indexed on `academic_year` for payment generation queries. |
 | **Payment** | `payments` | FK to Student + Parent + Enrollment. amount, type, method, status, due_date, payment_date, stripe_session_id / stripe_payment_intent (v1.11). **`parent` is nullable** — adult students have no guardian. There is no `active` field; soft-delete was never implemented, so never filter on `active=True`. Carries `unique_pending_periodic_payment_per_month` (v1.26.1) — a partial unique index on (student, payment_type, due year, due month) over `pending` periodic rows, plus a composite `(payment_status, due_date)` index for the app's dominant filter shape. |
@@ -40,6 +40,12 @@ against a database that already holds duplicate pending periodic payments (see
 `unique_pending_periodic_payment_per_month`), and `0008` converts pre-v1.17.3 `EnrollmentType` rows
 while no-opping on an empty table so `seed_enrollment_types` stays the single provisioning path.
 
+- **Payment.receipt_number / assign_receipt_number()** (v1.28.2) — a stable `YYYY-NNN` receipt number, blank until the first receipt is issued for the payment, then frozen (a family must always see the same number). The counter restarts at 001 each January by the payment's own year (`payment_date` → `due_date` → today); `SiteConfiguration.receipt_offset_year` (2026) instead continues the academy's paper sequence after `receipt_offset` (632), so the first 2026 app receipt is `2026-633`. Assignment is serialised on the singleton `SiteConfiguration` row with `select_for_update`, backed by a partial `unique_receipt_number` constraint. `pdf_service.generate_payment_receipt` calls it; never number a receipt by `payment.id`.
+
+## Money math (`billing/money.py`)
+
+A **leaf** module (stdlib only): `round_money` (the one HALF_UP-with-€0.01-floor rounding), `quarterly_price_from_monthly`, `period_base_amount`, `monthly_fee_for`. It exists so `billing.models` (`Enrollment.save()`'s price fallback) and `billing.services.pricing_service` can share the math without a `models → pricing_service → models` import cycle (pricing_service reaches back into models for `SiteConfiguration.get_config()`). `pricing_service` re-exports every name for backwards compatibility. Do not make `money.py` import models.
+
 ## Service Layer
 
 ### EnrollmentService (`billing/services/enrollment_service.py`)
@@ -49,7 +55,7 @@ while no-opping on an empty table so `seed_enrollment_types` stays the single pr
 - `_resolve_plan(config, data, is_adult, is_special, manual_amount)` — returns `(base_amount, schedule_type, payment_modality)`, i.e. the recurring period fee and how it is scheduled. The quarterly branch calls `pricing_service.quarterly_price_from_monthly` rather than carrying a fourth copy of "three months minus the quarterly percentage" (v1.27.1).
 - `_apply_discounts(config, base, ...)` — applies sibling and language cheque discounts. The €0.01 floor and the HALF_UP quantize come from `pricing_service.round_money` since v1.27.1; they used to be spelled out here, which made this the second of **three** copies (the payment generator and `Enrollment.save()` held the others), and the rounding has to match exactly or a half-cent intermediate stores one figure on the ficha and bills another on the invoice
 - `compute_enrollment_fee(config, student, is_adult, special_fee=None, force_returning=False, this_academic_year=None)` — returns `(final_fee, returning_discount_applied)`. **`this_academic_year` must be passed by any caller that has just created the enrollment** (`enrollment.academic_year`): judged against today's year instead, a future-dated enrollment reads as the student's own prior history and wrongly wins the discount. `force_returning` is the "Antiguo alumno" checkbox — it grants the discount, never revokes one the prior enrollments already earn. `special_fee` (v1.20.0) is the form's optional **Matrícula especial (€)**: a negotiated figure, so it is returned verbatim with no returning-student discount taken off it. It is deliberately separate from `manual_amount`, which prices the *recurring* fee only — a special monthly price does not imply a special matrícula, and before v1.20.0 such an enrollment was silently charged the standard one.
-- `is_returning_student(student)` / returning-student enrollment discount (v1.13) — a student who previously had an enrollment pays a reduced enrollment fee
+- `is_returning_student(student, this_academic_year)` / returning-student enrollment discount (v1.13) — a student with an enrollment in an **earlier** academic year pays a reduced enrollment fee. v1.29.0: the check is `academic_year__lt` (strictly earlier — lexicographic `<` on "YYYY-YYYY" is chronological); it used to be "any *different* year", so during the May–August two-cohort window a brand-new family who enrolled for the NEXT course first was granted the discount off a future-year enrollment. Cancelled enrollments still count on purpose (moving a student to the waiting list cancels, it does not erase history)
 - `close_active_enrollments(student, status, cancel_pending_periodic=False, keep_payment_type=None, cancel_from=None)` — finishes the live enrollment(s) and optionally cancels their pending **periodic** rows from `cancel_from` on (months already taught stay owed; completed money is never touched). `keep_payment_type` has **no caller** as of v1.27.1 — it preserved exactly the full-price transition-month row that made a replacement's prorated first period disappear — and is kept only because it is the right behaviour for a caller that genuinely wants a same-cadence overlap kept
 
 #### Plan transitions (v1.27.1)
@@ -138,7 +144,7 @@ saved value (the archived row is the source of truth for every calculation from 
 
 ### PdfService (`billing/services/pdf_service.py`)
 
-- `generate_payment_receipt(payment)` — single-payment receipt PDF (v1.3, reportlab)
+- `generate_payment_receipt(payment)` — single-payment receipt PDF (v1.3, reportlab). v1.28.2: assigns the payment its `YYYY-NNN` receipt number on first issue and prints it, and shows a **discount breakdown** (`_receipt_breakdown_rows` — precio base − descuentos = importe, itemising sibling / cheque-idioma / antiguo-alumno and — v1.29.0 — an explicit "Descuento junio" line for any period falling due in June (it used to land in the residual and print as a false "Prorrateo primer periodo"), with a prorated-first-period line so the column sums to the amount charged)
 - `generate_quarterly_summary(...)` — quarterly statement
 - `generate_tax_certificate(...)` — annual certificate for a parent's tax return. **Grouped by `student_id`, not by name** (v1.27.1): two siblings called the same thing — the academy has had them, and a re-registered student can share a name with a cousin — were merged into ONE block with ONE subtotal, on a document the family files with the tax authority. The name rides along in the entry for the heading; the key is what identifies a person
 - `generate_student_payment_history(student, payments, title_suffix="")` (v1.15) — a student's full payment history: concept, type, due date, **payment date**, **method** and status per row, with collected and outstanding totalled separately. Served by `student_payments_pdf`
@@ -220,6 +226,17 @@ python manage.py reconcile_payment_schedule --academic-year 2025-2026
 ```
 
 One-off migration aid for v1.22.0, which anchored quarters to the enrollment month. Payments written under the old fixed Oct/Jan/Apr calendar do **not** repair themselves — the idempotency check matches on due month/year and the new due dates differ, so a plain `generate_payments` re-run would create a second, overlapping set. This command reconciles instead: it creates periods the new schedule wants but that have no payment, cancels (never deletes) **pending** rows matching no period, and refuses to touch any enrollment with a **completed** payment, reporting it as `REVIEW` for a human instead — rewriting a settled schedule corrupts the books. Dry run unless `--apply`; idempotent, so re-running reports `0 payment(s) to create`. Since v1.26.1 it **cancels before it creates** — a stale pending row still occupies its month's slot under `unique_pending_periodic_payment_per_month`, and the v1.22.0 re-anchoring moves due dates *within* overlapping months, so creating first made the repair collide with the very row it was superseding. It also reads every enrollment's payments in one query rather than one per row, and the per-enrollment transaction is taken only when `--apply` is given (the dry run keeps its rollback net as one outer transaction instead of a savepoint per enrollment). See DEPLOYMENT.md for the testing and production runbooks.
+
+### `backfill_drive_receipts`
+
+```bash
+python manage.py backfill_drive_receipts                        # DRY RUN — count only
+python manage.py backfill_drive_receipts --apply                # upload
+python manage.py backfill_drive_receipts --apply --academic-year 2026-2027
+python manage.py backfill_drive_receipts --apply --limit 50     # first-batch test
+```
+
+One-off (v1.29.0) that uploads receipts for payments **already completed** before the Drive archive existed — the on-completion upload only covers new ones. Idempotent: the service skips any payment whose receipt is already in its month folder, so it is safe to re-run. Best-effort per payment (one render/upload failure is reported and the run continues), and it errors out immediately if `GOOGLE_DRIVE_RECEIPTS_FOLDER_ID` / the service account are not configured. See `core/services/drive_service.py`.
 
 ### `materialize_recurring_expenses`
 

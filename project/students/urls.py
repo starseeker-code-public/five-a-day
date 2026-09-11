@@ -14,6 +14,9 @@ from core.views import (
     assign_from_waiting_list,
     # New enrollment modal (book icon on the list)
     enroll_student,
+    # Bulk re-enrollment of prior ("antiguo") students
+    reenroll_old_students,
+    remove_from_waiting_list,
     remove_fun_friday_attendance,
     search_parents,
     # Search/validation API
@@ -35,6 +38,8 @@ urlpatterns = [
     # ============================================================================
     path("students/", StudentListView.as_view(), name="students_list"),
     path("students/create/", StudentCreateView.as_view(), name="student_create"),
+    # Bulk re-enrollment of prior students (v1.28.2)
+    path("students/reenroll/", reenroll_old_students, name="reenroll_old_students"),
     # Waiting list (v1.1)
     path("students/waiting/", waiting_list_view, name="waiting_list"),
     path("students/waiting/create/", waiting_list_create, name="waiting_list_create"),
@@ -47,6 +52,11 @@ urlpatterns = [
         "students/<int:student_id>/wait/",
         add_to_waiting_list,
         name="add_to_waiting_list",
+    ),
+    path(
+        "students/waiting/<int:student_id>/remove/",
+        remove_from_waiting_list,
+        name="remove_from_waiting_list",
     ),
     path("students/<int:student_id>/", StudentDetailView.as_view(), name="student_detail"),
     path(

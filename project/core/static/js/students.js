@@ -136,8 +136,10 @@ document.addEventListener('DOMContentLoaded', function () {
         { icon: 'check_circle',  title: 'Mostrando: Con FF esta semana',   bg: '#22c55e', color: '#ffffff' },
     ];
 
-    studentFFFilterBtn.addEventListener('click', () => {
-        ffFilterState = (ffFilterState + 1) % 3;
+    // Null-guarded like the GDPR/allergy filters below: a missing button must
+    // not abort the whole DOMContentLoaded handler (enroll modal, sort, search).
+    if (studentFFFilterBtn) studentFFFilterBtn.addEventListener('click', () => {
+        ffFilterState = (ffFilterState + 1) % ffFilterCfg.length;
         const cfg = ffFilterCfg[ffFilterState];
         studentFFFilterIcon.textContent = cfg.icon;
         studentFFFilterBtn.title = cfg.title;
@@ -170,8 +172,8 @@ document.addEventListener('DOMContentLoaded', function () {
         applyVisibility();
     }
 
-    studentTypeFilterBtn.addEventListener('click', () => {
-        typeFilterState = (typeFilterState + 1) % 4;
+    if (studentTypeFilterBtn) studentTypeFilterBtn.addEventListener('click', () => {
+        typeFilterState = (typeFilterState + 1) % typeFilterCfg.length;
         const cfg = typeFilterCfg[typeFilterState];
         studentTypeFilterIcon.textContent = cfg.icon;
         studentTypeFilterBtn.title = cfg.title;
@@ -254,6 +256,8 @@ document.addEventListener('DOMContentLoaded', function () {
         const enrollNameEl = document.getElementById('enrollStudentName');
         const enrollErrorEl = document.getElementById('enrollError');
         const enrollSpecialCb = document.getElementById('id_is_special');
+        const enrollCustomizeCb = document.getElementById('id_customize_recurring');
+        const enrollCustomizeRow = document.getElementById('enrollCustomizeRow');
         const enrollManualRow = document.getElementById('enrollManualRow');
         const enrollSpecialFeeRow = document.getElementById('enrollSpecialFeeRow');
         const enrollSubmitBtn = document.getElementById('enrollSubmitBtn');
@@ -263,8 +267,13 @@ document.addEventListener('DOMContentLoaded', function () {
 
         function toggleSpecialRows() {
             const on = enrollSpecialCb.checked;
-            enrollManualRow.style.display = on ? '' : 'none';
+            enrollCustomizeRow.style.display = on ? '' : 'none';
             enrollSpecialFeeRow.style.display = on ? '' : 'none';
+            // The cuota field only matters when "Personalizar también la cuota"
+            // is ticked — EnrollmentForm.clean() discards it otherwise, so
+            // showing it unticked invites typing an amount that would be lost.
+            if (!on) enrollCustomizeCb.checked = false;
+            enrollManualRow.style.display = on && enrollCustomizeCb.checked ? '' : 'none';
         }
 
         document.querySelectorAll('.enroll-btn').forEach(btn => {
@@ -290,6 +299,7 @@ document.addEventListener('DOMContentLoaded', function () {
         });
 
         enrollSpecialCb.addEventListener('change', toggleSpecialRows);
+        enrollCustomizeCb.addEventListener('change', toggleSpecialRows);
         document.getElementById('enrollModalClose').addEventListener('click', closeEnrollModal);
         document.getElementById('enrollCancelBtn').addEventListener('click', closeEnrollModal);
         enrollModal.addEventListener('click', (e) => { if (e.target === enrollModal) closeEnrollModal(); });

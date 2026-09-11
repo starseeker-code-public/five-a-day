@@ -5,6 +5,7 @@ Provides the core EmailService class and configuration helper.
 Moved from core/email.py as part of the comms app split.
 """
 
+import contextlib
 import logging
 import mimetypes
 import os
@@ -208,19 +209,39 @@ class EmailService:
         """
         results = {"sent": 0, "failed": 0}
 
-        for email_data in emails_data:
-            success = self.send_email(
-                template_name=template_name,
-                recipients=email_data["recipient"],
-                subject=email_data.get("subject", "Five a Day"),
-                context=email_data.get("context", {}),
-                fail_silently=fail_silently,
-            )
+        # One SMTP session for the whole batch (same pattern as the Fun Friday
+        # and tax-certificate sends) instead of a TCP+TLS+AUTH handshake per
+        # message. The open is guarded because this method's contract is a
+        # results dict, never an exception (`open_connection` fails loudly by
+        # design): if the server is unreachable we fall back to per-message
+        # connections, whose failures are already counted per recipient.
+        connection = None
+        try:
+            connection = self.open_connection()
+            connection.open()
+        except Exception:
+            logger.exception("No se pudo abrir la conexion SMTP compartida; envio individual")
+            connection = None
 
-            if success:
-                results["sent"] += 1
-            else:
-                results["failed"] += 1
+        try:
+            for email_data in emails_data:
+                success = self.send_email(
+                    template_name=template_name,
+                    recipients=email_data["recipient"],
+                    subject=email_data.get("subject", "Five a Day"),
+                    context=email_data.get("context", {}),
+                    fail_silently=fail_silently,
+                    connection=connection,
+                )
+
+                if success:
+                    results["sent"] += 1
+                else:
+                    results["failed"] += 1
+        finally:
+            if connection is not None:
+                with contextlib.suppress(Exception):
+                    connection.close()
 
         logger.info(f"Envio masivo completado: {results['sent']} enviados, {results['failed']} fallidos")
         return results

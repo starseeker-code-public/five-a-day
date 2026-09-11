@@ -26,7 +26,6 @@ It is a DRY RUN unless --apply is given.
 """
 
 import contextlib
-from decimal import ROUND_HALF_UP, Decimal
 
 from django.core.management.base import BaseCommand
 from django.db import IntegrityError, transaction
@@ -176,7 +175,7 @@ class Command(BaseCommand):
                             [m for m, _ in period["months"]],
                             period["fraction"],
                             quarterly,
-                        ).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+                        )
                         concept = PaymentService.period_concept(period, quarterly)
 
                         self.stdout.write(f"  + {student.full_name}: {concept} due {due} — EUR {amount}")

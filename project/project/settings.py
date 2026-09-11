@@ -746,6 +746,15 @@ GOOGLE_SHEETS_SERVICE_ACCOUNT_FILE = os.getenv("GOOGLE_SHEETS_SERVICE_ACCOUNT_FI
 # The service account must have Editor access to the sheet.
 GOOGLE_SHEETS_SPREADSHEET_ID = os.getenv("GOOGLE_SHEETS_SPREADSHEET_ID", "")
 
+# Google Drive receipt archive (v1.29.0). When set, a completed payment's receipt
+# PDF is uploaded to Drive under `<this folder>/Curso YYYY/YYYY+1/Recibos/<Mes>
+# YY/<paymentID>_<nombre>_<apellidos>.pdf`, mirroring the academy's paper archive.
+# It is the ID of the base "Five a Day" folder (the …/folders/<ID> part of its
+# URL). The SERVICE ACCOUNT above must be given Editor access to that folder, and
+# it authenticates with the `drive` scope. Empty (the default) disables the
+# upload entirely and everything else keeps working — the archive is best-effort.
+GOOGLE_DRIVE_RECEIPTS_FOLDER_ID = os.getenv("GOOGLE_DRIVE_RECEIPTS_FOLDER_ID", "")
+
 # ============================================================================
 # GCP BILLING EXPORT — OPTIONAL
 # ============================================================================

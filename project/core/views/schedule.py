@@ -6,6 +6,7 @@ from django.http import Http404, JsonResponse
 from django.shortcuts import get_object_or_404, render
 from django.views.decorators.http import require_http_methods
 
+from billing.models import relevant_academic_years
 from core.decorators import admin_required
 from core.models import FunFridayAttendance, HistoryLog, ScheduleSlot
 from core.schedule_utils import is_valid_slot, slot_time_range
@@ -114,9 +115,25 @@ def save_schedule_slot(request):
 
 
 def fun_friday_view(request):
-    """Vista de Fun Friday con lista de estudiantes."""
+    """Vista de Fun Friday con lista de estudiantes.
+
+    Only children who are actually studying THIS academic year belong here:
+    `active=True` alone let waiting-list entries (no enrollment, taken over the
+    phone) and students whose only enrollment is from a past course show up.
+    Fun Friday is a weekly activity for the current roll, so it is scoped the
+    same way the students list is — active, not on the waiting list, and holding
+    an enrollment in one of the relevant academic years (both cohorts during the
+    May–August overlap).
+    """
+    academic_years = relevant_academic_years()
     students = (
-        Student.objects.filter(active=True, is_adult=False)
+        Student.objects.filter(
+            active=True,
+            is_adult=False,
+            is_waiting=False,
+            enrollments__academic_year__in=academic_years,
+        )
+        .distinct()
         .select_related("group")
         .order_by("group__group_name", "first_name")
     )

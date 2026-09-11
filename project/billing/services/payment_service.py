@@ -59,9 +59,8 @@ class PaymentService:
         quarterly specials the admin types the price of the whole quarter), so it is
         used as-is: no further config discount is layered on top of a negotiated price.
         """
-        enrollment_type = enrollment.enrollment_type
-        if enrollment_type is not None and enrollment_type.name == "special":
-            return max(enrollment.final_amount, Decimal("0.01"))
+        if enrollment.is_hand_priced:
+            return PaymentService._round_money(enrollment.final_amount)
         return None
 
     @staticmethod

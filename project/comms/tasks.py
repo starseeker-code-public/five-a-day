@@ -139,11 +139,14 @@ def send_welcome_email_task(self, parent_id: int, student_id: int, enrollment_id
 
         return {"status": "success", "recipient": recipient_email}
 
-    except (Parent.DoesNotExist, Student.DoesNotExist, Enrollment.DoesNotExist) as e:
+    except (Parent.DoesNotExist, Student.DoesNotExist, Enrollment.DoesNotExist):
+        # Fixed message, not str(e): the DoesNotExist repr names the model and
+        # query, and a task result can end up in whatever consumes it (production
+        # runs eager) — same rule as the views (v1.14.4/5).
         logger.error(
             "Record not found: parent_id=%s student_id=%s enrollment_id=%s", parent_id, student_id, enrollment_id
         )
-        return {"status": "error", "message": str(e)}
+        return {"status": "error", "message": "Registro no encontrado."}
 
 
 @shared_task(
@@ -315,10 +318,18 @@ def send_monthly_report_task(self, recipient_email: str | None = None):
     # the other three call sites in this file were left behind.
     today = timezone.localdate()
     zero = Decimal("0.00")
+    # "Esperado" means LIVE money only (`billing.constants.LIVE_PAYMENT_STATUSES`,
+    # the same contract payments_list / dashboard.home / collection_rate share):
+    # without the status filter every cancelled/failed/refunded row due this
+    # month inflated `expected` and produced phantom `outstanding` debt — the
+    # exact pre-v1.15 bug the constant exists to prevent.
+    from billing.constants import LIVE_PAYMENT_STATUSES
+
     stats = Payment.objects.aggregate(
         expected=Sum(
             Case(
                 When(
+                    payment_status__in=LIVE_PAYMENT_STATUSES,
                     due_date__month=today.month,
                     due_date__year=today.year,
                     then="amount",
@@ -624,6 +635,50 @@ def send_payment_receipt_email_task(self, payment_id: int):
     return {"status": "success", "recipient": recipient, "payment_id": payment_id}
 
 
+@shared_task(name="comms.tasks.upload_receipt_to_drive_task", bind=True)
+def upload_receipt_to_drive_task(self, payment_id: int):
+    """Best-effort: archive a completed payment's receipt PDF to Google Drive.
+
+    Deliberately NOT auto-retrying and NOT raising: the Drive archive is a
+    convenience on top of the `Payment` row and the emailed receipt, so a Drive
+    problem must never fail the payment flow or spawn a retry storm (production
+    runs eager, so a raise here would surface inside the completion request). The
+    upload service already swallows every error and returns a status; this task
+    just resolves the payment, renders the PDF and records the outcome.
+    """
+    from billing.models import Payment
+    from billing.services.pdf_service import generate_payment_receipt
+    from core.services.drive_service import get_service as get_drive_service
+
+    drive = get_drive_service()
+    if not drive.is_configured():
+        return {"status": "not_configured", "payment_id": payment_id}
+
+    try:
+        payment = Payment.objects.select_related("student", "parent").get(id=payment_id)
+    except Payment.DoesNotExist:
+        logger.warning("upload_receipt_to_drive_task: payment %s not found", payment_id)
+        return {"status": "error", "message": "payment not found"}
+
+    # Only completed payments have a real receipt to archive.
+    if payment.payment_status != "completed":
+        return {"status": "skipped", "reason": "not completed", "payment_id": payment_id}
+
+    try:
+        pdf_bytes = generate_payment_receipt(payment)
+    except Exception:
+        # Rendering failing is worth knowing about, but still must not blow up the
+        # completion flow — log and stop.
+        logger.exception("upload_receipt_to_drive_task: failed to render PDF for payment %s", payment_id)
+        return {"status": "error", "message": "pdf render failed", "payment_id": payment_id}
+
+    result = drive.upload_receipt(payment, pdf_bytes)
+    if not result.success and result.status == "error":
+        # result.error is one of the service's own fixed messages, not user input.
+        logger.warning("upload_receipt_to_drive_task: payment %s not archived (%s)", payment_id, result.error)
+    return {"payment_id": payment_id, **result.as_dict()}
+
+
 @shared_task(
     name="comms.tasks.send_generic_email_task",
     bind=True,
@@ -801,7 +856,7 @@ def _send_fun_friday_batch(
 
     sent = 0
     try:
-        for email in recipients:
+        for index, email in enumerate(recipients, start=1):
             try:
                 if send_fun_friday_email(
                     recipients=email,
@@ -818,7 +873,10 @@ def _send_fun_friday_batch(
                 ):
                     sent += 1
             except Exception:  # noqa: BLE001 — one bad recipient must not abort the batch
-                logger.exception("Fun Friday email failed for %s", email)
+                # Opaque index, not the address: recipient emails are family PII
+                # and Cloud Logging retention outlives the app's own controls
+                # (this file's own rule — see the module docstring on args).
+                logger.exception("Fun Friday email failed for recipient %d of %d", index, len(recipients))
     finally:
         try:
             connection.close()

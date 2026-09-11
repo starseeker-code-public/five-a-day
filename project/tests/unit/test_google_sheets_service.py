@@ -97,7 +97,10 @@ class TestExportStudents:
         with patch.object(svc, "_get_or_create_worksheet", side_effect=RuntimeError("boom")):
             result = svc.export_students()
         assert result.success is False
-        assert "boom" in result.error
+        # Fixed message, never str(e): the error reaches the client verbatim via
+        # export_to_sheets, and exception text leaks internals (project rule).
+        assert result.error == "No se pudo exportar a Google Sheets."
+        assert "boom" not in result.error
 
 
 class TestExportPayments:
@@ -114,7 +117,9 @@ class TestExportPayments:
         with patch.object(svc, "_get_or_create_worksheet", side_effect=RuntimeError("boom")):
             result = svc.export_payments()
         assert result.success is False
-        assert "boom" in result.error
+        # Fixed message, never str(e) — see the export_students twin above.
+        assert result.error == "No se pudo exportar a Google Sheets."
+        assert "boom" not in result.error
 
 
 class TestExportResult:

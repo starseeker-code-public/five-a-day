@@ -50,7 +50,7 @@ documented dependency flow.
 Generic email sending service with HTML template rendering and inline images.
 
 - `send_email(template_name, recipients, subject, context, ..., connection=None, fail_silently=...)` — renders a Django template and sends via SMTP
-- `send_bulk_emails(template_name, emails_data, ...)` — sends multiple emails with the same template
+- `send_bulk_emails(template_name, emails_data, ...)` — sends multiple emails with the same template. v1.29.0: opens ONE shared SMTP session for the whole batch (guarded — an unreachable server degrades to per-message sends rather than raising, preserving the results-dict contract its caller `send_payment_reminders` relies on) instead of one TCP+TLS+AUTH handshake per recipient
 - `open_connection()` — a single reusable SMTP connection for a batch of sends (see below)
 - `email_service` — singleton instance used throughout the project
 
@@ -79,6 +79,8 @@ being embedded.
 Templates live in `core/templates/emails/` and extend `emails/base_email.html`. There are currently **19 content templates** (20 files including the shared base): `happy_birthday`, `welcome_student`, `enrollment_child`, `enrollment_adult`, `fun_friday`, `payment_reminder`, `payment_reminder_simple`, `payment_receipt`, `receipt_quarterly_child`, `receipt_adult`, `receipt_enrollment`, `vacation_closure`, `tax_certificate`, `monthly_report`, `admin_monthly_report`, `newsletter`, `parent_temporary_password`, `teacher_activation`, `password_reset`, plus the shared `base_email`.
 
 **Every content template must define its own `{% block title %}`** (v1.20.0). `base_email.html` supplies a generic "Five a Day" fallback and 11 of the 18 were silently taking it, so the document title bore no relation to the subject line. Give a new template a title matching its `subject=`, in the shared `"<asunto> · Five a Day"` shape.
+
+**Theming (v1.28.2): a single LIGHT theme, opted out of client dark-mode.** `base_email.html` declares `color-scheme: light` (meta + CSS) so Outlook/Windows can no longer auto-invert emails to dark (the cause of the "always dark / unreadable" reports); it is a white card with `#1f2430` text and `#6d28d9` violet accents, readable on any client. The scaffold is a **fluid-hybrid table** (600px fixed for Outlook via MSO conditionals, fluid elsewhere) with a `@media (max-width: 600px)` font bump for phones. Do not re-add a dark variant, a `<div>` card, or `{% static %}` (the worker has no staticfiles manifest — a `{% static %}` there killed every worker-dispatched email). See the email gotcha in `CLAUDE.md`.
 
 ### SmsService (`comms/services/sms_service.py`)
 
@@ -157,6 +159,7 @@ All tasks have retry logic (3 retries, exponential backoff):
 | `send_monthly_report_task` | Admin monthly report. With no explicit recipient it now (v1.26.8) goes to **both** `SUPPORT_EMAIL` and `DEFAULT_FROM_EMAIL`, deduped — the academy reads it in two inboxes — and is skipped only when neither is set. `--recipient` still overrides both. v1.27.1 uses `timezone.localdate()` instead of `date.today()`: the container runs UTC, so a scheduled run at 00:xx or a late-evening run in CEST read the **wrong month** and the "informe mensual" then aggregated a month nobody asked for | Celery Beat (28th, 20:00) / `send_monthly_report` command |
 | `send_parent_temporary_password_task` | Generates, hashes onto `Parent.temporary_password` and emails a one-off portal password — the invitation when the record is created, and the recovery from `¿Has olvidado tu contraseña?` (`reset=True` swaps the copy). The plaintext is generated **inside** the task, never passed as an argument: task arguments are serialised into the broker and printed in task logs (v1.9, reworked v1.27) | `ParentCreateView`, parent-portal recovery form |
 | `send_payment_receipt_email_task` | Emails a receipt PDF for a completed payment (v1.11) | Payment completion / Stripe webhook |
+| `upload_receipt_to_drive_task` | Best-effort: archives a completed payment's receipt PDF to Google Drive (v1.29.0, `core.services.drive_service`); never raises, no-op unless `GOOGLE_DRIVE_RECEIPTS_FOLDER_ID` is set | Payment completion / Stripe webhook |
 | `send_generic_email_task` | Generic email dispatcher | Manual |
 | `send_enrollment_confirmation_task` | Enrollment confirmation with attachments (uses `student.gender` field). v1.27.1 reads `core.constants.MESES_ES` instead of its own private `MONTHS_ES` copy — two lists of Spanish month names under different names is how two spellings of a month end up in the same product | On enrollment |
 | `send_due_fun_friday_emails_task` | Drains due `FunFridayScheduledSend` rows (idempotent — rows are marked `sent_at`). **The only Fun Friday send path** — manual sends persist a row (drained immediately if its slot has passed) so the claim guard always applies. | Celery Beat (daily 14:30) / `send_due_fun_friday_emails` command |

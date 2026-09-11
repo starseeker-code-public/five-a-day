@@ -68,6 +68,16 @@ class EnrollmentForm(forms.Form):
         widget=forms.CheckboxInput(attrs={"class": "form-check-input", "id": "id_is_special"}),
         label="Precio especial",
     )
+    # A special enrollment customises the MATRÍCULA (`special_enrollment_fee`) on
+    # its own; the recurring cuota stays standard UNLESS this box is ticked, which
+    # reveals `manual_amount`. Keeping them independent is what lets a special
+    # student be customised atomically — negotiated matrícula only, negotiated
+    # cuota only, or both — instead of forcing a manual cuota on every special.
+    customize_recurring = forms.BooleanField(
+        required=False,
+        widget=forms.CheckboxInput(attrs={"class": "form-check-input", "id": "id_customize_recurring"}),
+        label="Personalizar también la cuota",
+    )
     manual_amount = forms.DecimalField(
         required=False,
         min_value=Decimal("0.01"),
@@ -144,11 +154,34 @@ class EnrollmentForm(forms.Form):
         cleaned_data = super().clean()
         is_special = cleaned_data.get("is_special")
         manual_amount = cleaned_data.get("manual_amount")
-        if is_special and not manual_amount:
-            raise forms.ValidationError("Debes especificar un precio manual para matrícula especial")
+        customize_recurring = cleaned_data.get("customize_recurring")
+        special_fee = cleaned_data.get("special_enrollment_fee")
+
+        # `manual_amount` prices the recurring cuota, and it only takes effect
+        # when the admin ticked "Personalizar también la cuota". Clear it
+        # otherwise so a stale value can't sneak a hand price onto a special that
+        # was meant to keep the standard cuota (create_enrollment reads this).
+        if not customize_recurring:
+            cleaned_data["manual_amount"] = None
+            manual_amount = None
+
+        if customize_recurring:
+            if not is_special:
+                raise forms.ValidationError("Marca «Precio especial» para personalizar la cuota")
+            if not manual_amount:
+                raise forms.ValidationError("Indica la cuota personalizada o desmarca «Personalizar también la cuota»")
+
+        # A special enrollment must customise SOMETHING — the matrícula, the
+        # cuota, or both. Otherwise "Precio especial" is checked but changes
+        # nothing, which just charges the standard prices under a misleading flag.
+        if is_special and not manual_amount and not special_fee:
+            raise forms.ValidationError(
+                "Para un precio especial indica una matrícula especial, una cuota personalizada, o ambas."
+            )
+
         # Silently ignoring it would charge the standard matrícula while the admin
         # believes they set one — say so instead.
-        if cleaned_data.get("special_enrollment_fee") and not is_special:
+        if special_fee and not is_special:
             raise forms.ValidationError("Marca «Precio especial» para fijar una matrícula personalizada")
         return cleaned_data
 

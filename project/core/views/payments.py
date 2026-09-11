@@ -70,6 +70,15 @@ def _queue_payment_receipt(payment_id: int) -> None:
             send_payment_receipt_email_task.delay(int(payment_id))
         except Exception:  # noqa: BLE001 — receipt is nice-to-have
             logger.exception("Failed to enqueue payment receipt for payment %d", int(payment_id))
+        try:
+            # Archive the same receipt to the Drive folder (v1.29.0). Separate
+            # try/except so a Drive problem can never stop the email, and vice
+            # versa; the task itself is a no-op when Drive is not configured.
+            from comms.tasks import upload_receipt_to_drive_task
+
+            upload_receipt_to_drive_task.delay(int(payment_id))
+        except Exception:  # noqa: BLE001 — Drive archive is nice-to-have
+            logger.exception("Failed to enqueue Drive receipt upload for payment %d", int(payment_id))
 
     transaction.on_commit(_dispatch)
 
@@ -309,9 +318,14 @@ def create_payment(request):
             payment_method = _validated_choice(
                 request.POST.get("payment_method"), constants.PAYMENT_METHOD_CHOICES, "transfer"
             )
-            payment_status = _validated_choice(
-                request.POST.get("payment_status"), constants.PAYMENT_STATUS_CHOICES, "pending"
-            )
+            # A manually created payment is ALWAYS born pending — the "Estado"
+            # selector was removed from the form. Recording it as already
+            # completed here skipped the pending→completed transition that
+            # `quick_complete_payment` owns (receipt email, payment_date stamp,
+            # the assert_completable guard), so money could be booked with no
+            # receipt and no audit of when it was collected. Mark it paid from
+            # the payments list instead.
+            payment_status = "pending"
 
             concept = (request.POST.get("concept") or "").strip()[:200]
 
@@ -326,7 +340,10 @@ def create_payment(request):
                 currency=request.POST.get("currency", "EUR")[:3],
                 payment_status=payment_status,
                 due_date=parse_date_value(request.POST.get("due_date")),
-                payment_date=parse_date_value(request.POST.get("payment_date")),
+                # Pending payments carry no payment_date — it is stamped when the
+                # payment is marked completed. Every income figure filters on
+                # payment_date, so setting it here on a pending row is misleading.
+                payment_date=None,
                 concept=concept,
                 reference_number=(request.POST.get("reference_number", "") or "")[:50],
                 observations=request.POST.get("observations", ""),

@@ -145,6 +145,7 @@ from core.views.students import (
     get_ff_student_ids,
     get_last_friday,
     get_next_friday,
+    reenroll_old_students,
     search_students,
 )
 
@@ -178,6 +179,7 @@ from core.views.waiting_list import (
     assign_from_waiting_list,
     group_capacity_summary,
     notify_capacity_freed,
+    remove_from_waiting_list,
     waiting_list_create,
     waiting_list_view,
 )

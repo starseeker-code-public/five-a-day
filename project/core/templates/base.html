@@ -111,6 +111,9 @@
     <!-- Dark theme overrides (inert unless html.dark is set) -->
     <link rel="stylesheet" href="{% static 'css/theme.css' %}">
 
+    <!-- Vendored date picker (forces dd/mm/aaaa regardless of OS locale) -->
+    <link rel="stylesheet" href="{% static 'css/vendor-flatpickr-4.6.13.min.css' %}">
+
     {% block extra_css %}{% endblock %}
 </head>
 <body id="top" data-history-url="{% url 'history_list' %}">
@@ -210,12 +213,6 @@
                     {% endif %}
                 </nav>
             </div>
-            {% if request.session.username %}
-            <div class="mt-3 px-5 hidden sidebar-session">
-                <p class="text-xs text-primary-500">Sesión activa:</p>
-                <p class="text-sm font-semibold text-primary-700">{{ request.session.username }}</p>
-            </div>
-            {% endif %}
         </aside>
 
         <!-- Main Content -->
@@ -495,6 +492,11 @@
     <script src="{% static 'js/support.js' %}"></script>
     <script src="{% static 'js/base.js' %}"></script>
     <script src="{% static 'js/theme.js' %}"></script>
+    <!-- Date picker: vendored flatpickr + Spanish locale, then our init. Loaded
+         before per-view scripts so window.initDatePickers is available to them. -->
+    <script src="{% static 'js/vendor/flatpickr-4.6.13.min.js' %}"></script>
+    <script src="{% static 'js/vendor/flatpickr-es-4.6.13.min.js' %}"></script>
+    <script src="{% static 'js/date-picker.js' %}"></script>
 
     <!-- PWA (v1.12) — register the service worker after the page loads so the
          registration never blocks the first paint. Silently degrades on browsers
