@@ -702,6 +702,18 @@ class Student(models.Model):
             - ((today.month, today.day) < (self.birth_date.month, self.birth_date.day))
         )
 
+    def titular_parent(self):
+        """The parent who becomes the titular of this student's payments.
+
+        Adults legitimately have no parent/guardian (`parent=None` is valid on
+        Payment for them); for children the FIRST parent by id is the titular —
+        the same explicit ordering the payment generators use via their
+        `Prefetch("student__parents", queryset=Parent.objects.order_by("id"))`.
+        Those prefetch-loop paths must NOT call this method (it issues a fresh
+        query per student); it is for one-student request paths.
+        """
+        return None if self.is_adult else self.parents.order_by("id").first()
+
     def save(self, *args, **kwargs):
         if self.is_waiting and self.waiting_since is None:
             from django.utils import timezone

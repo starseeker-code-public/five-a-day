@@ -328,6 +328,13 @@
                     </div>
                 </div>
 
+                {# Opt-in to ALSO override the recurring cuota, mirroring student_create.html: a special matrícula does not imply a special cuota, and EnrollmentForm.clean() DISCARDS manual_amount when this box is off — without it the modal's typed cuota was silently dropped (or the form 400'd on a cuota-only special). #}
+                <div id="enrollCustomizeRow" style="display:none;">
+                    <label class="flex items-center gap-2 text-sm font-medium text-neutral-700 cursor-pointer">
+                        {{ enrollment_form.customize_recurring }}
+                        Personalizar también la cuota mensual/trimestral
+                    </label>
+                </div>
                 <div id="enrollManualRow" style="display:none;">
                     <label for="id_manual_amount" class="block text-sm font-medium text-neutral-700 mb-2">Precio manual (€)</label>
                     {{ enrollment_form.manual_amount }}

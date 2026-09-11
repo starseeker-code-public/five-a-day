@@ -348,6 +348,17 @@ def _receipt_breakdown_rows(payment) -> list[list[str]]:
         rows.append(["Cheque idioma", f"−{cheque:.2f} €"])
         discounted -= cheque
 
+    # `_price_months` takes the flat June discount off every period that covers
+    # June — and June is always the LAST teaching month, so a period covers it
+    # exactly when it falls due in it. Without this line the −june residual was
+    # printed as "Prorrateo primer periodo" on every family's June receipt (a
+    # payment that is neither first nor prorated). Adult groups pay a flat rate
+    # with no June discount, mirroring the generator's early return.
+    if payment.due_date and payment.due_date.month == 6 and enrollment.schedule_type != "adult_group":
+        june = Decimal(config.june_discount)
+        rows.append(["Descuento junio (curso completo)", f"−{june:.2f} €"])
+        discounted -= june
+
     discounted = round_money(discounted)
     residual = amount - discounted
     if residual != 0:

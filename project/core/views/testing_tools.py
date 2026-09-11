@@ -186,6 +186,33 @@ def api_seed_database(request):
         )
 
 
+def backlog_task_json(task):
+    """One JSON shape for a freshly created BacklogTask.
+
+    Shared by `api_create_backlog_task` here and `features.api_create_feature_task`
+    (like `email_backlog_task_created`), so a task spawned from a development
+    renders on the boards exactly like one typed into /testing/ — two hand-built
+    dicts had already drifted (one carried `description`, the other did not).
+
+    The Spanish labels come from the model's own choices so an AJAX-inserted row
+    reads exactly like a server-rendered one. Without these the board showed the
+    raw keys ("medium", "open") until the next reload, and the alternative — a
+    label map in JS — is a second copy of the choices that drifts the moment one
+    is renamed.
+    """
+    return {
+        "id": task.id,
+        "title": task.title,
+        "description": task.description,
+        "priority": task.priority,
+        "priority_display": task.get_priority_display(),
+        "status": task.status,
+        "status_display": task.get_status_display(),
+        "created_by": task.created_by,
+        "created_at": task.created_at.strftime("%d/%m/%Y %H:%M"),
+    }
+
+
 def email_backlog_task_created(task, screenshot=None, context_line=""):
     """Email SUPPORT_EMAIL about a newly created backlog task.
 
@@ -287,27 +314,7 @@ def api_create_backlog_task(request):
         # Email support — the screenshot is attached in-memory (never persisted).
         email_backlog_task_created(task, screenshot=screenshot)
 
-        return JsonResponse(
-            {
-                "success": True,
-                "task": {
-                    "id": task.id,
-                    "title": task.title,
-                    "priority": task.priority,
-                    "status": task.status,
-                    # The Spanish labels come from the model's own choices so an
-                    # AJAX-inserted row reads exactly like a server-rendered one.
-                    # Without these the board showed the raw keys ("medium",
-                    # "open") until the next reload, and the alternative — a
-                    # label map in JS — is a second copy of the choices that
-                    # drifts the moment one is renamed.
-                    "priority_display": task.get_priority_display(),
-                    "status_display": task.get_status_display(),
-                    "created_by": task.created_by,
-                    "created_at": task.created_at.strftime("%d/%m/%Y %H:%M"),
-                },
-            }
-        )
+        return JsonResponse({"success": True, "task": backlog_task_json(task)})
     except json.JSONDecodeError:
         return JsonResponse({"success": False, "message": "JSON invalido."}, status=400)
     except Exception:

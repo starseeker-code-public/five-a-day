@@ -51,6 +51,12 @@
 
         {% if not student.is_waiting or enrollment_form %}
         <h2 class="text-lg font-semibold text-neutral-800 mb-4 mt-8">Matrícula</h2>
+        {% if enrollment_form.non_field_errors %}
+            {# Without this block a rejected enrollment form re-rendered with NO message — the save looked successful while nothing was written. #}
+            <div class="bg-red-100 border border-red-200 rounded p-3 mb-4 text-red-700 text-sm">
+                {{ enrollment_form.non_field_errors }}
+            </div>
+        {% endif %}
         <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
             {% for field in enrollment_form %}
                 <div>

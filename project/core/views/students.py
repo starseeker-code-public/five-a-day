@@ -169,10 +169,14 @@ class StudentCreateView(CreateView):
         mean the form validated one intent and the view saved the other.
         """
         kwargs = super().get_form_kwargs()
-        kwargs["waiting"] = (
-            self.request.POST.get("is_waiting") in ("on", "true", "1") or self.request.GET.get("mode") == "waiting"
-        )
+        kwargs["waiting"] = self._is_waiting_request()
         return kwargs
+
+    def _is_waiting_request(self):
+        """One reading of the waiting-mode intent, shared by `get_form_kwargs` and
+        `form_valid` so the form can never validate one intent while the view
+        saves the other."""
+        return self.request.POST.get("is_waiting") in ("on", "true", "1") or self.request.GET.get("mode") == "waiting"
 
     def get_waiting_entry(self):
         """Waiting-list entry this enrollment came from (`?from_waiting=<id>`), if any."""
@@ -325,9 +329,7 @@ class StudentCreateView(CreateView):
     def form_valid(self, form):
         from comms.tasks import send_welcome_email_task
 
-        is_waiting_mode = (
-            self.request.POST.get("is_waiting") in ("on", "true", "1") or self.request.GET.get("mode") == "waiting"
-        )
+        is_waiting_mode = self._is_waiting_request()
         is_adult_mode = self.request.POST.get("is_adult_mode") == "true"
 
         # For waiting-list students we skip the enrollment form entirely — no
@@ -602,7 +604,18 @@ class StudentUpdateView(UpdateView):
                 is_special_now = enrollment.is_hand_priced
                 initial["is_special"] = is_special_now
                 if is_special_now:
-                    initial["manual_amount"] = enrollment.final_amount
+                    # `customize_recurring` must be pre-ticked or EnrollmentForm.clean()
+                    # DISCARDS manual_amount and then rejects the special — which made
+                    # every save of a hand-priced student's ficha (even a phone-number
+                    # edit) a silent no-op, since this form's non-field errors were the
+                    # only signal.
+                    initial["customize_recurring"] = True
+                    # Pre-fill the MANUAL BASE (`enrollment_amount`), never
+                    # `final_amount`: the final figure already carries the sibling /
+                    # cheque discounts, and a re-issue runs `_apply_discounts` again —
+                    # round-tripping the discounted figure compounded the discount on
+                    # every plan/start-date change (50 → 47.50 → 45.13).
+                    initial["manual_amount"] = enrollment.enrollment_amount
             context["enrollment_form"] = EnrollmentForm(
                 self.request.POST or None,
                 initial=initial,
@@ -648,7 +661,10 @@ class StudentUpdateView(UpdateView):
         wants_special = bool(data.get("is_special") and data.get("manual_amount"))
         if current_is_special != wants_special:
             return True
-        if wants_special and data.get("manual_amount") != current.final_amount:
+        # Compare against the MANUAL BASE the admin typed (`enrollment_amount`),
+        # matching the pre-fill above — `final_amount` is the discounted figure,
+        # so comparing it flagged every discounted special as "price changed".
+        if wants_special and data.get("manual_amount") != current.enrollment_amount:
             return True
 
         # The form pre-fills start_date from the live enrollment, so a changed
@@ -708,7 +724,7 @@ class StudentUpdateView(UpdateView):
                     if current is None or self._enrollment_plan_changed(current, enrollment_form):
                         from billing.services.payment_service import PaymentService
 
-                        parent = None if student.is_adult else student.parents.order_by("id").first()
+                        parent = student.titular_parent()
                         requested_start = enrollment_form.cleaned_data.get("start_date") or date.today()
                         effective_start = _superseding_start(student, current, enrollment_form, parent=parent)
 
@@ -922,11 +938,9 @@ def enroll_student(request, student_id):
         from billing.services.payment_service import PaymentService
 
         with transaction.atomic():
-            # Adults legitimately have no parent/guardian; for children the
-            # first parent is the titular — same explicit ordering the payment
-            # generators use. Resolved BEFORE the supersede, which bills the
-            # closing enrollment's unbilled months to the same titular.
-            parent = None if student.is_adult else student.parents.order_by("id").first()
+            # Resolved BEFORE the supersede, which bills the closing
+            # enrollment's unbilled months to the same titular.
+            parent = student.titular_parent()
 
             # One ACTIVE enrollment per student (DB constraint) — the new
             # matrícula supersedes the current one, same as StudentUpdateView
@@ -1069,7 +1083,20 @@ def reenroll_old_students(request):
                 if not student.active:
                     student.active = True
                     student.save(update_fields=["active", "updated_at"])
-                parent = None if student.is_adult else student.parents.order_by("id").first()
+                parent = student.titular_parent()
+                # A lapsed student usually still carries an ACTIVE enrollment from a
+                # prior course (nothing finishes enrollments at year end), and
+                # `unique_active_enrollment_per_student` is year-blind — without this
+                # close, create_enrollment raised IntegrityError for exactly the
+                # population this flow exists for. Cuotas the old plan legitimately
+                # billed stay owed: `cancel_from` voids only pending periodic rows due
+                # on/after the NEW start, mirroring `supersede_enrollment`.
+                from billing.services.enrollment_service import EnrollmentService
+
+                new_start = shared.cleaned_data.get("start_date") or date.today()
+                EnrollmentService.close_active_enrollments(
+                    student, "finished", cancel_pending_periodic=True, cancel_from=new_start
+                )
                 enrollment = shared.create_enrollment(student, is_adult=student.is_adult)
                 if charge_fee:
                     _create_enrollment_fee_payment(student, parent, enrollment, shared)

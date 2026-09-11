@@ -388,13 +388,10 @@ const localDateISO = window.localDateISO;
     // Set today as default due date
     document.getElementById('due_date').value = localDateISO();
 
-    // Auto-fill payment date when status changes to completed
-    document.getElementById('payment_status').addEventListener('change', function() {
-        const paymentDate = document.getElementById('payment_date');
-        if (this.value === 'completed' && !paymentDate.value) {
-            paymentDate.value = localDateISO();
-        }
-    });
+    // NOTE: there is deliberately no payment_status/payment_date handling here —
+    // a manually created payment is ALWAYS pending (v1.28.2, the view forces it)
+    // and the template has no Estado field. Binding to the removed element threw
+    // a TypeError that killed everything below (autocomplete, submit guard).
 
     // Auto-generate concept based on payment type
     document.getElementById('payment_type').addEventListener('change', function() {
@@ -512,13 +509,6 @@ const localDateISO = window.localDateISO;
             validationMessage.classList.remove('hidden');
             validationMessage.style.color = '#dc2626';
             validationMessage.textContent = '\u26A0 Debe seleccionar un estudiante y un padre/tutor v\u00e1lidos.';
-            return;
-        }
-        // Auto-set payment date if status is completed and date is empty
-        const paymentStatus = document.getElementById('payment_status').value;
-        const paymentDate = document.getElementById('payment_date');
-        if (paymentStatus === 'completed' && !paymentDate.value) {
-            paymentDate.value = localDateISO();
         }
     });
 })();

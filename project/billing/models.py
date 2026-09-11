@@ -857,6 +857,19 @@ class Payment(models.Model):
 
         with transaction.atomic():
             config = SiteConfiguration.objects.select_for_update().get(pk=SiteConfiguration.get_config().pk)
+
+            # Re-check INSIDE the lock: the guard above ran on a possibly-stale
+            # in-memory instance. The receipt-email task and the Drive task are
+            # dispatched together and (with a real worker) both load the payment
+            # with receipt_number='' — without this re-read the loser scanned the
+            # winner's committed number and OVERWROTE the same payment with the
+            # next one: emailed receipt 2026-633, DB 2026-634, 633 a permanent
+            # gap in a sequence that must be stable.
+            current = Payment.objects.filter(pk=self.pk).values_list("receipt_number", flat=True).first()
+            if current:
+                self.receipt_number = current
+                return current
+
             base = config.receipt_offset if year == config.receipt_offset_year else 0
 
             max_seq = base

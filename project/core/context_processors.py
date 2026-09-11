@@ -16,6 +16,7 @@ def today_notifications(request):
     # predicate the middleware enforces with — computed independently, the two
     # disagreed for an authenticated user with no Teacher row (the UI trimmed
     # itself while the middleware treated the session as admin, or vice versa).
+    from core.decorators import may_use_qa_tools
     from core.middleware import _is_non_admin_teacher
 
     user = getattr(request, "user", None)
@@ -34,11 +35,10 @@ def today_notifications(request):
     # it now requires an authenticated session first.
     is_admin_user = session_authenticated and not is_non_admin_teacher
 
-    # QA testing tools visibility — logged-in ADMIN Teacher in the testing
-    # environment only (non-admin teachers must not see the dev tools).
-    # `active` matters as much as `admin`: deactivating a Teacher is how this
-    # academy offboards somebody, and the dev tools include DB seed/reset.
-    show_testing_tools = settings.IS_TESTING_ENV and teacher is not None and teacher.admin and teacher.active
+    # QA testing tools visibility — the SAME predicate `qa_access_required`
+    # enforces (testing env + active admin Teacher), so the icon and the gate
+    # cannot drift apart.
+    show_testing_tools = may_use_qa_tools(teacher)
 
     # The header bell and the actions-history feed are admin-only, so a
     # non-admin teacher never renders either one — don't spend the queries.

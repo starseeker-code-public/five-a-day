@@ -67,10 +67,23 @@ def admin_required(view_func):
     return wrapper
 
 
+def may_use_qa_tools(teacher):
+    """THE predicate for the QA testing tools: testing env + admin + ACTIVE Teacher.
+
+    Shared by `qa_access_required` (the enforcing gate) and
+    `context_processors.show_testing_tools` (the icon's visibility) so the two
+    can never disagree — they used to: the visibility check required `active`
+    while the gate did not, leaving the enforcement weaker than the cosmetics.
+    `active` matters as much as `admin`: deactivating a Teacher is how this
+    academy offboards somebody, and the dev tools include DB seed/reset.
+    """
+    return bool(settings.IS_TESTING_ENV and teacher is not None and teacher.admin and teacher.active)
+
+
 def qa_access_required(view_func):
     """Block access unless DJANGO_ENV=testing (DEBUG=False) AND the request is
-    made by a logged-in ADMIN Teacher. Returns 404 for everyone else so the
-    page appears not to exist.
+    made by a logged-in, ACTIVE, ADMIN Teacher. Returns 404 for everyone else
+    so the page appears not to exist.
 
     The QA testing dashboard is gated on admin Teacher accounts (non-admin
     teachers must not see the dev tools: DB seed/reset, error-email toggle,
@@ -79,8 +92,7 @@ def qa_access_required(view_func):
 
     @wraps(view_func)
     def wrapper(request, *args, **kwargs):
-        teacher = _request_teacher(request)
-        if not (settings.IS_TESTING_ENV and teacher is not None and teacher.admin):
+        if not may_use_qa_tools(_request_teacher(request)):
             raise Http404
         return view_func(request, *args, **kwargs)
 

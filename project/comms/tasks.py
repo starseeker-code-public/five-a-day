@@ -139,11 +139,14 @@ def send_welcome_email_task(self, parent_id: int, student_id: int, enrollment_id
 
         return {"status": "success", "recipient": recipient_email}
 
-    except (Parent.DoesNotExist, Student.DoesNotExist, Enrollment.DoesNotExist) as e:
+    except (Parent.DoesNotExist, Student.DoesNotExist, Enrollment.DoesNotExist):
+        # Fixed message, not str(e): the DoesNotExist repr names the model and
+        # query, and a task result can end up in whatever consumes it (production
+        # runs eager) — same rule as the views (v1.14.4/5).
         logger.error(
             "Record not found: parent_id=%s student_id=%s enrollment_id=%s", parent_id, student_id, enrollment_id
         )
-        return {"status": "error", "message": str(e)}
+        return {"status": "error", "message": "Registro no encontrado."}
 
 
 @shared_task(
@@ -315,10 +318,18 @@ def send_monthly_report_task(self, recipient_email: str | None = None):
     # the other three call sites in this file were left behind.
     today = timezone.localdate()
     zero = Decimal("0.00")
+    # "Esperado" means LIVE money only (`billing.constants.LIVE_PAYMENT_STATUSES`,
+    # the same contract payments_list / dashboard.home / collection_rate share):
+    # without the status filter every cancelled/failed/refunded row due this
+    # month inflated `expected` and produced phantom `outstanding` debt — the
+    # exact pre-v1.15 bug the constant exists to prevent.
+    from billing.constants import LIVE_PAYMENT_STATUSES
+
     stats = Payment.objects.aggregate(
         expected=Sum(
             Case(
                 When(
+                    payment_status__in=LIVE_PAYMENT_STATUSES,
                     due_date__month=today.month,
                     due_date__year=today.year,
                     then="amount",
@@ -845,7 +856,7 @@ def _send_fun_friday_batch(
 
     sent = 0
     try:
-        for email in recipients:
+        for index, email in enumerate(recipients, start=1):
             try:
                 if send_fun_friday_email(
                     recipients=email,
@@ -862,7 +873,10 @@ def _send_fun_friday_batch(
                 ):
                     sent += 1
             except Exception:  # noqa: BLE001 — one bad recipient must not abort the batch
-                logger.exception("Fun Friday email failed for %s", email)
+                # Opaque index, not the address: recipient emails are family PII
+                # and Cloud Logging retention outlives the app's own controls
+                # (this file's own rule — see the module docstring on args).
+                logger.exception("Fun Friday email failed for recipient %d of %d", index, len(recipients))
     finally:
         try:
             connection.close()
