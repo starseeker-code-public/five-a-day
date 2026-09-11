@@ -16,6 +16,7 @@ The `students` app owns all people-related models: students, parents, teachers, 
 
 - `Student.full_name` — "{first_name} {last_name}", stripped: `last_name` is blank for a waiting-list entry taken over the phone
 - `Student.age` — calculated from birth_date; returns `None` when no birth date is on record (waiting-list entries may only have a name and a phone number)
+- `Student.titular_parent()` (v1.29.0) — THE rule for who becomes the titular of the student's payments: `None` for an adult (no guardian is valid), otherwise the first parent by id — the same explicit ordering the payment generators use. One-student request paths call this; the prefetch-loop paths (`generate_payments`, `reconcile_payment_schedule`) must NOT (it issues a fresh query per student) and keep their ordered `Prefetch` pattern
 - `Student.gender` — 'm' or 'f' (used in enrollment confirmation emails)
 - `Parent.full_name` — "{first_name} {last_name}"
 - `Teacher.full_name` — "{first_name} {last_name}"

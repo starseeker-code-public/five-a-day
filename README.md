@@ -19,7 +19,7 @@ Built to centralize student records, automate billing cycles, and streamline par
   &nbsp;|&nbsp;
   <a href="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml?query=branch%3Amain"><img src="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml/badge.svg?branch=main&style=flat-square" alt="CI main"></a>
   &nbsp;|&nbsp;
-  <img src="https://img.shields.io/badge/coverage-94.97%25-brightgreen?style=flat-square" alt="Coverage">
+  <img src="https://img.shields.io/badge/coverage-94.87%25-brightgreen?style=flat-square" alt="Coverage">
   &nbsp;|&nbsp;
   <a href="https://github.com/starseeker-code-public/five-a-day/actions/workflows/scorecard.yml"><img src="https://img.shields.io/badge/OpenSSF%20Scorecard-monitored-blueviolet?style=flat-square" alt="OSSF Scorecard"></a>
   &nbsp;|&nbsp;
@@ -36,7 +36,7 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 | Version | Date | Description |
 |---------|------|-------------|
-| **v1.29.0** | 2026-09-11 | Google Drive receipt archive (auto-upload + backfill) |
+| **v1.29.0** | 2026-09-11 | Google Drive receipt archive + full-project review fixes |
 | v1.28.2 | 2026-09-11 | QA fixes: email send bug, dd/mm dates, receipt numbering, bulk re-enrol |
 | v1.28.1 | 2026-09-03 | First complete version: review ledger closed across billing, timezone, auth, mass mail and CI |
 
@@ -173,11 +173,64 @@ same place the paper receipts are filed.
 - Idempotent by payment id, so re-completing a payment or re-running the backfill
   never duplicates a receipt.
 
+**Full-project review — 13 verified findings fixed**
+
+A whole-codebase `/code-review` + `/simplify` + `/security-review` pass (every
+finding adversarially verified before fixing). The security review found **no
+exploitable vulnerabilities**; the correctness pass found and fixed:
+
+- **`/payments/create/` was unusable** — the page JS still bound to the
+  `payment_status` field v1.28.2 removed, and the TypeError killed the student
+  autocomplete and the submit guard.
+- **Special (hand-priced) pricing, two coupled bugs** — the "Nueva matrícula"
+  modal never rendered `Personalizar también la cuota`, so a typed special
+  cuota was silently discarded (billing the standard rate) or rejected; and the
+  edit ficha neither pre-ticked that box (every save of a hand-priced student
+  was a silent no-op) nor pre-filled the un-discounted base, so sibling/cheque
+  discounts compounded on every re-issue. The enrollment form's errors now
+  render on the edit page.
+- **Bulk re-enrolment ("Antiguo alumno") failed for its target population** —
+  a lapsed student still carries an active prior-year enrollment, which
+  collided with `unique_active_enrollment_per_student`; the flow now finishes
+  it first (old owed cuotas stay owed).
+- **`is_returning_student` counted *later* years as history** — a future-year
+  enrollment granted the antiguo-alumno matrícula discount to a brand-new
+  family; the check is now strictly earlier-years-only.
+- **Monthly-report email counted cancelled money as "esperado"** — the
+  aggregate now filters on `LIVE_PAYMENT_STATUSES` like every other consumer.
+- **Receipt fixes** — `assign_receipt_number` re-checks inside the config lock
+  (parallel email/Drive tasks could renumber the same payment), and the June
+  discount prints as its own "Descuento junio" line instead of a false
+  "Prorrateo primer periodo".
+- Smaller: test-send feedback read a key the server never returns (always
+  rendered red); Sheets export returned raw exception text to the client and
+  now pins `RAW` input (formula-injection guard); a Fun Friday failure logged a
+  family's email address; a task result echoed `str(e)`.
+
+**Quality (simplify pass)**
+
+- One predicate each for QA-tool access (`may_use_qa_tools`, now enforcing
+  `Teacher.active` at the gate), the payment titular (`Student.titular_parent`),
+  the waiting-mode intent, and the backlog-task JSON shape; `hand_priced_amount`
+  now uses `Enrollment.is_hand_priced` + the shared money rounding;
+  `send_bulk_emails` reuses one SMTP session per batch (payment reminders no
+  longer pay one TLS+AUTH handshake per family).
+
+**Branch hygiene**
+
+- Merged `testing` (which contains `main`) into the release line, pre-resolving
+  the dev/testing conflict: the correct `billing/money.py` leaf-module fix for
+  the CodeQL cyclic-import alert is kept over the Copilot autofix on testing
+  (which referenced fields that don't exist in this schema), and the Dockerfile
+  takes the `python:3.14-slim` digest from the Dependabot bump.
+
 **Testing**
 
-- Suite at **2,226 tests**. New `unit/test_drive_service.py` (folder-path logic,
+- Suite at **2,227 tests**. New `unit/test_drive_service.py` (folder-path logic,
   idempotency, the never-raises guarantee) and `integration/test_drive_receipts.py`
-  (the task's guard rails + the backfill command).
+  (the task's guard rails + the backfill command); a new decorator test pins the
+  deactivated-admin 404, and the tests that pinned pre-fix behaviour (Sheets
+  `str(e)`, future-year returning history) now pin the corrected rules.
 
 </details>
 
@@ -4451,7 +4504,7 @@ five-a-day/
 │   │   └── management/commands/  send_email, test_all_emails, plus 4 Beat-task wrappers
 │   │                             (v1.14.2 — birthday, reminders, report, Fun Friday drain)
 │   │
-│   ├── tests/                    pytest suite (2,226 tests, 94.97 % coverage) — unit/ + integration/
+│   ├── tests/                    pytest suite (2,227 tests, 94.87 % coverage) — unit/ + integration/
 │   ├── templates/registration/   Password-reset templates (form, done, confirm, complete + email body)
 │   ├── templates/admin/          Django admin overrides (branded theme)
 │   └── conftest.py               Shared fixtures (models + authenticated_client)
@@ -4795,9 +4848,9 @@ Public flow at `/password-reset/...` that lets a teacher recover access without 
 
 | Metric | Value |
 |--------|-------|
-| **Total tests** | 2,226 |
+| **Total tests** | 2,227 |
 | **Test files** | 108 (61 unit + 47 integration) |
-| **Coverage** | 95% (94.97% — 7,099 statements, 357 uncovered) |
+| **Coverage** | 95% (94.87% — 7,131 statements, 366 uncovered) |
 | **Coverage thresholds** | **≥ 90%** (target, no warning) / **75-89%** (CI warning, pre-commit still blocks below 75) / **< 75%** (CI fails, pre-commit rejects the commit) |
 | **Runtime** | ~175 seconds (parallel workers via `pytest-xdist -n auto`) |
 | **Database** | PostgreSQL (same as production) — **always use `make test`** |
@@ -4843,7 +4896,7 @@ Within each file, related tests are grouped into classes. Where a large file abs
 
 ### Unit Tests
 
-**61 files, 958 tests.** Direct-call tests — no HTTP stack, no URL resolver, no template rendering.
+**61 files, 959 tests.** Direct-call tests — no HTTP stack, no URL resolver, no template rendering.
 
 | File | Count | Coverage |
 | --- | --- | --- |
@@ -4899,7 +4952,7 @@ Within each file, related tests are grouped into classes. Where a large file abs
 | [`unit/test_audit_log.py`](project/tests/unit/test_audit_log.py) | 6 | Immutable audit trail (v1.10): the `post_save`/`post_delete` signal receivers write an `AuditLog` row with the contextvar actor, and the model rejects mutation after creation |
 | [`unit/test_qa_error_middleware.py`](project/tests/unit/test_qa_error_middleware.py) | 5 | `QAErrorEmailMiddleware.process_exception` via `RequestFactory`: pass-through, disabled config, no support email, send success, send failure swallowed |
 | [`unit/test_error_handlers.py`](project/tests/unit/test_error_handlers.py) | 5 | `handler400`/`handler403`/`handler404`/`handler405`/`handler500` render with correct status codes |
-| [`unit/test_decorators.py`](project/tests/unit/test_decorators.py) | 5 | `@qa_access_required`: allow when `IS_TESTING_ENV` + the request is a logged-in admin Teacher, 404 when not testing env / authenticated non-teacher / anonymous |
+| [`unit/test_decorators.py`](project/tests/unit/test_decorators.py) | 6 | `@qa_access_required`: allow when `IS_TESTING_ENV` + the request is a logged-in **active** admin Teacher, 404 when not testing env / deactivated admin / authenticated non-teacher / anonymous |
 | [`unit/test_github_dispatch.py`](project/tests/unit/test_github_dispatch.py) | 5 | `notify_github_qa_signoff()` (v1.26.7), the `repository_dispatch` that arms `Deploy production` on QA's sign-off. The fail-soft contract: inert outside the testing environment and without `GITHUB_DISPATCH_TOKEN` (no request is ever made), the success path sends exactly the `qa-ready-for-prod` event the workflow's trigger filter names (renaming either side alone silently disarms the same-day trigger), and both an API rejection and a network failure return `False` instead of raising |
 | [`unit/test_final_coverage.py`](project/tests/unit/test_final_coverage.py) | 4 | The last uncovered branches: waiting-list assign with a null group in JSON, welcome-email `on_commit` happy path, Stripe checkout `httpx` error, receipt-email PDF-generation error |
 | [`unit/test_sms_tasks.py`](project/tests/unit/test_sms_tasks.py) | 4 | `send_payment_reminder_sms_task` (v1.8): opt-in parent gets the SMS, opted-out is skipped, missing payment and send failure handled |
@@ -4968,44 +5021,44 @@ Within each file, related tests are grouped into classes. Where a large file abs
 | File | Stmts | Miss | Cover | Missing lines |
 | --- | --- | --- | --- | --- |
 | `billing/forms.py` | 52 | 1 | 98% | 170 |
-| `billing/models.py` | 328 | 23 | 93% | 70-71, 824, 869-870, 892, 1070, 1072-1100, 1115, 1117, 1129-1130, 1138 |
-| `billing/services/enrollment_service.py` | 151 | 8 | 95% | 175, 278-280, 340, 463, 465, 499 |
+| `billing/models.py` | 332 | 25 | 92% | 70-71, 824, 870-871, 882-883, 905, 1083, 1085-1113, 1128, 1130, 1142-1143, 1151 |
+| `billing/services/enrollment_service.py` | 151 | 8 | 95% | 175, 278-280, 340, 473, 475, 509 |
 | `billing/services/expense_service.py` | 56 | 6 | 89% | 99-105, 151-153 |
 | `billing/services/gcp_cost_service.py` | 148 | 14 | 91% | 170-171, 208-209, 223-225, 231-232, 242-243, 292-294 |
-| `billing/services/payment_service.py` | 224 | 16 | 93% | 307, 339, 423, 501-509, 537-545, 598, 631, 648-655 |
-| `billing/services/pdf_service.py` | 216 | 17 | 92% | 155, 313, 320-329, 334, 345-349 |
+| `billing/services/payment_service.py` | 223 | 16 | 93% | 306, 338, 422, 500-508, 536-544, 597, 630, 647-654 |
+| `billing/services/pdf_service.py` | 220 | 20 | 91% | 155, 313, 320-329, 334, 345-349, 358-360 |
 | `billing/services/stripe_service.py` | 116 | 5 | 96% | 139-140, 179, 254-255 |
 | `comms/services/email_functions.py` | 96 | 6 | 94% | 540, 565-569, 579-580 |
-| `comms/services/email_service.py` | 65 | 2 | 97% | 183-184 |
+| `comms/services/email_service.py` | 77 | 5 | 94% | 184-185, 222-224 |
 | `comms/services/sms_service.py` | 50 | 3 | 94% | 58, 63-64 |
-| `comms/tasks.py` | 306 | 14 | 95% | 511, 623, 658-662, 667, 842-844, 864-865, 869-870, 905 |
+| `comms/tasks.py` | 307 | 14 | 95% | 522, 634, 669-673, 678, 853-855, 875-879, 883-884, 919 |
 | `core/audit_signals.py` | 103 | 9 | 91% | 116, 122, 138, 149-150, 155, 192, 210, 243 |
-| `core/context_processors.py` | 42 | 1 | 98% | 72 |
+| `core/context_processors.py` | 43 | 1 | 98% | 72 |
 | `core/date_utils.py` | 6 | 1 | 83% | 23 |
-| `core/decorators.py` | 33 | 2 | 94% | 63-64 |
+| `core/decorators.py` | 34 | 2 | 94% | 63-64 |
 | `core/middleware.py` | 197 | 13 | 93% | 151, 200, 211-216, 273, 279, 432, 444, 487, 550-551, 591-592 |
 | `core/models.py` | 178 | 2 | 99% | 336, 369 |
 | `core/services/drive_service.py` | 125 | 4 | 97% | 276-277, 303-305 |
 | `core/services/google_sheets_service.py` | 99 | 9 | 91% | 74-76, 112-118 |
 | `core/views/app_forms.py` | 560 | 31 | 94% | 245, 278-283, 371-372, 526-528, 540-543, 549-550, 688-689, 707-708, 739-741, 973, 1161, 1176-1180, 1308, 1499-1503, 1520-1523 |
 | `core/views/auth.py` | 200 | 11 | 94% | 66, 69-71, 254, 271, 319, 338, 383, 466-467 |
-| `core/views/dashboard.py` | 150 | 5 | 97% | 133-140, 186 |
+| `core/views/dashboard.py` | 150 | 5 | 97% | 133-140, 184 |
 | `core/views/expenses.py` | 135 | 11 | 92% | 30-31, 160, 183-184, 217-219, 252-254 |
-| `core/views/features.py` | 173 | 20 | 88% | 137, 161-162, 212-216, 274-280, 337-341 |
+| `core/views/features.py` | 173 | 20 | 88% | 137, 161-162, 212-216, 274-280, 327-331 |
 | `core/views/management.py` | 150 | 5 | 97% | 343, 380, 414-416 |
 | `core/views/parent_portal.py` | 220 | 6 | 97% | 112, 254, 487, 605, 653, 673 |
 | `core/views/parents.py` | 60 | 1 | 98% | 51 |
 | `core/views/password_reset.py` | 74 | 2 | 97% | 141, 143 |
 | `core/views/payments.py` | 368 | 32 | 91% | 71-72, 80-81, 296-301, 366, 372-373, 385-394, 494, 541-542, 564-565, 577, 585-596, 602-603, 997 |
 | `core/views/schedule.py` | 68 | 1 | 99% | 111 |
-| `core/views/students.py` | 434 | 36 | 92% | 299-301, 440-445, 605, 630, 641, 650, 652, 683, 695, 721, 754-760, 769, 939, 965-968, 1033-1034, 1048-1050, 1062-1063, 1065-1066, 1083-1085, 1090, 1092 |
-| `core/views/testing_tools.py` | 228 | 20 | 91% | 71-72, 76-78, 202, 266, 273, 275, 313-315, 424-428, 441, 459-460 |
+| `core/views/students.py` | 440 | 37 | 92% | 303-305, 442-447, 612-618, 643, 654, 663, 668, 699, 711, 737, 770-776, 785, 953, 979-982, 1047-1048, 1062-1064, 1076-1077, 1079-1080, 1110-1112, 1117, 1119 |
+| `core/views/testing_tools.py` | 230 | 20 | 91% | 71-72, 76-78, 229, 293, 300, 302, 320-322, 431-435, 448, 466-467 |
 | `core/views/two_factor.py` | 94 | 8 | 91% | 39, 50-51, 189-191, 196-197 |
 | `core/views/waiting_list.py` | 117 | 1 | 99% | 340 |
 | `students/forms.py` | 101 | 2 | 98% | 312-313 |
-| `students/models.py` | 333 | 9 | 97% | 159-160, 484, 568-569, 752-755 |
+| `students/models.py` | 335 | 9 | 97% | 159-160, 484, 568-569, 764-767 |
 
-**54 files** have 100% coverage (skipped above). Total coverage: **94.97%** across 7,099 statements. Coverage is **very good**. Coverage is enforced at three levels: pre-commit hook (>= 75%), CI hard floor (>= 75%), and CI warning (< 90%).
+**54 files** have 100% coverage (skipped above). Total coverage: **94.87%** across 7,131 statements. Coverage is **good**. Coverage is enforced at three levels: pre-commit hook (>= 75%), CI hard floor (>= 75%), and CI warning (< 90%).
 ---
 
 ## Migrations
@@ -5152,7 +5205,7 @@ All settings are environment-controlled and only activate when `DEBUG=False`.
 | Decision | Implementation |
 |----------|---------------|
 | Non-root container | `Dockerfile` creates user `django` (uid 1000) and runs as `USER django` |
-| Multi-stage build | Builder stage compiles dependencies; runtime stage uses `python:3.12-slim` without build tools |
+| Multi-stage build | Builder stage compiles dependencies; runtime stage uses `python:3.14-slim` without build tools |
 | No secrets in image | `.dockerignore` excludes `.env*`, `scripts/`, `.git/` |
 | DB port restricted | `docker-compose.yml` binds PostgreSQL to `127.0.0.1:5432` only (not exposed to network) |
 | Health checks | Database has auth-checking healthcheck; web service uses `/health/` endpoint |
@@ -5637,7 +5690,7 @@ Dependabot opens **weekly PRs on `development`** (Mondays, 08:00 Europe/Madrid) 
 
 - **Python packages** — minor and patch updates grouped into a single PR. Django major version bumps are intentionally ignored (require manual upgrade planning).
 - **GitHub Actions** — updates to `actions/*`, `astral-sh/setup-uv`, `dawidd6/action-send-mail`, etc.
-- **Docker** (v1.26.0) — the digest-pinned images in the `Dockerfile`: the `python:3.12-slim` base and, since v1.26.6, the `ghcr.io/astral-sh/uv` binary image (both `COPY --from` lines pinned to `0.11.32@sha256:…`). Since v1.26.6 this entry carries `target-branch: development` like the other two — it was missing, so its PRs would have targeted `main` outside the release path.
+- **Docker** (v1.26.0) — the digest-pinned images in the `Dockerfile`: the `python:3.14-slim` base (v1.29.0, via Dependabot #51) and, since v1.26.6, the `ghcr.io/astral-sh/uv` binary image (both `COPY --from` lines pinned to `0.11.32@sha256:…`). Since v1.26.6 this entry carries `target-branch: development` like the other two — it was missing, so its PRs would have targeted `main` outside the release path.
 
 PRs are labelled `dependencies` + `python`, `github-actions` or `docker` for easy filtering. **Every Dependabot PR is reviewed and merged by hand — nothing merges them automatically.** CI runs on PRs into `development`, so a bump's checks are visible before you merge it. Once merged, the normal 3 h cycle carries the update to `testing` and then to `main`.
 
@@ -5665,7 +5718,7 @@ make up                        # Start Docker (PostgreSQL + Redis + Django + Cel
 1. Work on `development` (or a short-lived branch off `development`)
 2. Make changes following the conventions below
 3. Run `make pc-run` — Ruff + mypy + bandit all pass, offers to auto-bump the patch version on success, and auto-stages `uv.lock` if regenerated
-4. Run `make test` — all 2,226 tests must pass (PostgreSQL via Docker, parallel, with coverage)
+4. Run `make test` — all 2,227 tests must pass (PostgreSQL via Docker, parallel, with coverage)
 5. `git commit` with a message like `v1.14.7 — Short description` (version first, em dash — matches every other release commit in the project)
 6. `git push origin development`
 7. CI runs automatically on your push (see [CI/CD](#cicd--github-actions))

@@ -69,6 +69,13 @@ from a waiting-list entry that already carries enrollments.
 The discount is judged against **the enrollment's own academic year**, not today's — otherwise a
 future-dated enrollment would read as the student's own prior history and win the discount by itself.
 
+The automatic detection counts **strictly earlier** years only (`academic_year__lt`, v1.29.0 — the
+"YYYY-YYYY" format makes lexicographic `<` chronological). It used to accept any *different* year,
+so during the May–August window a brand-new family who enrolled for the NEXT course first and then
+added a start in the RUNNING course was granted the discount off their own future-year enrollment.
+Cancelled enrollments still count: moving a student to the waiting list cancels the enrollment, it
+does not erase history.
+
 ### Changing the plan SUPERSEDES the enrollment (v1.27.1)
 
 There are three ways to change a student's plan mid-course, and all three now go through one

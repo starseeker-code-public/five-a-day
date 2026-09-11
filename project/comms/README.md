@@ -50,7 +50,7 @@ documented dependency flow.
 Generic email sending service with HTML template rendering and inline images.
 
 - `send_email(template_name, recipients, subject, context, ..., connection=None, fail_silently=...)` — renders a Django template and sends via SMTP
-- `send_bulk_emails(template_name, emails_data, ...)` — sends multiple emails with the same template
+- `send_bulk_emails(template_name, emails_data, ...)` — sends multiple emails with the same template. v1.29.0: opens ONE shared SMTP session for the whole batch (guarded — an unreachable server degrades to per-message sends rather than raising, preserving the results-dict contract its caller `send_payment_reminders` relies on) instead of one TCP+TLS+AUTH handshake per recipient
 - `open_connection()` — a single reusable SMTP connection for a batch of sends (see below)
 - `email_service` — singleton instance used throughout the project
 
