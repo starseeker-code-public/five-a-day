@@ -40,13 +40,11 @@
    home.html's `{% block sidebar_hover %}`. Wiring up a second expansion
    mechanism is a product decision, not a bug fix, so the dead half is gone and
    the live hover half is the whole behaviour.
-   Two consequences of the deletion, both deliberate:
-     • `.sidebar-session` (the "Sesión activa: <user>" block in base.html) was
-       revealed ONLY by the dead selector, so it never rendered anywhere. It is
-       folded into the hover group below, which is where the sidebar actually
-       expands.
+   Consequence of the deletion, deliberate:
      • `.sidebar-quick-actions` and `.sidebar-chevron` went with it: no element
-       in any template carries either class. */
+       in any template carries either class. (The old `.sidebar-session`
+       "Sesión activa: <user>" block was removed from base.html entirely in
+       v1.28.2 at QA's request.) */
 
 #main-sidebar.expandable-sidebar {
     transition-duration: 220ms;
@@ -63,8 +61,7 @@
 /* Show text elements while the sidebar is expanded (hover) */
 #main-sidebar.expandable-sidebar:hover .sidebar-title,
 #main-sidebar.expandable-sidebar:hover .sidebar-subtitle,
-#main-sidebar.expandable-sidebar:hover .sidebar-text,
-#main-sidebar.expandable-sidebar:hover .sidebar-session {
+#main-sidebar.expandable-sidebar:hover .sidebar-text {
     display: block !important;
 }
 

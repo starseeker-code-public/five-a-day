@@ -80,6 +80,8 @@ Templates live in `core/templates/emails/` and extend `emails/base_email.html`. 
 
 **Every content template must define its own `{% block title %}`** (v1.20.0). `base_email.html` supplies a generic "Five a Day" fallback and 11 of the 18 were silently taking it, so the document title bore no relation to the subject line. Give a new template a title matching its `subject=`, in the shared `"<asunto> · Five a Day"` shape.
 
+**Theming (v1.28.2): a single LIGHT theme, opted out of client dark-mode.** `base_email.html` declares `color-scheme: light` (meta + CSS) so Outlook/Windows can no longer auto-invert emails to dark (the cause of the "always dark / unreadable" reports); it is a white card with `#1f2430` text and `#6d28d9` violet accents, readable on any client. The scaffold is a **fluid-hybrid table** (600px fixed for Outlook via MSO conditionals, fluid elsewhere) with a `@media (max-width: 600px)` font bump for phones. Do not re-add a dark variant, a `<div>` card, or `{% static %}` (the worker has no staticfiles manifest — a `{% static %}` there killed every worker-dispatched email). See the email gotcha in `CLAUDE.md`.
+
 ### SmsService (`comms/services/sms_service.py`)
 
 Twilio SMS sender (v1.8). The `twilio` client is imported lazily so the app runs fine without it.

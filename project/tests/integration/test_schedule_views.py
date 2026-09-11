@@ -86,11 +86,27 @@ class TestFunFridayView:
         assert "students" in response.context
         assert "this_friday" in response.context
 
-    def test_excludes_adult_students(self, authenticated_client, student, adult_student):
+    def test_excludes_adult_students(self, authenticated_client, student, adult_student, active_enrollment):
+        # `active_enrollment` gives `student` a current-year enrollment, which
+        # Fun Friday now requires (v1.28.2: it lists only children studying this
+        # academic year, not waiting-list entries or lapsed students).
         response = authenticated_client.get(reverse("fun_friday_view"))
         student_ids = {s.id for s in response.context["students"]}
         assert student.id in student_ids
         assert adult_student.id not in student_ids
+
+    def test_excludes_students_without_a_current_enrollment(self, authenticated_client, student):
+        # `student` has no enrollment this year, so it must NOT appear.
+        response = authenticated_client.get(reverse("fun_friday_view"))
+        assert student.id not in {s.id for s in response.context["students"]}
+
+    def test_excludes_waiting_list_entries(self, authenticated_client, student, active_enrollment):
+        # A waiting-list placeholder is not a real student and must be excluded
+        # even though it is active.
+        student.is_waiting = True
+        student.save(update_fields=["is_waiting"])
+        response = authenticated_client.get(reverse("fun_friday_view"))
+        assert student.id not in {s.id for s in response.context["students"]}
 
 
 # ============================================================================

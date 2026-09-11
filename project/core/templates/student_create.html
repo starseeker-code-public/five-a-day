@@ -196,18 +196,30 @@
                         <p class="text-xs text-neutral-500 mt-1">Por defecto, hoy (curso actual). Los pagos se generan desde esta fecha.</p>
                     </div>
 
-                    <!-- Manual price (only visible when special) -->
-                    <div id="manual-amount-container" class="hidden">
-                        <label for="id_manual_amount" class="block text-sm font-medium text-neutral-700 mb-2">Precio manual (€) <span style="color:#dc2626;">*</span></label>
-                        {{ enrollment_form.manual_amount }}
-                        <p class="text-xs text-neutral-500 mt-1">Cuota periódica (por mes, o por trimestre en plan trimestral).</p>
-                    </div>
-
-                    <!-- Hand-set matrícula: optional, independent of the recurring price -->
+                    <!-- Hand-set matrícula: the primary special customisation, shown
+                         first because a special enrollment usually means a negotiated
+                         matrícula while the cuota stays standard. Independent of the
+                         recurring price below. -->
                     <div id="special-enrollment-fee-container" class="hidden">
                         <label for="id_special_enrollment_fee" class="block text-sm font-medium text-neutral-700 mb-2">Matrícula especial (€)</label>
                         {{ enrollment_form.special_enrollment_fee }}
                         <p class="text-xs text-neutral-500 mt-1">Pago único de matrícula. Vacío = matrícula estándar.</p>
+                    </div>
+
+                    <!-- Opt-in to ALSO override the recurring cuota. Off by default:
+                         a special matrícula does not imply a special cuota. -->
+                    <div id="customize-recurring-container" class="hidden md:col-span-2">
+                        <label class="flex items-center gap-2 text-sm font-medium text-neutral-700 cursor-pointer">
+                            {{ enrollment_form.customize_recurring }}
+                            Personalizar también la cuota mensual/trimestral
+                        </label>
+                    </div>
+
+                    <!-- Manual recurring price (only when the box above is ticked) -->
+                    <div id="manual-amount-container" class="hidden">
+                        <label for="id_manual_amount" class="block text-sm font-medium text-neutral-700 mb-2">Cuota personalizada (€)</label>
+                        {{ enrollment_form.manual_amount }}
+                        <p class="text-xs text-neutral-500 mt-1">Cuota periódica (por mes, o por trimestre en plan trimestral).</p>
                     </div>
                 </div>
 

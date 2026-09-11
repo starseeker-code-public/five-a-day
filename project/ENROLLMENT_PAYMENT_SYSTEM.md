@@ -157,7 +157,7 @@ restate a negotiated figure per period.
 
 The four rows above are exactly the four `EnrollmentType` categories — `new_student`, `returning_student`, `adults`, `special`. An `EnrollmentType` is a **matrícula category, not a payment cadence**; the cadence lives on `Enrollment.payment_modality`.
 
-A special *matrícula* is independent of a special *cuota*: **Precio manual (€)** prices the recurring fee, **Matrícula especial (€)** prices the one-time enrollment. Setting the first does not imply the second — left blank, the standard matrícula applies (returning-student discount included). A hand-set matrícula is a negotiated figure, so no discount is taken off it, and it is not stored on `Enrollment` — the `payment_type="enrollment"` Payment row is the record.
+A special *matrícula* is independent of a special *cuota*, and since **v1.28.2** each is customised on its own: ticking **Precio especial** reveals **Matrícula especial (€)** (the one-time enrollment fee), while the recurring **Cuota personalizada (€)** appears only when **Personalizar también la cuota** (`customize_recurring`) is also ticked. So a special can be matrícula-only (custom enrollment fee, standard cuota), cuota-only, or both — it must customise at least one. When the cuota is left standard the enrollment is **not** hand-priced (`Enrollment.is_hand_priced` stays false, since `enrollment_type` resolves to `special` only when a manual cuota is set), so the recurring fee is billed at the configured rate. A hand-set matrícula is a negotiated figure, so no discount is taken off it, and it is not stored on `Enrollment` — the `payment_type="enrollment"` Payment row is the record.
 
 ### June Discount
 

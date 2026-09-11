@@ -51,6 +51,8 @@ document.addEventListener('DOMContentLoaded', function () {
 
     const planSelect = document.getElementById('id_enrollment_plan');
     const specialCheckbox = document.getElementById('id_is_special');
+    const customizeRecurringCheckbox = document.getElementById('id_customize_recurring');
+    const customizeRecurringContainer = document.getElementById('customize-recurring-container');
     const manualAmountContainer = document.getElementById('manual-amount-container');
     const manualAmountInput = document.getElementById('id_manual_amount');
     // Optional hand-set matrícula. Shown with the manual price, but independent of
@@ -115,19 +117,31 @@ document.addEventListener('DOMContentLoaded', function () {
     }
 
     function updateCalculatedPrice() {
+        const customizeRecurring = customizeRecurringCheckbox && customizeRecurringCheckbox.checked;
         if (specialCheckbox && specialCheckbox.checked) {
-            manualAmountContainer.classList.remove('hidden');
+            // A special enrollment always exposes the matrícula-especial field and
+            // the "personalizar cuota" opt-in; the manual cuota field appears only
+            // when that opt-in is ticked.
             if (specialFeeContainer) specialFeeContainer.classList.remove('hidden');
-            if (manualAmountInput && manualAmountInput.value) {
-                calculatedPrice.textContent = parseFloat(manualAmountInput.value).toFixed(2);
-            } else {
-                calculatedPrice.textContent = '--';
+            if (customizeRecurringContainer) customizeRecurringContainer.classList.remove('hidden');
+            if (customizeRecurring) {
+                manualAmountContainer.classList.remove('hidden');
+                if (manualAmountInput && manualAmountInput.value) {
+                    calculatedPrice.textContent = parseFloat(manualAmountInput.value).toFixed(2);
+                } else {
+                    calculatedPrice.textContent = '--';
+                }
+                priceBreakdown.textContent = 'cuota especial';
+                return;
             }
-            priceBreakdown.textContent = 'precio especial';
-            return;
+            // Special matrícula but standard cuota: fall through to the normal
+            // price calculation so the preview shows the real recurring price.
+            manualAmountContainer.classList.add('hidden');
+        } else {
+            manualAmountContainer.classList.add('hidden');
+            if (specialFeeContainer) specialFeeContainer.classList.add('hidden');
+            if (customizeRecurringContainer) customizeRecurringContainer.classList.add('hidden');
         }
-        manualAmountContainer.classList.add('hidden');
-        if (specialFeeContainer) specialFeeContainer.classList.add('hidden');
 
         let base = getBasePrice();
         const gross = getGrossPrice();
@@ -208,6 +222,7 @@ document.addEventListener('DOMContentLoaded', function () {
     }
     if (planSelect) planSelect.addEventListener('change', updateCalculatedPrice);
     if (specialCheckbox) specialCheckbox.addEventListener('change', updateCalculatedPrice);
+    if (customizeRecurringCheckbox) customizeRecurringCheckbox.addEventListener('change', updateCalculatedPrice);
     if (manualAmountInput) manualAmountInput.addEventListener('input', updateCalculatedPrice);
     if (lcCheckbox) lcCheckbox.addEventListener('change', updateCalculatedPrice);
     if (siblingCheckbox) siblingCheckbox.addEventListener('change', function() {

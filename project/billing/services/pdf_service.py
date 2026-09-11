@@ -293,10 +293,83 @@ def _build_pdf(flowables: Iterable) -> bytes:
 # ── Public entry points ─────────────────────────────────────────────────────
 
 
+def _receipt_breakdown_rows(payment) -> list[list[str]]:
+    """`precio base − descuentos = importe` rows for the receipt, or [] when
+    there is nothing to itemise (an ``other`` payment, or a hand-priced special
+    whose agreed figure has no standard base to compare against).
+
+    The discounts shown are exactly the ones the enrollment carries and that
+    `EnrollmentService._apply_discounts` billed — sibling and cheque idioma for a
+    periodic fee, the antiguo-alumno reduction for a matrícula. Any residual
+    between the standard discounted price and the amount actually billed is the
+    prorated first period, shown on its own line so the column always sums to the
+    real importe rather than silently hiding proration inside "descuentos".
+    """
+    from billing.models import SiteConfiguration
+    from billing.money import period_base_amount, round_money
+
+    enrollment = payment.enrollment
+    if enrollment is None or payment.payment_type not in ("monthly", "quarterly", "enrollment"):
+        return []
+
+    config = SiteConfiguration.get_config()
+    amount = Decimal(payment.amount)
+    rows: list[list[str]] = []
+
+    if payment.payment_type == "enrollment":
+        base = Decimal(config.adult_enrollment_fee if enrollment.student.is_adult else config.children_enrollment_fee)
+        rows.append(["Precio matrícula", f"{base:.2f} €"])
+        discount = base - amount
+        if discount > 0:
+            rows.append(["Descuento antiguo alumno", f"−{discount:.2f} €"])
+        elif discount < 0:
+            # A hand-set special matrícula can exceed the standard fee.
+            rows = [["Matrícula especial", f"{amount:.2f} €"]]
+            return rows
+        return rows
+
+    # Periodic (monthly / quarterly).
+    if enrollment.is_hand_priced:
+        # A negotiated price has no standard base to break down against.
+        return []
+
+    base = round_money(period_base_amount(config, enrollment.schedule_type, enrollment.payment_modality))
+    rows.append(["Precio base", f"{base:.2f} €"])
+
+    discounted = base
+    if enrollment.is_sibling_discount and not enrollment.student.is_adult:
+        sibling = round_money(base * (Decimal(config.sibling_discount) / Decimal("100")))
+        rows.append([f"Descuento hermano ({config.sibling_discount:.0f}%)", f"−{sibling:.2f} €"])
+        discounted -= sibling
+    if enrollment.has_language_cheque and not enrollment.student.is_adult:
+        cheque = Decimal(config.language_cheque_discount)
+        if enrollment.payment_modality == "quarterly":
+            cheque *= 3
+        rows.append(["Cheque idioma", f"−{cheque:.2f} €"])
+        discounted -= cheque
+
+    discounted = round_money(discounted)
+    residual = amount - discounted
+    if residual != 0:
+        # First period billed pro rata (or a manual correction): the line that
+        # makes the column add up to the importe actually charged.
+        label = "Prorrateo primer periodo" if residual < 0 else "Ajuste"
+        rows.append([label, f"{'−' if residual < 0 else '+'}{abs(residual):.2f} €"])
+
+    return rows
+
+
 def generate_payment_receipt(payment) -> bytes:
-    """Single-payment receipt (recibo). Suitable for email attachment or download."""
+    """Single-payment receipt (recibo). Suitable for email attachment or download.
+
+    Assigns the payment its stable ``YYYY-NNN`` receipt number the first time a
+    receipt is generated (see ``Payment.assign_receipt_number``); reused verbatim
+    on every later download so the family always sees the same number.
+    """
     academy = _get_academy_info()
     styles = _styles()
+
+    receipt_no = payment.assign_receipt_number()
 
     student = payment.student
     parent = payment.parent
@@ -305,7 +378,7 @@ def generate_payment_receipt(payment) -> bytes:
     due_at = payment.due_date.strftime("%d/%m/%Y") if payment.due_date else "—"
 
     body_rows = [
-        ["Recibo Nº", str(payment.id)],
+        ["Recibo Nº", receipt_no],
         ["Fecha emisión", date.today().strftime("%d/%m/%Y")],
         ["Fecha cobro", paid_at],
         ["Fecha vencimiento", due_at],
@@ -315,8 +388,13 @@ def generate_payment_receipt(payment) -> bytes:
         ["Concepto", concept],
         ["Método de pago", payment.get_payment_method_display()],
         ["Estado", payment.get_payment_status_display()],
-        ["Importe", f"{payment.amount:.2f} €"],
     ]
+
+    # Discount breakdown: precio base − descuentos = importe. Falls back to a
+    # single "Importe" line when there is nothing to itemise.
+    breakdown = _receipt_breakdown_rows(payment)
+    body_rows.extend(breakdown)
+    body_rows.append(["Importe", f"{payment.amount:.2f} €"])
 
     info_table = _grid_table(body_rows, [55, 105], header_row=False, label_column=True, font_size=10)
     total_table = _banner_table([["TOTAL", f"{payment.amount:.2f} €"]], [120, 40])
@@ -325,7 +403,7 @@ def generate_payment_receipt(payment) -> bytes:
         *_header_flowables(
             styles,
             academy,
-            f"RECIBO Nº {payment.id}",
+            f"RECIBO Nº {receipt_no}",
             f"Emitido a nombre de {_md(parent.full_name if parent else student.full_name)}",
         ),
         info_table,

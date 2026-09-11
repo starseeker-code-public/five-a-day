@@ -6,7 +6,7 @@ from typing import NamedTuple
 from django.core.exceptions import ValidationError
 from django.core.signals import request_finished, request_started
 from django.core.validators import MinValueValidator
-from django.db import models
+from django.db import models, transaction
 from django.db.models import Q
 from django.db.models.functions import ExtractMonth, ExtractYear
 
@@ -364,6 +364,23 @@ class SiteConfiguration(models.Model):
         verbose_name="Web",
     )
 
+    # --- Receipt numbering (v1.28.2) --------------------------------------
+    # Receipts are numbered YYYY-NNN, restarting at NNN=001 every January. The
+    # academy kept a paper sequence before the app, so the FIRST app-issued
+    # receipt of a given year must continue that sequence rather than start at 1:
+    # in 2026 the last paper receipt was 632, so app receipts issued in 2026 must
+    # begin at 633. From 2027 the offset no longer applies and January restarts
+    # at 001. These two fields express exactly that: for `receipt_offset_year`
+    # the counter starts after `receipt_offset`, every other year starts at 0.
+    receipt_offset_year = models.PositiveIntegerField(
+        default=2026,
+        verbose_name="Año con numeración heredada de recibos",
+    )
+    receipt_offset = models.PositiveIntegerField(
+        default=632,
+        verbose_name="Último recibo emitido en papel ese año",
+    )
+
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
@@ -550,10 +567,12 @@ class Enrollment(models.Model):
         enrollment showed 162.00 on the ficha while the generator billed 153.90.
         """
         if not self.final_amount:
-            # Imported inside the method: `pricing_service` itself is import-safe
-            # here, but keeping the import local matches how `SiteConfiguration`
-            # consumers in the service layer reach back into this module.
-            from billing.services.pricing_service import period_base_amount, round_money
+            # `billing.money` is a LEAF module (stdlib only) — importing the price
+            # math from there rather than from `billing.services.pricing_service`
+            # is what keeps `models` out of a `models → pricing_service → models`
+            # import cycle (pricing_service reaches back here for
+            # `SiteConfiguration.get_config()`). CodeQL flagged the old edge.
+            from billing.money import period_base_amount, round_money
 
             config = SiteConfiguration.get_config()
             base_amount = period_base_amount(config, self.schedule_type, self.payment_modality)
@@ -658,7 +677,19 @@ class Payment(models.Model):
     payment_date = models.DateField(null=True, blank=True)
 
     concept = models.CharField(max_length=200)
-    reference_number = models.CharField(max_length=50, blank=True)  # Bank reference, receipt number, etc.
+    reference_number = models.CharField(max_length=50, blank=True)  # Bank reference, external ref, etc.
+
+    # v1.28.2 — Stable YYYY-NNN receipt number, assigned the FIRST time a receipt
+    # is issued for this payment (see `assign_receipt_number`) and never changed
+    # afterwards. Blank until then. The partial unique constraint below allows
+    # many blanks but forbids two payments sharing a real number.
+    receipt_number = models.CharField(
+        max_length=20,
+        blank=True,
+        default="",
+        db_index=True,
+        verbose_name="Número de recibo",
+    )
 
     # v1.11 — Stripe reconciliation
     stripe_session_id = models.CharField(
@@ -751,6 +782,13 @@ class Payment(models.Model):
                     "Edita o cancela el pago existente en lugar de crear otro."
                 ),
             ),
+            # A real receipt number is unique; the many blank ones (payments with
+            # no receipt issued yet) are not, hence the partial condition.
+            models.UniqueConstraint(
+                fields=["receipt_number"],
+                condition=~Q(receipt_number=""),
+                name="unique_receipt_number",
+            ),
         ]
 
     def __str__(self):
@@ -790,6 +828,54 @@ class Payment(models.Model):
                 "Este pago está cancelado o reembolsado y no puede marcarse como completado. "
                 "Crea un pago nuevo si hay que volver a cobrarlo."
             )
+
+    def assign_receipt_number(self):
+        """Assign a stable ``YYYY-NNN`` receipt number, once, and return it.
+
+        Idempotent: a payment that already has a number keeps it — the number
+        must never change once a family has been handed a receipt bearing it.
+        The year is the calendar year the money belongs to (``payment_date``,
+        falling back to ``due_date`` then today), so a payment collected in
+        January is ``YYYY-001`` even if the row was created in December.
+
+        The sequence restarts at 001 every January, EXCEPT for
+        ``SiteConfiguration.receipt_offset_year`` (2026), whose first app receipt
+        continues the academy's paper sequence — it starts after
+        ``receipt_offset`` (632), i.e. at 633.
+
+        Assignment is serialised on the singleton ``SiteConfiguration`` row with
+        ``select_for_update``: receipt volume is tiny, and locking the one config
+        row means two concurrent issues (a download and the receipt-email task
+        firing together) cannot compute the same next number and collide on
+        ``unique_receipt_number``.
+        """
+        if self.receipt_number:
+            return self.receipt_number
+
+        ref_date = self.payment_date or self.due_date or date.today()
+        year = ref_date.year
+
+        with transaction.atomic():
+            config = SiteConfiguration.objects.select_for_update().get(pk=SiteConfiguration.get_config().pk)
+            base = config.receipt_offset if year == config.receipt_offset_year else 0
+
+            max_seq = base
+            existing = Payment.objects.filter(receipt_number__startswith=f"{year}-").values_list(
+                "receipt_number", flat=True
+            )
+            for number in existing:
+                try:
+                    max_seq = max(max_seq, int(number.rsplit("-", 1)[1]))
+                except (IndexError, ValueError):
+                    continue
+
+            self.receipt_number = f"{year}-{max_seq + 1:03d}"
+            # Targeted update, not save(): assignment can happen while rendering a
+            # receipt for a payment loaded read-only, and a full save() would
+            # re-run every field's validation and touch unrelated columns.
+            Payment.objects.filter(pk=self.pk).update(receipt_number=self.receipt_number)
+
+        return self.receipt_number
 
     def clean(self):
         """Validation logic"""

@@ -6,7 +6,7 @@ The `billing` app owns all financial logic: pricing configuration, enrollment pl
 
 | Model | Table | Key Fields |
 | ----- | ----- | ---------- |
-| **SiteConfiguration** | `site_configuration` | Singleton (pk=1). All pricing: enrollment fees, monthly fees, discount percentages/amounts. Plus the five `academy_*` fiscal fields (v1.27.1, migration `0013`): `academy_name`, `academy_cif`, `academy_address`, `academy_phone`, `academy_website` |
+| **SiteConfiguration** | `site_configuration` | Singleton (pk=1). All pricing: enrollment fees, monthly fees, discount percentages/amounts. The five `academy_*` fiscal fields (v1.27.1, migration `0013`). Plus `receipt_offset_year` / `receipt_offset` (v1.28.2, migration `0014`) — the legacy paper-receipt seed: for the offset year (2026) receipt numbering starts after `receipt_offset` (632), every other year at 0 |
 | **EnrollmentType** | `enrollment_types` | The matrícula category: name (new_student, returning_student, adults, special), display_name, and `base_amount_*` = the one-time matrícula fee. Payment cadence lives on `Enrollment.payment_modality`, not here. |
 | **Enrollment** | `enrollments` | FK to Student + EnrollmentType. schedule_type, payment_modality, discounts, amounts, status, academic_year. Indexed on `academic_year` for payment generation queries. |
 | **Payment** | `payments` | FK to Student + Parent + Enrollment. amount, type, method, status, due_date, payment_date, stripe_session_id / stripe_payment_intent (v1.11). **`parent` is nullable** — adult students have no guardian. There is no `active` field; soft-delete was never implemented, so never filter on `active=True`. Carries `unique_pending_periodic_payment_per_month` (v1.26.1) — a partial unique index on (student, payment_type, due year, due month) over `pending` periodic rows, plus a composite `(payment_status, due_date)` index for the app's dominant filter shape. |
@@ -39,6 +39,12 @@ or `makemigrations --check` fails CI). Two earlier ones are load-bearing: `0010`
 against a database that already holds duplicate pending periodic payments (see
 `unique_pending_periodic_payment_per_month`), and `0008` converts pre-v1.17.3 `EnrollmentType` rows
 while no-opping on an empty table so `seed_enrollment_types` stays the single provisioning path.
+
+- **Payment.receipt_number / assign_receipt_number()** (v1.28.2) — a stable `YYYY-NNN` receipt number, blank until the first receipt is issued for the payment, then frozen (a family must always see the same number). The counter restarts at 001 each January by the payment's own year (`payment_date` → `due_date` → today); `SiteConfiguration.receipt_offset_year` (2026) instead continues the academy's paper sequence after `receipt_offset` (632), so the first 2026 app receipt is `2026-633`. Assignment is serialised on the singleton `SiteConfiguration` row with `select_for_update`, backed by a partial `unique_receipt_number` constraint. `pdf_service.generate_payment_receipt` calls it; never number a receipt by `payment.id`.
+
+## Money math (`billing/money.py`)
+
+A **leaf** module (stdlib only): `round_money` (the one HALF_UP-with-€0.01-floor rounding), `quarterly_price_from_monthly`, `period_base_amount`, `monthly_fee_for`. It exists so `billing.models` (`Enrollment.save()`'s price fallback) and `billing.services.pricing_service` can share the math without a `models → pricing_service → models` import cycle (pricing_service reaches back into models for `SiteConfiguration.get_config()`). `pricing_service` re-exports every name for backwards compatibility. Do not make `money.py` import models.
 
 ## Service Layer
 
@@ -138,7 +144,7 @@ saved value (the archived row is the source of truth for every calculation from 
 
 ### PdfService (`billing/services/pdf_service.py`)
 
-- `generate_payment_receipt(payment)` — single-payment receipt PDF (v1.3, reportlab)
+- `generate_payment_receipt(payment)` — single-payment receipt PDF (v1.3, reportlab). v1.28.2: assigns the payment its `YYYY-NNN` receipt number on first issue and prints it, and shows a **discount breakdown** (`_receipt_breakdown_rows` — precio base − descuentos = importe, itemising sibling / cheque-idioma / antiguo-alumno, with a prorated-first-period line so the column sums to the amount charged)
 - `generate_quarterly_summary(...)` — quarterly statement
 - `generate_tax_certificate(...)` — annual certificate for a parent's tax return. **Grouped by `student_id`, not by name** (v1.27.1): two siblings called the same thing — the academy has had them, and a re-registered student can share a name with a cousin — were merged into ONE block with ONE subtotal, on a document the family files with the tax authority. The name rides along in the entry for the heading; the key is what identifies a person
 - `generate_student_payment_history(student, payments, title_suffix="")` (v1.15) — a student's full payment history: concept, type, due date, **payment date**, **method** and status per row, with collected and outstanding totalled separately. Served by `student_payments_pdf`

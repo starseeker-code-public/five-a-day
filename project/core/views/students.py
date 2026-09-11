@@ -6,7 +6,7 @@ from django.contrib import messages
 from django.db import transaction
 from django.db.models import Prefetch, Q
 from django.http import HttpResponseRedirect, JsonResponse
-from django.shortcuts import get_object_or_404
+from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse, reverse_lazy
 from django.utils.decorators import method_decorator
 from django.views.decorators.http import require_http_methods
@@ -14,6 +14,7 @@ from django.views.generic import CreateView, DetailView, ListView, UpdateView
 
 from billing.forms import EnrollmentForm
 from billing.models import Enrollment, Payment, SiteConfiguration, relevant_academic_years
+from core.date_utils import first_day_of_next_month
 from core.decorators import admin_required
 from core.models import FunFridayAttendance, HistoryLog
 from students.forms import StudentForm
@@ -97,11 +98,10 @@ def _create_enrollment_fee_payment(student, parent, enrollment, enrollment_form)
     return enrollment_fee
 
 
-def _first_day_of_next_month(today=None):
-    today = today or date.today()
-    if today.month == 12:
-        return date(today.year + 1, 1, 1)
-    return date(today.year, today.month + 1, 1)
+# Re-exported from the leaf `core.date_utils` so `core.views.waiting_list` can
+# use it WITHOUT importing this module (which imports waiting_list — the cycle
+# CodeQL flagged). Kept under the old private name for this module's callers.
+_first_day_of_next_month = first_day_of_next_month
 
 
 #: Spanish notice the create page shows when a picker list was capped. The
@@ -981,3 +981,113 @@ def enroll_student(request, student_id):
             "effective_start": effective_start.isoformat(),
         }
     )
+
+
+def _reenroll_candidates():
+    """Students eligible for the 'Antiguo estudiante' bulk flow.
+
+    A candidate is any non-waiting student who is NOT already enrolled this
+    academic year — the pool of prior students (usually inactive, but also an
+    active student whose enrollment lapsed) who could be re-enrolled. Waiting-list
+    placeholders are excluded: they are not real students and have their own page.
+    """
+    academic_years = relevant_academic_years()
+    enrolled_ids = Enrollment.objects.filter(status="active", academic_year__in=academic_years).values_list(
+        "student_id", flat=True
+    )
+    return (
+        Student.objects.filter(is_waiting=False)
+        .exclude(id__in=enrolled_ids)
+        .select_related("group")
+        .prefetch_related("enrollments")
+        .order_by("first_name", "last_name")
+    )
+
+
+@require_http_methods(["GET", "POST"])
+@admin_required
+def reenroll_old_students(request):
+    """Re-enroll one or more prior ("antiguo") students in one action.
+
+    The 4th "Nuevo Estudiante" option. Pick existing students from the list,
+    choose the plan / start date / whether to charge the matrícula ONCE, and a
+    new enrollment is created for each — every one treated as a returning student
+    (the antiguo-alumno matrícula). Inactive students are reactivated. Each
+    student is committed in its own transaction so one failure does not lose the
+    rest; the response reports how many succeeded and names any that did not.
+    """
+    from billing.services.payment_service import PaymentService
+
+    if request.method == "GET":
+        return render(
+            request,
+            "reenroll_old.html",
+            {
+                "candidates": _reenroll_candidates(),
+                "today": date.today().isoformat(),
+            },
+        )
+
+    ids = request.POST.getlist("student_ids")
+    if not ids:
+        messages.error(request, "Selecciona al menos un alumno para matricular.")
+        return redirect("reenroll_old_students")
+
+    # The plan / start date / matrícula choice is shared by every selected
+    # student, so validate it ONCE with a throwaway form (a child form: adults
+    # ignore the plan anyway). is_returning_student is forced on — the whole
+    # point of this flow is the antiguo-alumno matrícula.
+    shared = EnrollmentForm(
+        {
+            "enrollment_plan": request.POST.get("enrollment_plan", "monthly_full"),
+            "start_date": request.POST.get("start_date") or "",
+            "is_returning_student": "on",
+        }
+    )
+    if not shared.is_valid():
+        error_text = " ".join(msg for errors in shared.errors.values() for msg in errors)
+        messages.error(request, error_text or "Datos de matrícula no válidos.")
+        return redirect("reenroll_old_students")
+
+    charge_fee = request.POST.get("charge_enrollment_fee") in ("on", "true", "1")
+
+    # Re-resolve candidates so a stale checkbox can't enrol a student who was
+    # already enrolled in another tab since the page loaded.
+    selectable = {s.id: s for s in _reenroll_candidates()}
+
+    created, skipped, failed = 0, 0, []
+    for raw_id in ids:
+        try:
+            student = selectable.get(int(raw_id))
+        except (TypeError, ValueError):
+            continue
+        if student is None:
+            skipped += 1
+            continue
+        try:
+            with transaction.atomic():
+                if not student.active:
+                    student.active = True
+                    student.save(update_fields=["active", "updated_at"])
+                parent = None if student.is_adult else student.parents.order_by("id").first()
+                enrollment = shared.create_enrollment(student, is_adult=student.is_adult)
+                if charge_fee:
+                    _create_enrollment_fee_payment(student, parent, enrollment, shared)
+                PaymentService.schedule_academic_year_payments(enrollment, parent)
+                HistoryLog.log(
+                    "student_enrolled",
+                    f"Rematrícula (antiguo alumno): {student.full_name} — {enrollment.academic_year}",
+                    icon="school",
+                )
+            created += 1
+        except Exception:
+            logger.exception("Bulk re-enrollment failed for student %d", int(raw_id))
+            failed.append(student.full_name)
+
+    if created:
+        messages.success(request, f"✅ {created} alumno(s) rematriculado(s) correctamente.")
+    if skipped:
+        messages.info(request, f"{skipped} ya estaban matriculados este curso y se omitieron.")
+    if failed:
+        messages.error(request, "No se pudo matricular a: " + ", ".join(failed))
+    return redirect("students_list")

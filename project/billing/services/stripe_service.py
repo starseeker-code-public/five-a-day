@@ -198,10 +198,19 @@ class StripeService:
             # for money never received. Wait for the async
             # checkout.session.async_payment_succeeded, which carries "paid".
             if session.get("payment_status") not in (None, "paid", "no_payment_required"):
+                # Never log the webhook's payment_status raw — it is attacker-
+                # influenced free text and slicing is taint-preserving (CodeQL
+                # log-injection). Resolve it to one of OUR OWN literals so the
+                # value written is never the tainted object.
+                raw_status = session.get("payment_status")
+                status_label = next(
+                    (known for known in ("unpaid", "processing", "requires_action") if known == raw_status),
+                    "otro",
+                )
                 logger.info(
                     "Stripe: session for payment %s completed but not yet paid (%s); waiting for settlement",
                     payment.id,
-                    str(session.get("payment_status"))[:40],
+                    status_label,
                 )
                 return {"status": "awaiting_payment", "payment_id": payment.id}
 
@@ -211,9 +220,13 @@ class StripeService:
             # The parent paid a link minted before the cancellation; that needs a
             # human (refund or re-attach), not a silent resurrection.
             if payment.payment_status in ("cancelled", "refunded"):
+                # Log a literal, not the field: at this point it is provably one
+                # of the two below, but CodeQL traces payment_status back to the
+                # webhook and flags the interpolation as log-injection.
+                dead_label = "refunded" if payment.payment_status == "refunded" else "cancelled"
                 logger.warning(
                     "Stripe: session paid for %s payment %s — NOT resurrecting it; review manually",
-                    payment.payment_status,
+                    dead_label,
                     payment.id,
                 )
                 return {"status": "ignored_dead_payment", "payment_id": payment.id}

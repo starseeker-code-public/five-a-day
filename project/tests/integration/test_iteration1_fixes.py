@@ -86,9 +86,6 @@ class TestModalityChangeCancelsOldSchedule:
         self, authenticated_client, student_with_parent, active_enrollment, site_config
     ):
         # active_enrollment is monthly; give it a future pending monthly row.
-        future = date.today().replace(day=28)
-        if future <= date.today():
-            future = future.replace(day=1)
         superseded = Payment.objects.create(
             student=student_with_parent,
             parent=student_with_parent.parents.first(),
