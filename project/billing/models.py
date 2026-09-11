@@ -550,15 +550,36 @@ class Enrollment(models.Model):
         enrollment showed 162.00 on the ficha while the generator billed 153.90.
         """
         if not self.final_amount:
-            # Imported inside the method: `pricing_service` itself is import-safe
-            # here, but keeping the import local matches how `SiteConfiguration`
-            # consumers in the service layer reach back into this module.
-            from billing.services.pricing_service import period_base_amount, round_money
-
             config = SiteConfiguration.get_config()
-            base_amount = period_base_amount(config, self.schedule_type, self.payment_modality)
+
+            if self.schedule_type == constants.ScheduleType.MONTHLY:
+                schedule_base_amount = config.monthly_fee
+            elif self.schedule_type == constants.ScheduleType.WEEKLY:
+                schedule_base_amount = config.weekly_fee
+            elif self.schedule_type == constants.ScheduleType.BIWEEKLY:
+                schedule_base_amount = config.biweekly_fee
+            elif self.schedule_type == constants.ScheduleType.QUARTERLY:
+                quarter_factor = Decimal("3") * (
+                    Decimal("1") - (config.quarterly_discount_percentage / Decimal("100"))
+                )
+                schedule_base_amount = config.monthly_fee * quarter_factor
+            else:
+                raise ValidationError("Invalid schedule type.")
+
+            if self.payment_modality == constants.PaymentModality.FULL:
+                base_amount = schedule_base_amount
+            elif self.payment_modality == constants.PaymentModality.SIBLING:
+                base_amount = schedule_base_amount * (
+                    Decimal("1") - (config.sibling_discount_percentage / Decimal("100"))
+                )
+            else:
+                raise ValidationError("Invalid payment modality.")
+
             discount_amount = base_amount * (self.discount_percentage / Decimal("100"))
-            self.final_amount = round_money(base_amount - discount_amount)
+            amount = (base_amount - discount_amount).quantize(
+                Decimal("0.01"), rounding="ROUND_HALF_UP"
+            )
+            self.final_amount = max(amount, Decimal("0.01"))
 
         # Deliberately OUTSIDE the block above. It used to be nested inside it,
         # so passing final_amount but not enrollment_amount skipped the
