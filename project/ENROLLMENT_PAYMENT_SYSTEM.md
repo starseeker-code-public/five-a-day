@@ -18,10 +18,31 @@ The enrollment form carries a **Fecha de inicio** (`EnrollmentForm.start_date`, 
 the day the student actually STARTS, which need not be the day the ficha is created, and it becomes
 `Enrollment.enrollment_date` — the single date everything downstream reads:
 
-- the **academic year** is `current_academic_year(start_date)`, not of today;
+- the **academic year** is `enrollment_academic_year(start_date)`, not of today (see below);
 - the **matrícula** Payment falls due on the last day of the month the enrollment *starts*;
 - **billing begins** at that month (`PaymentService.billing_periods`), and the first period is
   prorated from that day (`proration_fraction`).
+
+#### Which academic year a start date joins (v1.28.1)
+
+`enrollment_academic_year(start_date)` — **not** `current_academic_year`, and not
+`academic_year_for_month` — is the single answer. The rule is: a start inside the teaching
+calendar (**Sep-Jun**) joins the course that is **running**; a summer start (**Jul/Aug**) joins the
+course that begins that September.
+
+Neither older helper answers this, and both failures were silent:
+
+- `current_academic_year` rolls over in **May**, when enrolment for the next course opens. A
+  student starting 15 May — mid-course, attending *now* — was stamped with the **next** year. Their
+  May and June are not in that year's `teaching_months()`, so those months were **structurally
+  unbillable**, and the enrollment was invisible to every May-August cron run (which filter on
+  `academic_year_for_month`). Two taught months, billed to nobody.
+- `academic_year_for_month` maps July/August **back** to the finished course, so a summer signup
+  landed in a year with no teaching months left and `billing_periods()` returned `[]` — zero
+  payments, no error.
+
+`student-create.js` mirrors this rule client-side, so a change here has to be made in both places
+or the create-student preview and the invoice disagree.
 
 So a family signing up on 3 September for a 1 November start is billed from November, with a full
 November — not a prorated September. The same helper (`_create_enrollment_fee_payment`) issues the

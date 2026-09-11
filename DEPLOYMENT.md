@@ -461,6 +461,7 @@ gcloud run deploy fiveaday \
   --set-env-vars="DJANGO_ALLOWED_HOSTS=fiveaday-332600671945.europe-southwest1.run.app" \
   --set-env-vars="DATABASE_URL=postgres://fiveaday_user:PASSWORD@/fiveaday_db?host=/cloudsql/$PROJECT_ID:$REGION:fiveaday-db" \
   --set-env-vars="CELERY_TASK_ALWAYS_EAGER=True" \
+  --set-env-vars="RUN_MIGRATIONS_ON_START=false" \
   --set-env-vars="GOOGLE_REDIRECT_URI=https://fiveaday-332600671945.europe-southwest1.run.app/auth/google/callback/" \
   --set-env-vars="TEACHER_SEED_1_ADMIN=True" \
   --set-secrets="DJANGO_SECRET_KEY=DJANGO_SECRET_KEY:latest" \
@@ -473,6 +474,17 @@ gcloud run deploy fiveaday \
   --set-secrets="TEACHER_SEED_1_EMAIL=TEACHER_SEED_1_EMAIL:latest" \
   --set-secrets="TEACHER_SEED_1_PASSWORD=TEACHER_SEED_1_PASSWORD:latest"
 ```
+
+> **`RUN_MIGRATIONS_ON_START=false` is mandatory on production, not a preference.** `entrypoint.sh`
+> defaults it to **true**, so without it the container runs `migrate` on every cold start — which
+> bypasses the pre-deploy backup, the destructive-migration acknowledgement and the
+> migrate-before-rollout ordering that `deploy-production.yml` exists to enforce. That workflow
+> asserts the value in a **pre-mutation** gate and refuses to deploy when it is anything else, so
+> omitting it here does not yield a subtly wrong production — it yields a production that cannot be
+> deployed to until it is fixed. Repair it with a **merge**, never a replace:
+> `PYTHONUTF8=1 gcloud run services update $SERVICE --region=$REGION --project=$PROJECT_ID --update-env-vars=RUN_MIGRATIONS_ON_START=false`
+> (`--set-env-vars` would drop the other ~30 vars and 6 Secret Manager refs). Development and the
+> testing VM leave it unset on purpose — there the self-migrate on boot is what you want.
 
 **Optional env vars / secrets** — omit any feature you are not using; each one is dormant and
 harmless when unset. Add them to the same `gcloud run deploy` invocation:
@@ -510,7 +522,19 @@ harmless when unset. Add them to the same `gcloud run deploy` invocation:
   # client IP this many hops from the RIGHT of X-Forwarded-For, because a proxy APPENDS
   # what it saw — anything further left is client-supplied and therefore spoofable.
   --set-env-vars="TRUSTED_PROXY_COUNT=1" \
-  --set-env-vars="LOG_LEVEL=INFO"
+  --set-env-vars="LOG_LEVEL=INFO" \
+  # Error alerting (v1.27.1) — feeds Django's ADMINS and a throttled AdminEmailHandler.
+  # Comma-separated "Name <addr>" or bare addresses. Its mail body is scrubbed by
+  # RedactingExceptionReporterFilter, which is NOT gated on IS_TESTING_ENV.
+  --set-secrets="DJANGO_ADMINS=DJANGO_ADMINS:latest" \
+  --set-env-vars="SERVER_EMAIL=<from-address-on-those-alerts>" \
+  # Expense receipts folder (v1.28.1). The "Consultar recibos" buttons are HIDDEN when
+  # unset, rather than linking Drive's generic home page.
+  --set-env-vars="GOOGLE_DRIVE_RECEIPTS_URL=<drive-folder-url>" \
+  # SMTP socket timeout (v1.28.1). Leave at the 20 s default unless you have a reason:
+  # smtplib's OS default is minutes and the mass-mail views send inside the request, so
+  # one blackholed port 587 parks a Gunicorn worker until it is killed.
+  --set-env-vars="EMAIL_TIMEOUT=20"
 ```
 
 Additional teachers are numbered blocks — `TEACHER_SEED_2_*`, `TEACHER_SEED_3_*`, and so on.

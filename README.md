@@ -15,7 +15,7 @@ Built to centralize student records, automate billing cycles, and streamline par
 ### Project Status
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v1.27.1-brightgreen?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-v1.28.1-brightgreen?style=flat-square" alt="Version">
   &nbsp;|&nbsp;
   <a href="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml?query=branch%3Amain"><img src="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml/badge.svg?branch=main&style=flat-square" alt="CI main"></a>
   &nbsp;|&nbsp;
@@ -36,9 +36,9 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 | Version | Date | Description |
 |---------|------|-------------|
-| **v1.27.1** | 2026-09-03 | Review fix pass: billing transitions, auth hardening, mass mail |
+| **v1.28.1** | 2026-09-03 | First complete version: review ledger closed across billing, timezone, auth, mass mail and CI |
+| v1.27.1 | 2026-09-03 | Review fix pass: billing transitions, auth hardening, mass mail |
 | v1.27.0 | 2026-09-03 | Parent portal: email + password login, themed UI |
-| v1.26.8 | 2026-09-03 | Teacher/parent login flows, new-enrollment modal, dark emails |
 
 ---
 
@@ -140,8 +140,322 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 ## Version History
 
-<details id="v1271" open>
-<summary><strong>v1.27.1 — A full review pass: money that cannot be billed twice, sessions that end when they should, and mass mail that survives the roll (current)</strong></summary>
+<details id="v1281" open>
+<summary><strong>v1.28.1 — First complete version: the review ledger closed (current)</strong></summary>
+
+The release that declares the app feature-complete. It folds the two sweeps over the same
+numbered review ledger into one version — the iteration-1/2/4 pass and the closing pass that took
+it to ~98 items. Nothing here is a new feature; it is the accumulated set of things the app got
+wrong, ranked by what they cost the academy.
+
+**Time: the container ran on UTC**
+
+- `python:slim` is UTC and nothing set otherwise, so every naive `date.today()` / `datetime.now()`
+  — roughly **65 call sites** — returned the UTC calendar date, a day behind Madrid for the 1–2 h
+  after local midnight. A cash payment recorded at 00:40 on the 1st therefore booked into the
+  **previous** month, and every income figure filters on `payment_date`, so the money landed in a
+  month already reported. The image now sets `TZ=Europe/Madrid` and installs `tzdata` (without
+  which the variable resolves to no real zoneinfo and DST is lost); all three Compose files pass
+  it too. `USE_TZ=True` still stores aware UTC in the database — this only aligns the naive local
+  clock the app reads.
+- The same bug in the browser: `new Date().toISOString()` is the **UTC** date, so between local
+  midnight and 01:00/02:00 it returns yesterday. `localDateISO()` now lives in `base.js`;
+  `home.js` was stamping "Hoy" todos with yesterday's date, and a just-after-midnight cash payment
+  was dated into the closed month.
+
+**Billing: charged twice, charged the wrong amount, or never charged at all**
+
+- **A student with no `Parent` row accrued zero mensualidades for the whole year.** The generator
+  skipped them while the ficha showed the family as up to date. `Payment.parent` is nullable and
+  `Payment.clean()` only validates the relationship when a parent is present — which is exactly
+  what adult students rely on — and a child can legitimately lack one (a waiting-list entry
+  promoted from the ficha keeps its contact on `waiting_contact_*`). They are billed now.
+- **A May–August enrollment was structurally unbillable.** `current_academic_year` rolls over in
+  May, when enrolment for the next course opens, so a 15 May starter was stamped with the **next**
+  course — whose teaching months begin in September. The May and June they actually attended could
+  never be billed, and the enrollment was invisible to every May–August cron run.
+  `enrollment_academic_year` now joins the **running** course for a Sep–Jun start, and
+  `student-create.js` mirrors the rule so the preview agrees with the invoice.
+- **A fully discounted matrícula wrote a €0.00 pending payment.** The fee minus the
+  returning-student discount can reach zero, and `objects.create()` never validates — so the row
+  bypassed `Payment.amount`'s `MinValueValidator`, sat on the ficha as an uncollectable debt and
+  was chased by the reminder cron forever. Nothing to collect now creates nothing.
+- **A quarterly enrollment created outside the form priced 162.00 while the generator billed
+  153.90** — `Enrollment.save()`'s `final_amount` fallback summed three months and omitted the
+  quarterly discount that `EnrollmentService._resolve_plan` applies.
+- **A cancelled or refunded payment could be resurrected.** `quick_complete_payment` refused
+  `cancelled` but not `refunded`, and saved with a plain `.save()`, which never runs `clean()`.
+  The rule moved onto the model as `Payment.assert_completable()` / `Payment.DEAD_STATUSES`, so
+  every write path that validates is covered. The admin's bulk complete action used
+  `exclude("completed")`, which also caught `cancelled` / `failed` / `refunded` — it resurrected
+  them, dated them today (re-booking the money as this month's income) and emailed a receipt for a
+  refund. `_bulk_set_status` gained the mirror-image guard, refusing to move a **completed**
+  payment into failed/cancelled and silently drop collected income out of a closed month. This
+  matters because cancelling **frees the month** under the pending-only
+  `unique_pending_periodic_payment_per_month` index, so the schedule may already have re-billed it.
+- **`reconcile_payment_schedule` aborted mid-run with a raw traceback.** That index is scoped to
+  the **student** while the command's already-billed set is scoped to one **enrollment**, so a
+  pending row left on a superseded enrollment occupied the month and collided. That is "already
+  billed", not a fault: it now skips and keeps repairing, exactly as
+  `schedule_academic_year_payments` does — previously one collision stopped the run *after* earlier
+  enrollments had committed.
+- Changing a payment cadence re-billed months already collected, and a mid-month re-enrollment
+  either double-billed the transition month or left it unbilled. Both now go through one canonical
+  `EnrollmentService.supersede_enrollment`; the v1.27.1 block below carries the full derivation.
+- The **enrollment start date** is bounded to `relevant_academic_years()` — one course most of the
+  year, two in the May–August overlap. Unbounded, a mistyped year filed the enrollment under an old
+  `academic_year`, which dropped the student out of every list view **and** back-filled a year of
+  already-overdue payments that the reminder cron then chased.
+- A price edit re-derives the `EnrollmentType.base_amount_*` mirror, five inert discount fields are
+  no longer persisted, and `SiteConfiguration` gained the five `academy_*` fiscal fields —
+  `pdf_service` had always read them via `getattr` and they had never existed, so **the CIF was
+  blank on every tax certificate the academy ever issued**, on a document that asserts IRPF
+  deductibility.
+
+**A recurrence typo took down the whole expenses page**
+
+- `Expense.weekday_set()` `int()`s the `recurring_weekdays` CSV and raises `ValueError` on junk
+  ("L,M,V", "lunes"). `ModelForm._post_clean` only catches `ValidationError`, and the admin had no
+  validated form of its own — so saving that value produced a field-less **500 on `/expenses/` for
+  every user** and aborted the daily materialiser for every weekly and yearly template. The admin
+  now runs the model's own `full_clean()`, and the template property is defensive about a
+  malformed row written before the fix.
+
+**Authentication and authorization**
+
+- **An offboarded teacher's open tab kept full access for up to six hours.** The middleware checked
+  only `session["is_authenticated"]`, and the non-admin predicate answered "not a non-admin" for a
+  session whose Teacher row was gone — handing it the *unrestricted* set, so revocation escalated
+  the session. Sessions whose backing account no longer resolves are now rejected outright and the
+  predicate fails closed.
+- **The template gate and the middleware gate were computed independently, and disagreed.**
+  `context_processors` now derives the teacher-role flags from the *same* predicate the middleware
+  enforces with. For an authenticated user with no Teacher row the UI trimmed itself while the
+  middleware treated the session as admin, or the reverse.
+- **Deactivating a Teacher did not stop them logging in.** `Teacher.active` is mirrored onto the
+  linked `auth.User`, and both role predicates check it **before** the superuser/staff hatch —
+  those flags are mirrored from `Teacher.admin`, so a deactivated admin still carried them.
+- The non-admin whitelist was tightened to match what the sidebar already hid. Waiting-list
+  promotion and `add_to_waiting_list` are admin-only: promotion is enrolling by another name, and
+  adding **cancels the student's active enrollment** — a one-way financial write that stops billing
+  a family, whose only undo path is admin-only re-enrolment. `update_expense` and `delete_expense`
+  had crept in, handing the least-privileged role a destructive financial write on a page the
+  sidebar hides from them; expenses are read + create only, exactly as the comment had always
+  claimed. `/reports/` left too — income, receivables and collection rate are the precise figures
+  the trimmed non-admin dashboard exists to withhold.
+- `@admin_required` now states the role requirement at **48 views**, instead of leaving the
+  URL-name allowlist as the sole control on every financial write endpoint — a deny-by-omission
+  list in a file nobody edits when adding a URL.
+- Turning 2FA off wipes the secret **and** the backup codes, and a failed login spends the same
+  hashing work a successful one does (`_no_credential_dummy_hash()`), so "no such account" is not
+  measurably faster than "wrong password".
+- `Parent.email` is resolved with `iexact` plus explicit ambiguity handling: Postgres compares
+  case-sensitively, so a bare `.get()` both missed a differently-cased address and raised an opaque
+  `MultipleObjectsReturned` on a mailbox two parents legitimately share.
+
+**The parent portal**
+
+- **Changing the portal password now logs out every other device.**
+  `Parent.portal_credential_changed_at` (migration `students/0016`) is stamped on every credential
+  change, and each portal session records the value it was opened with — a session carrying an
+  older stamp is rejected. It is the portal's equivalent of Django's session-auth-hash. The session
+  that performed the change is re-stamped so it survives its own change. Without it a reset ended
+  only the browser that performed it, and every other logged-in session survived on its rolling
+  six-hour expiry.
+- A temporary password is a plaintext credential sitting in an inbox, so logging in with one forces
+  an immediate change — and the forced flow now refuses to keep that same value as the permanent
+  password. The voluntary flow's `password == current` guard cannot catch it, because the forced
+  flow deliberately never asks for the current one.
+- The login view resolves the **Parent row**, not just the session key. A session lingering after
+  the row was deleted (an admin delete, or a QA `seed_database --reset`) sent the visitor to the
+  dashboard, which bounced them to login, which bounced them back — an infinite redirect. A stale
+  session is cleared and the form renders normally.
+- The recovery endpoint could be replayed to **deny a family their own recovery**: every hit
+  rotated the temporary password, so the credential in their inbox was dead before they could type
+  it. It is now 3 requests / 15 min, coalesced by a per-family cooldown, with the send moved after
+  the response is written so latency is not an enumeration oracle, and an unknown address pays the
+  same `make_password()` cost as a known one. The address is deliberately not logged — the log is a
+  place the "is this email registered" story leaks from.
+- Blanket `/parent/` is out of `PUBLIC_PREFIXES`, so a new portal URL is protected by default;
+  Stripe checkout goes through the shared portal gate and honours both the credential stamp and the
+  must-change-password pin; both logout views require POST.
+
+**Error mail and logging**
+
+- **A 500 in a password change emailed the new plaintext password to `SUPPORT_EMAIL`.** `password`
+  was redacted but `password_confirm` and the portal change form's own field names were not, and
+  they carry the same value. The list was audited endpoint by endpoint and a
+  `RedactingExceptionReporterFilter` added, because Django only cleanses bodies for views using
+  `@sensitive_post_parameters` — which none of this app's hand-rolled auth views do.
+- **JSON bodies were not redacted at all.** `_redact_body` handled urlencoded and multipart and
+  then bailed out on `"=" not in raw`, so every `/api/` POST — including both password-change
+  endpoints — reached the inbox verbatim. `_redact_json` blanks sensitive values in a possibly
+  truncated preview.
+- `ADMINS` plus a throttled `AdminEmailHandler` gives production its first error alerting.
+
+**Mass mail and email delivery**
+
+- **The app reported success during a mail outage.** `send()` returns the number of messages the
+  backend *accepted*; with `fail_silently=True` a total SMTP failure returns 0 without raising, and
+  that value was discarded in favour of `return True`. Every counter said "0 fallidos",
+  `HistoryLog` recorded tickets for mail nobody received, and the portal told families to check a
+  mailbox nothing had arrived at.
+- **Waiting-list families received every mass mail** — the recipient queries filtered on active
+  children without excluding waiting entries. Addresses are now de-duplicated case-insensitively
+  (`Parent.email` is legitimately not unique), parents with no email no longer inflate the counts,
+  and the counted set and the sent set are the same set.
+- Each batch shares **one SMTP session** instead of reconnecting per message; `EMAIL_TIMEOUT` is
+  20 s, because a hung socket inherited smtplib's multi-minute OS default and the mass-mail views
+  send synchronously inside the request, so one blackholed port 587 could park a Gunicorn worker
+  until it was killed. A connection failure now reports a tally instead of a 500, and ~400 lines of
+  near-duplicate preview/send/tally blocks in `app_forms.py` collapsed into two helpers.
+- **`send_fun_friday_emails_task` was removed.** It had no code callers, but was advertised as the
+  manual-send path while bypassing the `WHERE sent_at IS NULL` claim guard — so anyone following
+  the README could double-mail every family. Every send now goes through a persisted
+  `FunFridayScheduledSend` row, drained immediately when its slot has already passed.
+- The `send_email` command's argparse defaults were literals, and argparse always populates
+  options — so the `.get(..., "")` fallbacks in the send code never fired and the command shipped a
+  **placeholder IBAN nobody could pay into** and a cheque-idioma price of 40 € where the app
+  derives 34 €. The defaults are `None` now, so `SiteConfiguration` and the environment are the
+  sources, and the Bizum number is read from `ACADEMY_PHONE` (there is no `ACADEMY_BIZUM_PHONE` on
+  the service).
+- The Fun Friday card scans a rolling **35-day window** rather than "the rest of this month": the
+  old scan died at the month boundary — from the last Friday of September to the 30th it showed
+  zero upcoming sends while three were pending — and the monthly cadence could only ever match on
+  the 1st itself.
+
+**Frontend: saves that reported success without saving**
+
+- **A mistyped price showed a green "guardado" while the old price stayed live.** The validation
+  loop in `management.js` used `return`, which skips one input rather than aborting — so the bad
+  field was dropped from the payload, the request fired anyway, and `update_site_config` saved the
+  rest. It aborts the whole save now.
+- **A failed schedule save was invisible.** The dropped promise left the grid showing the new group
+  after a 302 to `/login/` or a 403 on a stale CSRF token, so the timetable emailed to parents
+  reflected an assignment the server never stored.
+- The Fun Friday toggle used read-then-create, so two overlapping POSTs — a double-click, on an
+  endpoint non-admin teachers reach — both saw "no row" and the second hit the `(student, date)`
+  unique constraint. That 500's HTML error page landed in a `fetch()` expecting JSON, so the toggle
+  silently reverted on screen with no error shown. It is `get_or_create` now.
+- Cancelling a payment is a **two-click** arm-then-commit rather than a native `confirm()`:
+  sandboxed webviews silently return false and make the dialog a no-op, and completing a cancelled
+  row is now refused, so the only undo is `/admin/` — unreachable for the non-admin teachers who
+  use that page.
+- The CSRF reader was duplicated 6+ times and `testing_tools.html` had it **inverted**
+  (cookie-first), which silently 403s every POST wherever `DEBUG=False` — exactly where `/testing/`
+  lives. A second, weaker `escapeHtml` that did not escape quotes was in use in an attribute
+  position.
+- The Tailwind palette had been copied inline into three shells and had already drifted
+  (`verify.html`'s copy was missing `fontFamily`); it now lives in `tailwind-config.js` +
+  `palette.css`, with a test asserting the two agree. A new test scans inline `style=""` attributes
+  by perceived lightness and immediately found four pre-existing dark-mode bugs.
+- Focus trap, Escape and restore-focus for all nine dialogs; ~55 icon-only controls and 14 sidebar
+  controls got accessible names; 21 `fetch` sites report an expired session as such rather than
+  "Error de conexión"; `<html lang>` corrected to `es` on the two widest-cascading templates.
+  `export_payments` had **no entry point anywhere in the UI** — a working endpoint nobody could
+  reach — and now has a link that honours the page's filters.
+
+**Admin, exports and audit**
+
+- `GroupAdmin`'s enrolled count excludes waiting-list students, `StudentForm` enforces
+  `Group.max_students` on **write** rather than only redirecting afterwards, and `/reports/`
+  rejects an out-of-range month like every other view.
+- The Excel export sized columns by walking **every cell** — ~1.7 M `len(str())` calls on a
+  full-history payments sheet, for a cosmetic width. It now samples the header plus the first N
+  data rows, caps at the real content, and streams model rows with `.iterator()`.
+- `Student.waiting_priority` (a queue-jumping decision) and the recurrence cadence fields added in
+  `billing/0006` were untracked by the audit signals, so both could change without a trace.
+- `billing/0008` now depends on `core`'s audit table. Every write in it is a queryset `.update()`
+  that emits no signals, so it was safe by accident of style; the dependency makes it safe by
+  construction.
+
+**Configuration and start-up**
+
+- **`TRUSTED_PROXY_COUNT` defaults per environment.** Production sits behind Cloud Run's front end
+  — exactly one trusted hop — but the QA VM and the dev stack bind Gunicorn straight to the
+  interface with **no** proxy. There a default of 1 read the rate-limit bucket key from a header
+  only the client writes, so a rotating `X-Forwarded-For` gave every request a fresh window and
+  defeated every credential throttle on an internet-exposed host.
+- `ALLOWED_HOSTS` entries are stripped, as the CSRF list always was. `"host1, host2"` produced
+  `" host2"`, which matches no `Host` header — that host answered 400 `DisallowedHost` while
+  `/health/` on the first one stayed green.
+- `LOG_LEVEL` is normalised and validated: `dictConfig` raises on an unknown level, so a
+  well-meaning lowercase `LOG_LEVEL=info` **prevented the whole app from booting**. `_env_int()`
+  gives the numeric env vars the same tolerance for sloppy values.
+- `EMAIL_BACKEND` is env-overridable. The QA VM runs the full Beat schedule and, hard-wired to
+  Gmail, would autonomously mail whatever addresses its database holds — a real hazard the moment a
+  production dump is restored onto it. Production stays on the SMTP default.
+- `GOOGLE_DRIVE_RECEIPTS_URL` is empty by default and the "Consultar recibos" buttons are
+  **hidden** when it is unset, rather than shipping the old placeholder link to Drive's generic
+  home page.
+- `entrypoint.sh` parses `CACHE_DB` case-insensitively to match `settings.py`, which accepts
+  `true/1/t/TRUE/…`. The old exact-literal check meant `CACHE_DB=TRUE` selected `DatabaseCache` in
+  Django while **skipping the cache-table creation here**, so every `cache.add()` raised and the
+  limiter failed open silently. `RUN_MIGRATIONS_ON_START=false` lets a pipeline that owns migrations
+  stop the Cloud Run *service* self-migrating on every cold start and bypassing that ordering and
+  its pre-deploy backup. `seed_enrollment_types` failing is now fatal (without its four rows nobody
+  can be enrolled at all) and the database wait is bounded.
+- The production start-up guard also asserts the cache backend — dropping `CACHE_DB` fell back to a
+  per-process `LocMemCache`, multiplying every rate limit by workers × instances.
+
+**CI/CD and infrastructure**
+
+- **The auto-merge gate now checks the commit subject against `pyproject.toml`.** A release commit
+  titled `v1.26.8` over a tree carrying 1.27.0 produced a PR with a v1.26.8 title, a v1.27.0 body
+  and a v1.27.0 staging tag — a reviewer cannot tell which half to trust. This fails the run
+  **loudly** rather than taking the quiet `should_merge=false` skip, because it is a repo-state
+  error, not a "not yet" state. The subject is only ever read through a quoted variable and the
+  extracted version is regex-constrained to digits and dots.
+- **The production deploy asserts `DJANGO_ENV` explicitly.** Dropped or mistyped, it silently
+  switches **off** the `settings.py` production posture guard (DEBUG-off, Secure cookies, HSTS, no
+  `*` in `ALLOWED_HOSTS`) or flips **on** `IS_TESTING_ENV`, exposing `/testing/` and the QA
+  error-body emails on live data. The version compare passes either way, so it is now asserted.
+- The nightly testing deploy had a **winter cron gap**: under CET only one of its two ticks landed
+  inside the deploy window, and observed scheduler drift exceeded the window entirely — producing
+  silently green nights while the VM drifted (it once sat on v1.20.0 against testing's v1.23.1).
+  Three ticks and a 01:00–05:59 window.
+- The production auto-rollback loop had no job-count guard, so an empty list produced "Los 0 jobs
+  vuelven a apuntar…" in a success-toned email while every job stayed on the failed image. Rollback
+  now also fires on cancellation, every job has a `timeout-minutes`, `ci.yml` got a least-privilege
+  `permissions` block, and Trivy actually gates on HIGH/CRITICAL.
+- **Compose is now three files.** `docker-compose.yml` is the image as shipped;
+  `docker-compose.override.yml` (dev only, auto-loaded by a bare `docker compose`) carries the
+  source mount. The testing overlay previously inherited that mount, so **QA ran the VM's git tree
+  instead of the built, scanned image** — the artifact QA signed off was not the one production ran.
+- `make clean-all` / `reset-db` refuse to run against a testing or production `.env`, and
+  `djangorestframework`, `django-filter` and `django-cors-headers` were removed — zero imports,
+  pure CVE surface, and a DRF advisory had already forced an unrelated release.
+
+**Housekeeping**
+
+- **The end-to-end smoke test passes for the first time.** It had never once run: the import was
+  wrong, and the comment claiming that was fixed was itself wrong. Nothing in the repo invoked it,
+  which is why nobody noticed — there is a `make smoke` now.
+- `prune_audit_log` — the only code path that deletes from a deliberately immutable table — had
+  zero test references for eight versions and would have wiped the entire trail on `--days 0`. It
+  now has a retention floor, a `--dry-run` and 16 tests.
+- `seed_testdata --reset` left orphaned `auth.User` rows carrying working superuser credentials
+  with no Teacher row to explain them, and its `@fiveaday.test` filter was deleting seeded accounts
+  it never created.
+- Documentation corrections where the docs were actively **wrong**, not merely stale:
+  `recurring_day` is 1–31 (not 1–28), `RUN_MIGRATIONS_ON_START` is implemented, production deploys
+  use Workload Identity Federation, the portal emails a temporary password rather than a
+  "single-use link", and the Gmail 500/day cap is roughly one mass-mail run rather than a
+  comfortable margin.
+
+**Testing**
+
+- Suite at **1,899 tests, 95.39 % coverage** (6,790 statements, 313 uncovered, 54 files at 100 %).
+  The first sweep added `test_iteration1_fixes.py`, `test_iteration2_fixes.py` and
+  `test_iteration4_fixes.py` — regressions for the numbered ledger items — and the closing sweep
+  added `test_auth_hardening_fixes.py`, `test_enrollment_transition_fixes.py`,
+  `test_frontend_template_fixes.py`, `test_mass_mail_fixes.py`,
+  `test_students_periphery_fixes.py` and `test_audit_pruning.py`.
+
+</details>
+
+<details id="v1271">
+<summary><strong>v1.27.1 — A full review pass: money that cannot be billed twice, sessions that end when they should, and mass mail that survives the roll</strong></summary>
 
 A single sweep closing a ~98-item review ledger. Nothing here is a new feature; it is the
 accumulated set of things the app got wrong, ranked by what they cost the academy.
@@ -3018,7 +3332,7 @@ All tools configured in `pyproject.toml` — single source of truth.
 | Google Cloud Platform | Production: Cloud Run + Cloud SQL (`europe-southwest1`) + Cloud Scheduler + Secret Manager. Testing: Compute Engine `e2-micro` (always-free tier) |
 | Gmail SMTP | Email sending (app password authentication) |
 | Google OAuth 2.0 | Optional admin authentication |
-| Make | 48 development commands (`make help`) |
+| Make | 49 targets, 45 of them listed by `make help` (`test-cov-gate`, `check-deploy` and `version` are deliberately unadvertised) |
 
 ### Python Dependencies
 
@@ -3099,6 +3413,9 @@ erDiagram
         string iban
         bool sms_opt_in
         string password
+        string temporary_password
+        datetime temporary_password_issued_at
+        datetime portal_credential_changed_at
         datetime portal_invite_sent_at
     }
 
@@ -3146,6 +3463,11 @@ erDiagram
         decimal half_month_discount
         decimal one_week_discount
         decimal three_week_discount
+        string academy_name
+        string academy_cif
+        string academy_address
+        string academy_phone
+        string academy_website
     }
 
     EnrollmentType {
@@ -3379,6 +3701,12 @@ DJANGO_ALLOWED_HOSTS=localhost,127.0.0.1
 # logger and inherits LOG_LEVEL when unset.
 # LOG_LEVEL=INFO                  # DEBUG in dev, INFO elsewhere
 # DJANGO_LOG_LEVEL=INFO
+# Normalised and validated on load: dictConfig raises on an unknown level, so a
+# lowercase LOG_LEVEL=info used to stop the app booting at all.
+# Error alerting (production). Comma-separated "Name <addr>" or bare addresses;
+# feeds Django's ADMINS and a throttled AdminEmailHandler.
+# DJANGO_ADMINS=
+# SERVER_EMAIL=                   # From: on those alerts
 
 # ============================================================================
 # HTTPS & SECURITY  (testing + production only — defaults are correct in dev)
@@ -3463,6 +3791,14 @@ EMAIL_SECRET=                     # 16-char Gmail App Password
 SUPPORT_EMAIL=                    # where support tickets are sent
 EMAIL_TEST_1=                     # dev/QA test recipient 1
 EMAIL_TEST_2=                     # dev/QA test recipient 2
+# Override the backend to NEUTRALISE outbound mail. The QA VM runs the full
+# Beat schedule (birthday, payment reminders, monthly report, Fun Friday) and,
+# hard-wired to Gmail, would autonomously mail whatever addresses its database
+# holds — a real hazard the moment a production dump is restored onto it.
+# EMAIL_BACKEND=django.core.mail.backends.console.EmailBackend
+# EMAIL_TIMEOUT=20                # seconds; smtplib's OS default is minutes,
+#                                 # and the mass-mail views send in-request, so
+#                                 # one blackholed port 587 parks a worker
 
 # ============================================================================
 # GOOGLE OAUTH  (optional — recommended in production)
@@ -3542,6 +3878,10 @@ ACADEMY_PHONE=
 GOOGLE_SHEETS_SERVICE_ACCOUNT_JSON=
 GOOGLE_SHEETS_SERVICE_ACCOUNT_FILE=
 GOOGLE_SHEETS_SPREADSHEET_ID=       # doc ID from the sheet's URL
+# Drive folder holding expense receipts / justificantes. Empty by default: the
+# "Consultar recibos" buttons are HIDDEN when unset, rather than shipping a link
+# to Drive's generic home page (a dead end that looked functional).
+GOOGLE_DRIVE_RECEIPTS_URL=
 
 # ============================================================================
 # GCP BILLING EXPORT  (v1.26.5 — optional, all environments)
@@ -3749,6 +4089,8 @@ The table below describes every variable in the [.env template](#env-template) a
 | `EMAIL_SECRET` | Gmail app password | For email features | — |
 | `SUPPORT_EMAIL` | Support ticket recipient | No | — |
 | `EMAIL_TEST_1` / `EMAIL_TEST_2` | Test email recipients | No | — |
+| `EMAIL_BACKEND` | Override to neutralise outbound mail. The QA VM runs the full Beat schedule and, hard-wired to Gmail, would autonomously mail whatever addresses its database holds — set `…backends.console.EmailBackend` there | No | Django SMTP backend |
+| `EMAIL_TIMEOUT` | SMTP socket timeout in seconds. smtplib inherits a multi-minute OS default and the mass-mail views send inside the request, so one blackholed port 587 parks a Gunicorn worker | No | `20` |
 | **Auth** | | | |
 | `LOGIN_USERNAME` | Dev-only basic-auth username (compared by the login view when `DJANGO_ENV=development`). Ignored in testing/production. | **Yes in dev** | — (login refused if missing) |
 | `LOGIN_PASSWORD` | Dev-only basic-auth password. Ignored in testing/production — Teachers log in via `auth.User` (seed them with `TEACHER_SEED_*`). | **Yes in dev** | — (login refused if missing) |
@@ -3782,6 +4124,7 @@ The table below describes every variable in the [.env template](#env-template) a
 | `GOOGLE_SHEETS_SERVICE_ACCOUNT_JSON` | Inline service-account JSON (recommended for Cloud Run + Secret Manager) | No | — |
 | `GOOGLE_SHEETS_SERVICE_ACCOUNT_FILE` | Filesystem path to a service-account JSON file (alternative to inline) | No | — |
 | `GOOGLE_SHEETS_SPREADSHEET_ID` | Target spreadsheet doc ID; service account must have Editor access | No | — |
+| `GOOGLE_DRIVE_RECEIPTS_URL` | Drive folder holding expense receipts. The "Consultar recibos" buttons are **hidden** when unset, rather than linking Drive's generic home page | No | — (buttons hidden) |
 | **GCP billing export (v1.26.5)** — optional, real Google Cloud spend from the BigQuery billing export | | | |
 | `GCP_BILLING_EXPORT_TABLE` | Billing-export table id (`project.dataset.gcp_billing_export_v1_XXXXXX`). Unset ⇒ the whole feature is off ("—" in the UI, nothing archived) | No | — |
 | `GCP_BILLING_PROJECT_ID` | Project the BigQuery query job runs under (needs BigQuery Job User) | No | the table's own project |
@@ -3806,6 +4149,9 @@ The table below describes every variable in the [.env template](#env-template) a
 | **Logging / misc** | | | |
 | `LOG_LEVEL` | App log level | No | `DEBUG` in dev, `INFO` in prod |
 | `DJANGO_LOG_LEVEL` | Django framework log level | No | inherits `LOG_LEVEL` |
+| `DJANGO_ADMINS` | Comma-separated `Name <addr>` or bare addresses feeding Django's `ADMINS` and a throttled `AdminEmailHandler` — production's error alerting | No | — (no alerting) |
+| `SERVER_EMAIL` | `From:` address on those error alerts | No | `EMAIL_HOST_USER` |
+| `TZ` | Container timezone. Set to `Europe/Madrid` in the Dockerfile and all three Compose files, **not** from `.env`: `python:slim` is UTC, so naive `date.today()` was a day behind local for 1–2 h after midnight and a cash payment at 00:40 on the 1st booked into the previous month | Set in image | `Europe/Madrid` |
 | `APP_VERSION` | Version string override | No | read from `pyproject.toml` |
 | `DJANGO_SUPERUSER_EMAIL` | Email given to the auto-created dev superuser, and last fallback for the Google-login allow-list | No | `<LOGIN_USERNAME>@local.dev` |
 | **Security headers & cookies** (advanced overrides — all applied only when `DEBUG=False`) | | | |
@@ -3915,8 +4261,9 @@ five-a-day/
 │   │   │                         two_factor/ (v1.13), plus expenses/reports/waiting_list
 │   │   │                         and waiting_list_create (v1.15), features/feature_detail
 │   │   │                         and qa/_qa_styles (v1.21.0)
-│   │   ├── static/               CSS (app.css, theme.css, email.css, admin_custom.css)
-│   │   │                         + JS (16 modules) + images
+│   │   ├── static/               CSS (app.css, theme.css, email.css, admin_custom.css,
+│   │   │                         palette.css — v1.27.1) + JS (16 behaviour modules
+│   │   │                         + tailwind-config.js) + vendor/ + images
 │   │   └── management/commands/  seed_teachers (v1.26.8: optional USERNAME handle),
 │   │                             seed_demo_parents (v1.26.8 — parent-portal demo family,
 │   │                             refused in production), seed_testdata, export_to_sheets (v1.2),
@@ -4542,6 +4889,10 @@ All migrations were regenerated from scratch during the v1.0.0 multi-app split.
 | `students` | `0011_two_factor_replay_counter` | `Teacher.two_factor_last_counter` — refuses a replayed TOTP code within its ~90 s window (v1.23.0) | `students.0010` |
 | `students` | `0012_alter_group_options_alter_parent_options_and_more` | Spanish `verbose_name` / `verbose_name_plural` on every model — metadata only, no schema change (v1.23.x) | `students.0011` |
 | `students` | `0013_parent_password_parent_portal_invite_sent_at` | `Parent.password` (hashed portal credential) + `Parent.portal_invite_sent_at` (once-only invitation guard) (v1.27.0) | `students.0012` |
+| `students` | `0014_remove_group_groups_group_n_2d53de_idx_and_more` | Index housekeeping — drops single-column b-trees already covered by a unique constraint or a composite, and adds the functional `Upper("email")` index that every `email__iexact` lookup is answered from (v1.27.0) | `students.0013` |
+| `students` | `0015_remove_parentsessiontoken_..._and_more` | `Parent.temporary_password` + `temporary_password_issued_at`, and **deletes `ParentSessionToken`** — the magic-link table the portal used until v1.27. The way in is a temporary password in a second column, never a link (v1.27.0) | `students.0014` |
+| `students` | `0016_parent_portal_credential_changed_at` | `Parent.portal_credential_changed_at` — stamped on every credential change; a portal session carrying an older stamp is rejected, so a password change logs out every **other** device (v1.28.1) | `students.0015` |
+| `students` | `0017_remove_parent_parents_email_346afe_idx` | Drops the redundant case-**sensitive** b-tree on `parents.email` — every lookup is `email__iexact`, which Postgres answers from `parents_email_upper_idx` (v1.28.1) | `students.0016` |
 | `billing` | `0001_initial` | SiteConfiguration, EnrollmentType, Enrollment, Payment | `students.0001` |
 | `billing` | `0002` | Enrollment academic_year index | `billing.0001`, `students.0002` |
 | `billing` | `0003_add_expense_model` | `Expense` — recurring templates + auto-materialised rows (v1.5) | `billing.0002` |
@@ -4551,6 +4902,10 @@ All migrations were regenerated from scratch during the v1.0.0 multi-app split.
 | `billing` | `0007_alter_enrollment_options_and_more` | Model `Meta` / field housekeeping across `Enrollment`, `Payment` and `Expense` | `billing.0006` |
 | `billing` | `0008_enrollment_type_categories` | Data migration — re-points every enrollment onto a matrícula **category** (`new_student` / `returning_student` / `adults` / `special`) and drops the retired cadence rows. Deliberately no-ops on an empty table so `seed_enrollment_types` stays the single provisioning path (v1.17.3) | `billing.0007` |
 | `billing` | `0009_alter_enrollment_status_alter_payment_payment_status_and_more` | `AlterField` for the Spanish choice **labels** on `Enrollment.status`, `Payment.payment_status` and `Payment.payment_type` — keys unchanged, so no data moves (v1.20.0) | `billing.0008` |
+| `billing` | `0010_payment_payment_status_due_idx_and_more` | `unique_pending_periodic_payment_per_month` + `unique_materialized_expense_per_date` — billing idempotency enforced by the **database**, plus a `(payment_status, due_date)` index. **Refuses to apply against a database that already holds duplicates**, naming the offending students, rather than failing with a bare Postgres error part-way through a deploy (v1.26.1) | `billing.0009` |
+| `billing` | `0011_remove_enrollment_..._and_more` | Index housekeeping — drops the single-column indexes on `Enrollment.student` and `Payment.student` / `parent` / `enrollment` that the composites already lead with (v1.27.0) | `billing.0010` |
+| `billing` | `0012_alter_enrollmenttype_name` | `EnrollmentType.name` gains `choices` — the four categories are resolved **by name** and a missing one blocks every enrollment of every kind, so an invented value must not be storable (v1.28.1) | `billing.0011` |
+| `billing` | `0013_siteconfiguration_academy_fields` | The five `academy_*` fiscal fields (`academy_name` / `_cif` / `_address` / `_phone` / `_website`). `pdf_service` had always read them via `getattr` and they had never existed, so **the CIF was blank on every tax certificate the academy ever issued** (v1.28.1) | `billing.0012` |
 | `core` | `0001_initial` | TodoItem, HistoryLog, FunFridayAttendance, ScheduleSlot | `students.0001` |
 | `core` | `0002` | UniqueConstraint for FunFridayAttendance and ScheduleSlot | `core.0001`, `students.0002` |
 | `core` | `0003_qa_backlog_and_config` | QA backlog model and config fields | `core.0002` |
@@ -4560,6 +4915,12 @@ All migrations were regenerated from scratch during the v1.0.0 multi-app split.
 | `core` | `0007_alter_historylog_action` | Expanded `HistoryLog.action` choices | `core.0006` |
 | `core` | `0008_backlogtask_verified` | `BacklogTask.verified` — QA's tick, independent of `status="done"` (v1.20.0) | `core.0007` |
 | `core` | `0009_feature_backlogtask_feature` | New `Feature` model (QA epics — no priority, nullable `deadline`) + `BacklogTask.feature` FK (`SET_NULL`) (v1.21.0) | `core.0008` |
+| `core` | `0010_alter_auditlog_options_alter_backlogtask_options_and_more` | Spanish `verbose_name` / `verbose_name_plural` on every core model — metadata only, no schema change (v1.26.0) | `core.0009` |
+| `core` | `0011_funfridayattendance_fun_friday__date_c25bdb_idx` | Explicit `Index(fields=["date"])` on `FunFridayAttendance`. Its `UniqueConstraint(["student", "date"])` leads on `student`, so the twice-per-page `date=`-only lookup was a sequential scan (v1.26.1) | `core.0010` |
+| `core` | `0012_qaconfiguration_ready_for_prod` | `QAConfiguration.ready_for_prod` — QA's sign-off, read by the production deploy's preflight gate ahead of the human approval (v1.26.4) | `core.0011` |
+| `core` | `0013_remove_auditlog_audit_logs_actor_i_0badd2_idx` | Drops the redundant single-column `AuditLog.actor` index (v1.27.0) | `core.0012` |
+| `core` | `0014_alter_auditlog_action_alter_backlogtask_priority_and_more` | Spanish choice **labels** on `AuditLog.action` and `BacklogTask.priority` / `status` — keys unchanged, so no data moves (v1.28.1) | `core.0013` |
+| `core` | `0015_historylog_modality_changed_action` | Adds `modality_changed` to `HistoryLog.action`, so a payment-cadence switch leaves a trace (v1.28.1) | `core.0014` |
 | `comms` | — | (no models) | — |
 
 ```bash
@@ -4963,6 +5324,7 @@ Auto-merge check
   • last commit ≥ 3 h old?
   • CI passing on that commit?
   • version bumped in pyproject.toml (dev > testing)?
+  • last commit subject names that same version?  (mismatch = red, not a skip)
         │ all yes
         ▼
 git merge development → testing
@@ -5040,7 +5402,7 @@ Feature branches off `development` are welcome for non-trivial work, but the exp
 | **CI** | [`ci.yml`](.github/workflows/ci.yml) | Push to `development`/`testing`/`main`; PRs to `development`/`testing`/`main` | Six jobs — **Lint** (Ruff + Bandit + pip-audit + Hadolint), **Type check** (mypy), **Tests** (pytest + PostgreSQL 16 + coverage artifact), **Docker build** (validates Dockerfile), **Trivy** (filesystem CVE scan → Security tab), **Docker publish** (GHCR push + image scan, on `main`/`testing` only). Since v1.27.1 it carries a least-privilege top-level `permissions` block (it was the only workflow without one, so jobs running arbitrary branch code had the repo-default token scope), every job has a `timeout-minutes`, and the **image** scan now GATES on HIGH/CRITICAL: a second Trivy pass writes JSON and a separate step fails the job, so a missing or unparseable report reads as a failed scan rather than a clean one. The escape hatch is [`.github/trivyignore`](.github/trivyignore), applied to the gate only so an ignored CVE still appears in the Security tab |
 | **Auto-merge** | [`auto-merge.yml`](.github/workflows/auto-merge.yml) | Hourly cron + manual dispatch | Merges `development` → `testing` when conditions pass, creates PR to `main`, emails owners |
 | **Deploy testing** | [`deploy-testing.yml`](.github/workflows/deploy-testing.yml) | Daily, 01:00-05:59 Europe/Madrid window (three cron ticks) + manual dispatch | Compares `/health/` on the VM against `pyproject.toml` on `origin/testing`; deploys only when they differ. Gates the DB volume, resets `ready_for_prod` to false (locking the new version for production until QA signs it off), diffs row counts, then emails the result |
-| **Deploy production** | [`deploy-production.yml`](.github/workflows/deploy-production.yml) | QA's sign-off (`repository_dispatch: qa-ready-for-prod`, fired by the `/testing/` button) + the release PR merge (`push` to `main`) — both exit green and quiet while the other condition is pending — + `Deploy testing` finishing without issues (`workflow_run`, the strict watchdog) + manual dispatch | Two-phase: preflight exits green when production already serves `main`'s version, otherwise **requires release provenance** (the `testing-vX.Y.Z` tag must be an ancestor of `main`) and **testing's QA sign-off** (`/health/?deep=1` healthy + same version + `ready_for_prod=true`), waits for CI to go green and lists the migrations; then **blocks on the `production` environment's required reviewer**. On approval: verified backup → repoint every Cloud Run job → migrate → roll out → verify. A failure after the first write **auto-rolls the code back** (jobs + service to the previous image; the database is never reverted). v1.27.1 adds four **pre-mutation** gates, all placed before the first write so a mismatch stops the deploy with production untouched and nothing to roll back: `RUN_MIGRATIONS_ON_START` must be `false` on the service (otherwise a cold start self-migrates, bypassing this ordering and its backup); the enumerated Cloud Run **jobs and Cloud Scheduler entries** must match the expected sets (an empty list is fatal, never read as "nothing scheduled" — Scheduler lives in `europe-west1`, and querying the service's region returns nothing silently; a deliberately PAUSED schedule must be listed in `PAUSED_OK_SCHEDULES`); and a **destructive migration** (`DeleteModel`/`RemoveField`/`RenameField`/`DROP`/`TRUNCATE`) is surfaced in the approval summary and refuses to proceed without the `ack_destructive` dispatch input. The rollback now also fires on **cancellation**, and its job-repoint loop has the same count guard as the forward loop — an empty list previously produced "Los 0 jobs vuelven a apuntar…" in a success-toned email while every job stayed on the failed image |
+| **Deploy production** | [`deploy-production.yml`](.github/workflows/deploy-production.yml) | QA's sign-off (`repository_dispatch: qa-ready-for-prod`, fired by the `/testing/` button) + the release PR merge (`push` to `main`) — both exit green and quiet while the other condition is pending — + `Deploy testing` finishing without issues (`workflow_run`, the strict watchdog) + manual dispatch | Two-phase: preflight exits green when production already serves `main`'s version, otherwise **requires release provenance** (the `testing-vX.Y.Z` tag must be an ancestor of `main`) and **testing's QA sign-off** (`/health/?deep=1` healthy + same version + `ready_for_prod=true`), waits for CI to go green and lists the migrations; then **blocks on the `production` environment's required reviewer**. On approval: verified backup → repoint every Cloud Run job → migrate → roll out → verify. The post-deploy verify asserts the served **version**, that `/health/` still reports `environment: production` (v1.28.1 — a dropped or mistyped `DJANGO_ENV` silently switches **off** the `settings.py` posture guard or flips **on** `IS_TESTING_ENV`, exposing `/testing/` and the QA error-body emails on live data, and the version compare passes either way), and the Cloud SQL attachment. A failure after the first write **auto-rolls the code back** (jobs + service to the previous image; the database is never reverted). v1.27.1 adds four **pre-mutation** gates, all placed before the first write so a mismatch stops the deploy with production untouched and nothing to roll back: `RUN_MIGRATIONS_ON_START` must be `false` on the service (otherwise a cold start self-migrates, bypassing this ordering and its backup); the enumerated Cloud Run **jobs and Cloud Scheduler entries** must match the expected sets (an empty list is fatal, never read as "nothing scheduled" — Scheduler lives in `europe-west1`, and querying the service's region returns nothing silently; a deliberately PAUSED schedule must be listed in `PAUSED_OK_SCHEDULES`); and a **destructive migration** (`DeleteModel`/`RemoveField`/`RenameField`/`DROP`/`TRUNCATE`) is surfaced in the approval summary and refuses to proceed without the `ack_destructive` dispatch input. The rollback now also fires on **cancellation**, and its job-repoint loop has the same count guard as the forward loop — an empty list previously produced "Los 0 jobs vuelven a apuntar…" in a success-toned email while every job stayed on the failed image |
 | **Rollback production** | [`rollback-production.yml`](.github/workflows/rollback-production.yml) | Manual dispatch only | Rolls the service **and** every Cloud Run job back to a previous image tag (empty input = previous image; or an explicit git short SHA), behind the same `production` approval gate and concurrency group as a deploy. Code only — restoring the database stays a manual decision |
 | **CodeQL** | [`codeql.yml`](.github/workflows/codeql.yml) | Push to `main`/`testing`/`development`; PRs to `main`; Monday 04:30 UTC | Python static security analysis (OWASP Top 10, Django-specific queries) |
 | **Notify production** | [`notify-production.yml`](.github/workflows/notify-production.yml) | Push to `main` | Emails `hellofiveaday@gmail.com` with commit info and `gcloud` deploy instructions |
@@ -5056,7 +5418,7 @@ Concurrent CI runs on the same branch cancel each other automatically — new pu
 
 - CI triggers immediately (lint, typecheck, tests run in parallel, ~2-4 min)
 - CodeQL triggers immediately (weekly scan also runs independently)
-- The hourly auto-merge cron promotes to `testing` only when **all four** conditions hold: dev is ahead of testing, the last commit is ≥ 3 h old, CI is green, **and the version in `pyproject.toml` has been bumped** (strictly higher than `testing`'s version). Without a version bump the merge is skipped even with 3 h of new commits on dev — run `make pc-run` (answer yes) or `make version x.y.z` before the next tick to unlock it.
+- The hourly auto-merge cron promotes to `testing` only when **all five** conditions hold: dev is ahead of testing, the last commit is ≥ 3 h old, CI is green, **the version in `pyproject.toml` has been bumped** (strictly higher than `testing`'s version), **and the version named in the last commit subject matches `pyproject.toml`** (v1.28.1). The first four are "not yet" states and skip quietly; the fifth is a repo-state **error** and fails the run red. The subject of the last commit becomes the merge message *and* the release PR title, so a commit titled `v1.26.8` over a tree carrying 1.27.0 produced a PR with a v1.26.8 title, a v1.27.0 body and a v1.27.0 staging tag — a reviewer cannot tell which half to trust. Without a version bump the merge is skipped even with 3 h of new commits on dev — run `make pc-run` (answer yes) or `make version x.y.z` before the next tick to unlock it; on a subject mismatch, either push a commit whose subject carries the real version or correct `pyproject.toml`.
 
 **2. Auto-merge fires**
 
