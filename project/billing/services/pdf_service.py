@@ -294,80 +294,97 @@ def _build_pdf(flowables: Iterable) -> bytes:
 
 
 def _receipt_breakdown_rows(payment) -> list[list[str]]:
-    """`precio base − descuentos = importe` rows for the receipt, or [] when
-    there is nothing to itemise (an ``other`` payment, or a hand-priced special
-    whose agreed figure has no standard base to compare against).
+    """`precio base − descuentos = importe` rows for the receipt, or [] when the
+    amount charged cannot be reconstructed from the enrollment exactly.
 
-    The discounts shown are exactly the ones the enrollment carries and that
-    `EnrollmentService._apply_discounts` billed — sibling and cheque idioma for a
-    periodic fee, the antiguo-alumno reduction for a matrícula. Any residual
-    between the standard discounted price and the amount actually billed is the
-    prorated first period, shown on its own line so the column always sums to the
-    real importe rather than silently hiding proration inside "descuentos".
+    **Reconstruct-or-say-nothing.** The lines come from
+    `PaymentService.price_breakdown`, the same call that prices the payment, and
+    are shown ONLY when re-pricing the period reproduces `payment.amount` to the
+    cent. Anything else — a hand-priced special, a manual correction, a close-out
+    block, or simply a receipt re-downloaded after the admin edited prices in
+    `/management/` — falls back to the bare "Importe" line.
+
+    That check is the whole design. This function previously re-derived the
+    discounts itself and printed whatever was left over as "Prorrateo primer
+    periodo" / "Ajuste", which meant any disagreement between the receipt's copy
+    of the rules and the generator's was silently relabelled as proration on a
+    document families keep for tax purposes: a one-month June stub showed a full
+    quarter's base and a ~2/3 "prorrateo" on a payment that was neither first nor
+    prorated, and re-downloading last September's receipt after a price rise
+    restated its base at the NEW price with the difference as an "Ajuste".
+    A receipt that cannot explain the amount must not guess at it.
     """
     from billing.models import SiteConfiguration
-    from billing.money import period_base_amount, round_money
+    from billing.services.payment_service import PaymentService
 
     enrollment = payment.enrollment
-    if enrollment is None or payment.payment_type not in ("monthly", "quarterly", "enrollment"):
+    if enrollment is None or payment.due_date is None:
         return []
 
     config = SiteConfiguration.get_config()
     amount = Decimal(payment.amount)
-    rows: list[list[str]] = []
 
     if payment.payment_type == "enrollment":
-        base = Decimal(config.adult_enrollment_fee if enrollment.student.is_adult else config.children_enrollment_fee)
-        rows.append(["Precio matrícula", f"{base:.2f} €"])
-        discount = base - amount
-        if discount > 0:
-            rows.append(["Descuento antiguo alumno", f"−{discount:.2f} €"])
-        elif discount < 0:
-            # A hand-set special matrícula can exceed the standard fee.
-            rows = [["Matrícula especial", f"{amount:.2f} €"]]
-            return rows
-        return rows
+        # `payment.student`, not `enrollment.student` — the same row, but the
+        # callers select_related the payment's side of it.
+        return _matricula_breakdown_rows(enrollment, payment.student, config, amount)
 
-    # Periodic (monthly / quarterly).
-    if enrollment.is_hand_priced:
-        # A negotiated price has no standard base to break down against.
+    if payment.payment_type not in ("monthly", "quarterly"):
         return []
 
-    base = round_money(period_base_amount(config, enrollment.schedule_type, enrollment.payment_modality))
-    rows.append(["Precio base", f"{base:.2f} €"])
+    # The period this payment was issued for, identified by its due date — the
+    # schedule is what says how many months it covers and how much of the first
+    # one the family was charged, and guessing either is how the June stub came
+    # to be priced as a full quarter.
+    period = next(
+        (p for p in PaymentService.billing_periods(enrollment) if p["due"] == payment.due_date),
+        None,
+    )
+    if period is None:
+        return []
 
-    discounted = base
-    if enrollment.is_sibling_discount and not enrollment.student.is_adult:
-        sibling = round_money(base * (Decimal(config.sibling_discount) / Decimal("100")))
-        rows.append([f"Descuento hermano ({config.sibling_discount:.0f}%)", f"−{sibling:.2f} €"])
-        discounted -= sibling
-    if enrollment.has_language_cheque and not enrollment.student.is_adult:
-        cheque = Decimal(config.language_cheque_discount)
-        if enrollment.payment_modality == "quarterly":
-            cheque *= 3
-        rows.append(["Cheque idioma", f"−{cheque:.2f} €"])
-        discounted -= cheque
+    months = [m for m, _ in period["months"]]
+    effective = Decimal(len(months) - 1) + period["fraction"]
+    lines, total = PaymentService.price_breakdown(
+        enrollment, config, months, effective, enrollment.payment_modality == "quarterly"
+    )
+    if not lines or total != amount:
+        return []
 
-    # `_price_months` takes the flat June discount off every period that covers
-    # June — and June is always the LAST teaching month, so a period covers it
-    # exactly when it falls due in it. Without this line the −june residual was
-    # printed as "Prorrateo primer periodo" on every family's June receipt (a
-    # payment that is neither first nor prorated). Adult groups pay a flat rate
-    # with no June discount, mirroring the generator's early return.
-    if payment.due_date and payment.due_date.month == 6 and enrollment.schedule_type != "adult_group":
-        june = Decimal(config.june_discount)
-        rows.append(["Descuento junio (curso completo)", f"−{june:.2f} €"])
-        discounted -= june
-
-    discounted = round_money(discounted)
-    residual = amount - discounted
-    if residual != 0:
-        # First period billed pro rata (or a manual correction): the line that
-        # makes the column add up to the importe actually charged.
-        label = "Prorrateo primer periodo" if residual < 0 else "Ajuste"
-        rows.append([label, f"{'−' if residual < 0 else '+'}{abs(residual):.2f} €"])
-
+    # First line is the base; the rest are amounts subtracted from it.
+    (base_label, base_amount), *discounts = lines
+    rows = [[base_label, f"{base_amount:.2f} €"]]
+    rows.extend([label, f"−{value:.2f} €"] for label, value in discounts if value)
     return rows
+
+
+def _matricula_breakdown_rows(enrollment, student, config, amount) -> list[list[str]]:
+    """Breakdown rows for a matrícula payment, or [] if the amount is negotiated.
+
+    Only two figures are explainable from the configuration: the standard fee,
+    and the standard fee minus the returning-student discount. A `special`
+    matrícula is a price agreed with the family and stored nowhere but the
+    Payment row itself, so there is nothing to break it down against.
+
+    The discount line is gated on the enrollment's own category and not on the
+    arithmetic. Deriving it from `base - amount` meant ANY shortfall was labelled
+    "Descuento antiguo alumno": a negotiated 25 € matrícula against a 40 €
+    standard fee printed a 15 € returning-student discount for a family that had
+    never studied here and had been granted no such thing.
+    """
+    base = Decimal(config.adult_enrollment_fee if student and student.is_adult else config.children_enrollment_fee)
+    if amount == base:
+        return [["Precio matrícula", f"{base:.2f} €"]]
+
+    discount = Decimal(getattr(config, "returning_student_enrollment_discount", 0) or 0)
+    is_returning = getattr(enrollment.enrollment_type, "name", "") == "returning_student"
+    if is_returning and discount > 0 and amount == max(base - discount, Decimal("0.00")):
+        return [
+            ["Precio matrícula", f"{base:.2f} €"],
+            ["Descuento antiguo alumno", f"−{discount:.2f} €"],
+        ]
+
+    return []
 
 
 def generate_payment_receipt(payment) -> bytes:
@@ -376,11 +393,17 @@ def generate_payment_receipt(payment) -> bytes:
     Assigns the payment its stable ``YYYY-NNN`` receipt number the first time a
     receipt is generated (see ``Payment.assign_receipt_number``); reused verbatim
     on every later download so the family always sees the same number.
+
+    An uncollected payment gets no number — every caller here filters on
+    ``completed``, so this is the belt-and-braces half of that rule rather than a
+    state the UI can reach. The document still renders, unnumbered, instead of
+    failing.
     """
     academy = _get_academy_info()
     styles = _styles()
 
     receipt_no = payment.assign_receipt_number()
+    heading = f"RECIBO Nº {receipt_no}" if receipt_no else "RECIBO"
 
     student = payment.student
     parent = payment.parent
@@ -389,7 +412,7 @@ def generate_payment_receipt(payment) -> bytes:
     due_at = payment.due_date.strftime("%d/%m/%Y") if payment.due_date else "—"
 
     body_rows = [
-        ["Recibo Nº", receipt_no],
+        ["Recibo Nº", receipt_no or "—"],
         ["Fecha emisión", date.today().strftime("%d/%m/%Y")],
         ["Fecha cobro", paid_at],
         ["Fecha vencimiento", due_at],
@@ -414,7 +437,7 @@ def generate_payment_receipt(payment) -> bytes:
         *_header_flowables(
             styles,
             academy,
-            f"RECIBO Nº {receipt_no}",
+            heading,
             f"Emitido a nombre de {_md(parent.full_name if parent else student.full_name)}",
         ),
         info_table,

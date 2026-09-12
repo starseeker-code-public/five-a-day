@@ -646,16 +646,24 @@ def parent_portal_payments(request):
 
 def parent_portal_receipt(request, payment_id: int):
     """
-    Download a receipt PDF for a payment — must belong to the current parent.
+    Download a receipt PDF for a payment — must belong to the current parent,
+    and must be COLLECTED.
+
+    Ownership alone is not enough to authorise this. Rendering a receipt assigns
+    the payment its permanent ``YYYY-NNN`` number, so a family editing the id in
+    the URL to one of their own PENDING charges would mint an official receipt
+    for money the academy has not received and consume a number from the fiscal
+    sequence for good.
     """
     parent, redirect_resp = _require_parent(request)
     if redirect_resp:
         return redirect_resp
 
     payment = get_object_or_404(
-        Payment.objects.select_related("student", "parent"),
+        Payment.objects.select_related("student", "parent", "enrollment", "enrollment__enrollment_type"),
         id=payment_id,
         parent=parent,
+        payment_status="completed",
     )
 
     from billing.services.pdf_service import generate_payment_receipt

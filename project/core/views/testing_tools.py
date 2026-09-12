@@ -16,6 +16,7 @@ from django.core.mail import send_mail
 from django.db.models import Q
 from django.http import HttpResponse, JsonResponse
 from django.shortcuts import render
+from django.utils import timezone
 from django.utils.text import get_valid_filename
 from django.views.decorators.http import require_http_methods
 
@@ -209,7 +210,12 @@ def backlog_task_json(task):
         "status": task.status,
         "status_display": task.get_status_display(),
         "created_by": task.created_by,
-        "created_at": task.created_at.strftime("%d/%m/%Y %H:%M"),
+        # `localtime` first: `created_at` is stored aware in UTC, and a naive
+        # strftime on it prints UTC while the server-rendered rows beside it go
+        # through `|date`, which converts to Europe/Madrid. A task created at
+        # 00:30 showed up in the AJAX row as 22:30 the previous DAY, then
+        # corrected itself on reload.
+        "created_at": timezone.localtime(task.created_at).strftime("%d/%m/%Y %H:%M"),
     }
 
 

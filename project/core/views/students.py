@@ -17,6 +17,7 @@ from billing.models import Enrollment, Payment, SiteConfiguration, relevant_acad
 from core.date_utils import first_day_of_next_month
 from core.decorators import admin_required
 from core.models import FunFridayAttendance, HistoryLog
+from core.transactions import students_on_the_roll
 from students.forms import StudentForm
 from students.models import Group, Parent, Student
 
@@ -96,12 +97,6 @@ def _create_enrollment_fee_payment(student, parent, enrollment, enrollment_form)
     payment.full_clean()
     payment.save()
     return enrollment_fee
-
-
-# Re-exported from the leaf `core.date_utils` so `core.views.waiting_list` can
-# use it WITHOUT importing this module (which imports waiting_list — the cycle
-# CodeQL flagged). Kept under the old private name for this module's callers.
-_first_day_of_next_month = first_day_of_next_month
 
 
 #: Spanish notice the create page shows when a picker list was capped. The
@@ -500,19 +495,11 @@ class StudentListView(ListView):
     context_object_name = "students"
 
     def get_queryset(self):
-        # Both cohorts during the May–August overlap: students finishing the
-        # running course and those already enrolled for the next one. Filtering
-        # on one year alone makes half the academy vanish from the list.
-        academic_years = relevant_academic_years()
+        # `students_on_the_roll` carries the "studying this course" rule — both
+        # cohorts during the May–August overlap included, or half the academy
+        # vanishes from the list for four months of every year.
         queryset = (
-            Student.objects.filter(
-                active=True,
-                is_waiting=False,
-                enrollments__academic_year__in=academic_years,
-            )
-            .distinct()
-            .select_related("group")
-            .prefetch_related("parents", "enrollments__enrollment_type")
+            students_on_the_roll().select_related("group").prefetch_related("parents", "enrollments__enrollment_type")
         )
 
         search_query = self.request.GET.get("search", "").strip()
@@ -604,12 +591,11 @@ class StudentUpdateView(UpdateView):
                 is_special_now = enrollment.is_hand_priced
                 initial["is_special"] = is_special_now
                 if is_special_now:
-                    # `customize_recurring` must be pre-ticked or EnrollmentForm.clean()
-                    # DISCARDS manual_amount and then rejects the special — which made
-                    # every save of a hand-priced student's ficha (even a phone-number
-                    # edit) a silent no-op, since this form's non-field errors were the
-                    # only signal.
-                    initial["customize_recurring"] = True
+                    # `customize_recurring` is implied by a pre-filled
+                    # `manual_amount` and ticked by EnrollmentForm.__init__ — the
+                    # form owns that invariant, because forgetting it here made
+                    # every save of a hand-priced student's ficha a silent no-op.
+                    #
                     # Pre-fill the MANUAL BASE (`enrollment_amount`), never
                     # `final_amount`: the final figure already carries the sibling /
                     # cheque discounts, and a re-issue runs `_apply_discounts` again —
@@ -712,7 +698,7 @@ class StudentUpdateView(UpdateView):
                         student,
                         "cancelled",
                         cancel_pending_periodic=True,
-                        cancel_from=_first_day_of_next_month(),
+                        cancel_from=first_day_of_next_month(),
                     )
                 else:
                     # Only re-issue the enrollment when the plan actually
@@ -997,25 +983,28 @@ def enroll_student(request, student_id):
     )
 
 
-def _reenroll_candidates():
+def _reenroll_candidates(*, for_display=True):
     """Students eligible for the 'Antiguo estudiante' bulk flow.
 
     A candidate is any non-waiting student who is NOT already enrolled this
     academic year — the pool of prior students (usually inactive, but also an
     active student whose enrollment lapsed) who could be re-enrolled. Waiting-list
     placeholders are excluded: they are not real students and have their own page.
+
+    `for_display=False` drops the joins the page needs but the POST does not. The
+    POST re-runs this only to re-check the handful of submitted ids against the
+    candidacy rule, and on a roll near this academy's ceiling the display
+    prefetch pulled every candidate's entire enrollment history to answer a
+    question about three students.
     """
     academic_years = relevant_academic_years()
     enrolled_ids = Enrollment.objects.filter(status="active", academic_year__in=academic_years).values_list(
         "student_id", flat=True
     )
-    return (
-        Student.objects.filter(is_waiting=False)
-        .exclude(id__in=enrolled_ids)
-        .select_related("group")
-        .prefetch_related("enrollments")
-        .order_by("first_name", "last_name")
-    )
+    candidates = Student.objects.filter(is_waiting=False).exclude(id__in=enrolled_ids)
+    if for_display:
+        candidates = candidates.select_related("group").prefetch_related("enrollments")
+    return candidates.order_by("first_name", "last_name")
 
 
 @require_http_methods(["GET", "POST"])
@@ -1033,12 +1022,19 @@ def reenroll_old_students(request):
     from billing.services.payment_service import PaymentService
 
     if request.method == "GET":
+        # The plan list comes from the form that validates the POST, not from a
+        # second copy typed into the template — those had already forked on the
+        # labels, and a plan added to `ENROLLMENT_PLAN_CHOICES` would never have
+        # appeared here.
+        from billing.forms import ENROLLMENT_PLAN_CHOICES
+
         return render(
             request,
             "reenroll_old.html",
             {
                 "candidates": _reenroll_candidates(),
                 "today": date.today().isoformat(),
+                "enrollment_plan_choices": ENROLLMENT_PLAN_CHOICES,
             },
         )
 
@@ -1066,37 +1062,56 @@ def reenroll_old_students(request):
     charge_fee = request.POST.get("charge_enrollment_fee") in ("on", "true", "1")
 
     # Re-resolve candidates so a stale checkbox can't enrol a student who was
-    # already enrolled in another tab since the page loaded.
-    selectable = {s.id: s for s in _reenroll_candidates()}
+    # already enrolled in another tab since the page loaded. Narrowed to the
+    # submitted ids: the candidacy rule is still applied (it is the queryset's
+    # own filter), but the whole pool no longer has to be fetched to check three.
+    try:
+        requested_ids = {int(raw) for raw in ids}
+    except (TypeError, ValueError):
+        messages.error(request, "Selección de alumnos no válida.")
+        return redirect("reenroll_old_students")
+
+    selectable = {s.id: s for s in _reenroll_candidates(for_display=False).filter(id__in=requested_ids)}
 
     created, skipped, failed = 0, 0, []
-    for raw_id in ids:
-        try:
-            student = selectable.get(int(raw_id))
-        except (TypeError, ValueError):
-            continue
+    for raw_id in requested_ids:
+        student = selectable.get(raw_id)
         if student is None:
             skipped += 1
             continue
         try:
             with transaction.atomic():
+                parent = student.titular_parent()
+
+                # A lapsed student usually still carries an ACTIVE enrollment from
+                # a prior course (nothing finishes enrollments at year end), and
+                # `unique_active_enrollment_per_student` is year-blind — so the old
+                # row has to be closed before the new one can exist.
+                #
+                # Through `supersede_enrollment`, exactly like the single-student
+                # "Nueva matrícula" modal and the plan-change paths. Closing the
+                # enrollment by hand here skipped `close_out_periods`, and
+                # `generate_payments` visits only ACTIVE enrollments — so any month
+                # the old plan taught and never invoiced became structurally
+                # unbillable the instant this view finished it, with no back-fill
+                # able to reach it. It also returns the date the new enrollment may
+                # safely start from, which is not always the one the admin typed.
+                current = student.enrollments.filter(status="active").order_by("-enrollment_date", "-id").first()
+                effective_start = _superseding_start(student, current, shared, parent=parent)
+                if effective_start is None:
+                    # Every remaining month of the course is already invoiced;
+                    # nothing was written. Re-billing them is the one outcome worse
+                    # than not re-enrolling today.
+                    skipped += 1
+                    continue
+                shared.cleaned_data["start_date"] = effective_start
+
+                # Only now that the enrollment is going ahead — a student we
+                # refused above must not be left reactivated with no matrícula.
                 if not student.active:
                     student.active = True
                     student.save(update_fields=["active", "updated_at"])
-                parent = student.titular_parent()
-                # A lapsed student usually still carries an ACTIVE enrollment from a
-                # prior course (nothing finishes enrollments at year end), and
-                # `unique_active_enrollment_per_student` is year-blind — without this
-                # close, create_enrollment raised IntegrityError for exactly the
-                # population this flow exists for. Cuotas the old plan legitimately
-                # billed stay owed: `cancel_from` voids only pending periodic rows due
-                # on/after the NEW start, mirroring `supersede_enrollment`.
-                from billing.services.enrollment_service import EnrollmentService
 
-                new_start = shared.cleaned_data.get("start_date") or date.today()
-                EnrollmentService.close_active_enrollments(
-                    student, "finished", cancel_pending_periodic=True, cancel_from=new_start
-                )
                 enrollment = shared.create_enrollment(student, is_adult=student.is_adult)
                 if charge_fee:
                     _create_enrollment_fee_payment(student, parent, enrollment, shared)
@@ -1114,7 +1129,7 @@ def reenroll_old_students(request):
     if created:
         messages.success(request, f"✅ {created} alumno(s) rematriculado(s) correctamente.")
     if skipped:
-        messages.info(request, f"{skipped} ya estaban matriculados este curso y se omitieron.")
+        messages.info(request, f"{skipped} se omitieron (ya matriculados o sin meses por facturar este curso).")
     if failed:
         messages.error(request, "No se pudo matricular a: " + ", ".join(failed))
     return redirect("students_list")

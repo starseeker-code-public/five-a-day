@@ -50,7 +50,7 @@ documented dependency flow.
 Generic email sending service with HTML template rendering and inline images.
 
 - `send_email(template_name, recipients, subject, context, ..., connection=None, fail_silently=...)` — renders a Django template and sends via SMTP
-- `send_bulk_emails(template_name, emails_data, ...)` — sends multiple emails with the same template. v1.29.0: opens ONE shared SMTP session for the whole batch (guarded — an unreachable server degrades to per-message sends rather than raising, preserving the results-dict contract its caller `send_payment_reminders` relies on) instead of one TCP+TLS+AUTH handshake per recipient
+- `send_bulk_emails(template_name, emails_data, ...)` — sends multiple emails with the same template. v1.29.0: opens ONE shared SMTP session for the whole batch (guarded — an unreachable server degrades to per-message sends rather than raising, preserving the results-dict contract its caller `send_payment_reminders` relies on) instead of one TCP+TLS+AUTH handshake per recipient. **v1.29.1 drops that shared session on ANY failure** and lets the rest of the batch open their own: Django's SMTP backend never reopens a connection it still holds, so one mid-batch disconnect — Gmail drops idle sockets, and enforces a per-session message cap — turned every remaining send into a guaranteed failure, and 130 payment reminders were lost to a socket that died after the 20th. A wasted reconnect after a genuine per-recipient failure (a bad address) costs one handshake; guessing wrong the other way costs the whole run
 - `open_connection()` — a single reusable SMTP connection for a batch of sends (see below)
 - `email_service` — singleton instance used throughout the project
 
@@ -149,6 +149,17 @@ can be coerced (an integer id) or simply left out of the record, prefer that.
 
 All tasks have retry logic (3 retries, exponential backoff):
 
+**`dispatch_payment_completed(payment_id)`** (v1.29.1, a plain function, not a task) — the one
+statement of *what happens when money lands*: the receipt email and the Drive archive, each in
+its own `try`. There are two completion paths — the admin marking a payment cobrado and the
+Stripe webhook — and each carried its own copy of this pair of dispatches, so a third side
+effect (or a third completion path) would have had to be written twice to be right and once to
+be silently half-wrong. Neither dispatch may raise, because production runs
+`CELERY_TASK_ALWAYS_EAGER`: the "queue" is this call stack, inside the request that recorded the
+money. Callers inside a transaction must wrap it in `transaction.on_commit` (see
+`core.views.payments._queue_payment_receipt`) — eager execution re-reads the payment by id,
+which a not-yet-committed write is invisible to.
+
 | Task | Purpose | Trigger |
 | ---- | ------- | ------- |
 | `send_welcome_email_task` | Async welcome email (includes the group's timetable). Reports the payment modality in Spanish, and "Especial" for a `special` matrícula — its cadence is whatever was agreed with the family, not a standard one (v1.20.0); v1.27.1 reads that from the shared `Enrollment.is_hand_priced` instead of a sixth inline copy of `enrollment_type.name == "special"`, and passes `fail_silently=True` like every other task in the file — without it an SMTP error escaped as the raw backend exception instead of the `RuntimeError` that `autoretry_for` and the student-creation caller are written against | On student creation, fired `on_commit` |
@@ -158,8 +169,8 @@ All tasks have retry logic (3 retries, exponential backoff):
 | `send_payment_reminder_sms_task` | Twilio SMS reminder for one payment — opt-in parents only (v1.8) | Called from the reminder batch |
 | `send_monthly_report_task` | Admin monthly report. With no explicit recipient it now (v1.26.8) goes to **both** `SUPPORT_EMAIL` and `DEFAULT_FROM_EMAIL`, deduped — the academy reads it in two inboxes — and is skipped only when neither is set. `--recipient` still overrides both. v1.27.1 uses `timezone.localdate()` instead of `date.today()`: the container runs UTC, so a scheduled run at 00:xx or a late-evening run in CEST read the **wrong month** and the "informe mensual" then aggregated a month nobody asked for | Celery Beat (28th, 20:00) / `send_monthly_report` command |
 | `send_parent_temporary_password_task` | Generates, hashes onto `Parent.temporary_password` and emails a one-off portal password — the invitation when the record is created, and the recovery from `¿Has olvidado tu contraseña?` (`reset=True` swaps the copy). The plaintext is generated **inside** the task, never passed as an argument: task arguments are serialised into the broker and printed in task logs (v1.9, reworked v1.27) | `ParentCreateView`, parent-portal recovery form |
-| `send_payment_receipt_email_task` | Emails a receipt PDF for a completed payment (v1.11) | Payment completion / Stripe webhook |
-| `upload_receipt_to_drive_task` | Best-effort: archives a completed payment's receipt PDF to Google Drive (v1.29.0, `core.services.drive_service`); never raises, no-op unless `GOOGLE_DRIVE_RECEIPTS_FOLDER_ID` is set | Payment completion / Stripe webhook |
+| `send_payment_receipt_email_task` | Emails a receipt PDF for a completed payment (v1.11). v1.29.1 `select_related`s the full `_RECEIPT_RELATIONS` set the receipt's discount breakdown reads (`enrollment__enrollment_type`, `enrollment__student`) — without them each send paid 3 extra lazy queries, which production (eager Celery) spends inside the completion request | Payment completion / Stripe webhook |
+| `upload_receipt_to_drive_task` | Best-effort: archives a completed payment's receipt PDF to Google Drive (v1.29.0, `core.services.drive_service`); never raises, no-op unless `GOOGLE_DRIVE_RECEIPTS_FOLDER_ID` is set. Shares `_RECEIPT_RELATIONS` with the receipt-email task | Payment completion / Stripe webhook |
 | `send_generic_email_task` | Generic email dispatcher | Manual |
 | `send_enrollment_confirmation_task` | Enrollment confirmation with attachments (uses `student.gender` field). v1.27.1 reads `core.constants.MESES_ES` instead of its own private `MONTHS_ES` copy — two lists of Spanish month names under different names is how two spellings of a month end up in the same product | On enrollment |
 | `send_due_fun_friday_emails_task` | Drains due `FunFridayScheduledSend` rows (idempotent — rows are marked `sent_at`). **The only Fun Friday send path** — manual sends persist a row (drained immediately if its slot has passed) so the claim guard always applies. | Celery Beat (daily 14:30) / `send_due_fun_friday_emails` command |

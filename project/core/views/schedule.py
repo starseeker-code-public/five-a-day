@@ -6,10 +6,10 @@ from django.http import Http404, JsonResponse
 from django.shortcuts import get_object_or_404, render
 from django.views.decorators.http import require_http_methods
 
-from billing.models import relevant_academic_years
 from core.decorators import admin_required
 from core.models import FunFridayAttendance, HistoryLog, ScheduleSlot
 from core.schedule_utils import is_valid_slot, slot_time_range
+from core.transactions import students_on_the_roll
 from core.views.students import get_ff_student_ids, get_last_friday, get_next_friday
 from students.models import Group, Student
 
@@ -125,17 +125,8 @@ def fun_friday_view(request):
     an enrollment in one of the relevant academic years (both cohorts during the
     May–August overlap).
     """
-    academic_years = relevant_academic_years()
     students = (
-        Student.objects.filter(
-            active=True,
-            is_adult=False,
-            is_waiting=False,
-            enrollments__academic_year__in=academic_years,
-        )
-        .distinct()
-        .select_related("group")
-        .order_by("group__group_name", "first_name")
+        students_on_the_roll(children_only=True).select_related("group").order_by("group__group_name", "first_name")
     )
     this_friday = get_next_friday()
     last_friday = get_last_friday()

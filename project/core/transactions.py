@@ -1,7 +1,35 @@
 from django.db.models import Prefetch
 
-from billing.models import Enrollment, Payment
+from billing.models import Enrollment, Payment, relevant_academic_years
 from students.models import Student
+
+
+def students_on_the_roll(*, children_only=False):
+    """Students actually studying THIS course — the roll, as every page means it.
+
+    Active, not a waiting-list placeholder, and holding an enrollment in one of
+    the relevant academic years (BOTH cohorts during the May–August overlap, or
+    half the academy disappears from the list for four months of the year).
+
+    One definition because there were three: the students list, the Fun Friday
+    page and the re-enrolment candidate pool each spelled it out inline, so
+    "who is on the roll" could be answered differently on three pages of the same
+    app — and fixing it in one (a waiting-list entry leaking into Fun Friday) did
+    not fix it in the others.
+
+    `children_only` drops adult students, who have no guardian and do not take
+    part in the children's activities.
+    """
+    queryset = Student.objects.filter(
+        active=True,
+        is_waiting=False,
+        enrollments__academic_year__in=relevant_academic_years(),
+    )
+    if children_only:
+        queryset = queryset.filter(is_adult=False)
+    # `.distinct()` because the enrollment join multiplies a student by their
+    # enrollments — two in the overlap window is normal, not a data problem.
+    return queryset.distinct()
 
 
 def get_active_students():

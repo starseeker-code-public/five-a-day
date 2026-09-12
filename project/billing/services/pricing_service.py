@@ -35,15 +35,16 @@ class PricingService:
 
     @staticmethod
     def get_monthly_fee(schedule_type, config=None):
-        """Get the monthly fee for a given schedule type."""
+        """Get the monthly fee for a given schedule type.
+
+        Delegates to `billing.money.monthly_fee_for` rather than carrying its own
+        copy of the mapping — a new schedule type has to price the same here, in
+        `Enrollment.save()`'s fallback and in the payment generator, or the ficha
+        and the invoice disagree.
+        """
         if config is None:
             config = PricingService.get_config()
-        fees = {
-            "full_time": config.full_time_monthly_fee,
-            "part_time": config.part_time_monthly_fee,
-            "adult_group": config.adult_group_monthly_fee,
-        }
-        return fees.get(schedule_type, config.full_time_monthly_fee)
+        return monthly_fee_for(schedule_type, config)
 
     @staticmethod
     def get_enrollment_fee(is_adult, config=None):

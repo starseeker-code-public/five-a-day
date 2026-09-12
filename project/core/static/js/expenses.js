@@ -69,7 +69,16 @@
 
     function setValue(id, value) {
         const el = document.getElementById(id);
-        if (el) el.value = value;
+        if (!el) return;
+        if (el.getAttribute("data-fp-done")) {
+            // A flatpickr-enhanced date input: its visible field is a separate
+            // element, so a bare `.value =` filled the form invisibly and the
+            // modal showed a blank date (or the previously edited expense's) on
+            // a row that has one.
+            window.setDateValue(el, value);
+            return;
+        }
+        el.value = value;
     }
 
     function render() {

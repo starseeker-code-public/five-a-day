@@ -238,6 +238,20 @@ class EmailService:
                     results["sent"] += 1
                 else:
                     results["failed"] += 1
+                    if connection is not None:
+                        # Django's SMTP backend never reopens a connection it
+                        # still holds, so ONE mid-batch disconnect (Gmail drops
+                        # idle sockets, and enforces a per-session message cap)
+                        # turned every remaining send into a guaranteed failure —
+                        # 130 payment reminders lost to a socket that died after
+                        # the 20th. Drop the shared session on any failure and let
+                        # the rest of the batch open their own: a wasted reconnect
+                        # after a genuine per-recipient failure (a bad address)
+                        # costs one handshake, where guessing wrong the other way
+                        # costs the whole run.
+                        with contextlib.suppress(Exception):
+                            connection.close()
+                        connection = None
         finally:
             if connection is not None:
                 with contextlib.suppress(Exception):

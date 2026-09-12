@@ -327,3 +327,53 @@ html.dark #view-help-modal-body kbd { background: var(--fad-accent-bg); color: v
 .theme-icon-dark { display: none; }
 html.dark .theme-icon-light { display: none; }
 html.dark .theme-icon-dark { display: inline; }
+
+/* ── Date picker (flatpickr) ───────────────────────────────────────────── */
+/* The vendored stylesheet is light-only, so without these the calendar opened
+   as a bright white panel over every dark page — on a control that now sits on
+   EVERY date input in the app (date-picker.js, v1.28.2). */
+html.dark .flatpickr-calendar {
+    background: var(--fad-surface);
+    border: 1px solid var(--fad-border-2);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+    color: var(--fad-ink);
+}
+html.dark .flatpickr-calendar.arrowTop::before,
+html.dark .flatpickr-calendar.arrowTop::after { border-bottom-color: var(--fad-surface); }
+html.dark .flatpickr-calendar.arrowBottom::before,
+html.dark .flatpickr-calendar.arrowBottom::after { border-top-color: var(--fad-surface); }
+
+html.dark .flatpickr-months,
+html.dark .flatpickr-month { background: var(--fad-surface-2); color: var(--fad-ink); fill: var(--fad-ink); }
+html.dark .flatpickr-current-month .flatpickr-monthDropdown-months { background: var(--fad-surface-2); color: var(--fad-ink); }
+html.dark .flatpickr-current-month .flatpickr-monthDropdown-months .flatpickr-monthDropdown-month { background: var(--fad-surface-2); color: var(--fad-ink); }
+html.dark .flatpickr-months .flatpickr-prev-month,
+html.dark .flatpickr-months .flatpickr-next-month { color: var(--fad-ink); fill: var(--fad-ink); }
+html.dark .flatpickr-months .flatpickr-prev-month:hover svg,
+html.dark .flatpickr-months .flatpickr-next-month:hover svg { fill: var(--primary-400); }
+
+html.dark .flatpickr-weekdays,
+html.dark span.flatpickr-weekday { background: var(--fad-surface-2); color: var(--fad-faint); }
+html.dark .flatpickr-days,
+html.dark .dayContainer { background: var(--fad-surface); }
+
+html.dark .flatpickr-day { color: var(--fad-ink); }
+html.dark .flatpickr-day:hover,
+html.dark .flatpickr-day:focus { background: var(--fad-active); border-color: var(--fad-active); }
+html.dark .flatpickr-day.today { border-color: var(--primary-500); }
+html.dark .flatpickr-day.selected,
+html.dark .flatpickr-day.selected:hover {
+    background: var(--primary-600);
+    border-color: var(--primary-600);
+    color: #fff;
+}
+html.dark .flatpickr-day.flatpickr-disabled,
+html.dark .flatpickr-day.prevMonthDay,
+html.dark .flatpickr-day.nextMonthDay { color: var(--fad-faint); }
+html.dark .numInputWrapper span { border-color: var(--fad-border-2); }
+html.dark .numInputWrapper span:hover { background: var(--fad-active); }
+
+/* ── Indigo utilities (students list actions menu) ─────────────────────── */
+html.dark .hover\:bg-indigo-50:hover { background-color: #232a4d; }
+html.dark .hover\:text-indigo-700:hover { color: #a5b4fc; }
+html.dark .text-indigo-500 { color: #818cf8; }

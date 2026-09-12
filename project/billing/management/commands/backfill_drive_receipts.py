@@ -14,7 +14,7 @@ Best-effort per payment: one failure is reported and the run continues, so a
 single un-renderable payment or a transient Drive blip does not abort the rest.
 """
 
-from django.core.management.base import BaseCommand
+from django.core.management.base import BaseCommand, CommandError
 
 from billing.models import Payment
 from billing.services.pdf_service import generate_payment_receipt
@@ -38,17 +38,20 @@ class Command(BaseCommand):
         # across every payment (one lookup per Curso/Recibos/month, not per file).
         drive = DriveReceiptService()
         if not drive.is_configured():
-            self.stderr.write(
-                self.style.ERROR(
-                    "Google Drive receipts are not configured. Set GOOGLE_DRIVE_RECEIPTS_FOLDER_ID and the "
-                    "service-account credentials, and share the folder with the service account as Editor."
-                )
+            # CommandError, not a message and a clean return: this runs as a Cloud
+            # Run Job, and exiting 0 with an empty archive reports success for a
+            # run that did nothing at all.
+            raise CommandError(
+                "Google Drive receipts are not configured. Set GOOGLE_DRIVE_RECEIPTS_FOLDER_ID and the "
+                "service-account credentials, and share the folder with the service account as Editor."
             )
-            return
 
         payments = (
             Payment.objects.filter(payment_status="completed")
-            .select_related("student", "parent", "enrollment")
+            # `enrollment__enrollment_type` / `enrollment__student` are what the
+            # receipt's discount breakdown reads; without them the loop pays two
+            # extra queries per payment across the entire archive.
+            .select_related("student", "parent", "enrollment", "enrollment__enrollment_type", "enrollment__student")
             .order_by("payment_date", "id")
         )
         if academic_year:
@@ -60,11 +63,15 @@ class Command(BaseCommand):
         mode = "APPLY" if apply_changes else "DRY RUN"
         self.stdout.write(f"[{mode}] {total} completed payment(s) to archive.")
 
-        counts = {"uploaded": 0, "skipped_exists": 0, "error": 0, "would_upload": 0}
+        if not apply_changes:
+            # Nothing to iterate for: the count IS the answer. Walking the rows to
+            # increment a counter to the number just printed streamed the whole
+            # joined archive for no information.
+            self.stdout.write(f"Would upload {total} receipt(s). Re-run with --apply.")
+            return
+
+        counts = {"uploaded": 0, "skipped_exists": 0, "error": 0}
         for payment in payments.iterator():
-            if not apply_changes:
-                counts["would_upload"] += 1
-                continue
             try:
                 pdf_bytes = generate_payment_receipt(payment)
             except Exception as exc:  # noqa: BLE001 — report and continue
@@ -83,12 +90,9 @@ class Command(BaseCommand):
                 counts["error"] += 1
                 self.stderr.write(self.style.WARNING(f"  payment {payment.id}: {result.status} — {result.error}"))
 
-        if apply_changes:
-            self.stdout.write(
-                self.style.SUCCESS(
-                    f"Done. {counts['uploaded']} uploaded, {counts['skipped_exists']} already present, "
-                    f"{counts['error']} failed."
-                )
+        self.stdout.write(
+            self.style.SUCCESS(
+                f"Done. {counts['uploaded']} uploaded, {counts['skipped_exists']} already present, "
+                f"{counts['error']} failed."
             )
-        else:
-            self.stdout.write(f"Would upload {counts['would_upload']} receipt(s). Re-run with --apply.")
+        )

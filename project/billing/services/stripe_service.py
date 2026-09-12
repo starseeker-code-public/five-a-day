@@ -237,22 +237,14 @@ class StripeService:
             payment.save(update_fields=["payment_status", "payment_date", "stripe_payment_intent", "updated_at"])
             logger.info("Stripe: payment %s marked completed via checkout.session.completed", payment.id)
 
-            # Fire a receipt email so the parent has proof of payment.
+            # Receipt email + Drive archive, through the shared dispatcher that
+            # the admin "marcar cobrado" path also uses — one statement of what a
+            # completion triggers, so a new side effect cannot reach only one of
+            # the two ways a payment gets completed. It never raises.
             # Late import avoids circular imports at module load.
-            try:
-                from comms.tasks import send_payment_receipt_email_task
+            from comms.tasks import dispatch_payment_completed
 
-                send_payment_receipt_email_task.delay(payment.id)
-            except Exception:  # noqa: BLE001 — email is nice-to-have, never fail the webhook
-                logger.exception("Failed to enqueue receipt email for payment %s", payment.id)
-
-            # Archive the receipt to Drive too (v1.29.0) — no-op unless configured.
-            try:
-                from comms.tasks import upload_receipt_to_drive_task
-
-                upload_receipt_to_drive_task.delay(payment.id)
-            except Exception:  # noqa: BLE001 — Drive archive is nice-to-have, never fail the webhook
-                logger.exception("Failed to enqueue Drive receipt upload for payment %s", payment.id)
+            dispatch_payment_completed(payment.id)
 
             return {"status": "completed", "payment_id": payment.id}
 

@@ -10,6 +10,14 @@
  *
  * Idempotent and re-runnable: `window.initDatePickers(root)` can be called after
  * injecting markup (a modal, an AJAX panel) to enhance any new date inputs.
+ *
+ * IMPORTANT for callers: once enhanced, the original <input> is type=hidden and
+ * what the user sees is flatpickr's separate altInput. Writing `el.value` or
+ * calling `form.reset()` therefore updates the submitted value while leaving the
+ * VISIBLE field showing something else — a form that displays one date and posts
+ * another. Use `window.setDateValue(el, iso)` to write one, and
+ * `window.dateInputElement(el)` when you need the element the user actually sees
+ * (to show/hide or focus it). Form resets are re-synced automatically below.
  */
 (function () {
     "use strict";
@@ -35,13 +43,65 @@
                 altInput: true,
                 altFormat: "d/m/Y",
                 allowInput: true,
-                locale: flatpickr.l10ns && flatpickr.l10ns.es ? "es" : "default",
+                // No `locale:` here — `flatpickr.localize()` above already made
+                // Spanish the default for every instance, and the fallback value
+                // would have been "default" anyway.
                 // Respect min/max already declared on the element.
                 minDate: el.getAttribute("min") || null,
                 maxDate: el.getAttribute("max") || null,
             });
         });
     }
+
+    function resolve(el) {
+        return typeof el === "string" ? document.getElementById(el) : el;
+    }
+
+    /**
+     * The element the user actually sees for a date input — flatpickr's altInput
+     * once enhanced, the input itself otherwise. Use it to show/hide or focus a
+     * date field: the original is type=hidden after enhancement, so toggling a
+     * `hidden` class on it (or focusing it) has no visible effect at all.
+     */
+    window.dateInputElement = function (el) {
+        el = resolve(el);
+        return (el && el._flatpickr && el._flatpickr.altInput) || el;
+    };
+
+    /**
+     * Set a date input's value so the visible field and the submitted value
+     * agree. `value` is an ISO "YYYY-MM-DD" string (or "" to clear).
+     *
+     * A plain `el.value = iso` writes only the hidden original, leaving the
+     * visible field blank or — worse — showing the date from whatever record was
+     * opened before, which is a form that displays one date and posts another.
+     */
+    window.setDateValue = function (el, value) {
+        el = resolve(el);
+        if (!el) return;
+        if (el._flatpickr) {
+            // `false` = don't fire onChange; this is a programmatic fill, not a
+            // user edit, and listeners react to the latter.
+            el._flatpickr.setDate(value || null, false);
+        } else {
+            el.value = value || "";
+        }
+    };
+
+    // `form.reset()` restores the original inputs' defaultValue but cannot know
+    // about flatpickr's altInput, so a reused modal (enroll, new todo) kept
+    // showing the previously picked date while submitting the default one.
+    // `reset` bubbles, so one listener covers every form on the page.
+    document.addEventListener("reset", function (event) {
+        var form = event.target;
+        if (!form || typeof form.querySelectorAll !== "function") return;
+        // After the browser has applied the reset.
+        setTimeout(function () {
+            form.querySelectorAll("input[data-fp-done]").forEach(function (el) {
+                if (el._flatpickr) el._flatpickr.setDate(el.value || null, false);
+            });
+        }, 0);
+    });
 
     document.addEventListener("DOMContentLoaded", function () {
         enhance(document);
