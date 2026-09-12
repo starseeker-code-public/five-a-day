@@ -582,11 +582,23 @@ class TestPortalPages:
         response = client.get(reverse("parent_portal_receipt", args=[pending_payment.id]))
         assert response.status_code == 404
 
-    def test_receipt_returns_pdf(self, client, parent, pending_payment):
+    def test_receipt_returns_pdf(self, client, parent, completed_payment):
         _login_as(client, parent)
-        response = client.get(reverse("parent_portal_receipt", args=[pending_payment.id]))
+        response = client.get(reverse("parent_portal_receipt", args=[completed_payment.id]))
         assert response.status_code == 200
         assert response["Content-Type"] == "application/pdf"
+
+    def test_receipt_refused_for_own_pending_payment(self, client, parent, pending_payment):
+        """Owning the payment is not enough. Rendering assigns a permanent fiscal
+        receipt number, so a family editing the id in the URL to one of their own
+        UNPAID charges would mint an official receipt for money the academy never
+        received."""
+        _login_as(client, parent)
+        response = client.get(reverse("parent_portal_receipt", args=[pending_payment.id]))
+        assert response.status_code == 404
+
+        pending_payment.refresh_from_db()
+        assert pending_payment.receipt_number == ""
 
     def test_tax_certificate(self, client, parent):
         _login_as(client, parent)

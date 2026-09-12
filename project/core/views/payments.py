@@ -60,25 +60,17 @@ def _queue_payment_receipt(payment_id: int) -> None:
     outside one (the admin bulk action) behave exactly as before.
 
     Best-effort: a receipt that fails to send must never fail the request that
-    recorded the money. Imported lazily to avoid a comms->billing import cycle.
+    recorded the money. `comms.tasks.dispatch_payment_completed` owns WHICH side
+    effects a completion has (receipt email + Drive archive) so this path and the
+    Stripe webhook cannot drift; this function owns only the on-commit timing,
+    which is the part the two genuinely differ on. Imported lazily to avoid a
+    comms->billing import cycle.
     """
 
     def _dispatch():
-        try:
-            from comms.tasks import send_payment_receipt_email_task
+        from comms.tasks import dispatch_payment_completed
 
-            send_payment_receipt_email_task.delay(int(payment_id))
-        except Exception:  # noqa: BLE001 — receipt is nice-to-have
-            logger.exception("Failed to enqueue payment receipt for payment %d", int(payment_id))
-        try:
-            # Archive the same receipt to the Drive folder (v1.29.0). Separate
-            # try/except so a Drive problem can never stop the email, and vice
-            # versa; the task itself is a no-op when Drive is not configured.
-            from comms.tasks import upload_receipt_to_drive_task
-
-            upload_receipt_to_drive_task.delay(int(payment_id))
-        except Exception:  # noqa: BLE001 — Drive archive is nice-to-have
-            logger.exception("Failed to enqueue Drive receipt upload for payment %d", int(payment_id))
+        dispatch_payment_completed(int(payment_id))
 
     transaction.on_commit(_dispatch)
 
@@ -426,10 +418,22 @@ def payment_detail_view(request, payment_id):
 @require_http_methods(["GET"])
 @admin_required
 def payment_receipt_pdf(request, payment_id):
-    """Stream a payment-receipt PDF (v1.3)."""
+    """Stream a payment-receipt PDF (v1.3), for COLLECTED money only.
+
+    The status filter is part of the receipt-numbering invariant, not a UI
+    nicety: rendering assigns the payment its permanent ``YYYY-NNN`` number from
+    a sequence that continues the academy's paper books, so serving this for a
+    pending row would issue a numbered receipt for money never collected and
+    leave a permanent gap if it were later cancelled. The payments list already
+    hides the link; this is what makes a hand-typed URL agree with it.
+    """
     from billing.services.pdf_service import generate_payment_receipt
 
-    payment = get_object_or_404(Payment.objects.select_related("student", "parent"), id=payment_id)
+    payment = get_object_or_404(
+        Payment.objects.select_related("student", "parent", "enrollment", "enrollment__enrollment_type"),
+        id=payment_id,
+        payment_status="completed",
+    )
     pdf_bytes = generate_payment_receipt(payment)
     response = HttpResponse(pdf_bytes, content_type="application/pdf")
     response["Content-Disposition"] = f'attachment; filename="recibo-{payment.id}.pdf"'

@@ -360,14 +360,18 @@ Both generators short-circuit here, so any queryset feeding them needs `select_r
 
 ### Shared money helpers (v1.27.1)
 
-Three formulas were written out more than once each, and money rounded two different ways in the same
-transaction. They now live in `billing/services/pricing_service.py` and are the **only** copies:
+Four formulas were written out more than once each, and money rounded two different ways in the same
+transaction. They live in **`billing/money.py`** — a stdlib-only *leaf* module since v1.28.2, so that
+both `billing.models` and `billing.services.pricing_service` can share them without the
+`models → pricing_service → models` import cycle CodeQL flagged; `pricing_service` re-exports every
+name. These are the **only** copies:
 
 | Helper | Rule |
 |--------|------|
 | `round_money(value)` | Floor at €0.01, quantize **HALF_UP**. THE one money rounding in billing. |
 | `quarterly_price_from_monthly(monthly_fee, config)` | Three months of `monthly_fee` minus the configured quarterly percentage. Parameterised by the fee, because the advertised price is always full-time while `Enrollment.save()` and `EnrollmentService` must apply it to whatever base `schedule_type` selected. |
 | `period_base_amount(config, schedule_type, payment_modality)` | Standard price of **one** billing period — a month, or a quarter on a quarterly plan. This is the figure `Enrollment.final_amount` holds. |
+| `monthly_fee_for(schedule_type, config)` | The schedule → fee mapping (`full_time` / `part_time` / `adult_group`, defaulting to full-time). Since v1.29.1 both `PaymentService._get_base_monthly_fee` and `PricingService.get_monthly_fee` delegate here; they were hand-rolled copies, so a schedule type added to one map priced correctly on the ficha and fell back to full-time on the invoice. |
 
 `PaymentService._round_money` and `EnrollmentService._apply_discounts` delegate to `round_money`;
 `Enrollment.save()`'s price fallback and `EnrollmentService.replicate_enrollment` both go through
@@ -457,6 +461,36 @@ The admin's bulk actions enforce the mirror image: `mark_as_completed` touches o
 and `_bulk_set_status` refuses to move a **completed** payment to `failed` or `cancelled` (that
 money has been collected and counted as income in a month very likely already closed and reported).
 "Marcar como pendientes" is the auditable route back.
+
+### Receipts (recibos) — v1.29.1
+
+A **recibo is proof that money was collected**, and its number is drawn from a sequence that
+continues the academy's paper books. Two rules follow from that, and both are enforced rather than
+left to the UI:
+
+- **Only a `completed` payment gets a receipt.** `Payment.assign_receipt_number()` returns blank for
+  any other status, and both endpoints that render one — the admin `/payments/<id>/receipt.pdf` and
+  the parent portal's, which authorises by *owner* — filter on the status too. Rendering is what
+  *assigns* the permanent `YYYY-NNN` number, so a hand-typed id on a pending row previously issued a
+  false official document **and** consumed a number that became a permanent hole in a fiscal
+  sequence once that charge was cancelled. The PDF still renders, headed plain `RECIBO`.
+- **The breakdown reconstructs the price or shows nothing.** `PaymentService.price_breakdown()` is
+  the single pricing implementation — it returns the itemised lines *and* the total, so
+  `_price_months` is just the total-only face of it — and the receipt prints those lines only when
+  re-pricing the period reproduces `payment.amount` to the cent. A hand-priced special, a manual
+  correction, a close-out block, or a receipt re-downloaded after prices changed in `/management/`
+  all fall back to the bare **Importe** line. The receipt previously re-derived the discounts itself
+  and printed the leftover as `Prorrateo primer periodo` / `Ajuste`, so any drift from the generator
+  was silently relabelled as proration on a document families file with the tax authority: the
+  one-month June stub showed a full quarter's base and a ~2/3 "prorrateo" on a payment that was
+  neither first nor prorated, and last September's receipt restated its base at today's price.
+- The **matrícula** breakdown gates `Descuento antiguo alumno` on the enrollment's own category,
+  never on `base − amount` — deriving it labelled *any* shortfall a returning-student discount, so a
+  negotiated 25 € matrícula against the 40 € standard fee printed a 15 € discount the family had
+  never been granted.
+
+The reference date for both the number's year and the Drive archive's folder is one property,
+`Payment.receipt_date` (`payment_date` → `due_date` → today).
 
 ---
 

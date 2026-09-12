@@ -15,11 +15,11 @@ Built to centralize student records, automate billing cycles, and streamline par
 ### Project Status
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v1.29.0-brightgreen?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-v1.29.1-brightgreen?style=flat-square" alt="Version">
   &nbsp;|&nbsp;
   <a href="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml?query=branch%3Amain"><img src="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml/badge.svg?branch=main&style=flat-square" alt="CI main"></a>
   &nbsp;|&nbsp;
-  <img src="https://img.shields.io/badge/coverage-94.87%25-brightgreen?style=flat-square" alt="Coverage">
+  <img src="https://img.shields.io/badge/coverage-95.10%25-brightgreen?style=flat-square" alt="Coverage">
   &nbsp;|&nbsp;
   <a href="https://github.com/starseeker-code-public/five-a-day/actions/workflows/scorecard.yml"><img src="https://img.shields.io/badge/OpenSSF%20Scorecard-monitored-blueviolet?style=flat-square" alt="OSSF Scorecard"></a>
   &nbsp;|&nbsp;
@@ -36,9 +36,9 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 | Version | Date | Description |
 |---------|------|-------------|
-| **v1.29.0** | 2026-09-11 | Google Drive receipt archive + full-project review fixes |
+| **v1.29.1** | 2026-09-12 | Receipts only for collected money, one pricing source, QA fixes |
+| v1.29.0 | 2026-09-11 | Google Drive receipt archive + full-project review fixes |
 | v1.28.2 | 2026-09-11 | QA fixes: email send bug, dd/mm dates, receipt numbering, bulk re-enrol |
-| v1.28.1 | 2026-09-03 | First complete version: review ledger closed across billing, timezone, auth, mass mail and CI |
 
 ---
 
@@ -140,8 +140,206 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 ## Version History
 
-<details id="v1290" open>
-<summary><strong>v1.29.0 — Google Drive receipt archive (current)</strong></summary>
+<details id="v1291" open>
+<summary><strong>v1.29.1 — Receipts describe what was actually charged (current)</strong></summary>
+
+A QA follow-up on the v1.29.0 receipt work. The theme is *one source per rule*:
+several documents and screens were each re-deriving a figure the generator had
+already decided, and every one of those copies had drifted.
+
+**Receipts are issued for collected money only**
+
+- **A receipt number is never minted for a pending charge.**
+  `Payment.assign_receipt_number()` returns blank unless the payment is
+  `completed`, and both receipt endpoints — the admin
+  `/payments/<id>/receipt.pdf` and the parent portal's — now filter on it.
+  Rendering a receipt is what *assigns* the permanent `YYYY-NNN` number, so a
+  hand-typed URL on a pending row used to issue an official receipt for money the
+  academy had not received and burn a number out of a fiscal sequence that
+  continues the academy's paper books. The PDF still renders, headed plain
+  `RECIBO`, rather than failing.
+- **`Payment.receipt_date`** is now one property (`payment_date` → `due_date` →
+  today), read by both the receipt number's YEAR and the Drive archive's
+  `Curso`/`<Mes>` folders. Two copies of that fallback chain meant a receipt
+  numbered `2026-6xx` could be filed under a different year's folder with nothing
+  erroring.
+- Numbering no longer pulls the whole year's receipt numbers into Python inside
+  the config lock — it reads the highest as one ordered row, so the first full
+  `backfill_drive_receipts` run is no longer quadratic against the archive.
+
+**The receipt breakdown reconstructs the price or says nothing**
+
+- **`PaymentService.price_breakdown()`** is now THE pricing arithmetic, returning
+  the itemised lines *and* the total; `_price_months` is the total-only face of
+  the same call. The receipt PDF had grown its own copy of the discount order and
+  it drifted immediately: it charged the cheque idioma x3 on the one-month June
+  stub every quarterly family gets, gated sibling/cheque on `student.is_adult`
+  where the generator gates on `schedule_type`, and rounded each line separately
+  so the default quarterly+sibling prices printed a phantom `Ajuste +0,01 EUR`.
+- The breakdown is shown **only when re-pricing the period reproduces
+  `payment.amount` to the cent**. Anything else — a hand-priced special, a manual
+  correction, a close-out block, or simply a receipt re-downloaded after prices
+  changed in `/management/` — falls back to the bare `Importe` line. Previously
+  any disagreement was silently relabelled `Prorrateo primer periodo` or `Ajuste`
+  on a document families keep for tax purposes.
+- The matrícula breakdown gates `Descuento antiguo alumno` on the enrollment's own
+  category instead of on the arithmetic. Deriving it from `base - amount` printed
+  a returning-student discount for a family that had never studied here, whenever
+  a negotiated matrícula came in under the standard fee.
+- **One schedule → fee mapping.** `PaymentService._get_base_monthly_fee` and
+  `PricingService.get_monthly_fee` were two hand-rolled copies of
+  `billing.money.monthly_fee_for`; both now delegate to it.
+
+**One statement of what happens when money lands**
+
+- **`comms.tasks.dispatch_payment_completed()`** fires the receipt email and the
+  Drive archive, each in its own `try`. The admin "marcar cobrado" path and the
+  Stripe webhook each carried their own copy of that pair, so a third side effect
+  would have had to be written twice to be right. The views keep only the part
+  they genuinely differ on — on-commit timing.
+- Both receipt tasks and the backfill command `select_related` everything the
+  receipt touches, saving three lazy queries per payment — which production
+  (eager Celery) spends inside the completion request.
+
+**Bulk mail no longer dies mid-batch**
+
+- `EmailService.send_bulk_emails` **drops the shared SMTP session on any failure**
+  and lets the rest of the batch reconnect. Django's SMTP backend never reopens a
+  connection it still holds, so one mid-batch disconnect — Gmail drops idle
+  sockets and enforces a per-session message cap — turned every remaining send
+  into a guaranteed failure. 130 payment reminders were lost to a socket that died
+  after the 20th.
+
+**One definition of "the roll"**
+
+- **`core.transactions.students_on_the_roll()`** — active, not a waiting-list
+  placeholder, enrolled in one of the relevant academic years (both cohorts during
+  the May–August overlap). The students list, Fun Friday and the re-enrolment pool
+  each spelled this out inline, so fixing it in one did not fix it in the others.
+
+**Bulk re-enrolment goes through the supersede path**
+
+- "Antiguo alumno" now closes the prior enrollment via
+  `EnrollmentService.supersede_enrollment` like every other plan change, instead of
+  finishing it by hand. The hand-rolled close skipped `close_out_periods`, and
+  `generate_payments` only visits ACTIVE enrollments — so any month the old plan
+  taught and never invoiced became structurally unbillable the instant the view
+  finished it. It also refuses (and says so) when every remaining month is already
+  invoiced, rather than re-billing them.
+- The plan dropdown is rendered from `ENROLLMENT_PLAN_CHOICES` — the same list the
+  POST validates against — instead of a second copy typed into the template, which
+  had already forked on its labels.
+- The POST re-checks only the submitted ids against the candidacy rule instead of
+  fetching the whole pool with its display prefetches.
+
+**Google Drive archive hardening**
+
+- **Every Drive call is bounded at 10 s.** googleapiclient's default is no timeout
+  at all, and production runs Celery eager — so a stalled connection would have
+  parked a Gunicorn worker inside the "marcar cobrado" request indefinitely. Never
+  raising is not the same as never blocking.
+- **Concurrent folder creation converges.** Find-then-create is not atomic and
+  Drive allows duplicate names, so two payments completing on two instances could
+  each create `Septiembre 26` and file receipts into different folders, defeating
+  the per-payment idempotency check with nothing erroring. After creating, the
+  service re-lists and keeps the oldest match, so every instance writes to the same
+  folder.
+- The service-account credential is parsed once per instance rather than per
+  payment, and month names come from `core.constants.MESES_ES` instead of a second
+  local list — Drive folders are matched BY NAME, so one drifted accent would have
+  filed receipts into a differently-spelled folder beside the real one.
+- `backfill_drive_receipts` now raises `CommandError` when Drive is unconfigured.
+  It runs as a Cloud Run Job, where exiting 0 with an empty archive reported success
+  for a run that did nothing. Its dry run also stops streaming the whole joined
+  archive to count rows it had already counted.
+
+**Frontend fixes**
+
+- **Date pickers: `window.setDateValue()` / `window.dateInputElement()`.** After
+  flatpickr enhancement the original input is `type=hidden` behind a separate
+  visible field, so `el.value = ...` filled a form invisibly and toggling `hidden`
+  or calling `.focus()` did nothing. The expenses edit modal showed a blank date on
+  a row that has one, and the dashboard's "Fecha" todo option left the field
+  permanently invisible while silently taking today's date. `form.reset()` now
+  re-syncs the visible field too.
+- **The flatpickr calendar has a dark theme.** The vendored stylesheet is
+  light-only, so the picker opened as a bright white panel over every dark page —
+  on a control that sits on every date input in the app.
+- The waiting-list delete confirmation moved from an inline `onsubmit` to
+  `data-confirm`, which `base.js` handles: an inline event attribute cannot carry a
+  nonce, so the enforced CSP dropped it and the confirmation on a destructive
+  action silently disappeared.
+- Two leftover dark-palette hex values in the monthly-report emails (invisible
+  white-on-white after the v1.28.2 light migration), and the QA backlog's AJAX
+  timestamps (printed in UTC beside server-rendered Europe/Madrid rows, so a task
+  created at 00:30 showed as 22:30 the previous day).
+
+**Email templates**
+
+- The green WhatsApp contact box existed as **fifteen inline copies**; it is now
+  `emails/_contact_box.html`, included with a `topic` (and optional `heading` /
+  `body`). The v1.28.2 light migration had to restyle two hex values across
+  thirteen files in lockstep, and one missed copy would have left a dark box on the
+  new white card. `static/css/email.css` is deleted — an email template can never
+  reference a `static` tag (the Celery worker never runs `collectstatic`), so the
+  file had no reader.
+
+**Special enrollments**
+
+- `EnrollmentForm` now owns the invariant that a pre-filled `manual_amount`
+  implies "Personalizar también la cuota", rather than each caller remembering to
+  tick it — forgetting it turned every save of a hand-priced student's ficha, even
+  a phone-number edit, into a silent no-op.
+
+**Security / CI — the image gate goes green**
+
+- **The runtime image no longer ships pip**, which clears the two fixable HIGHs that
+  were failing `Publish image & scan`: `msgpack 1.1.2` (GHSA-6v7p-g79w-8964) and
+  `setuptools 70.3.0` (CVE-2025-47273). Neither was a project dependency, and
+  **neither could be fixed by bumping anything** — `uv.lock` already carries
+  msgpack 1.2.1 (exactly the version the advisory asks for) and setuptools 83.0.0,
+  both are dev-only transitives (`pip-audit` → cachecontrol → msgpack,
+  `coverage-badge` → setuptools), and the image builds `uv sync --no-dev`, so
+  neither is in `/app/.venv` at all. The versions Trivy reported came from **pip's
+  own vendored-dependency manifest** (`pip/_vendor/vendor.txt`) in the
+  `python:3.14-slim` base image — a file uv does not manage and Dependabot cannot
+  bump.
+- Deleting it is a real fix rather than a suppression: the vendored msgpack code is
+  genuinely present and genuinely removed. (The setuptools line was a phantom —
+  `pip/_vendor/setuptools/` does not exist in the image; Trivy reads the manifest,
+  not the filesystem.) `.github/trivyignore` was deliberately **not** used, since an
+  ignore would have left the vulnerable code in place and disabled the control.
+- Dropping an installer from a production container is also hardening in its own
+  right. Nothing needs it: the venv is resolved and built by uv in the builder stage
+  and copied in, `uv` remains on `PATH` for anything ad-hoc, and `make test` syncs
+  dev dependencies with **uv** inside the container, so the dev workflow is
+  unchanged. The `RUN` ends in two negated assertions that fail the build if any pip
+  metadata survives a future base-image bump.
+- Verified end to end locally: the same Trivy invocation the gate uses reports
+  **2 fixable HIGH/CRITICAL before, 0 after**, with Hadolint clean and Django,
+  Gunicorn, `uv sync` and pytest all working in the rebuilt image.
+
+**Testing**
+
+- Suite at **2,237 tests, 95.10 % coverage** (7,169 statements, 351 uncovered, 54 files at
+  100 %), up 10. `test_v1282_qa_fixes.py` grew from 8 to 15 cases, all on the two receipt rules:
+  the **reconstruct-or-say-nothing** breakdown (the June stub not priced as a full quarter, the
+  breakdown withheld once prices have changed since, a negotiated matrícula below the standard fee
+  not reported as a returning-student discount) and **numbering** (a pending payment consumes no
+  number, a completed one is numbered exactly once, the sequence crossing 999, a malformed stored
+  number not breaking the next issue). The two receipt endpoints each gained a test that a
+  **pending** payment is refused — `test_receipt_view.py` asserts no number is consumed, and
+  `test_parent_portal.py` asserts a family is refused their OWN pending charge, which is the case
+  ownership checks alone would let through. `test_drive_service.py` pins the failure labelling of
+  each Drive error cause.
+- Not covered by tests, and worth knowing: the SMTP mid-batch reconnect, the Drive call timeout and
+  the convergent folder creation are all verified by reading rather than pinned — each needs a
+  fake that fails partway through a live session, which the current email/Drive fakes cannot express.
+
+</details>
+
+<details id="v1290">
+<summary><strong>v1.29.0 — Google Drive receipt archive</strong></summary>
 
 Completed-payment receipts are now mirrored to the academy's Google Drive, the
 same place the paper receipts are filed.
@@ -3965,6 +4163,11 @@ EMAIL_SECRET=                     # 16-char Gmail App Password
 SUPPORT_EMAIL=                    # where support tickets are sent
 EMAIL_TEST_1=                     # dev/QA test recipient 1
 EMAIL_TEST_2=                     # dev/QA test recipient 2
+# SMTP host/port/TLS. Defaults are Gmail's and correct; listed so they are
+# discoverable if the academy ever moves off Gmail.
+# EMAIL_HOST=smtp.gmail.com
+# EMAIL_PORT=587
+# EMAIL_USE_TLS=True
 # Override the backend to NEUTRALISE outbound mail. The QA VM runs the full
 # Beat schedule (birthday, payment reminders, monthly report, Fun Friday) and,
 # hard-wired to Gmail, would autonomously mail whatever addresses its database
@@ -4437,13 +4640,16 @@ five-a-day/
 │   │   │                         (CSP + Permissions-Policy, v1.23.0)
 │   │   ├── decorators.py         qa_access_required (testing env gate)
 │   │   ├── context_processors.py Notifications + is_admin_user / is_non_admin_teacher flags
-│   │   ├── transactions.py       Optimised queryset builders with stable ordering
+│   │   ├── transactions.py       Optimised queryset builders with stable ordering, plus
+│   │   │                         students_on_the_roll() (v1.29.1 — the one definition of
+│   │   │                         "studying this course", shared by the roll and Fun Friday)
 │   │   ├── templates/            All HTML templates — base, pages, emails/, parent_portal/,
 │   │   │                         two_factor/ (v1.13), plus expenses/reports/waiting_list
 │   │   │                         and waiting_list_create (v1.15), features/feature_detail
 │   │   │                         and qa/_qa_styles (v1.21.0)
-│   │   ├── static/               CSS (app.css, theme.css, email.css, admin_custom.css,
-│   │   │                         palette.css — v1.27.1, vendor-flatpickr — v1.28.2)
+│   │   ├── static/               CSS (app.css, theme.css — incl. the v1.29.1 flatpickr dark
+│   │   │                         theme, admin_custom.css, palette.css — v1.27.1,
+│   │   │                         vendor-flatpickr — v1.28.2)
 │   │   │                         + JS (17 behaviour modules incl. date-picker
 │   │   │                         + tailwind-config.js) + vendor/ (Tailwind, flatpickr) + images
 │   │   └── management/commands/  seed_teachers (v1.26.8: optional USERNAME handle),
@@ -4504,7 +4710,7 @@ five-a-day/
 │   │   └── management/commands/  send_email, test_all_emails, plus 4 Beat-task wrappers
 │   │                             (v1.14.2 — birthday, reminders, report, Fun Friday drain)
 │   │
-│   ├── tests/                    pytest suite (2,227 tests, 94.87 % coverage) — unit/ + integration/
+│   ├── tests/                    pytest suite (2,237 tests, 95.10 % coverage) — unit/ + integration/
 │   ├── templates/registration/   Password-reset templates (form, done, confirm, complete + email body)
 │   ├── templates/admin/          Django admin overrides (branded theme)
 │   └── conftest.py               Shared fixtures (models + authenticated_client)
@@ -4522,6 +4728,9 @@ five-a-day/
 │   │   └── scorecard.yml              OSSF Scorecard supply-chain security (weekly)
 │   ├── dependabot.yml            Weekly dependency updates
 │   ├── trivyignore               CVE allow-list for the gating image scan (v1.27.1).
+│   │                             Still EMPTY as of v1.29.1: the vendored-pip
+│   │                             findings were fixed by removing pip from the
+│   │                             runtime image, not by ignoring them.
 │   │                             Applied to the GATE only, so an ignored CVE still
 │   │                             shows in the Security tab. Entries need a reason.
 │   └── CODEOWNERS                Auto-request reviews from owner accounts
@@ -4572,8 +4781,8 @@ Dashboard, authentication, scheduling, and shared utilities. Owns all views and 
 | **Views** | 23 modules: auth, password_reset, dashboard, students, parents, payments, management, app_forms, schedule, fun_friday_attendance, todos, support, errors, testing_tools, features, waiting_list, sheets, expenses, reports, parent_portal, stripe_views, pwa, two_factor |
 | **Services** | 4 — analytics_service, google_sheets_service, two_factor_service, drive_service (v1.29.0 — receipt archive) |
 | **Middleware** | 4 — NoHtmlCacheMiddleware (no-cache on dynamic HTML), QAErrorEmailMiddleware, SimpleAuthMiddleware (session auth public allow-list incl. `/password-reset/` + non-admin teacher URL-name whitelist), AuditActorMiddleware |
-| **Templates** | base.html (layout — v1.26.8 renders the global flash-message block and gates the bell / history feed / per-view help on `is_admin_user`), 25 page templates (v1.21.0: `features.html`, `feature_detail.html`) + the shared `qa/_qa_styles.html` partial, 19 email templates + `base_email.html` (v1.26.8: the violet **dark** palette is now inline and unconditional, not a `prefers-color-scheme` overlay), error pages, plus `templates/registration/` for the password-reset and teacher-activation flows |
-| **Static** | 5 CSS files (app.css, theme.css, email.css, admin_custom.css, plus `palette.css` — v1.27.1, the `--primary-*` vars, deliberately separate because only `base.html` loads app.css while theme.css is loaded by three shells) + `vendor-flatpickr-*.css` (v1.28.2), 17 JS behaviour modules (incl. `date-picker.js` — v1.28.2) + `tailwind-config.js` (v1.27.1 — the shared `tailwind.config`, previously copied inline into three shells and already drifted), `vendor/` (self-hosted Tailwind Play build + flatpickr), images |
+| **Templates** | base.html (layout — v1.26.8 renders the global flash-message block and gates the bell / history feed / per-view help on `is_admin_user`), 25 page templates (v1.21.0: `features.html`, `feature_detail.html`) + the shared `qa/_qa_styles.html` partial, 19 email templates + `base_email.html` (v1.28.2: ONE light theme that opts out of client dark-mode, written inline; v1.29.1 factors the shared WhatsApp contact box out of fifteen inline copies into `emails/_contact_box.html`), error pages, plus `templates/registration/` for the password-reset and teacher-activation flows |
+| **Static** | 4 CSS files (app.css, theme.css — which gained the flatpickr dark theme in v1.29.1, admin_custom.css, plus `palette.css` — v1.27.1, the `--primary-*` vars, deliberately separate because only `base.html` loads app.css while theme.css is loaded by three shells) + `vendor-flatpickr-*.css` (v1.28.2); `email.css` was deleted in v1.29.1 (an email template can never use `{% static %}`, so it had no reader). 17 JS behaviour modules (incl. `date-picker.js` — v1.28.2, which exposes `window.setDateValue()` / `window.dateInputElement()` since v1.29.1) + `tailwind-config.js` (v1.27.1 — the shared `tailwind.config`, previously copied inline into three shells and already drifted), `vendor/` (self-hosted Tailwind Play build + flatpickr), images |
 | **Commands** | seed_teachers (Teacher + auth.User from env vars; v1.26.8 optional `USERNAME` login handle), seed_demo_parents (v1.26.8 — the parent-portal demo family, `CommandError` in production), seed_testdata, export_to_sheets, reset_two_factor, cleanup_backlog_tasks, prune_audit_log (v1.15), backup_retention (v1.26.0), purge_sessions (v1.23.0), set_ready_for_prod (v1.26.4; since v1.26.7 `on` also fires the repository_dispatch that arms `Deploy production`) |
 | **URLs** | 54 patterns: dashboard, auth, password reset + **password change** (v1.26.8), schedule, todos, support, QA (backlog + export, Desarrollos board/detail/API/export), PWA, 2FA, parent portal (login, forgot / change password, dashboard, payments, receipt, tax certificate) |
 
@@ -4695,7 +4904,8 @@ Payment management with search, filtering, pagination, and quick-complete.
 - **Search** — real-time filter by student name, parent name, concept, or reference number.
 - **Status filter** — 4-state cycle: all → pending → completed → overdue.
 - **Type filter** — 5-state: all → enrollment → monthly → quarterly → other.
-- **Quick complete** — click a pending status badge → dropdown with 3 payment methods (cash / transfer / card) → one click marks as completed with today's date, logs to history. On completion the receipt PDF is emailed **and** (v1.29.0) archived to Google Drive — best-effort, so neither can fail the payment; the Drive upload is a no-op unless `GOOGLE_DRIVE_RECEIPTS_FOLDER_ID` is configured.
+- **Quick complete** — click a pending status badge → dropdown with 3 payment methods (cash / transfer / card) → one click marks as completed with today's date, logs to history. On completion the receipt PDF is emailed **and** (v1.29.0) archived to Google Drive — best-effort, so neither can fail the payment; the Drive upload is a no-op unless `GOOGLE_DRIVE_RECEIPTS_FOLDER_ID` is configured. Both are fired by one dispatcher (`comms.tasks.dispatch_payment_completed`, v1.29.1) shared with the Stripe webhook, so a new side effect of completion cannot reach only one of the two paths.
+- **Receipts are only issued for collected money (v1.29.1)** — `/payments/<id>/receipt.pdf` 404s on anything but a `completed` payment. Rendering a receipt is what assigns its permanent `YYYY-NNN` number from a sequence continuing the academy's paper books, so a hand-typed URL on a pending row would otherwise issue an official receipt for money never received and leave a permanent gap when that charge was cancelled. The PDF's discount breakdown is shown only when re-pricing the period reproduces the amount to the cent; otherwise it falls back to a bare **Importe** line rather than guessing.
 - **Create payment** — autocomplete student search fills the read-only **Padre/Tutor** field from the same response (v1.20.0 — it used to fire a second request whose failures were swallowed, leaving the field silently blank) → select type, method, amount, due date, concept. An adult student legitimately has no guardian and the submit guard accepts that. **v1.28.2: a created payment is always *Pendiente*** — the "Estado" selector and payment-date field were removed; mark it cobrado from the list (that path stamps the date and emails the receipt).
 - **Detail view** — read-only display of all payment fields.
 - **Export** — CSV download (all payments) and Excel download (full database: students + enrollments + payments as multi-sheet .xlsx).
@@ -4827,7 +5037,7 @@ Public flow at `/password-reset/...` that lets a teacher recover access without 
 - **Invitation, sent once** — when a parent record is created, `send_parent_temporary_password_task` emails a generated temporary password. `Parent.portal_invite_sent_at` guards it, so a family with three children receives exactly one invitation, and the stamp is written *before* the send is queued.
 - **`¿Has olvidado tu contraseña?`** — one form covering both recovery and a never-opened invitation, which is why it never says whether a password exists. It re-issues a temporary password, replacing any previous one.
 - **Two credentials, not one** — `Parent.temporary_password` sits *beside* `Parent.password` rather than over it, because recovery is unauthenticated and overwriting the real credential would let anyone who knows a family's address lock them out. Both are accepted until the family sets their own, which clears the temporary one; logging in with a temporary password forces an immediate change, which is what substitutes for an expiry.
-- **Dashboard + payments** — the parent sees only their own children's payments. The tax certificate is offered per year the family actually paid in, and each completed payment has a labelled receipt download. Both render as PDFs.
+- **Dashboard + payments** — the parent sees only their own children's payments. The tax certificate is offered per year the family actually paid in, and each completed payment has a labelled receipt download. Both render as PDFs. Since v1.29.1 the receipt endpoint filters on `completed` as well as ownership: owning a payment is not authority to mint a receipt number for one the academy has not collected.
 - **Light + dark theme** — the portal shares `base.html`'s violet `primary` palette, pre-paint theme script, `theme.css` and header toggle, and reads the same `localStorage` key, so a family's choice carries across pages.
 - **Pay online (v1.11)** — when `STRIPE_SECRET_KEY` is set, a "Pagar online" button creates a Stripe Checkout session. The webhook (`stripe_webhook`) marks the payment completed. `STRIPE_WEBHOOK_SECRET` is **required in production** — with it unset the webhook skips signature verification, so any HTTP client could mark payments as paid.
 - **Rate limited** — login and recovery at 5 POSTs/min/IP, change-password at 5 per 5 min/IP.
@@ -4848,9 +5058,9 @@ Public flow at `/password-reset/...` that lets a teacher recover access without 
 
 | Metric | Value |
 |--------|-------|
-| **Total tests** | 2,227 |
+| **Total tests** | 2,237 |
 | **Test files** | 108 (61 unit + 47 integration) |
-| **Coverage** | 95% (94.87% — 7,131 statements, 366 uncovered) |
+| **Coverage** | 95% (95.10% — 7,169 statements, 351 uncovered) |
 | **Coverage thresholds** | **≥ 90%** (target, no warning) / **75-89%** (CI warning, pre-commit still blocks below 75) / **< 75%** (CI fails, pre-commit rejects the commit) |
 | **Runtime** | ~175 seconds (parallel workers via `pytest-xdist -n auto`) |
 | **Database** | PostgreSQL (same as production) — **always use `make test`** |
@@ -4896,7 +5106,7 @@ Within each file, related tests are grouped into classes. Where a large file abs
 
 ### Unit Tests
 
-**61 files, 959 tests.** Direct-call tests — no HTTP stack, no URL resolver, no template rendering.
+**61 files, 960 tests.** Direct-call tests — no HTTP stack, no URL resolver, no template rendering.
 
 | File | Count | Coverage |
 | --- | --- | --- |
@@ -4960,11 +5170,11 @@ Within each file, related tests are grouped into classes. Where a large file abs
 | [`unit/test_parent_view_internals.py`](project/tests/unit/test_parent_view_internals.py) | 2 | `ParentCreateView` internals called directly through `RequestFactory` — the prefill branch that reads a waiting-list entry from `?from_waiting=<id>`, and the duplicate-DNI reuse path |
 | [`unit/test_testing_tools_helpers.py`](project/tests/unit/test_testing_tools_helpers.py) | 2 | `_git_info` helper: success path + non-zero returncode branch with `subprocess.run` mocked |
 | [`unit/test_audit_pruning.py`](project/tests/unit/test_audit_pruning.py) | 16 | `core.tasks.prune_audit_log` and its Cloud Scheduler command wrapper — the ONLY code path that deletes from `audit_logs`, a table the admin deliberately makes immutable (no add, no change, no delete). It had **zero test references for eight versions** while permanently destroying rows, and `*/admin.py` being coverage-omitted meant nothing else exercised the surrounding rules either. Pins the retention window and its boundary, the floor that refuses a window short enough to erase the course being taught (`--days 0` would have deleted every row, including the entries incriminating whoever ran it), `--dry-run` counting exactly what a real run deletes, and the floor surfacing as a `CommandError` so a Cloud Run Job reports a clean failure instead of a Celery traceback. Rows are backdated with `queryset.update()` because `created_at` is `auto_now_add` |
-| [`unit/test_drive_service.py`](project/tests/unit/test_drive_service.py) | 25 | `core.services.drive_service.DriveReceiptService` (v1.29.0) — the folder-path logic (`Curso YYYY/YYYY+1/Recibos/<Mes> YY/`, whose Curso rolls over in **August**, deliberately NOT the billing academic-year boundary), find-or-create at each level, idempotency by the `<paymentID>_` filename prefix so re-completion and `backfill_drive_receipts` never duplicate, and the **never-raises** guarantee: every failure path returns a `DriveUploadResult` with a status (`uploaded` / `skipped_exists` / `not_configured` / `error`) instead of propagating, because the Drive copy is a convenience on top of the `Payment` row and the emailed receipt — an unshared folder or a bad credential must leave payment completion untouched |
+| [`unit/test_drive_service.py`](project/tests/unit/test_drive_service.py) | 26 | `core.services.drive_service.DriveReceiptService` (v1.29.0) — the folder-path logic (`Curso YYYY/YYYY+1/Recibos/<Mes> YY/`, whose Curso rolls over in **August**, deliberately NOT the billing academic-year boundary), find-or-create at each level, idempotency by the `<paymentID>_` filename prefix so re-completion and `backfill_drive_receipts` never duplicate, and the **never-raises** guarantee: every failure path returns a `DriveUploadResult` with a status (`uploaded` / `skipped_exists` / `not_configured` / `error`) instead of propagating, because the Drive copy is a convenience on top of the `Payment` row and the emailed receipt — an unshared folder or a bad credential must leave payment completion untouched |
 
 ### Integration Tests
 
-**47 files, 1,268 tests.** Full HTTP stack through Django's test client.
+**47 files, 1,277 tests.** Full HTTP stack through Django's test client.
 
 | File | Count | Coverage |
 | --- | --- | --- |
@@ -4987,7 +5197,7 @@ Within each file, related tests are grouped into classes. Where a large file abs
 | [`integration/test_password_management.py`](project/tests/integration/test_password_management.py) | 17 | The two authenticated password entry points (v1.26.8). `change_password`: the happy path (session survives via `update_session_auth_hash`, an `AuditLog` row is written), wrong current password, mismatched confirmation, Django's validators, a non-object JSON body, GET refused, the 5/5 min rate limit, and the 403 for Google-OAuth sessions and accounts with no usable password. `send_password_setup_email`: `create_teacher` mails the activation link, the message says which of the two outcomes happened, a dead SMTP hop still keeps the Teacher, and the link actually sets a password on an account Django's stock `PasswordResetForm` would have skipped |
 | [`integration/test_two_factor_views.py`](project/tests/integration/test_two_factor_views.py) | 18 | 2FA views and the login gate (v1.13): setup page (QR + secret), manage page (disable, rotate backup codes), the login gate flow (TOTP accepted, backup code accepted, wrong code rejected), and the `reset_two_factor` management command |
 | [`integration/test_dashboard_views.py`](project/tests/integration/test_dashboard_views.py) | 15 | `home` view quote-cookie branches (valid cookie, corrupt cookie -> API, API failure, API empty, `[AUTH]` placeholder filtered, with pending payments), `all_info` sort variants (default, first_name, last_name, id_asc, payments_sort=student_asc) |
-| [`integration/test_parent_portal.py`](project/tests/integration/test_parent_portal.py) | 55 | Parent portal (v1.9, email + password since v1.27): login with a hashed `Parent.password` (case-insensitive email, blank password refused, unknown-email and wrong-password responses indistinguishable, an address shared by two `Parent` rows refused rather than resolved to the lowest pk), the invitation sent **exactly once** per family however many children are enrolled, `¿Has olvidado tu contraseña?` issuing a temporary password and retiring the previous one, the two-credential contract (a temporary password logs in but forces an immediate change, and `set_portal_password` clears it so an old recovery email stops working), the portal's **own** password rules — too short / common / all-digits refused, an 8-character password the staff validators would reject accepted, and the page stating 8 rather than 12 — the guarantee that a portal credential is **not** an `auth.User` and is refused by `/login/`, and the portal pages restricted to that parent's own children |
+| [`integration/test_parent_portal.py`](project/tests/integration/test_parent_portal.py) | 56 | Parent portal (v1.9, email + password since v1.27): login with a hashed `Parent.password` (case-insensitive email, blank password refused, unknown-email and wrong-password responses indistinguishable, an address shared by two `Parent` rows refused rather than resolved to the lowest pk), the invitation sent **exactly once** per family however many children are enrolled, `¿Has olvidado tu contraseña?` issuing a temporary password and retiring the previous one, the two-credential contract (a temporary password logs in but forces an immediate change, and `set_portal_password` clears it so an old recovery email stops working), the portal's **own** password rules — too short / common / all-digits refused, an 8-character password the staff validators would reject accepted, and the page stating 8 rather than 12 — the guarantee that a portal credential is **not** an `auth.User` and is refused by `/login/`, and the portal pages restricted to that parent's own children — plus (v1.29.1) a family's own **pending** payment refused a receipt, because rendering one mints the permanent `YYYY-NNN` number and a hand-edited id would issue an official receipt for money the academy has not received |
 | [`integration/test_parent_portal_demo_login.py`](project/tests/integration/test_parent_portal_demo_login.py) | 11 | The `DEMO_PARENT_*` demo family (v1.27 rewrite): `seed_demo_parents` writes a **hashed** password onto the `Parent` row, stamps them as already invited, is idempotent and restores the documented password on every run, and raises in production. The rest assert the demo parent logs in through the **ordinary** form — there is no demo-only login path any more, which is what made QA sign off on a flow production never ran — plus a wrong password, a non-ASCII password, and the session flush |
 | [`integration/test_schedule_views.py`](project/tests/integration/test_schedule_views.py) | 16 | Schedule page (groups + slots in context), `save_schedule_slot` (assign + clear + reject GET + invalid JSON), Fun Friday page (loads, excludes adults, with attendance). v1.28.2: Fun Friday also excludes students without a current-year enrollment and waiting-list entries |
 | [`integration/test_auth_oauth.py`](project/tests/integration/test_auth_oauth.py) | 16 | OAuth callback flow with `google_auth_oauthlib.flow.Flow` mocked: state missing, state mismatch, `fetch_token` failure, id-token verification failure, email whitelist mismatch, successful session establishment; login view extras (already-auth redirect, missing env, OAuth-available flag); logout clears session. v1.26.5 adds the PKCE regression: the redirect sends a `code_challenge` and stashes the `code_verifier` in the session for the callback's fresh Flow |
@@ -5004,7 +5214,7 @@ Within each file, related tests are grouped into classes. Where a large file abs
 | [`integration/test_fun_friday_attendance_views.py`](project/tests/integration/test_fun_friday_attendance_views.py) | 6 | `toggle_fun_friday_this_week` (adult rejected + toggle on/off), `add_fun_friday_attendance` (success + invalid), `remove_fun_friday_attendance` (success + invalid) |
 | [`integration/test_support_views.py`](project/tests/integration/test_support_views.py) | 5 | `submit_support_ticket`: success (send_mail called), short message rejected, no support email configured -> 500, bad JSON, unexpected exception |
 | [`integration/test_reports_view.py`](project/tests/integration/test_reports_view.py) | 4 | Reports dashboard (v1.7): the HTML page renders every analytics block, and the PDF export returns a reportlab document |
-| [`integration/test_receipt_view.py`](project/tests/integration/test_receipt_view.py) | 2 | Payment-receipt PDF endpoint (v1.3): authorised download returns a PDF, unauthorised is rejected |
+| [`integration/test_receipt_view.py`](project/tests/integration/test_receipt_view.py) | 3 | Payment-receipt PDF endpoint (v1.3): authorised download returns a PDF, unauthorised is rejected, and (v1.29.1) a **pending** payment 404s rather than burning a receipt number on uncollected money |
 | [`integration/test_auth_hardening_fixes.py`](project/tests/integration/test_auth_hardening_fixes.py) | 104 | One regression test per finding of the v1.27.1 authorization review. The load-bearing one: an **offboarded teacher's live session escaped the whitelist** — layer 1 checked only `session["is_authenticated"]`, and the non-admin predicate answered "not a non-admin" for a session whose Teacher row was gone, handing it the *unrestricted* set for up to six hours. Revocation escalated the session. Also pins that `Teacher.active` is consulted **before** the `is_superuser`/`is_staff` hatch (those flags are mirrored from `Teacher.admin`, so a deactivated admin still carries them), `@admin_required`'s response shape mirroring the middleware exactly, `confirm_password` and every other posted secret being redacted in all three body encodings, the recovery endpoint's per-family cooldown and post-response send, the default-deny portal gate, and the production posture guard asserting the cache backend. The two enumeration tests normalise the CSP nonce, the CSRF token and the echoed address out of the body — everything else must match byte for byte |
 | [`integration/test_students_periphery_fixes.py`](project/tests/integration/test_students_periphery_fixes.py) | 40 | The students app's write paths and the admin's blind spots. `clean_group`'s waiting-list exemption was **dead code**: Django cleans `group` before `is_waiting`, so the key was never present and editing a waiting-list student whose preferred group was full — the normal state, since a full group is *why* they wait — was rejected outright. Also covers the group cap now reaching the admin form, `resend_portal_invitation` stamping rather than clearing the once-only guard (clearing it let a later sibling enrollment re-fire the invite and invalidate the temporary password the family was holding), the duplicate-portal-email rule being asymmetric on purpose (admin refuses, `ParentForm` warns so the same-DNI sibling path survives), DNI kept out of the audit label, `birth_date` genuinely optional, and `Group` occupancy preferring an annotation when one is present |
 | [`integration/test_enrollment_transition_fixes.py`](project/tests/integration/test_enrollment_transition_fixes.py) | 35 | Every way a cadence or plan change could bill a month twice or not at all — service-level, anchored to an elapsed course so the assertions are not date bombs. A modality flip used to re-bill months already **collected** under the old cadence, because billed-month idempotency is keyed on `payment_type` and the pending-only DB constraint cannot see a completed row of the other type. Pins the supersede shape (old enrollment finished on the cadence it billed, replacement anchored past every covered month of *either* cadence), `covered_months` expanding a quarterly row to its three months, the mid-month handover moving to the 1st so head days are neither double-billed nor dropped, and the refusal path leaving nothing written |
@@ -5013,52 +5223,53 @@ Within each file, related tests are grouped into classes. Where a large file abs
 | [`integration/test_iteration1_fixes.py`](project/tests/integration/test_iteration1_fixes.py) | 18 | First-pass review fixes: the €0.00 matrícula that must not be written, the group cap enforced on write, and the modality switch cancelling superseded pending rows (rewritten in v1.27.1 — the switch now supersedes the enrollment, so the assertion is on the specific superseded row rather than the absence of every pending monthly row, because the handover legitimately gap-fills the taught month) |
 | [`integration/test_iteration2_fixes.py`](project/tests/integration/test_iteration2_fixes.py) | 7 | Second-pass review fixes |
 | [`integration/test_iteration4_fixes.py`](project/tests/integration/test_iteration4_fixes.py) | 5 | Fourth-pass review fixes |
-| [`integration/test_v1282_qa_fixes.py`](project/tests/integration/test_v1282_qa_fixes.py) | 8 | v1.28.2 QA fixes: manual payments born pending, waiting-list removal (delete + 404 on a real student), bulk "antiguo estudiante" re-enrolment (reactivates + returning-student type), receipt numbering (`2026-633` seed, January restart, idempotent) and the receipt discount breakdown |
+| [`integration/test_v1282_qa_fixes.py`](project/tests/integration/test_v1282_qa_fixes.py) | 15 | v1.28.2 + v1.29.1 QA fixes: manual payments born pending, waiting-list removal (delete + 404 on a real student), bulk "antiguo estudiante" re-enrolment (reactivates + returning-student type, and since v1.29.1 routed through `supersede_enrollment` so the closing plan's uninvoiced months are billed before the hand-over), receipt numbering (`2026-633` seed, January restart, idempotent, and never assigned to a payment that is not `completed`), and the **reconstruct-or-say-nothing** discount breakdown — shown only when re-pricing the period reproduces the amount to the cent, so the June stub, a re-download after a price change and a negotiated matrícula fall back to the bare `Importe` line instead of inventing a "Prorrateo" / "Ajuste" / "Descuento antiguo alumno" |
 | [`integration/test_drive_receipts.py`](project/tests/integration/test_drive_receipts.py) | 8 | The dispatch half of the Drive archive (v1.29.0) — `_queue_payment_receipt` and the Stripe webhook queue the upload in their **own** `try/except`, separate from the receipt email, so neither can take the other down; the task is a no-op unless `GOOGLE_DRIVE_RECEIPTS_FOLDER_ID` is set; and it is NOT a Beat task, so nothing expects a Cloud Scheduler entry for it |
 
 ### Coverage Report
 
 | File | Stmts | Miss | Cover | Missing lines |
 | --- | --- | --- | --- | --- |
-| `billing/forms.py` | 52 | 1 | 98% | 170 |
-| `billing/models.py` | 332 | 25 | 92% | 70-71, 824, 870-871, 882-883, 905, 1083, 1085-1113, 1128, 1130, 1142-1143, 1151 |
+| `billing/forms.py` | 55 | 2 | 96% | 136, 181 |
+| `billing/models.py` | 338 | 25 | 93% | 73-74, 831, 900-901, 928-929, 951, 1129, 1131-1159, 1174, 1176, 1188-1189, 1197 |
 | `billing/services/enrollment_service.py` | 151 | 8 | 95% | 175, 278-280, 340, 473, 475, 509 |
 | `billing/services/expense_service.py` | 56 | 6 | 89% | 99-105, 151-153 |
 | `billing/services/gcp_cost_service.py` | 148 | 14 | 91% | 170-171, 208-209, 223-225, 231-232, 242-243, 292-294 |
-| `billing/services/payment_service.py` | 223 | 16 | 93% | 306, 338, 422, 500-508, 536-544, 597, 630, 647-654 |
-| `billing/services/pdf_service.py` | 220 | 20 | 91% | 155, 313, 320-329, 334, 345-349, 358-360 |
-| `billing/services/stripe_service.py` | 116 | 5 | 96% | 139-140, 179, 254-255 |
+| `billing/services/payment_service.py` | 238 | 16 | 93% | 364, 396, 480, 558-566, 594-602, 655, 688, 705-712 |
+| `billing/services/pdf_service.py` | 210 | 5 | 98% | 155, 322, 333, 377, 382 |
+| `billing/services/stripe_service.py` | 108 | 3 | 97% | 139-140, 179 |
 | `comms/services/email_functions.py` | 96 | 6 | 94% | 540, 565-569, 579-580 |
-| `comms/services/email_service.py` | 77 | 5 | 94% | 184-185, 222-224 |
+| `comms/services/email_service.py` | 81 | 5 | 94% | 184-185, 222-224 |
 | `comms/services/sms_service.py` | 50 | 3 | 94% | 58, 63-64 |
-| `comms/tasks.py` | 307 | 14 | 95% | 522, 634, 669-673, 678, 853-855, 875-879, 883-884, 919 |
+| `comms/tasks.py` | 317 | 16 | 95% | 522, 612-613, 672, 707-711, 716, 891-893, 913-917, 921-922, 957 |
 | `core/audit_signals.py` | 103 | 9 | 91% | 116, 122, 138, 149-150, 155, 192, 210, 243 |
 | `core/context_processors.py` | 43 | 1 | 98% | 72 |
 | `core/date_utils.py` | 6 | 1 | 83% | 23 |
 | `core/decorators.py` | 34 | 2 | 94% | 63-64 |
 | `core/middleware.py` | 197 | 13 | 93% | 151, 200, 211-216, 273, 279, 432, 444, 487, 550-551, 591-592 |
 | `core/models.py` | 178 | 2 | 99% | 336, 369 |
-| `core/services/drive_service.py` | 125 | 4 | 97% | 276-277, 303-305 |
+| `core/services/drive_service.py` | 140 | 4 | 97% | 323-324, 350-352 |
 | `core/services/google_sheets_service.py` | 99 | 9 | 91% | 74-76, 112-118 |
-| `core/views/app_forms.py` | 560 | 31 | 94% | 245, 278-283, 371-372, 526-528, 540-543, 549-550, 688-689, 707-708, 739-741, 973, 1161, 1176-1180, 1308, 1499-1503, 1520-1523 |
+| `core/views/app_forms.py` | 560 | 32 | 94% | 245, 278-283, 371-372, 436, 526-528, 540-543, 549-550, 688-689, 707-708, 739-741, 973, 1161, 1176-1180, 1308, 1499-1503, 1520-1523 |
 | `core/views/auth.py` | 200 | 11 | 94% | 66, 69-71, 254, 271, 319, 338, 383, 466-467 |
 | `core/views/dashboard.py` | 150 | 5 | 97% | 133-140, 184 |
 | `core/views/expenses.py` | 135 | 11 | 92% | 30-31, 160, 183-184, 217-219, 252-254 |
 | `core/views/features.py` | 173 | 20 | 88% | 137, 161-162, 212-216, 274-280, 327-331 |
 | `core/views/management.py` | 150 | 5 | 97% | 343, 380, 414-416 |
-| `core/views/parent_portal.py` | 220 | 6 | 97% | 112, 254, 487, 605, 653, 673 |
+| `core/views/parent_portal.py` | 220 | 6 | 97% | 112, 254, 487, 605, 660, 681 |
 | `core/views/parents.py` | 60 | 1 | 98% | 51 |
 | `core/views/password_reset.py` | 74 | 2 | 97% | 141, 143 |
-| `core/views/payments.py` | 368 | 32 | 91% | 71-72, 80-81, 296-301, 366, 372-373, 385-394, 494, 541-542, 564-565, 577, 585-596, 602-603, 997 |
-| `core/views/schedule.py` | 68 | 1 | 99% | 111 |
-| `core/views/students.py` | 440 | 37 | 92% | 303-305, 442-447, 612-618, 643, 654, 663, 668, 699, 711, 737, 770-776, 785, 953, 979-982, 1047-1048, 1062-1064, 1076-1077, 1079-1080, 1110-1112, 1117, 1119 |
-| `core/views/testing_tools.py` | 230 | 20 | 91% | 71-72, 76-78, 229, 293, 300, 302, 320-322, 431-435, 448, 466-467 |
+| `core/views/payments.py` | 360 | 28 | 92% | 288-293, 358, 364-365, 377-386, 498, 545-546, 568-569, 581, 589-600, 606-607, 1001 |
+| `core/views/schedule.py` | 67 | 1 | 99% | 111 |
+| `core/views/students.py` | 447 | 39 | 91% | 298-300, 437-442, 604, 629, 640, 649, 654, 685, 697, 723, 756-762, 771, 939, 965-968, 1043-1044, 1058-1060, 1070-1072, 1080-1081, 1105-1106, 1125-1127, 1132, 1134 |
+| `core/views/testing_tools.py` | 231 | 20 | 91% | 72-73, 77-79, 235, 299, 306, 308, 326-328, 437-441, 454, 472-473 |
 | `core/views/two_factor.py` | 94 | 8 | 91% | 39, 50-51, 189-191, 196-197 |
 | `core/views/waiting_list.py` | 117 | 1 | 99% | 340 |
 | `students/forms.py` | 101 | 2 | 98% | 312-313 |
 | `students/models.py` | 335 | 9 | 97% | 159-160, 484, 568-569, 764-767 |
 
-**54 files** have 100% coverage (skipped above). Total coverage: **94.87%** across 7,131 statements. Coverage is **good**. Coverage is enforced at three levels: pre-commit hook (>= 75%), CI hard floor (>= 75%), and CI warning (< 90%).
+**54 files** have 100% coverage (skipped above). Total coverage: **95.10%** across 7,169 statements. Coverage is **very good**. Coverage is enforced at three levels: pre-commit hook (>= 75%), CI hard floor (>= 75%), and CI warning (< 90%).
+
 ---
 
 ## Migrations
@@ -5718,7 +5929,7 @@ make up                        # Start Docker (PostgreSQL + Redis + Django + Cel
 1. Work on `development` (or a short-lived branch off `development`)
 2. Make changes following the conventions below
 3. Run `make pc-run` — Ruff + mypy + bandit all pass, offers to auto-bump the patch version on success, and auto-stages `uv.lock` if regenerated
-4. Run `make test` — all 2,227 tests must pass (PostgreSQL via Docker, parallel, with coverage)
+4. Run `make test` — all 2,237 tests must pass (PostgreSQL via Docker, parallel, with coverage)
 5. `git commit` with a message like `v1.14.7 — Short description` (version first, em dash — matches every other release commit in the project)
 6. `git push origin development`
 7. CI runs automatically on your push (see [CI/CD](#cicd--github-actions))

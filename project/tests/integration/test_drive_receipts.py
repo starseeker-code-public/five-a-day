@@ -12,6 +12,7 @@ from unittest.mock import patch
 
 import pytest
 from django.core.management import call_command
+from django.core.management.base import CommandError
 
 from billing.models import Payment
 from core.services.drive_service import DriveUploadResult
@@ -119,8 +120,9 @@ class TestBackfillCommand:
         assert "1 uploaded" in out.getvalue()
 
     def test_not_configured_errors_out(self, student_with_parent, active_enrollment, site_config):
+        """A CommandError, so the Cloud Run Job exits non-zero. Writing to stderr
+        and returning cleanly reported success for a run that archived nothing."""
         with patch("billing.management.commands.backfill_drive_receipts.DriveReceiptService") as Svc:
             Svc.return_value.is_configured.return_value = False
-            err = StringIO()
-            call_command("backfill_drive_receipts", "--apply", stderr=err)
-        assert "not configured" in err.getvalue().lower()
+            with pytest.raises(CommandError, match="not configured"):
+                call_command("backfill_drive_receipts", "--apply")

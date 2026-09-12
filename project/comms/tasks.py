@@ -584,6 +584,44 @@ def send_parent_temporary_password_task(self, parent_id: int, login_url: str = "
     return {"status": "success" if success else "failed", "recipient": parent.email}
 
 
+def dispatch_payment_completed(payment_id: int) -> None:
+    """Fire every side effect of a payment becoming COMPLETED: receipt + archive.
+
+    The one statement of "what happens when money lands", because there are two
+    completion paths — the admin marking a payment cobrado and the Stripe webhook
+    — and each carried its own copy of this pair of dispatches. A third side
+    effect, or a third completion path, would have had to be written twice to be
+    right and once to be silently half-wrong.
+
+    Each dispatch gets its own ``try``: a Drive outage must not cost the family
+    their receipt email, and vice versa. Neither may raise, because production
+    runs ``CELERY_TASK_ALWAYS_EAGER`` — the "queue" is this call stack, inside
+    the request that recorded the money.
+
+    Callers inside a transaction must wrap this in ``transaction.on_commit``
+    (see ``core.views.payments._queue_payment_receipt``): eager execution re-reads
+    the payment by id, which a not-yet-committed write is invisible to.
+    """
+    try:
+        send_payment_receipt_email_task.delay(int(payment_id))
+    except Exception:  # noqa: BLE001 — receipt is nice-to-have
+        logger.exception("Failed to enqueue payment receipt for payment %d", int(payment_id))
+
+    try:
+        upload_receipt_to_drive_task.delay(int(payment_id))
+    except Exception:  # noqa: BLE001 — Drive archive is nice-to-have
+        logger.exception("Failed to enqueue Drive receipt upload for payment %d", int(payment_id))
+
+
+#: Everything `generate_payment_receipt` touches off a Payment. The receipt's
+#: discount breakdown reads the enrollment and its matrícula category, and
+#: `enrollment.student` is a separate FK cache from `payment.student` — without
+#: the pair the two receipt tasks each paid 3 extra lazy queries per payment,
+#: which production (eager Celery) spends inside the completion request and the
+#: Drive backfill multiplies by the whole archive.
+_RECEIPT_RELATIONS = ("student", "parent", "enrollment", "enrollment__enrollment_type", "enrollment__student")
+
+
 @shared_task(
     name="comms.tasks.send_payment_receipt_email_task",
     bind=True,
@@ -602,7 +640,7 @@ def send_payment_receipt_email_task(self, payment_id: int):
     from comms.services.email_service import email_service
 
     try:
-        payment = Payment.objects.select_related("student", "parent").get(id=payment_id)
+        payment = Payment.objects.select_related(*_RECEIPT_RELATIONS).get(id=payment_id)
     except Payment.DoesNotExist:
         logger.warning("send_payment_receipt_email_task: payment %s not found", payment_id)
         return {"status": "error", "message": "payment not found"}
@@ -655,7 +693,7 @@ def upload_receipt_to_drive_task(self, payment_id: int):
         return {"status": "not_configured", "payment_id": payment_id}
 
     try:
-        payment = Payment.objects.select_related("student", "parent").get(id=payment_id)
+        payment = Payment.objects.select_related(*_RECEIPT_RELATIONS).get(id=payment_id)
     except Payment.DoesNotExist:
         logger.warning("upload_receipt_to_drive_task: payment %s not found", payment_id)
         return {"status": "error", "message": "payment not found"}

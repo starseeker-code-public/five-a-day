@@ -35,12 +35,16 @@ TEACHING_MONTHS = [9, 10, 11, 12, 1, 2, 3, 4, 5, 6]
 class PaymentService:
     @staticmethod
     def _get_base_monthly_fee(enrollment, config):
-        """Get base monthly fee by schedule type."""
-        if enrollment.schedule_type == "adult_group":
-            return config.adult_group_monthly_fee
-        elif enrollment.schedule_type == "full_time":
-            return config.full_time_monthly_fee
-        return config.part_time_monthly_fee
+        """Get base monthly fee by schedule type.
+
+        Delegates to `billing.money.monthly_fee_for`, the one schedule → fee
+        mapping. This used to be a third hand-rolled copy of it (beside
+        `PricingService.get_monthly_fee`), so a schedule type added to one map
+        priced correctly on the ficha and fell back to full-time on the invoice.
+        """
+        from billing.money import monthly_fee_for
+
+        return monthly_fee_for(enrollment.schedule_type, config)
 
     @staticmethod
     def hand_priced_amount(enrollment):
@@ -100,33 +104,87 @@ class PaymentService:
         block truncated by a plan change and has to hand in the total directly.
         Any new amount calculation must come through here — a second copy of this
         discount ORDER is a family charged one figure and quoted another.
+
+        The arithmetic itself lives in ``price_breakdown``, which returns the
+        itemised lines alongside the total so the receipt PDF can show a family
+        WHY they paid this figure without re-deriving it. This method is the
+        total-only face of that one implementation.
+        """
+        return PaymentService.price_breakdown(enrollment, config, months, effective, quarterly)[1]
+
+    @staticmethod
+    def price_breakdown(enrollment, config, months, effective, quarterly):
+        """``(lines, total)`` — the itemised price of a period and what it costs.
+
+        THE pricing arithmetic; ``_price_months`` is just this without the lines.
+        They are one function because they were briefly two: the receipt PDF grew
+        its own copy of the discount order to itemise what the generator had
+        billed, and it drifted immediately — the copy charged the language cheque
+        x3 on every quarterly payment (right for a full quarter, wrong for the
+        one-month June stub every quarterly family gets), gated sibling/cheque on
+        ``student.is_adult`` where this gates on ``schedule_type``, and rounded
+        each line separately so the default quarterly+sibling prices printed a
+        phantom "Ajuste +0.01". Every one of those was a receipt describing a
+        price the family had not been charged.
+
+        ``lines`` is ``[(label, amount), ...]``: the first entry is the full-period
+        base and every later one an amount SUBTRACTED from it. They are rounded as
+        differences between rounded running subtotals, so ``base - sum(discounts)``
+        equals ``total`` to the cent — the column on the receipt always adds up,
+        with no residual line to paper over half-cent drift.
+
+        ``lines`` is empty for a hand-priced (``special``) enrollment: a
+        negotiated figure has no standard base to break down against.
         """
         special = PaymentService.hand_priced_amount(enrollment)
         if special is not None:
             whole_period = Decimal(3) if quarterly else Decimal(1)
-            return PaymentService._round_money(special * (effective / whole_period))
+            return [], PaymentService._round_money(special * (effective / whole_period))
 
         base = PaymentService._get_base_monthly_fee(enrollment, config)
-        total = base * effective
+        full_period = Decimal(len(months))
+
+        # (label, exact running total AFTER the step) — exact, because the whole
+        # point of one implementation is that the total is rounded exactly once.
+        steps: list[tuple[str, Decimal]] = []
+        total = base * full_period
+
+        if effective != full_period:
+            # Only the first month of the first period is ever partial, and a
+            # close-out block can be short at the end; both show up here as
+            # "fewer months than the period spans".
+            total = base * effective
+            steps.append(("Prorrateo primer periodo", total))
 
         if quarterly:
             total -= total * (config.quarterly_enrollment_discount / Decimal("100"))
+            steps.append((f"Descuento trimestral ({config.quarterly_enrollment_discount:.0f}%)", total))
 
         # Adult groups pay a flat rate — no sibling / cheque / June discounts.
-        if enrollment.schedule_type == "adult_group":
-            return PaymentService._round_money(total)
+        if enrollment.schedule_type != "adult_group":
+            if enrollment.is_sibling_discount:
+                total -= total * (config.sibling_discount / Decimal("100"))
+                steps.append((f"Descuento hermano ({config.sibling_discount:.0f}%)", total))
 
-        if enrollment.is_sibling_discount:
-            total -= total * (config.sibling_discount / Decimal("100"))
+            if enrollment.has_language_cheque:
+                # The cheque is a per-month amount; a period covers `effective` of them.
+                total -= config.language_cheque_discount * effective
+                steps.append(("Cheque idioma", total))
 
-        if enrollment.has_language_cheque:
-            # The cheque is a per-month amount; a period covers `effective` of them.
-            total -= config.language_cheque_discount * effective
+            if 6 in months:  # June carries the "complete the year" discount
+                total -= config.june_discount
+                steps.append(("Descuento junio (curso completo)", total))
 
-        if 6 in months:  # June carries the "complete the year" discount
-            total -= config.june_discount
+        total = PaymentService._round_money(total)
 
-        return PaymentService._round_money(total)
+        running = PaymentService._round_money(base * full_period)
+        lines = [("Precio base", running)]
+        for label, exact_after in steps:
+            shown = PaymentService._round_money(exact_after)
+            lines.append((label, running - shown))
+            running = shown
+
+        return lines, total
 
     @staticmethod
     def _round_money(value):

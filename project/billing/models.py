@@ -1,3 +1,4 @@
+import logging
 from contextvars import ContextVar
 from datetime import date, timedelta
 from decimal import Decimal
@@ -8,9 +9,11 @@ from django.core.signals import request_finished, request_started
 from django.core.validators import MinValueValidator
 from django.db import models, transaction
 from django.db.models import Q
-from django.db.models.functions import ExtractMonth, ExtractYear
+from django.db.models.functions import ExtractMonth, ExtractYear, Length
 
 from billing import constants
+
+logger = logging.getLogger(__name__)
 
 # Enrolment for the next course opens in May, so from May onwards "the current
 # academic year" is the one families are signing up for — not the one whose
@@ -788,6 +791,10 @@ class Payment(models.Model):
                 fields=["receipt_number"],
                 condition=~Q(receipt_number=""),
                 name="unique_receipt_number",
+                # Spelled out for the same reason as the constraint above:
+                # `full_clean()` validates this, and Django's default renders the
+                # constraint NAME into a Spanish page.
+                violation_error_message="Ese número de recibo ya está asignado a otro pago.",
             ),
         ]
 
@@ -829,8 +836,30 @@ class Payment(models.Model):
                 "Crea un pago nuevo si hay que volver a cobrarlo."
             )
 
+    @property
+    def receipt_date(self):
+        """The date this payment's receipt belongs to.
+
+        When the money was collected, falling back to when it was due, then
+        today. One property because two things key off it and must agree: the
+        YEAR in the ``YYYY-NNN`` receipt number, and the ``Curso``/``<Mes>``
+        folder the Drive archive files the PDF under. Two copies of the fallback
+        chain meant a receipt numbered 2026-6xx could be filed under a different
+        year's folder, with nothing erroring.
+        """
+        return self.payment_date or self.due_date or date.today()
+
     def assign_receipt_number(self):
         """Assign a stable ``YYYY-NNN`` receipt number, once, and return it.
+
+        Returns ``""`` for a payment that is not COMPLETED, without consuming a
+        number. A recibo is proof that money was collected, and the sequence it
+        draws from continues the academy's paper books — so issuing one for a
+        pending charge is both a false document and a permanent hole in a fiscal
+        sequence when that charge is later cancelled. Rendering is a GET on an
+        id (`/payments/<id>/receipt.pdf`, and the parent portal's equivalent,
+        which authorises by owner and not by status), so without this guard a
+        hand-edited URL burned a number on any row the caller could see.
 
         Idempotent: a payment that already has a number keeps it — the number
         must never change once a family has been handed a receipt bearing it.
@@ -851,9 +880,10 @@ class Payment(models.Model):
         """
         if self.receipt_number:
             return self.receipt_number
+        if self.payment_status != "completed":
+            return ""
 
-        ref_date = self.payment_date or self.due_date or date.today()
-        year = ref_date.year
+        year = self.receipt_date.year
 
         with transaction.atomic():
             config = SiteConfiguration.objects.select_for_update().get(pk=SiteConfiguration.get_config().pk)
@@ -872,15 +902,31 @@ class Payment(models.Model):
 
             base = config.receipt_offset if year == config.receipt_offset_year else 0
 
-            max_seq = base
-            existing = Payment.objects.filter(receipt_number__startswith=f"{year}-").values_list(
-                "receipt_number", flat=True
+            # The highest number of the year, read as ONE row. Pulling every
+            # number into Python to scan for the max ran inside the config lock,
+            # so each issue serialised the whole year's history behind itself —
+            # and the first full `backfill_drive_receipts` run made that O(N^2).
+            #
+            # Ordered, not aggregated: casting the suffix to an integer in SQL
+            # would be quicker still, but a cast in the SELECT list is not
+            # guaranteed to run after the WHERE that filters malformed values
+            # out, and one hand-edited `receipt_number` would then raise inside
+            # this lock and stop the academy issuing receipts at all. Suffixes
+            # are zero-padded to at least three digits, so (length, then
+            # lexicographic) IS numeric order, with no cast anywhere.
+            latest = (
+                Payment.objects.filter(receipt_number__startswith=f"{year}-")
+                .filter(receipt_number__regex=rf"^{year}-\d+$")
+                .order_by(Length("receipt_number").desc(), "-receipt_number")
+                .values_list("receipt_number", flat=True)
+                .first()
             )
-            for number in existing:
+            max_seq = base
+            if latest:
                 try:
-                    max_seq = max(max_seq, int(number.rsplit("-", 1)[1]))
+                    max_seq = max(max_seq, int(latest.rsplit("-", 1)[1]))
                 except (IndexError, ValueError):
-                    continue
+                    logger.warning("Ignoring malformed receipt_number while numbering a receipt.")
 
             self.receipt_number = f"{year}-{max_seq + 1:03d}"
             # Targeted update, not save(): assignment can happen while rendering a

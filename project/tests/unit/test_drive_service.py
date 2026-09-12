@@ -24,6 +24,9 @@ def _payment(pid=633, d=date(2026, 9, 3), first="Ana", last="Ruiz"):
         id=pid,
         payment_date=d,
         due_date=None,
+        # `Payment.receipt_date` — the same property that picks the YEAR of the
+        # receipt number, so the archive folder and the number cannot disagree.
+        receipt_date=d,
         student=SimpleNamespace(first_name=first, last_name=last),
     )
 
@@ -135,10 +138,16 @@ class TestUploadReceipt:
     def test_creates_missing_folders(self, _info):
         svc = self._svc()
         fake = MagicMock()
+        # Each miss costs a second list: after creating, the service re-lists and
+        # keeps the OLDEST match, so two instances racing on the same month folder
+        # converge instead of forking the archive.
         fake.files.return_value.list.return_value.execute.side_effect = [
             {"files": []},  # curso missing
+            {"files": [{"id": "C"}]},  # re-list after create: we won
             {"files": []},  # recibos missing
+            {"files": [{"id": "R"}]},
             {"files": []},  # month missing
+            {"files": [{"id": "M"}]},
             {"files": []},  # existing-receipt check
         ]
         fake.files.return_value.create.return_value.execute.side_effect = [
@@ -152,6 +161,35 @@ class TestUploadReceipt:
         assert result.status == "uploaded"
         # 3 folders + 1 file.
         assert fake.files.return_value.create.call_count == 4
+
+    @patch.object(drive_service, "_service_account_info", return_value={"type": "service_account"})
+    def test_concurrent_folder_create_converges_on_the_oldest(self, _info):
+        """Drive allows duplicate folder names and find-then-create is not atomic,
+        so two instances can each create "Septiembre 26" at the start of a month.
+        Whoever loses must still WRITE to the winner's folder, or the archive
+        forks and the per-payment idempotency check stops seeing existing
+        receipts."""
+        svc = self._svc()
+        fake = MagicMock()
+        fake.files.return_value.list.return_value.execute.side_effect = [
+            {"files": [{"id": "C"}]},
+            {"files": [{"id": "R"}]},
+            {"files": []},  # month not there yet...
+            # ...so we create it — but the re-list shows another instance got
+            # there first (oldest wins).
+            {"files": [{"id": "M_WINNER"}, {"id": "M_OURS"}]},
+            {"files": []},  # existing-receipt check, in the winner's folder
+        ]
+        fake.files.return_value.create.return_value.execute.side_effect = [
+            {"id": "M_OURS"},
+            {"id": "FILE"},
+        ]
+        with patch.object(svc, "_get_service", return_value=fake):
+            result = svc.upload_receipt(_payment(), b"%PDF")
+
+        assert result.status == "uploaded"
+        parents = fake.files.return_value.create.call_args_list[-1].kwargs["body"]["parents"]
+        assert parents == ["M_WINNER"]
 
     @patch.object(drive_service, "_service_account_info", return_value={"type": "service_account"})
     def test_error_never_raises(self, _info):

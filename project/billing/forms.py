@@ -124,6 +124,17 @@ class EnrollmentForm(forms.Form):
         super().__init__(*args, **kwargs)
         self._current_start = current_start
 
+        # A pre-filled `manual_amount` IMPLIES "Personalizar también la cuota".
+        # `clean()` discards `manual_amount` whenever that box is off and then
+        # rejects the special, so a caller that pre-fills a hand price without
+        # also ticking this turns every save of that student's ficha — even a
+        # phone-number edit — into a silent no-op. Owning the invariant here
+        # means the next surface that edits a special enrollment cannot
+        # reintroduce that bug by forgetting the companion flag.
+        initial = self.initial or {}
+        if initial.get("manual_amount") is not None:
+            self.initial["customize_recurring"] = True
+
     def clean_start_date(self):
         start = self.cleaned_data.get("start_date")
         if not start or start == self._current_start:

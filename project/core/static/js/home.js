@@ -49,7 +49,11 @@ document.addEventListener('DOMContentLoaded', function () {
             btn.classList.toggle('bg-neutral-100', !isActive);
             btn.classList.toggle('text-neutral-700', !isActive);
         });
-        customDate.classList.toggle('hidden', mode !== 'fecha');
+        // The VISIBLE element, not the input: date-picker.js turns the original
+        // into type=hidden behind flatpickr's altInput, so toggling `hidden`
+        // here left the field permanently invisible and the todo silently took
+        // today's date.
+        window.dateInputElement(customDate).classList.toggle('hidden', mode !== 'fecha');
     }
 
     document.getElementById('btnHoy').addEventListener('click', function () {
@@ -64,7 +68,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
     document.getElementById('btnFecha').addEventListener('click', function () {
         setActiveBtn('fecha');
-        customDate.focus();
+        window.dateInputElement(customDate).focus();
         if (customDate.value) selectedDate = customDate.value;
     });
 
