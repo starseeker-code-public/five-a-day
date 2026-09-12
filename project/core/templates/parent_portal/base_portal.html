@@ -31,33 +31,20 @@ portal shares the key, so a family that picked dark on one page keeps it here.
 
 <script src="{% static 'js/vendor/tailwindcss-play-3.4.17.js' %}"></script>
 {% comment %}
-The violet `primary` palette MUST be declared here as well as in base.html.
-Without it every `bg-primary-500` / `text-primary-700` in the portal is an
-undefined utility that Tailwind emits nothing for — which is exactly how the
-"Certificado fiscal" button rendered as white text on a white card and looked
-like a missing download for anyone not inspecting the DOM.
+The palette MUST be loaded on this page as well as in base.html: without it
+every `bg-primary-500` / `text-primary-700` in the portal is an undefined
+utility that Tailwind emits nothing for — which is exactly how the "Certificado
+fiscal" button rendered as white text on a white card and looked like a missing
+download for anyone not inspecting the DOM. It is now the SHARED
+js/tailwind-config.js rather than a third pasted copy of the scale.
 {% endcomment %}
-<script nonce="{{ csp_nonce }}">
-tailwind.config = {
-    darkMode: 'class',
-    theme: {
-        extend: {
-            colors: {
-                primary: {
-                    50: '#f5f3ff', 100: '#ede9fe', 200: '#ddd6fe', 300: '#c4b5fd',
-                    400: '#a78bfa', 500: '#8b5cf6', 600: '#7c3aed', 700: '#6d28d9',
-                    800: '#5b21b6', 900: '#4c1d95',
-                }
-            },
-            fontFamily: {
-                sans: ['Trebuchet MS', 'ui-sans-serif', 'system-ui', 'sans-serif'],
-            }
-        }
-    }
-}
-</script>
+<script src="{% static 'js/tailwind-config.js' %}"></script>
 
 <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined" rel="stylesheet">
+{# palette.css declares --primary-* for the hand-written rules in theme.css; #}
+{# without it var(--primary-500) is undefined and computes to the initial     #}
+{# value, which renders the violet buttons TRANSPARENT in dark mode.          #}
+<link rel="stylesheet" href="{% static 'css/palette.css' %}">
 <link rel="stylesheet" href="{% static 'css/theme.css' %}">
 <style>
     body { font-family: 'Trebuchet MS', ui-sans-serif, system-ui, sans-serif; }
@@ -96,7 +83,14 @@ cookie-only reader works in dev and silently 403s in testing/production.
                 <a href="{% url 'parent_portal_dashboard' %}" class="text-neutral-600 hover:text-primary-700 no-underline">Inicio</a>
                 <a href="{% url 'parent_portal_payments' %}" class="text-neutral-600 hover:text-primary-700 no-underline">Pagos</a>
                 <a href="{% url 'parent_portal_change_password' %}" class="text-neutral-600 hover:text-primary-700 no-underline">Contraseña</a>
-                <a href="{% url 'parent_portal_logout' %}" class="text-red-600 hover:text-red-800 no-underline">Salir</a>
+                {# POST, not a link: parent_portal_logout is @require_http_methods(["POST"]) #}
+                {# — a GET logout can be triggered by any third-party <img>. Styled to be   #}
+                {# indistinguishable from the nav links beside it.                          #}
+                <form method="post" action="{% url 'parent_portal_logout' %}" class="inline">
+                    {% csrf_token %}
+                    <button type="submit" class="text-red-600 hover:text-red-800"
+                            style="background:none;border:0;padding:0;cursor:pointer;font:inherit;">Salir</button>
+                </form>
             </nav>
             {% endif %}
             <button id="theme-toggle-btn" type="button"

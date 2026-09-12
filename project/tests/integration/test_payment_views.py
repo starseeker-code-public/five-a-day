@@ -364,11 +364,24 @@ class TestGetPaymentDetails:
         assert response.json()["success"] is True
 
     def test_exception_returns_500(self, authenticated_client, completed_payment):
-        with patch("core.views.payments.get_object_or_404", side_effect=RuntimeError("boom")):
+        # The row fetch now lives OUTSIDE the try (a stale id is a 404, tested
+        # below), so the catch-all is exercised by breaking serialization inside
+        # the try instead.
+        from unittest.mock import PropertyMock
+
+        from students.models import Student
+
+        with patch.object(Student, "full_name", new_callable=PropertyMock, side_effect=RuntimeError("boom")):
             response = authenticated_client.get(
                 reverse("get_payment_details", kwargs={"payment_id": completed_payment.id})
             )
         assert response.status_code == 500
+
+    def test_missing_payment_returns_404(self, authenticated_client):
+        # Used to be a 500: get_object_or_404 sat inside `except Exception`,
+        # which swallows Http404 (it subclasses Exception).
+        response = authenticated_client.get(reverse("get_payment_details", kwargs={"payment_id": 99999}))
+        assert response.status_code == 404
 
 
 # ============================================================================

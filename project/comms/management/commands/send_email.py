@@ -18,6 +18,7 @@ from django.core.management.base import BaseCommand, CommandError
 from django.db.models import Prefetch
 
 from comms.services.email_functions import (
+    cheque_idioma_fee,
     send_all_tax_certificates,
     send_fun_friday_email,
     send_payment_reminder_email,
@@ -26,7 +27,49 @@ from comms.services.email_functions import (
     send_vacation_closure_email,
 )
 from comms.services.email_service import email_service
+from core.constants import DIAS_ES, MESES_ES
 from students.models import Parent, Student
+
+
+def _mass_mail_parent_filters() -> dict:
+    """The filters every mass-mail recipient query in this command must carry.
+
+    Mirrors `core.views.app_forms._recipient_filters`: `is_waiting=False` is the
+    one that was missing. A waiting-list entry taken over the phone has no
+    `Parent` row, but a student MOVED BACK onto the list keeps their parents —
+    so `children__active=True` alone mailed families whose child is not
+    enrolled. Duplicated rather than imported because a management command in
+    `comms` importing `core.views` would be a layering inversion; the two are
+    two lines each and the docstring names its twin.
+    """
+    return {"children__active": True, "children__is_waiting": False}
+
+
+def _dedupe_emails(addresses) -> list[str]:
+    """Collapse addresses differing only by case/whitespace, keeping order.
+
+    `Parent.email` is not unique, so a couple sharing a mailbox is two rows and
+    got two copies of every batch.
+    """
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for raw in addresses:
+        address = (raw or "").strip()
+        if address and address.lower() not in seen:
+            seen.add(address.lower())
+            ordered.append(address)
+    return ordered
+
+
+def _mass_mail_recipients() -> list[str]:
+    """Deduplicated addresses of the parents of currently enrolled students."""
+    return _dedupe_emails(
+        Parent.objects.filter(**_mass_mail_parent_filters())
+        .exclude(email="")
+        .exclude(email__isnull=True)
+        .order_by("id")
+        .values_list("email", flat=True)
+    )
 
 
 class Command(BaseCommand):
@@ -52,9 +95,14 @@ class Command(BaseCommand):
         parser.add_argument("--month", type=str, help="Mes del pago")
         parser.add_argument("--payment-start", type=str, default="1", help="Día inicio pago")
         parser.add_argument("--payment-end", type=str, default="5", help="Día fin pago")
-        parser.add_argument("--iban", type=str, default="ES00 0000 0000 0000 0000 0000")
-        parser.add_argument("--cheque-idioma-price", type=str, default="40")
-        parser.add_argument("--bizum-phone", type=str, default="613 481 141")
+        # Defaults are None so the real sources (SiteConfiguration / env) are used
+        # when the flag is omitted. The old literal defaults shipped a PLACEHOLDER
+        # IBAN nobody could pay into and a cheque-idioma price of 40€ where the app
+        # derives 34€ — argparse always populates options, so the `.get(..., "")`
+        # fallbacks in the send code never fired.
+        parser.add_argument("--iban", type=str, default=None)
+        parser.add_argument("--cheque-idioma-price", type=str, default=None)
+        parser.add_argument("--bizum-phone", type=str, default=None)
         parser.add_argument("--vacation-closure", action="store_true", help="Cierre vacaciones")
         parser.add_argument("--reason", type=str, help="Motivo del cierre")
         parser.add_argument("--start", type=str, help="Fecha inicio cierre")
@@ -126,7 +174,7 @@ class Command(BaseCommand):
         # making the `prefetch_related` above dead weight.
         birthday_students = list(
             Student.objects.filter(
-                birth_date__month=today.month, birth_date__day=today.day, active=True
+                birth_date__month=today.month, birth_date__day=today.day, active=True, is_waiting=False
             ).prefetch_related(
                 Prefetch(
                     "parents",
@@ -158,17 +206,31 @@ class Command(BaseCommand):
         # Was three queries per parent: `children.filter(active=True)`, then `s.group`
         # for every child (no select_related), then `students.count()` re-running the
         # same queryset. All of it now rides on one prefetch.
-        parents = list(
-            Parent.objects.filter(email__isnull=False)
+        # Only parents of ENROLLED students, deduplicated by address. This used
+        # to be every `Parent` row with an email — including families that have
+        # left, and waiting-list families — each of whom received a report
+        # listing zero students.
+        seen: set[str] = set()
+        parents = []
+        for parent in (
+            Parent.objects.filter(**_mass_mail_parent_filters())
             .exclude(email="")
+            .exclude(email__isnull=True)
+            .distinct()
+            .order_by("id")
             .prefetch_related(
                 Prefetch(
                     "children",
-                    queryset=Student.objects.filter(active=True).select_related("group"),
+                    queryset=Student.objects.filter(active=True, is_waiting=False).select_related("group"),
                     to_attr="active_children",
                 )
             )
-        )
+        ):
+            key = parent.email.strip().lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            parents.append(parent)
         if not parents:
             self.stdout.write(self.style.WARNING("No hay padres con email"))
             return
@@ -204,23 +266,7 @@ class Command(BaseCommand):
         except ValueError as err:
             raise CommandError("Formato de fecha inválido") from err
         start_time, end_time = options["time"].split("-")
-        DAYS_ES = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
-        MONTHS_ES = [
-            "enero",
-            "febrero",
-            "marzo",
-            "abril",
-            "mayo",
-            "junio",
-            "julio",
-            "agosto",
-            "septiembre",
-            "octubre",
-            "noviembre",
-            "diciembre",
-        ]
-        parents = Parent.objects.filter(email__isnull=False, children__active=True).distinct()
-        recipient_emails = [p.email for p in parents if p.email]
+        recipient_emails = _mass_mail_recipients()
         # Send one email per parent. Previously the whole list was passed as
         # `recipients=...` which put every family's address in the `To:` header
         # of a single message — GDPR breach + enumeration leak. Loop instead.
@@ -228,9 +274,9 @@ class Command(BaseCommand):
         for email in recipient_emails:
             if send_fun_friday_email(
                 recipients=email,
-                day_name=DAYS_ES[event_date.weekday()],
+                day_name=DIAS_ES[event_date.weekday()],
                 day_number=event_date.day,
-                month=MONTHS_ES[event_date.month - 1],
+                month=MESES_ES[event_date.month - 1],
                 start_time=start_time,
                 end_time=end_time,
                 activity_description=options["activity"],
@@ -245,23 +291,44 @@ class Command(BaseCommand):
     def send_payment_reminder_emails(self, options):
         if not options.get("month"):
             raise CommandError("Se requiere --month")
-        DAYS_ES = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
-        parents = Parent.objects.filter(email__isnull=False, children__active=True).exclude(email="").distinct()
-        recipient_emails = list(parents.values_list("email", flat=True))
+
+        # Resolve the fee/IBAN from the real sources when the flags are omitted,
+        # so this command bills the same numbers the app does — SiteConfiguration
+        # is the single source of truth for prices.
+        import os
+
+        from billing.models import SiteConfiguration
+
+        config = SiteConfiguration.get_config()
+        iban = options.get("iban") or os.getenv("ACADEMY_IBAN", "")
+        # ACADEMY_PHONE, matching app_forms.py — production stores the Bizum
+        # number there (= the old hard-coded 613 481 141), and no
+        # ACADEMY_BIZUM_PHONE var exists on the service.
+        bizum_phone = options.get("bizum_phone") or os.getenv("ACADEMY_PHONE", "")
+        # `emails/payment_reminder.html` prints "{{ reduced_price_cheque_idioma }}
+        # euros", so the "€" this used to append rendered as "34€ euros". One
+        # helper formats it now (the same one the app's four call sites use), and
+        # a "€" typed after `--cheque-idioma-price` is stripped rather than
+        # doubled up.
+        cheque_price = (options.get("cheque_idioma_price") or "").strip().removesuffix("€").strip()
+        if not cheque_price:
+            cheque_price = cheque_idioma_fee(config)
+
+        recipient_emails = _mass_mail_recipients()
         # Per-parent loop — see send_fun_friday_emails for the "batch in To:"
         # bug this replaces.
         sent = 0
         for email in recipient_emails:
             if send_payment_reminder_email(
                 recipients=email,
-                payment_start_day_name=DAYS_ES[0],
+                payment_start_day_name=DIAS_ES[0],
                 payment_start_day_number=int(options.get("payment_start", 1)),
-                payment_end_day_name=DAYS_ES[4],
+                payment_end_day_name=DIAS_ES[4],
                 payment_end_day_number=int(options.get("payment_end", 5)),
                 month=options["month"],
-                iban_number=options.get("iban", ""),
-                reduced_price_cheque_idioma=options.get("cheque_idioma_price", "40"),
-                telephone_number_bizum=options.get("bizum_phone", ""),
+                iban_number=iban,
+                reduced_price_cheque_idioma=cheque_price,
+                telephone_number_bizum=bizum_phone,
             ):
                 sent += 1
         self.stdout.write(self.style.SUCCESS(f"Enviado a {sent}/{len(recipient_emails)} padres"))
@@ -273,43 +340,27 @@ class Command(BaseCommand):
         start_date = datetime.strptime(options["start"], "%Y-%m-%d")
         end_date = datetime.strptime(options["end"], "%Y-%m-%d")
         reopen_date = datetime.strptime(options["reopen"], "%Y-%m-%d")
-        DAYS_ES = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
-        MONTHS_ES = [
-            "enero",
-            "febrero",
-            "marzo",
-            "abril",
-            "mayo",
-            "junio",
-            "julio",
-            "agosto",
-            "septiembre",
-            "octubre",
-            "noviembre",
-            "diciembre",
-        ]
-        parents = Parent.objects.filter(email__isnull=False, children__active=True).exclude(email="").distinct()
-        recipient_emails = list(parents.values_list("email", flat=True))
+        recipient_emails = _mass_mail_recipients()
         # Per-parent loop — see send_fun_friday_emails for the "batch in To:"
         # bug this replaces.
         sent = 0
         for email in recipient_emails:
             if send_vacation_closure_email(
                 recipients=email,
-                start_closure_day_name=DAYS_ES[start_date.weekday()],
+                start_closure_day_name=DIAS_ES[start_date.weekday()],
                 start_closure_day_number=start_date.day,
-                end_closure_day_name=DAYS_ES[end_date.weekday()],
+                end_closure_day_name=DIAS_ES[end_date.weekday()],
                 end_closure_day_number=end_date.day,
-                month_closure=MONTHS_ES[start_date.month - 1],
+                month_closure=MESES_ES[start_date.month - 1],
                 # The end month can differ from the start month (Christmas
                 # closure = Dec 23 → Jan 3). Pass both so the template can
                 # render "23 de diciembre" and "3 de enero" correctly instead
                 # of collapsing to a single month.
-                month_closure_end=MONTHS_ES[end_date.month - 1],
+                month_closure_end=MESES_ES[end_date.month - 1],
                 closure_reason=options["reason"],
-                reopening_day_name=DAYS_ES[reopen_date.weekday()],
+                reopening_day_name=DIAS_ES[reopen_date.weekday()],
                 reopening_day_number=reopen_date.day,
-                month_reopening=MONTHS_ES[reopen_date.month - 1],
+                month_reopening=MESES_ES[reopen_date.month - 1],
             ):
                 sent += 1
         self.stdout.write(self.style.SUCCESS(f"Enviado a {sent}/{len(recipient_emails)} padres"))
@@ -319,10 +370,27 @@ class Command(BaseCommand):
             raise CommandError("Se requiere --year")
         year = options["year"]
         if options.get("recipient"):
-            try:
-                parent = Parent.objects.get(email=options["recipient"])
-            except Parent.DoesNotExist as err:
-                raise CommandError(f"No se encontró padre con email {options['recipient']}") from err
+            # iexact + explicit ambiguity handling: Parent.email is not unique
+            # and Postgres compares it case-sensitively, so a bare
+            # `.get(email=...)` both missed a differently-cased address and
+            # raised an opaque MultipleObjectsReturned on a shared mailbox.
+            # `[:2]` + refuse-if-not-exactly-one is the same call
+            # `core.views.auth._parent_by_email` makes, and for the same reason:
+            # picking whichever row came back first would mail one family's
+            # fiscal certificate — with the other family's payments and DNI on
+            # it — to the shared address. The local copy is deliberate; a comms
+            # command importing `core.views` would invert the layering.
+            #
+            # There is no `except Parent.DoesNotExist` here any more: nothing in
+            # this block can raise it (the `.get()` it guarded was replaced by
+            # the slice above), so it was dead code that read like a live path.
+            recipient = options["recipient"]
+            matches = list(Parent.objects.filter(email__iexact=recipient)[:2])
+            if not matches:
+                raise CommandError(f"No se encontró padre con email {recipient}")
+            if len(matches) > 1:
+                raise CommandError(f"Hay varios padres con el email {recipient}; resuélvelo antes de enviar.")
+            parent = matches[0]
             success = send_tax_certificate_email(parent=parent, year=year)
             self.stdout.write(
                 self.style.SUCCESS(f"Certificado enviado a {parent.email}") if success else self.style.ERROR("Error")
@@ -341,7 +409,7 @@ class Command(BaseCommand):
         if not options.get("months"):
             raise CommandError("Se requiere --months (mes1,mes2,mes3)")
         student = Student.objects.get(pk=options["student_id"])
-        parent = student.parents.exclude(email="").exclude(email__isnull=True).first()
+        parent = student.parents.exclude(email="").exclude(email__isnull=True).order_by("id").first()
         if not parent:
             raise CommandError(f"{student.full_name} no tiene padre con email")
         months = options["months"].split(",")

@@ -1,21 +1,41 @@
 """
 Email app form views — each view handles GET (show form with email preview)
 and POST (send emails to parents).
+
+Roughly 400 of this module's lines used to be duplication: 9 near-verbatim
+preview/test-send blocks, 6 copies of the same send loop (each carrying an
+identical 6-line comment) and 5 tally tails. They are now two shared helpers,
+`_preview_or_test` and `_mass_send`, plus one shared definition of "who a mass
+mail reaches" (`_recipient_filters` / `_parent_recipients` / `_mass_mail_parents`).
+That is not tidying for its own sake — every one of the bugs below existed in
+some copies and not others, which is exactly what copy-paste guarantees:
+
+* waiting-list families received every mass mail (see `_recipient_filters`);
+* the Fun Friday recipient COUNT, the sent set and the success message were
+  three different numbers;
+* no send deduplicated addresses, so a couple sharing a mailbox got two copies;
+* opening the SMTP connection could 500 the request (`_mass_send`);
+* the preview and the send resolved a student's guardian by different query
+  paths (`_emailable_parent`).
 """
 
 import logging
 import os
-from datetime import date, timedelta
+from datetime import date, time, timedelta
 
 from django.contrib import messages
+from django.core.exceptions import ValidationError
+from django.db import transaction
 from django.db.models import Prefetch
 from django.http import JsonResponse
 from django.shortcuts import redirect, render
 from django.template.loader import render_to_string
+from django.utils import timezone
 from django.utils.html import strip_tags
 
 from billing.services.pricing_service import PricingService
 from comms.services.email_functions import (
+    cheque_idioma_fee,
     send_all_tax_certificates,
     send_monthly_report,
     send_payment_reminder_email,
@@ -25,11 +45,26 @@ from comms.services.email_functions import (
 )
 from comms.services.email_service import email_service
 from core.constants import DIAS_ES, MESES_ES
+from core.decorators import admin_required
 from core.models import HistoryLog
 from core.utils import MAX_QUERY_YEAR, MIN_QUERY_YEAR, safe_int
 from students.models import Group, Parent, Student
 
 logger = logging.getLogger(__name__)
+
+
+def _birthday_image_path():
+    """Absolute path to the inline birthday card image.
+
+    The template's `<img src="cid:birthday_image">` renders BROKEN without a
+    matching `inline_images` attachment — the cron passes it, but the manual
+    test-send and mass-send here did not, so the admin's own test could never
+    reproduce what parents complained about. Same file the cron and
+    test_all_emails use.
+    """
+    from django.conf import settings
+
+    return os.path.join(settings.BASE_DIR, "core/static/images/happy-birthday.png")
 
 
 #: Parents of a Student who actually have an email address, exposed as the plain
@@ -56,9 +91,15 @@ _EMAILABLE_PARENTS_PREFETCH = Prefetch(
 #: prefetch cache is discarded and every parent costs a round trip — measured at 365
 #: queries for 120 parents, against 2 with this Prefetch. `select_related("group")`
 #: is folded in because the monthly report reads each child's group name.
+#:
+#: `is_waiting=False` matches `_recipient_filters`: without it a family whose child
+#: was moved back onto the waiting list still had that child listed in their monthly
+#: report and still got a receipt for them.
 _ACTIVE_CHILDREN_PREFETCH = Prefetch(
     "children",
-    queryset=Student.objects.filter(active=True).select_related("group").order_by("first_name", "last_name"),
+    queryset=Student.objects.filter(active=True, is_waiting=False)
+    .select_related("group")
+    .order_by("first_name", "last_name"),
     to_attr="active_children",
 )
 
@@ -74,6 +115,304 @@ def _safe_year(raw, default: int) -> int:
     return safe_int(raw, default=default, low=MIN_QUERY_YEAR, high=MAX_QUERY_YEAR)
 
 
+# ============================================================================
+# WHO A MASS MAIL REACHES — one definition, used by both the count and the send
+# ============================================================================
+
+
+def _recipient_filters(*, group=None, include_adult_students: bool = True) -> dict:
+    """The filters EVERY mass-mail recipient query must carry.
+
+    `children__is_waiting=False` is the one that was missing everywhere. A
+    waiting-list entry taken over the phone has no `Parent` row at all (its
+    contact lives on `Student.waiting_contact_name` / `waiting_contact_phone`),
+    so it looked harmless — but `add_to_waiting_list` moves an ENROLLED student
+    onto the list by cancelling the enrollment and leaving `active=True`, and
+    that student keeps their parents. Filtering on `active` alone therefore sent
+    payment reminders, receipts and every announcement to families whose child
+    is not enrolled and owes nothing.
+
+    `include_adult_students=False` drops parents whose only active child is an
+    adult student — Fun Friday is a children's activity with a min/max age, and
+    its counter already excluded them while its send did not.
+    """
+    filters = {"children__active": True, "children__is_waiting": False}
+    if not include_adult_students:
+        filters["children__is_adult"] = False
+    if group is not None:
+        filters["children__group"] = group
+    return filters
+
+
+def _dedupe_emails(addresses) -> list[str]:
+    """Collapse addresses that differ only by case or surrounding whitespace.
+
+    `Parent.email` is NOT unique — a couple sharing one mailbox is two
+    legitimate rows (see CLAUDE.md) — so every mass send delivered one copy per
+    ROW, and a family with both parents on file got everything twice. The
+    comparison is case-insensitive because SMTP local-parts are compared
+    case-insensitively in practice and `Maria@x` / `maria@x` is one inbox.
+    Insertion order is preserved so the lowest-id parent's spelling wins and the
+    send order stays deterministic.
+    """
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for raw in addresses:
+        address = (raw or "").strip()
+        if not address:
+            continue
+        key = address.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        ordered.append(address)
+    return ordered
+
+
+def _parent_recipients(*, group=None, include_adult_students: bool = True) -> list[str]:
+    """The addresses a mass mail actually reaches — deduplicated.
+
+    THE counted set and THE sent set: every form renders `parent_count` from
+    `len()` of this list and then sends to the same list, so the number on the
+    page, the number of messages and the number in the success banner can no
+    longer disagree. The six `parent_count` figures also all lacked the
+    `if p.email` filter, so they overstated reachable recipients by however many
+    families have no address on file.
+    """
+    rows = (
+        Parent.objects.filter(**_recipient_filters(group=group, include_adult_students=include_adult_students))
+        .exclude(email="")
+        .exclude(email__isnull=True)
+        .order_by("id")
+        .values_list("email", flat=True)
+    )
+    return _dedupe_emails(rows)
+
+
+def _mass_mail_parents(*, group=None, include_adult_students: bool = True, with_children: bool = False) -> list:
+    """`Parent` rows for a PERSONALISED mass mail — one row per distinct address.
+
+    Same population as `_parent_recipients`, but the objects, for the sends that
+    need the parent's name or their children (monthly report, receipts).
+    `with_children` attaches `_ACTIVE_CHILDREN_PREFETCH` so the loop reads a
+    plain list instead of re-querying per parent.
+
+    Deduplication is by address, not by row: two `Parent` rows sharing a mailbox
+    are the same couple with the same children, so one message is right and two
+    were the bug. If two unrelated families genuinely shared an address the
+    second would be skipped — that is a data error worth surfacing, and one
+    message is still the safer direction.
+    """
+    qs = (
+        Parent.objects.filter(**_recipient_filters(group=group, include_adult_students=include_adult_students))
+        .exclude(email="")
+        .exclude(email__isnull=True)
+        .distinct()
+        .order_by("id")
+    )
+    if with_children:
+        qs = qs.prefetch_related(_ACTIVE_CHILDREN_PREFETCH)
+
+    seen: set[str] = set()
+    parents = []
+    for parent in qs:
+        key = parent.email.strip().lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        parents.append(parent)
+    return parents
+
+
+def _emailable_parent(student):
+    """The guardian a single-student email goes to — ONE resolution.
+
+    `enrollment_form`'s preview did `parents.exclude(...).first()` while its send
+    did `parents.exclude(...).order_by("id").first()`. Both happen to sort by pk
+    today (an unordered queryset makes `.first()` add `order_by("pk")`, and no
+    model in `students.models` sets `Meta.ordering`), so the preview could show a
+    different guardian than the one who receives the mail the moment either side
+    grew an ordering. One helper, explicit ordering — the same pick the payment
+    generators make, for the same reason.
+
+    Honours `_EMAILABLE_PARENTS_PREFETCH` when the caller used it: `.filter()` /
+    `.first()` on a prefetched related manager builds a NEW queryset and throws
+    the prefetch away (CLAUDE.md), which is how the mass-mail views measured 365
+    queries for 120 parents.
+    """
+    cached = getattr(student, "emailable_parents", None)
+    if cached is not None:
+        return next(iter(cached), None)
+    return student.parents.exclude(email="").exclude(email__isnull=True).order_by("id").first()
+
+
+# ============================================================================
+# PREVIEW / TEST SEND — one implementation for all 9 forms
+# ============================================================================
+
+
+def _preview_or_test(action: str, template_name: str, context: dict, subject: str, *, inline_images=None):
+    """Handle the `action=preview` / `action=test_send` branch of a mail form.
+
+    Nine views carried a byte-for-byte copy of this: render for `preview`, read
+    `EMAIL_TEST_1`/`EMAIL_TEST_2` for `test_send`, and return one of three fixed
+    JSON shapes. The only real behaviour change is that a raising `send_email`
+    (SMTP down) is now reported as "❌ Error al enviar el email de prueba"
+    instead of 500ing the AJAX call.
+    """
+    if action == "preview":
+        return JsonResponse({"html": render_to_string(f"emails/{template_name}.html", context)})
+
+    recipients = [r for r in (os.getenv("EMAIL_TEST_1", ""), os.getenv("EMAIL_TEST_2", "")) if r]
+    if not recipients:
+        return JsonResponse({"success": False, "message": "❌ EMAIL_TEST_1/EMAIL_TEST_2 no configurados"})
+
+    try:
+        sent = email_service.send_email(
+            template_name=template_name,
+            recipients=recipients,
+            subject=subject,
+            context=context,
+            inline_images=inline_images,
+        )
+    except Exception:
+        # The test-send button exists to diagnose the mail path, so it must
+        # report a dead SMTP hop rather than crash on it. The recipients are the
+        # operator's own test addresses and are not logged.
+        logger.exception("Test send failed for template '%s'", template_name)
+        sent = False
+
+    if sent:
+        return JsonResponse({"success": True, "message": f"✅ Email de prueba enviado a {', '.join(recipients)}"})
+    return JsonResponse({"success": False, "message": "❌ Error al enviar el email de prueba"})
+
+
+# ============================================================================
+# MASS SEND — one implementation for all 6 batch forms
+# ============================================================================
+
+
+def _mass_send(request, jobs: list[dict], sender, *, log_label: str, success_text: str, failure_text: str):
+    """Deliver one batch over ONE SMTP session and report accurately.
+
+    `jobs` is a list of kwarg dicts — one message each — and `sender` is called
+    as ``sender(connection=<conn>, **job)``, returning truthy on success.
+    Returns ``(sent, failed)``. `success_text` / `failure_text` are Spanish
+    templates carrying the literal `{count}`, substituted with `str.replace` and
+    NOT `str.format`: the newsletter banner interpolates a group name, and a
+    group called `A{B}` would make `.format()` raise *after* the batch had gone
+    out.
+
+    Six views had a near-verbatim copy of this loop, each with its own copy of
+    the same six-line comment and its own `success_count` / `error_count` tail.
+    Four things are fixed here once instead of six times:
+
+    * **ONE SMTP session per batch.** Every loop except `birthday_form`'s opened
+      a fresh TCP+TLS+AUTH per recipient; at roster scale that handshake IS the
+      request. The senders take a `connection=` for exactly this.
+    * **Opening the connection cannot 500.** `with email_service.open_connection()`
+      calls `open()` with `fail_silently=False`, so a TCP/TLS/AUTH failure
+      propagated out of `birthday_form` as a 500 where the older per-student loop
+      had reported "⚠️ N email(s) no pudieron enviarse". The open is wrapped, the
+      operator gets a Spanish error, and every message counts as unsent.
+    * **A per-message failure never aborts the batch** — the remaining families
+      still get their mail, which is the whole point of a mass send.
+    * **The operator always gets a record.** `HistoryLog` was written only when
+      `success_count > 0`, so a total mail outage left NOTHING in the activity
+      feed — the one case where the record matters most. One entry is written
+      whenever there was anything to send, carrying both figures.
+
+    NOT taken further into a Celery task: production runs
+    `CELERY_TASK_ALWAYS_EAGER=True` with no worker, so a task would execute
+    inline in this same request and buy nothing, while making the report the
+    operator reads unreliable. The structural fix is the persisted-row + drain
+    pattern (`FunFridayScheduledSend`), which `fun_friday_form` already uses.
+    """
+    if not jobs:
+        return 0, 0
+
+    view_name = request.resolver_match.url_name if request.resolver_match else "app_forms"
+
+    try:
+        connection = email_service.open_connection()
+        connection.open()
+    except Exception:
+        logger.exception("SMTP connection could not be opened in %s", view_name)
+        messages.error(
+            request,
+            f"❌ No se pudo conectar con el servidor de correo. No se ha enviado ningún email ({len(jobs)} pendientes).",
+        )
+        HistoryLog.log(
+            "email_sent",
+            f"{log_label}: 0 enviados, {len(jobs)} fallidos (sin conexión con el servidor de correo)",
+            icon="mail",
+        )
+        return 0, len(jobs)
+
+    success_count = 0
+    error_count = 0
+    try:
+        for job in jobs:
+            try:
+                if sender(connection=connection, **job):
+                    success_count += 1
+                else:
+                    error_count += 1
+            except Exception:
+                # Never silent: this is the academy's outbound channel, and an
+                # operator who sees only a count cannot tell a bad address from
+                # an SMTP outage. The recipient is NOT logged — the exception
+                # text can carry it, so `logger.exception` alone is the record.
+                logger.exception("Email send failed in %s", view_name)
+                error_count += 1
+    finally:
+        try:
+            connection.close()
+        except Exception:
+            logger.exception("SMTP connection could not be closed in %s", view_name)
+
+    detail = f"{success_count} email(s) enviados"
+    if error_count:
+        detail = f"{detail}, {error_count} fallidos"
+    HistoryLog.log("email_sent", f"{log_label}: {detail}", icon="mail")
+
+    if success_count:
+        messages.success(request, success_text.replace("{count}", str(success_count)))
+    if error_count:
+        messages.warning(request, failure_text.replace("{count}", str(error_count)))
+    return success_count, error_count
+
+
+def _hhmm(raw) -> str | None:
+    """Normalise a time input to `HH:MM`, or None when it is not a time.
+
+    `<input type="time">` submits seconds ("17:30:00") in several browsers and
+    locales, and `FunFridayScheduledSend.start_time` is a `CharField(max_length=5)`
+    — so the raw value reached Postgres as 8 characters, raised a `DataError`,
+    and the announcement the teacher had just composed was lost with the 500.
+    """
+    try:
+        return time.fromisoformat(str(raw).strip()).strftime("%H:%M")
+    except (AttributeError, TypeError, ValueError):
+        return None
+
+
+def _cheque_idioma_text(raw, config) -> str:
+    """The cheque-idioma figure exactly as the template prints it.
+
+    `emails/payment_reminder.html` renders `{{ reduced_price_cheque_idioma }}
+    euros`, so a value carrying its own "€" produced "34€ euros" — and every
+    caller added the symbol, so production has sent the double unit since v1.0.
+    The default now comes from `cheque_idioma_fee` (SiteConfiguration; the POST
+    path still had a hard-coded "34€" while GET and preview derived it), and a
+    trailing "€" typed into the form by an operator is stripped rather than
+    rendered.
+    """
+    text = (raw or "").strip().removesuffix("€").strip()
+    return text or cheque_idioma_fee(config)
+
+
+@admin_required
 def apps_view(request):
     """Vista para la página de aplicaciones/herramientas"""
     return render(request, "apps.html")
@@ -84,11 +423,12 @@ def apps_view(request):
 # ============================================================================
 
 
+@admin_required
 def fun_friday_form(request):
     """
     Vista para el formulario de Fun Friday.
     GET: Muestra el formulario con valores por defecto
-    POST: Valida HTML y envía emails a todos los padres con estudiantes activos
+    POST: Valida HTML y programa emails a todos los padres con estudiantes activos
     """
     today = date.today()
     days_until_friday = (4 - today.weekday()) % 7
@@ -96,7 +436,12 @@ def fun_friday_form(request):
         days_until_friday = 7
     next_friday = today + timedelta(days=days_until_friday)
 
-    parent_count = Parent.objects.filter(children__active=True, children__is_adult=False).distinct().count()
+    # ONE resolution for the counter, the scheduled recipients and the success
+    # message. These were three different numbers: the counter excluded adult
+    # students and parents without an address, the send excluded neither, and
+    # the banner reported the length of a third list.
+    parent_emails = _parent_recipients(include_adult_students=False)
+    parent_count = len(parent_emails)
 
     default_html = """<strong>🎉 ¡SESIÓN DE MANUALIDADES!</strong>
 <br><br>
@@ -110,14 +455,32 @@ Esta semana haremos manualidades creativas con materiales reciclados.
 <br>
 ¡Os esperamos! 🎨"""
 
+    def _reshow(text):
+        """Re-render the form KEEPING what the teacher wrote.
+
+        Every error path here has to preserve `activity_description`: it is a
+        composed announcement, sometimes several minutes of typing, and losing
+        it to a validation error is the difference between a warning and a
+        support call.
+        """
+        return render(
+            request,
+            "apps/fun_friday_form.html",
+            {
+                "next_friday": next_friday.isoformat(),
+                "parent_count": parent_count,
+                "default_html": text or default_html,
+            },
+        )
+
     if request.method == "POST":
         action = request.POST.get("action", "")
         if action in ("preview", "test_send"):
             _event_date_str = request.POST.get("event_date", next_friday.isoformat())
-            _start_time = request.POST.get("start_time", "17:30")
-            _end_time = request.POST.get("end_time", "18:30")
             _meeting_point = request.POST.get("meeting_point", "")
             _activity = request.POST.get("activity_description", default_html)
+            _start_time = _hhmm(request.POST.get("start_time")) or "17:30"
+            _end_time = _hhmm(request.POST.get("end_time")) or "18:30"
             try:
                 _ed = date.fromisoformat(_event_date_str)
             except (ValueError, TypeError):
@@ -138,58 +501,37 @@ Esta semana haremos manualidades creativas con materiales reciclados.
                 "minimum_age": _min_age,
                 "maximum_age": _max_age,
             }
-            if action == "preview":
-                return JsonResponse({"html": render_to_string("emails/fun_friday.html", _ctx)})
-            _t1, _t2 = os.getenv("EMAIL_TEST_1", ""), os.getenv("EMAIL_TEST_2", "")
-            _recipients = [r for r in [_t1, _t2] if r]
-            if not _recipients:
-                return JsonResponse({"success": False, "message": "❌ EMAIL_TEST_1/EMAIL_TEST_2 no configurados"})
-            _ok = email_service.send_email(
-                template_name="fun_friday",
-                recipients=_recipients,
-                subject=f"[TEST] 🎉 Fun Friday - {_ctx['day_name'].capitalize()} {_ctx['day_number']} de {_ctx['month']}",
-                context=_ctx,
+            return _preview_or_test(
+                action,
+                "fun_friday",
+                _ctx,
+                f"[TEST] 🎉 Fun Friday - {_ctx['day_name'].capitalize()} {_ctx['day_number']} de {_ctx['month']}",
             )
-            if _ok:
-                return JsonResponse(
-                    {"success": True, "message": f"✅ Email de prueba enviado a {', '.join(_recipients)}"}
-                )
-            return JsonResponse({"success": False, "message": "❌ Error al enviar el email de prueba"})
 
         # Obtener datos del formulario
         event_date_str = request.POST.get("event_date")
-        start_time = request.POST.get("start_time")
-        end_time = request.POST.get("end_time")
+        raw_start_time = request.POST.get("start_time")
+        raw_end_time = request.POST.get("end_time")
         meeting_point = request.POST.get("meeting_point", "")
         min_age = request.POST.get("min_age")
         max_age = request.POST.get("max_age")
         activity_description = request.POST.get("activity_description", "")
 
-        if not all([event_date_str, start_time, end_time, min_age, max_age, activity_description]):
+        if not all([event_date_str, raw_start_time, raw_end_time, min_age, max_age, activity_description]):
             messages.error(request, "❌ Todos los campos obligatorios son requeridos")
-            return render(
-                request,
-                "apps/fun_friday_form.html",
-                {
-                    "next_friday": next_friday.isoformat(),
-                    "parent_count": parent_count,
-                    "default_html": activity_description or default_html,
-                },
-            )
+            return _reshow(activity_description)
 
         try:
             event_date = date.fromisoformat(event_date_str)
         except ValueError:
             messages.error(request, "❌ Fecha inválida")
-            return render(
-                request,
-                "apps/fun_friday_form.html",
-                {
-                    "next_friday": next_friday.isoformat(),
-                    "parent_count": parent_count,
-                    "default_html": activity_description,
-                },
-            )
+            return _reshow(activity_description)
+
+        start_time = _hhmm(raw_start_time)
+        end_time = _hhmm(raw_end_time)
+        if not start_time or not end_time:
+            messages.error(request, "❌ Hora inválida. Usa el formato HH:MM (por ejemplo 17:30).")
+            return _reshow(activity_description)
 
         try:
             min_age_int = int(min_age)
@@ -198,21 +540,10 @@ Esta semana haremos manualidades creativas con materiales reciclados.
                 raise ValueError
         except ValueError:
             messages.error(request, "❌ Las edades deben ser números y la mínima no puede superar la máxima.")
-            return render(
-                request,
-                "apps/fun_friday_form.html",
-                {
-                    "next_friday": next_friday.isoformat(),
-                    "parent_count": parent_count,
-                    "default_html": activity_description,
-                },
-            )
+            return _reshow(activity_description)
 
         day_name = DIAS_ES[event_date.weekday()]
         month_name = MESES_ES[event_date.month - 1]
-
-        parents = Parent.objects.filter(children__active=True).distinct()
-        parent_emails = [p.email for p in parents if p.email]
 
         if not parent_emails:
             messages.warning(request, "⚠️ No hay padres con email para enviar")
@@ -226,17 +557,35 @@ Esta semana haremos manualidades creativas con materiales reciclados.
         # the moment has already passed, drain immediately.
         import datetime as _dt
 
-        from django.utils import timezone as _tz
-
-        from comms.tasks import send_due_fun_friday_emails_task
+        from comms.tasks import _dispatch, send_due_fun_friday_emails_task
         from core.models import FunFridayScheduledSend
 
         monday = event_date - timedelta(days=event_date.weekday())
         send_at = _dt.datetime.combine(monday, _dt.time(14, 30))
-        if _tz.is_naive(send_at):
-            send_at = _tz.make_aware(send_at, _tz.get_current_timezone())
+        if timezone.is_naive(send_at):
+            send_at = timezone.make_aware(send_at, timezone.get_current_timezone())
 
-        FunFridayScheduledSend.objects.create(
+        # A double submit used to create a SECOND scheduled row for the same
+        # announcement — and when the slot has already passed the row is drained
+        # on creation, so the second submit mailed every family twice. Matched on
+        # the announcement's natural key (slot + day + month + text) regardless of
+        # `sent_at`, because "already sent" is precisely the case that must not
+        # be repeated. Changing the text is what makes it a new announcement.
+        already_scheduled = FunFridayScheduledSend.objects.filter(
+            scheduled_for=send_at,
+            day_number=event_date.day,
+            month=month_name,
+            activity_description=activity_description,
+        ).exists()
+        if already_scheduled:
+            messages.info(
+                request,
+                f"ℹ️ Este anuncio de Fun Friday ya estaba programado para el "
+                f"{monday.strftime('%d/%m')} a las 14:30. No se ha duplicado.",
+            )
+            return redirect("home")
+
+        scheduled = FunFridayScheduledSend(
             recipients=parent_emails,
             day_name=day_name,
             day_number=event_date.day,
@@ -249,8 +598,30 @@ Esta semana haremos manualidades creativas con materiales reciclados.
             meeting_point=meeting_point if meeting_point else None,
             scheduled_for=send_at,
         )
-        if send_at <= _tz.now():
-            send_due_fun_friday_emails_task.delay()
+        try:
+            # `objects.create()` does NOT validate (CLAUDE.md), and every field
+            # here comes straight from raw POST. Without this a value the column
+            # cannot hold reached Postgres as a `DataError` — a 500 that also
+            # threw away the composed announcement.
+            scheduled.full_clean()
+        except ValidationError:
+            logger.exception("FunFridayScheduledSend validation failed in fun_friday_form")
+            messages.error(
+                request,
+                "❌ Los datos del anuncio no son válidos. Revisa las horas (HH:MM), las edades y el punto de encuentro.",
+            )
+            return _reshow(activity_description)
+        scheduled.save()
+
+        if send_at <= timezone.now():
+            # `.delay()` was the only non-fail-soft dispatch in the tree: under
+            # production's eager+propagate settings a drain failure raised INTO
+            # this POST, 500ing it after the row had already committed — so the
+            # teacher saw a crash for an announcement that was safely stored.
+            # `_dispatch` logs and returns False instead. `on_commit` because the
+            # drain reads the row back by id, so it must be committed first
+            # (a no-op outside an atomic block, which is where this normally runs).
+            transaction.on_commit(lambda: _dispatch(send_due_fun_friday_emails_task, what="Fun Friday drain"))
 
         HistoryLog.log(
             "email_scheduled",
@@ -297,14 +668,19 @@ Esta semana haremos manualidades creativas con materiales reciclados.
 # ============================================================================
 
 
+@admin_required
 def payment_reminder_form(request):
     """
     Vista para enviar recordatorios de pago mensual/trimestral.
     GET: Muestra formulario con valores por defecto
     POST: Envía recordatorio a todos los padres con estudiantes activos
     """
+    from billing.models import SiteConfiguration
+
     today = date.today()
-    parent_count = Parent.objects.filter(children__active=True).distinct().count()
+    config = SiteConfiguration.get_config()
+    parent_emails = _parent_recipients()
+    parent_count = len(parent_emails)
 
     default_start = today.replace(day=1)
     try:
@@ -313,23 +689,18 @@ def payment_reminder_form(request):
         default_end = today.replace(day=28)
 
     current_month = MESES_ES[today.month - 1]
+    cheque_price = cheque_idioma_fee(config)
 
     if request.method == "POST":
         action = request.POST.get("action", "")
         if action in ("preview", "test_send"):
-            from billing.models import SiteConfiguration
-
-            _config = SiteConfiguration.get_config()
             _start_str = request.POST.get("payment_start_date", default_start.isoformat())
             _end_str = request.POST.get("payment_end_date", default_end.isoformat())
             _month = request.POST.get("month", current_month)
             _iban = request.POST.get("iban_number", os.getenv("ACADEMY_IBAN", ""))
             _iban_holder = request.POST.get("iban_holder", os.getenv("ACADEMY_IBAN_HOLDER", ""))
             _bizum = request.POST.get("telephone_number_bizum", os.getenv("ACADEMY_PHONE", ""))
-            _cheque = request.POST.get(
-                "reduced_price_cheque_idioma",
-                f"{_config.full_time_monthly_fee - _config.language_cheque_discount:.0f}€",
-            )
+            _cheque = _cheque_idioma_text(request.POST.get("reduced_price_cheque_idioma"), config)
             try:
                 _sd = date.fromisoformat(_start_str)
                 _ed = date.fromisoformat(_end_str)
@@ -345,36 +716,19 @@ def payment_reminder_form(request):
                 "iban_holder": _iban_holder,
                 "reduced_price_cheque_idioma": _cheque,
                 "telephone_number_bizum": _bizum,
-                **PricingService.payment_reminder_fees(_config),
+                **PricingService.payment_reminder_fees(config),
             }
-            if action == "preview":
-                return JsonResponse({"html": render_to_string("emails/payment_reminder.html", _ctx)})
-            _t1, _t2 = os.getenv("EMAIL_TEST_1", ""), os.getenv("EMAIL_TEST_2", "")
-            _recipients = [r for r in [_t1, _t2] if r]
-            if not _recipients:
-                return JsonResponse({"success": False, "message": "❌ EMAIL_TEST_1/EMAIL_TEST_2 no configurados"})
-            _ok = email_service.send_email(
-                template_name="payment_reminder",
-                recipients=_recipients,
-                subject=f"[TEST] 💰 Recordatorio de Pago - {_month.title()}",
-                context=_ctx,
+            return _preview_or_test(
+                action, "payment_reminder", _ctx, f"[TEST] 💰 Recordatorio de Pago - {_month.title()}"
             )
-            if _ok:
-                return JsonResponse(
-                    {"success": True, "message": f"✅ Email de prueba enviado a {', '.join(_recipients)}"}
-                )
-            return JsonResponse({"success": False, "message": "❌ Error al enviar el email de prueba"})
 
-        from billing.models import SiteConfiguration
-
-        _config = SiteConfiguration.get_config()
         payment_start_date_str = request.POST.get("payment_start_date")
         payment_end_date_str = request.POST.get("payment_end_date")
         month = request.POST.get("month", current_month)
         iban_number = request.POST.get("iban_number", "")
         iban_holder = request.POST.get("iban_holder", os.getenv("ACADEMY_IBAN_HOLDER", ""))
         telephone_number_bizum = request.POST.get("telephone_number_bizum", "")
-        reduced_price_cheque_idioma = request.POST.get("reduced_price_cheque_idioma", "34€")
+        reduced_price_cheque_idioma = _cheque_idioma_text(request.POST.get("reduced_price_cheque_idioma"), config)
 
         if not all([payment_start_date_str, payment_end_date_str, iban_number, telephone_number_bizum]):
             messages.error(request, "❌ Todos los campos obligatorios son requeridos")
@@ -386,59 +740,39 @@ def payment_reminder_form(request):
                 messages.error(request, "❌ Fecha inválida")
                 return redirect("payment_reminder_form")
 
-            parents = Parent.objects.filter(children__active=True).distinct()
-            parent_emails = [p.email for p in parents if p.email]
-
             if not parent_emails:
                 messages.warning(request, "⚠️ No hay padres con email para enviar")
                 return redirect("apps")
 
-            success_count = 0
-            error_count = 0
-            for email_addr in parent_emails:
-                try:
-                    result = send_payment_reminder_email(
-                        recipients=email_addr,
-                        payment_start_day_name=DIAS_ES[start_date.weekday()],
-                        payment_start_day_number=start_date.day,
-                        payment_end_day_name=DIAS_ES[end_date.weekday()],
-                        payment_end_day_number=end_date.day,
-                        month=month,
-                        iban_number=iban_number,
-                        iban_holder=iban_holder,
-                        reduced_price_cheque_idioma=reduced_price_cheque_idioma,
-                        telephone_number_bizum=telephone_number_bizum,
-                        **PricingService.payment_reminder_fees(_config),
-                    )
-                    if result:
-                        success_count += 1
-                    else:
-                        error_count += 1
-                except Exception:
-                    # Never silent: this is the academy's outbound channel, and an
-                    # operator who sees only a count cannot tell a bad address from
-                    # an SMTP outage. The recipient is NOT logged — the exception
-                    # text can carry it, so `logger.exception` alone is the record.
-                    logger.exception(
-                        "Email send failed in %s",
-                        request.resolver_match.url_name if request.resolver_match else "app_forms",
-                    )
-                    error_count += 1
-
-            if success_count > 0:
-                HistoryLog.log("email_sent", f"Recordatorio de pago: {success_count} email(s) enviados", icon="mail")
-                messages.success(request, f"✅ Recordatorio enviado a {success_count} padre(s)")
-            if error_count > 0:
-                messages.warning(request, f"⚠️ {error_count} email(s) no pudieron enviarse")
+            fees = PricingService.payment_reminder_fees(config)
+            jobs = [
+                {
+                    "recipients": email_addr,
+                    "payment_start_day_name": DIAS_ES[start_date.weekday()],
+                    "payment_start_day_number": start_date.day,
+                    "payment_end_day_name": DIAS_ES[end_date.weekday()],
+                    "payment_end_day_number": end_date.day,
+                    "month": month,
+                    "iban_number": iban_number,
+                    "iban_holder": iban_holder,
+                    "reduced_price_cheque_idioma": reduced_price_cheque_idioma,
+                    "telephone_number_bizum": telephone_number_bizum,
+                    **fees,
+                }
+                for email_addr in parent_emails
+            ]
+            _mass_send(
+                request,
+                jobs,
+                send_payment_reminder_email,
+                log_label="Recordatorio de pago",
+                success_text="✅ Recordatorio enviado a {count} padre(s)",
+                failure_text="⚠️ {count} email(s) no pudieron enviarse",
+            )
             return redirect("apps")
 
     default_iban = os.getenv("ACADEMY_IBAN", "")
     default_bizum = os.getenv("ACADEMY_PHONE", "")
-
-    from billing.models import SiteConfiguration
-
-    config = SiteConfiguration.get_config()
-    cheque_price = f"{config.full_time_monthly_fee - config.language_cheque_discount:.0f}€"
 
     email_html = render_to_string(
         "emails/payment_reminder.html",
@@ -477,13 +811,15 @@ def payment_reminder_form(request):
 # ============================================================================
 
 
+@admin_required
 def vacation_closure_form(request):
     """
     Vista para enviar avisos de cierre por vacaciones.
     GET: Muestra formulario
     POST: Envía aviso a todos los padres con estudiantes activos
     """
-    parent_count = Parent.objects.filter(children__active=True).distinct().count()
+    parent_emails = _parent_recipients()
+    parent_count = len(parent_emails)
 
     if request.method == "POST":
         action = request.POST.get("action", "")
@@ -513,23 +849,7 @@ def vacation_closure_form(request):
                 "reopening_day_number": _ro.day,
                 "month_reopening": MESES_ES[_ro.month - 1],
             }
-            if action == "preview":
-                return JsonResponse({"html": render_to_string("emails/vacation_closure.html", _ctx)})
-            _t1, _t2 = os.getenv("EMAIL_TEST_1", ""), os.getenv("EMAIL_TEST_2", "")
-            _recipients = [r for r in [_t1, _t2] if r]
-            if not _recipients:
-                return JsonResponse({"success": False, "message": "❌ EMAIL_TEST_1/EMAIL_TEST_2 no configurados"})
-            _ok = email_service.send_email(
-                template_name="vacation_closure",
-                recipients=_recipients,
-                subject=f"[TEST] 🏖️ Cierre por {_reason} - Five a Day",
-                context=_ctx,
-            )
-            if _ok:
-                return JsonResponse(
-                    {"success": True, "message": f"✅ Email de prueba enviado a {', '.join(_recipients)}"}
-                )
-            return JsonResponse({"success": False, "message": "❌ Error al enviar el email de prueba"})
+            return _preview_or_test(action, "vacation_closure", _ctx, f"[TEST] 🏖️ Cierre por {_reason} - Five a Day")
 
         closure_start_str = request.POST.get("closure_start_date")
         closure_end_str = request.POST.get("closure_end_date")
@@ -547,50 +867,34 @@ def vacation_closure_form(request):
                 messages.error(request, "❌ Fecha inválida")
                 return redirect("vacation_closure_form")
 
-            parents = Parent.objects.filter(children__active=True).distinct()
-            parent_emails = [p.email for p in parents if p.email]
-
             if not parent_emails:
                 messages.warning(request, "⚠️ No hay padres con email para enviar")
                 return redirect("apps")
 
-            success_count = 0
-            error_count = 0
-            for email_addr in parent_emails:
-                try:
-                    result = send_vacation_closure_email(
-                        recipients=email_addr,
-                        start_closure_day_name=DIAS_ES[closure_start.weekday()],
-                        start_closure_day_number=closure_start.day,
-                        end_closure_day_name=DIAS_ES[closure_end.weekday()],
-                        end_closure_day_number=closure_end.day,
-                        month_closure=MESES_ES[closure_start.month - 1],
-                        month_closure_end=MESES_ES[closure_end.month - 1],
-                        closure_reason=closure_reason,
-                        reopening_day_name=DIAS_ES[reopening.weekday()],
-                        reopening_day_number=reopening.day,
-                        month_reopening=MESES_ES[reopening.month - 1],
-                    )
-                    if result:
-                        success_count += 1
-                    else:
-                        error_count += 1
-                except Exception:
-                    # Never silent: this is the academy's outbound channel, and an
-                    # operator who sees only a count cannot tell a bad address from
-                    # an SMTP outage. The recipient is NOT logged — the exception
-                    # text can carry it, so `logger.exception` alone is the record.
-                    logger.exception(
-                        "Email send failed in %s",
-                        request.resolver_match.url_name if request.resolver_match else "app_forms",
-                    )
-                    error_count += 1
-
-            if success_count > 0:
-                HistoryLog.log("email_sent", f"Cierre por vacaciones: {success_count} email(s) enviados", icon="mail")
-                messages.success(request, f"✅ Aviso de cierre enviado a {success_count} padre(s)")
-            if error_count > 0:
-                messages.warning(request, f"⚠️ {error_count} email(s) no pudieron enviarse")
+            jobs = [
+                {
+                    "recipients": email_addr,
+                    "start_closure_day_name": DIAS_ES[closure_start.weekday()],
+                    "start_closure_day_number": closure_start.day,
+                    "end_closure_day_name": DIAS_ES[closure_end.weekday()],
+                    "end_closure_day_number": closure_end.day,
+                    "month_closure": MESES_ES[closure_start.month - 1],
+                    "month_closure_end": MESES_ES[closure_end.month - 1],
+                    "closure_reason": closure_reason,
+                    "reopening_day_name": DIAS_ES[reopening.weekday()],
+                    "reopening_day_number": reopening.day,
+                    "month_reopening": MESES_ES[reopening.month - 1],
+                }
+                for email_addr in parent_emails
+            ]
+            _mass_send(
+                request,
+                jobs,
+                send_vacation_closure_email,
+                log_label="Cierre por vacaciones",
+                success_text="✅ Aviso de cierre enviado a {count} padre(s)",
+                failure_text="⚠️ {count} email(s) no pudieron enviarse",
+            )
             return redirect("apps")
 
     email_html = render_to_string(
@@ -623,11 +927,17 @@ def vacation_closure_form(request):
 # ============================================================================
 
 
+@admin_required
 def tax_certificate_form(request):
     """
     Vista para generar y enviar certificados fiscales.
     GET: Muestra formulario con año por defecto
     POST: Genera y envía certificados a todos los padres con pagos
+
+    NOTE: this is the ONE mass mail that deliberately does NOT exclude
+    waiting-list families or deduplicate addresses — see the docstring of
+    `comms.services.email_functions.send_all_tax_certificates`. The certificate
+    attests money actually paid, per DNI.
     """
 
     today = date.today()
@@ -644,23 +954,9 @@ def tax_certificate_form(request):
         if action in ("preview", "test_send"):
             _year = _safe_year(request.POST.get("year"), default_year)
             _ctx = {"year": _year, "parent_name": "Nombre del padre"}
-            if action == "preview":
-                return JsonResponse({"html": render_to_string("emails/tax_certificate.html", _ctx)})
-            _t1, _t2 = os.getenv("EMAIL_TEST_1", ""), os.getenv("EMAIL_TEST_2", "")
-            _recipients = [r for r in [_t1, _t2] if r]
-            if not _recipients:
-                return JsonResponse({"success": False, "message": "❌ EMAIL_TEST_1/EMAIL_TEST_2 no configurados"})
-            _ok = email_service.send_email(
-                template_name="tax_certificate",
-                recipients=_recipients,
-                subject=f"[TEST] 📋 Certificado de Renta {_year} - Five a Day",
-                context=_ctx,
+            return _preview_or_test(
+                action, "tax_certificate", _ctx, f"[TEST] 📋 Certificado de Renta {_year} - Five a Day"
             )
-            if _ok:
-                return JsonResponse(
-                    {"success": True, "message": f"✅ Email de prueba enviado a {', '.join(_recipients)}"}
-                )
-            return JsonResponse({"success": False, "message": "❌ Error al enviar el email de prueba"})
 
         year = _safe_year(request.POST.get("year"), default_year)
         results = send_all_tax_certificates(year)
@@ -671,6 +967,12 @@ def tax_certificate_form(request):
         if results.get("skipped", 0) > 0:
             messages.info(request, f"ℹ️ {results['skipped']} padre(s) omitidos (sin email)")
         if results.get("failed", 0) > 0:
+            # Logged even when nothing was sent: a total SMTP outage used to
+            # leave no trace at all in the activity feed.
+            if not results["sent"]:
+                HistoryLog.log(
+                    "email_sent", f"Certificado de renta: 0 enviados, {results['failed']} fallidos", icon="mail"
+                )
             messages.warning(request, f"⚠️ {results['failed']} certificado(s) fallaron")
         return redirect("apps")
 
@@ -697,6 +999,7 @@ def tax_certificate_form(request):
 # ============================================================================
 
 
+@admin_required
 def monthly_report_form(request):
     """
     Vista para enviar informes mensuales a los padres.
@@ -705,9 +1008,6 @@ def monthly_report_form(request):
     """
     today = date.today()
     current_month = MESES_ES[today.month - 1]
-    parent_count = Parent.objects.filter(children__active=True).distinct().count()
-    total_students = Student.objects.filter(active=True).count()
-    total_groups = Group.objects.filter(active=True).count()
 
     if request.method == "POST":
         action = request.POST.get("action", "")
@@ -721,75 +1021,48 @@ def monthly_report_form(request):
                 "students": [{"name": "Alumno Ejemplo", "group": "Grupo A"}],
                 "total_students": 1,
             }
-            if action == "preview":
-                return JsonResponse({"html": render_to_string("emails/monthly_report.html", _ctx)})
-            _t1, _t2 = os.getenv("EMAIL_TEST_1", ""), os.getenv("EMAIL_TEST_2", "")
-            _recipients = [r for r in [_t1, _t2] if r]
-            if not _recipients:
-                return JsonResponse({"success": False, "message": "❌ EMAIL_TEST_1/EMAIL_TEST_2 no configurados"})
-            _ok = email_service.send_email(
-                template_name="monthly_report",
-                recipients=_recipients,
-                subject=f"[TEST] 📊 Informe Mensual - {_month.title()} {_year}",
-                context=_ctx,
+            return _preview_or_test(
+                action, "monthly_report", _ctx, f"[TEST] 📊 Informe Mensual - {_month.title()} {_year}"
             )
-            if _ok:
-                return JsonResponse(
-                    {"success": True, "message": f"✅ Email de prueba enviado a {', '.join(_recipients)}"}
-                )
-            return JsonResponse({"success": False, "message": "❌ Error al enviar el email de prueba"})
 
         month = request.POST.get("month", current_month)
         year = _safe_year(request.POST.get("year"), today.year)
 
-        # `prefetch_related("children")` caches `children.all()`; calling
-        # `.filter(active=True)` on the manager throws that cache away and issues a
-        # fresh query per parent (365 for 120 parents, and the child's `.group` was
-        # then uncached too). `Prefetch(..., to_attr=...)` applies the filter INSIDE
-        # the prefetch, so the loop reads a plain list.
-        parents = Parent.objects.filter(children__active=True).distinct().prefetch_related(_ACTIVE_CHILDREN_PREFETCH)
-
-        success_count = 0
-        error_count = 0
-        for parent in parents:
-            if not parent.email:
-                continue
+        jobs = []
+        for parent in _mass_mail_parents(with_children=True):
             students_data = [
                 {"name": s.full_name, "group": s.group.group_name if s.group else "Sin grupo"}
                 for s in parent.active_children
             ]
-            try:
-                result = send_monthly_report(
-                    recipient=parent.email,
-                    report_data={
+            jobs.append(
+                {
+                    "recipient": parent.email,
+                    "report_data": {
                         "month": month,
                         "year": year,
                         "parent_name": parent.full_name,
                         "students": students_data,
                         "total_students": len(students_data),
                     },
-                )
-                if result:
-                    success_count += 1
-                else:
-                    error_count += 1
-            except Exception:
-                # Never silent: this is the academy's outbound channel, and an
-                # operator who sees only a count cannot tell a bad address from
-                # an SMTP outage. The recipient is NOT logged — the exception
-                # text can carry it, so `logger.exception` alone is the record.
-                logger.exception(
-                    "Email send failed in %s",
-                    request.resolver_match.url_name if request.resolver_match else "app_forms",
-                )
-                error_count += 1
+                }
+            )
 
-        if success_count > 0:
-            HistoryLog.log("email_sent", f"Informe mensual: {success_count} email(s) enviados", icon="mail")
-            messages.success(request, f"✅ Informes enviados a {success_count} padre(s)")
-        if error_count > 0:
-            messages.warning(request, f"⚠️ {error_count} informe(s) no pudieron enviarse")
+        _mass_send(
+            request,
+            jobs,
+            send_monthly_report,
+            log_label="Informe mensual",
+            success_text="✅ Informes enviados a {count} padre(s)",
+            failure_text="⚠️ {count} informe(s) no pudieron enviarse",
+        )
         return redirect("apps")
+
+    parent_count = len(_parent_recipients())
+    # `is_waiting=False` here too: the waiting queue has its own page and its own
+    # counter, and counting those entries as students made this figure disagree
+    # with every group's `enrolled_count`.
+    total_students = Student.objects.filter(active=True, is_waiting=False).count()
+    total_groups = Group.objects.filter(active=True).count()
 
     email_html = render_to_string(
         "emails/monthly_report.html",
@@ -821,6 +1094,7 @@ def monthly_report_form(request):
 # ============================================================================
 
 
+@admin_required
 def welcome_form(request):
     """Merged into enrollment_form — redirect all traffic there."""
     return redirect("enrollment_form")
@@ -831,6 +1105,7 @@ def welcome_form(request):
 # ============================================================================
 
 
+@admin_required
 def birthday_form(request):
     """
     Vista para gestionar y enviar manualmente emails de cumpleaños.
@@ -838,14 +1113,18 @@ def birthday_form(request):
     POST: Envía manualmente los emails de cumpleaños de hoy
     """
     today = date.today()
+    # `is_waiting=False`, like every other mass mail: a waiting-list entry is not
+    # a student of the academy yet, and the cron (`send_birthday_emails_task`)
+    # makes the same call so the manual path and the daily job cannot disagree
+    # about who gets a card.
     birthday_students = (
-        Student.objects.filter(birth_date__month=today.month, birth_date__day=today.day, active=True)
+        Student.objects.filter(birth_date__month=today.month, birth_date__day=today.day, active=True, is_waiting=False)
         .select_related("group")
         .prefetch_related(_EMAILABLE_PARENTS_PREFETCH)
     )
 
     month_birthdays = (
-        Student.objects.filter(birth_date__month=today.month, active=True)
+        Student.objects.filter(birth_date__month=today.month, active=True, is_waiting=False)
         .select_related("group")
         .order_by("birth_date__day")
     )
@@ -856,62 +1135,58 @@ def birthday_form(request):
             # One execution: `.first()` plus `.exists()` ran the same query twice.
             _first_birthday = next(iter(birthday_students), None)
             _name = _first_birthday.first_name if _first_birthday else "Alumno Ejemplo"
-            _ctx = {"name": _name}
-            if action == "preview":
-                return JsonResponse({"html": render_to_string("emails/happy_birthday.html", _ctx)})
-            _t1, _t2 = os.getenv("EMAIL_TEST_1", ""), os.getenv("EMAIL_TEST_2", "")
-            _recipients = [r for r in [_t1, _t2] if r]
-            if not _recipients:
-                return JsonResponse({"success": False, "message": "❌ EMAIL_TEST_1/EMAIL_TEST_2 no configurados"})
-            _ok = email_service.send_email(
-                template_name="happy_birthday",
-                recipients=_recipients,
-                subject=f"[TEST] 🎉 ¡Feliz Cumpleaños {_name}!",
-                context=_ctx,
+            return _preview_or_test(
+                action,
+                "happy_birthday",
+                {"name": _name},
+                f"[TEST] 🎉 ¡Feliz Cumpleaños {_name}!",
+                inline_images={"birthday_image": _birthday_image_path()},
             )
-            if _ok:
-                return JsonResponse(
-                    {"success": True, "message": f"✅ Email de prueba enviado a {', '.join(_recipients)}"}
-                )
-            return JsonResponse({"success": False, "message": "❌ Error al enviar el email de prueba"})
 
-        if not birthday_students.exists():
+        students_today = list(birthday_students)
+        if not students_today:
             messages.info(request, "ℹ️ No hay cumpleaños hoy")
             return redirect("birthday_form")
 
-        success_count = 0
-        error_count = 0
-        for student in birthday_students:
-            parent = next(iter(student.emailable_parents), None)
-            if not parent:
+        image_path = _birthday_image_path()
+        jobs = []
+        for student in students_today:
+            # EVERY emailable parent, not just the first — a birthday card that
+            # goes to one of two guardians looks like a snub to the other. The
+            # cron's fan-out task does the same; this manual path had kept the
+            # single-parent `.first()` bug the task was fixed for. Deduplicated
+            # because two guardians can legitimately share one mailbox.
+            recipients = _dedupe_emails(p.email for p in student.emailable_parents)
+            if not recipients:
                 continue
-            try:
-                result = email_service.send_email(
-                    template_name="happy_birthday",
-                    recipients=parent.email,
-                    subject=f"🎉 ¡Feliz Cumpleaños {student.first_name}!",
-                    context={"name": student.first_name},
-                )
-                if result:
-                    success_count += 1
-                else:
-                    error_count += 1
-            except Exception:
-                # Never silent: this is the academy's outbound channel, and an
-                # operator who sees only a count cannot tell a bad address from
-                # an SMTP outage. The recipient is NOT logged — the exception
-                # text can carry it, so `logger.exception` alone is the record.
-                logger.exception(
-                    "Email send failed in %s",
-                    request.resolver_match.url_name if request.resolver_match else "app_forms",
-                )
-                error_count += 1
+            jobs.append(
+                {
+                    "template_name": "happy_birthday",
+                    "recipients": recipients,
+                    "subject": f"🎉 ¡Feliz Cumpleaños {student.first_name}!",
+                    "context": {"name": student.first_name},
+                    "inline_images": {"birthday_image": image_path},
+                }
+            )
 
-        if success_count > 0:
-            HistoryLog.log("email_sent", f"Cumpleaños: {success_count} email(s) enviados", icon="mail")
-            messages.success(request, f"✅ Email de cumpleaños enviado a {success_count} estudiante(s)")
-        if error_count > 0:
-            messages.warning(request, f"⚠️ {error_count} email(s) no pudieron enviarse")
+        if not jobs:
+            # There ARE birthdays, but nobody reachable — a distinct outcome from
+            # "no birthdays today". The old code reported neither and simply
+            # returned a clean success page having sent nothing.
+            messages.warning(
+                request,
+                f"⚠️ Hay {len(students_today)} cumpleaños hoy, pero ningún padre/tutor tiene email registrado.",
+            )
+            return redirect("birthday_form")
+
+        _mass_send(
+            request,
+            jobs,
+            email_service.send_email,
+            log_label="Cumpleaños",
+            success_text="✅ Email de cumpleaños enviado a {count} estudiante(s)",
+            failure_text="⚠️ {count} email(s) no pudieron enviarse",
+        )
         return redirect("birthday_form")
 
     email_html = render_to_string(
@@ -937,6 +1212,7 @@ def birthday_form(request):
 # ============================================================================
 
 
+@admin_required
 def receipts_form(request):
     """
     Vista para enviar recibos trimestrales (niños) o mensuales (adultos).
@@ -945,7 +1221,6 @@ def receipts_form(request):
     """
     today = date.today()
     current_month = MESES_ES[today.month - 1]
-    parent_count = Parent.objects.filter(children__active=True).distinct().count()
 
     quarter_idx = (today.month - 1) // 3
     quarter_start = quarter_idx * 3
@@ -974,134 +1249,84 @@ def receipts_form(request):
                 _template = "receipt_adult"
                 _ctx = {"month": _adm}
                 _subject = f"[TEST] 🧾 Recibo Mensual - {_adm.title()}"
-            if action == "preview":
-                return JsonResponse({"html": render_to_string(f"emails/{_template}.html", _ctx)})
-            _t1, _t2 = os.getenv("EMAIL_TEST_1", ""), os.getenv("EMAIL_TEST_2", "")
-            _recipients = [r for r in [_t1, _t2] if r]
-            if not _recipients:
-                return JsonResponse({"success": False, "message": "❌ EMAIL_TEST_1/EMAIL_TEST_2 no configurados"})
-            _ok = email_service.send_email(
-                template_name=_template,
-                recipients=_recipients,
-                subject=_subject,
-                context=_ctx,
-            )
-            if _ok:
-                return JsonResponse(
-                    {"success": True, "message": f"✅ Email de prueba enviado a {', '.join(_recipients)}"}
-                )
-            return JsonResponse({"success": False, "message": "❌ Error al enviar el email de prueba"})
+            return _preview_or_test(action, _template, _ctx, _subject)
 
         receipt_type = request.POST.get("receipt_type", "quarterly_child")
 
+        # `success_count` / `error_count` used to be initialised INSIDE each of
+        # these three branches and read after them, so adding a fourth branch
+        # raised NameError *after* the emails had already gone out. The branches
+        # now only build the batch; `_mass_send` owns the counters and the tally.
         if receipt_type == "quarterly_child":
             month_1 = request.POST.get("month_1", quarter_months[0])
             month_2 = request.POST.get("month_2", quarter_months[1])
             month_3 = request.POST.get("month_3", quarter_months[2])
-
-            # See _ACTIVE_CHILDREN_PREFETCH: `.filter()` on a prefetched manager
-            # discards the prefetch and re-queries once per parent.
-            parents = (
-                Parent.objects.filter(children__active=True).distinct().prefetch_related(_ACTIVE_CHILDREN_PREFETCH)
-            )
-
-            success_count = 0
-            error_count = 0
-            for parent in parents:
-                if not parent.email:
-                    continue
-                for student in parent.active_children:
-                    try:
-                        result = send_quarterly_receipt_email(
-                            parent_email=parent.email,
-                            student_name=student.full_name,
-                            month_1=month_1,
-                            month_2=month_2,
-                            month_3=month_3,
-                        )
-                        if result:
-                            success_count += 1
-                        else:
-                            error_count += 1
-                    except Exception:
-                        # Never silent: this is the academy's outbound channel, and an
-                        # operator who sees only a count cannot tell a bad address from
-                        # an SMTP outage. The recipient is NOT logged — the exception
-                        # text can carry it, so `logger.exception` alone is the record.
-                        logger.exception(
-                            "Email send failed in %s",
-                            request.resolver_match.url_name if request.resolver_match else "app_forms",
-                        )
-                        error_count += 1
+            sender = send_quarterly_receipt_email
+            jobs = [
+                {
+                    "parent_email": parent.email,
+                    "student_name": student.full_name,
+                    "month_1": month_1,
+                    "month_2": month_2,
+                    "month_3": month_3,
+                }
+                for parent in _mass_mail_parents(with_children=True)
+                for student in parent.active_children
+            ]
         elif receipt_type == "enrollment":
             from billing.models import current_academic_year
 
             academic_year = current_academic_year()
-            # See _ACTIVE_CHILDREN_PREFETCH: `.filter()` on a prefetched manager
-            # discards the prefetch and re-queries once per parent.
-            parents = (
-                Parent.objects.filter(children__active=True).distinct().prefetch_related(_ACTIVE_CHILDREN_PREFETCH)
-            )
-
-            success_count = 0
-            error_count = 0
-            for parent in parents:
-                if not parent.email:
-                    continue
-                for student in parent.active_children:
-                    try:
-                        result = email_service.send_email(
-                            template_name="receipt_enrollment",
-                            recipients=parent.email,
-                            subject=f"🧾 Recibo Matrícula {academic_year} — {student.full_name}",
-                            context={"student_name": student.full_name, "academic_year": academic_year},
-                        )
-                        if result:
-                            success_count += 1
-                        else:
-                            error_count += 1
-                    except Exception:
-                        # Never silent: this is the academy's outbound channel, and an
-                        # operator who sees only a count cannot tell a bad address from
-                        # an SMTP outage. The recipient is NOT logged — the exception
-                        # text can carry it, so `logger.exception` alone is the record.
-                        logger.exception(
-                            "Email send failed in %s",
-                            request.resolver_match.url_name if request.resolver_match else "app_forms",
-                        )
-                        error_count += 1
+            sender = email_service.send_email
+            jobs = [
+                {
+                    "template_name": "receipt_enrollment",
+                    "recipients": parent.email,
+                    "subject": f"🧾 Recibo Matrícula {academic_year} — {student.full_name}",
+                    "context": {"student_name": student.full_name, "academic_year": academic_year},
+                }
+                for parent in _mass_mail_parents(with_children=True)
+                for student in parent.active_children
+            ]
         else:
             adult_month = request.POST.get("adult_month", current_month)
             # ADULT students receive their own monthly receipt. This used to
             # query parents of active children — so the adult receipt went to
             # every child's parent and never reached a single adult student.
-            adult_students = Student.objects.filter(active=True, is_adult=True).exclude(email="")
-
-            success_count = 0
-            error_count = 0
+            adult_students = (
+                Student.objects.filter(active=True, is_adult=True, is_waiting=False)
+                .exclude(email="")
+                .exclude(email__isnull=True)
+                .order_by("id")
+            )
+            seen_adult: set[str] = set()
+            sender = email_service.send_email
+            jobs = []
             for student in adult_students:
-                try:
-                    result = email_service.send_email(
-                        template_name="receipt_adult",
-                        recipients=student.email,
-                        subject=f"🧾 Recibo Mensual - {adult_month.title()}",
-                        context={"month": adult_month, "student_name": student.full_name},
-                    )
-                    if result:
-                        success_count += 1
-                    else:
-                        error_count += 1
-                except Exception:
-                    logger.exception("Adult receipt failed for student %d", student.id)
-                    error_count += 1
+                key = student.email.strip().lower()
+                if not key or key in seen_adult:
+                    continue
+                seen_adult.add(key)
+                jobs.append(
+                    {
+                        "template_name": "receipt_adult",
+                        "recipients": student.email,
+                        "subject": f"🧾 Recibo Mensual - {adult_month.title()}",
+                        "context": {"month": adult_month, "student_name": student.full_name},
+                    }
+                )
 
-        if success_count > 0:
-            HistoryLog.log("email_sent", f"Recibos: {success_count} email(s) enviados", icon="mail")
-            messages.success(request, f"✅ Recibos enviados: {success_count}")
-        if error_count > 0:
-            messages.warning(request, f"⚠️ {error_count} recibo(s) no pudieron enviarse")
+        _mass_send(
+            request,
+            jobs,
+            sender,
+            log_label="Recibos",
+            success_text="✅ Recibos enviados: {count}",
+            failure_text="⚠️ {count} recibo(s) no pudieron enviarse",
+        )
         return redirect("apps")
 
+    parent_count = len(_parent_recipients())
     email_html = render_to_string(
         "emails/receipt_quarterly_child.html",
         {
@@ -1129,13 +1354,13 @@ def receipts_form(request):
 # ============================================================================
 
 
+@admin_required
 def newsletter_form(request):
     """
     Vista para enviar newsletters por grupo.
     GET: Muestra formulario con selector de grupo
     POST: Envía newsletter a todos los padres con estudiantes activos
     """
-    parent_count = Parent.objects.filter(children__active=True).distinct().count()
     groups = Group.objects.filter(active=True).order_by("group_name")
 
     if request.method == "POST":
@@ -1150,23 +1375,7 @@ def newsletter_form(request):
                 "newsletter_link": newsletter_link,
                 "message": message_text,
             }
-            if action == "preview":
-                return JsonResponse({"html": render_to_string("emails/newsletter.html", _ctx)})
-            _t1, _t2 = os.getenv("EMAIL_TEST_1", ""), os.getenv("EMAIL_TEST_2", "")
-            _recipients = [r for r in [_t1, _t2] if r]
-            if not _recipients:
-                return JsonResponse({"success": False, "message": "❌ EMAIL_TEST_1/EMAIL_TEST_2 no configurados"})
-            _ok = email_service.send_email(
-                template_name="newsletter",
-                recipients=_recipients,
-                subject=f"[TEST] 📰 Newsletter {group_name} - Five a Day",
-                context=_ctx,
-            )
-            if _ok:
-                return JsonResponse(
-                    {"success": True, "message": f"✅ Email de prueba enviado a {', '.join(_recipients)}"}
-                )
-            return JsonResponse({"success": False, "message": "❌ Error al enviar el email de prueba"})
+            return _preview_or_test(action, "newsletter", _ctx, f"[TEST] 📰 Newsletter {group_name} - Five a Day")
 
         if not group_name:
             messages.error(request, "❌ Debes seleccionar un grupo")
@@ -1184,47 +1393,32 @@ def newsletter_form(request):
             )
             return redirect("newsletter_form")
 
-        parents = Parent.objects.filter(children__group=group_obj, children__active=True).distinct()
-        parent_emails = [p.email for p in parents if p.email]
-
+        parent_emails = _parent_recipients(group=group_obj)
         if not parent_emails:
             messages.warning(request, "⚠️ No hay padres con email en este grupo")
             return redirect("apps")
 
-        success_count = 0
-        error_count = 0
-        for email_addr in parent_emails:
-            try:
-                result = email_service.send_email(
-                    template_name="newsletter",
-                    recipients=email_addr,
-                    subject=f"📰 Newsletter {group_name} - Five a Day",
-                    context={
-                        "group_name": group_name,
-                        "newsletter_link": newsletter_link,
-                        "message": message_text,
-                    },
-                )
-                if result:
-                    success_count += 1
-                else:
-                    error_count += 1
-            except Exception:
-                # Never silent: this is the academy's outbound channel, and an
-                # operator who sees only a count cannot tell a bad address from
-                # an SMTP outage. The recipient is NOT logged — the exception
-                # text can carry it, so `logger.exception` alone is the record.
-                logger.exception(
-                    "Email send failed in %s",
-                    request.resolver_match.url_name if request.resolver_match else "app_forms",
-                )
-                error_count += 1
-
-        if success_count > 0:
-            HistoryLog.log("email_sent", f"Newsletter {group_name}: {success_count} email(s) enviados", icon="mail")
-            messages.success(request, f"✅ Newsletter enviada a {success_count} padre(s) del grupo {group_name}")
-        if error_count > 0:
-            messages.warning(request, f"⚠️ {error_count} email(s) no pudieron enviarse")
+        jobs = [
+            {
+                "template_name": "newsletter",
+                "recipients": email_addr,
+                "subject": f"📰 Newsletter {group_name} - Five a Day",
+                "context": {
+                    "group_name": group_name,
+                    "newsletter_link": newsletter_link,
+                    "message": message_text,
+                },
+            }
+            for email_addr in parent_emails
+        ]
+        _mass_send(
+            request,
+            jobs,
+            email_service.send_email,
+            log_label=f"Newsletter {group_name}",
+            success_text=f"✅ Newsletter enviada a {{count}} padre(s) del grupo {group_name}",
+            failure_text="⚠️ {count} email(s) no pudieron enviarse",
+        )
         return redirect("apps")
 
     email_html = render_to_string(
@@ -1240,7 +1434,7 @@ def newsletter_form(request):
         "apps/newsletter_form.html",
         {
             "groups": groups,
-            "parent_count": parent_count,
+            "parent_count": len(_parent_recipients()),
             "email_html": email_html,
         },
     )
@@ -1251,20 +1445,31 @@ def newsletter_form(request):
 # ============================================================================
 
 
+@admin_required
 def enrollment_form(request):
     """
     Vista para enviar confirmación de matrícula manualmente.
     GET: Muestra formulario con selector de estudiante
     POST: Envía confirmación al padre del estudiante seleccionado
     """
+    from billing.models import academic_year_for_month
+
     today = date.today()
     current_month = MESES_ES[today.month - 1]
-    students = Student.objects.filter(active=True).select_related("group").order_by("last_name", "first_name")
+    # Waiting-list entries are not enrolled — offering them in a
+    # "confirmación de matrícula" picker is offering to confirm a matriculation
+    # that does not exist.
+    students = (
+        Student.objects.filter(active=True, is_waiting=False)
+        .select_related("group")
+        .order_by("last_name", "first_name")
+    )
 
-    if today.month >= 9:
-        default_academic_year = f"{today.year}-{today.year + 1}"
-    else:
-        default_academic_year = f"{today.year - 1}-{today.year}"
+    # The academic year the CURRENT teaching month belongs to. This was a
+    # hand-rolled September-rollover that disagreed with the helper every
+    # May–August, so the matriculation-confirmation email named a different
+    # course from the enrollment record it was confirming.
+    default_academic_year = academic_year_for_month(today)
 
     if request.method == "POST":
         action = request.POST.get("action", "")
@@ -1284,7 +1489,8 @@ def enrollment_form(request):
                 if _student_id:
                     try:
                         _s = Student.objects.select_related("group").get(id=_student_id)
-                        _p = _s.parents.exclude(email="").exclude(email__isnull=True).first()
+                        # Same resolution the send uses — see `_emailable_parent`.
+                        _p = _emailable_parent(_s)
                         _ctx["student_name"] = _s.full_name
                         if _p:
                             _ctx["parent_name"] = _p.full_name
@@ -1295,64 +1501,37 @@ def enrollment_form(request):
                         # the placeholder names stay in `_ctx`. Never block the
                         # preview over it.
                         pass
-                if action == "preview":
-                    return JsonResponse({"html": render_to_string("emails/welcome_student.html", _ctx)})
-                _t1, _t2 = os.getenv("EMAIL_TEST_1", ""), os.getenv("EMAIL_TEST_2", "")
-                _recipients = [r for r in [_t1, _t2] if r]
-                if not _recipients:
-                    return JsonResponse({"success": False, "message": "❌ EMAIL_TEST_1/EMAIL_TEST_2 no configurados"})
-                _ok = email_service.send_email(
-                    template_name="welcome_student",
-                    recipients=_recipients,
-                    subject=f"[TEST] 🎉 Bienvenida a Five a Day - {_ctx['student_name']}",
-                    context=_ctx,
+                return _preview_or_test(
+                    action,
+                    "welcome_student",
+                    _ctx,
+                    f"[TEST] 🎉 Bienvenida a Five a Day - {_ctx['student_name']}",
                 )
-                if _ok:
-                    return JsonResponse(
-                        {"success": True, "message": f"✅ Email de prueba enviado a {', '.join(_recipients)}"}
-                    )
-                return JsonResponse({"success": False, "message": "❌ Error al enviar el email de prueba"})
-            else:
-                _etype = request.POST.get("enrollment_type", "child")
-                _gender = request.POST.get("gender", "m")
-                _ay = request.POST.get("academic_year", default_academic_year)
-                _month = request.POST.get("month", current_month)
-                _student_name = "Alumno Ejemplo"
-                if _student_id:
-                    try:
-                        _s = Student.objects.get(id=_student_id)
-                        _student_name = _s.full_name
-                    except Exception:
-                        # Preview/test-send only: fall back to the placeholder
-                        # name if the student id no longer resolves.
-                        pass
-                _template = "enrollment_child" if _etype == "child" else "enrollment_adult"
-                _ctx = {"student": _student_name, "genero": _gender, "academic_year": _ay, "month": _month}
-                if action == "preview":
-                    return JsonResponse({"html": render_to_string(f"emails/{_template}.html", _ctx)})
-                _t1, _t2 = os.getenv("EMAIL_TEST_1", ""), os.getenv("EMAIL_TEST_2", "")
-                _recipients = [r for r in [_t1, _t2] if r]
-                if not _recipients:
-                    return JsonResponse({"success": False, "message": "❌ EMAIL_TEST_1/EMAIL_TEST_2 no configurados"})
-                _ok = email_service.send_email(
-                    template_name=_template,
-                    recipients=_recipients,
-                    subject=f"[TEST] 🎉 Confirmación de Matrícula - {_student_name}",
-                    context=_ctx,
-                )
-                if _ok:
-                    return JsonResponse(
-                        {"success": True, "message": f"✅ Email de prueba enviado a {', '.join(_recipients)}"}
-                    )
-                return JsonResponse({"success": False, "message": "❌ Error al enviar el email de prueba"})
+
+            _etype = request.POST.get("enrollment_type", "child")
+            _gender = request.POST.get("gender", "m")
+            _ay = request.POST.get("academic_year", default_academic_year)
+            _month = request.POST.get("month", current_month)
+            _student_name = "Alumno Ejemplo"
+            if _student_id:
+                try:
+                    _s = Student.objects.get(id=_student_id)
+                    _student_name = _s.full_name
+                except Exception:
+                    # Preview/test-send only: fall back to the placeholder
+                    # name if the student id no longer resolves.
+                    pass
+            _template = "enrollment_child" if _etype == "child" else "enrollment_adult"
+            _ctx = {"student": _student_name, "genero": _gender, "academic_year": _ay, "month": _month}
+            return _preview_or_test(action, _template, _ctx, f"[TEST] 🎉 Confirmación de Matrícula - {_student_name}")
 
         student_id = request.POST.get("student_id")
         if not student_id:
             messages.error(request, "❌ Selecciona un estudiante")
         elif email_type == "welcome":
             try:
-                student = Student.objects.select_related("group").prefetch_related("parents").get(id=student_id)
-                parent = student.parents.exclude(email="").exclude(email__isnull=True).first()
+                student = Student.objects.select_related("group").get(id=student_id)
+                parent = _emailable_parent(student)
                 if not parent:
                     messages.error(request, f"❌ {student.full_name} no tiene padre con email registrado")
                 else:
@@ -1375,8 +1554,8 @@ def enrollment_form(request):
             academic_year = request.POST.get("academic_year", default_academic_year)
             month = request.POST.get("month", current_month)
             try:
-                student = Student.objects.prefetch_related("parents").get(id=student_id)
-                parent = student.parents.exclude(email="").exclude(email__isnull=True).first()
+                student = Student.objects.get(id=student_id)
+                parent = _emailable_parent(student)
                 if not parent:
                     messages.error(request, f"❌ {student.full_name} no tiene padre con email registrado")
                 else:

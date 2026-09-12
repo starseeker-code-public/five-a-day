@@ -71,10 +71,18 @@ class TestClientIpValidation:
             req.META["HTTP_X_FORWARDED_FOR"] = forwarded
         return req
 
-    def test_uses_remote_addr_when_no_forwarded_header(self):
+    def test_uses_remote_addr_when_no_forwarded_header(self, settings):
+        settings.TRUSTED_PROXY_COUNT = 1
         assert _client_ip(self._req()) == "9.9.9.9"
 
-    def test_reads_the_hop_our_proxy_appended_not_the_client_prefix(self):
+    def test_default_outside_production_ignores_forwarded_header(self):
+        # settings_test inherits a non-production DJANGO_ENV, so the DEFAULT
+        # must be 0 trusted proxies: the QA VM and the dev stack have no proxy,
+        # and trusting one hop there let a rotating X-Forwarded-For defeat
+        # every credential throttle.
+        assert _client_ip(self._req(forwarded="1.2.3.4")) == "9.9.9.9"
+
+    def test_reads_the_hop_our_proxy_appended_not_the_client_prefix(self, settings):
         """With one trusted proxy we take the LAST entry, not the first.
 
         A proxy APPENDS the address it saw, so the rightmost entries are the
@@ -82,7 +90,11 @@ class TestClientIpValidation:
         client-supplied. Reading `split(",")[0]` let an attacker prepend a
         value and land in a fresh rate-limit bucket on every request, which
         made the login throttle a no-op.
+
+        (TRUSTED_PROXY_COUNT is set explicitly: the settings default is now
+        environment-aware — 0 outside production, where no proxy exists.)
         """
+        settings.TRUSTED_PROXY_COUNT = 1
         assert _client_ip(self._req(forwarded="1.2.3.4, 5.6.7.8")) == "5.6.7.8"
 
     def test_spoofed_prefix_cannot_rotate_the_bucket(self, settings):
@@ -112,9 +124,10 @@ class TestClientIpValidation:
         req.META["REMOTE_ADDR"] = "198.51.100.1"
         assert _client_ip(req) == "198.51.100.1"
 
-    def test_ipv6_is_normalised(self):
+    def test_ipv6_is_normalised(self, settings):
         # Same client must not be able to occupy several buckets by varying the
         # textual form of one address.
+        settings.TRUSTED_PROXY_COUNT = 1
         assert _client_ip(self._req(forwarded="2001:0db8:0000:0000:0000:0000:0000:0001")) == "2001:db8::1"
 
     @pytest.mark.parametrize(
@@ -127,14 +140,16 @@ class TestClientIpValidation:
             "<script>alert(1)</script>",
         ],
     )
-    def test_malformed_forwarded_header_becomes_unknown(self, raw):
+    def test_malformed_forwarded_header_becomes_unknown(self, raw, settings):
+        settings.TRUSTED_PROXY_COUNT = 1
         assert _client_ip(self._req(forwarded=raw)) == "unknown"
 
     def test_malformed_remote_addr_becomes_unknown(self):
         assert _client_ip(self._req(remote="garbage")) == "unknown"
 
-    def test_empty_forwarded_header_falls_back_to_remote_addr(self):
+    def test_empty_forwarded_header_falls_back_to_remote_addr(self, settings):
         """An empty header is absent, not malformed."""
+        settings.TRUSTED_PROXY_COUNT = 1
         assert _client_ip(self._req(forwarded="", remote="9.9.9.9")) == "9.9.9.9"
 
     def test_missing_both_becomes_unknown(self):

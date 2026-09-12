@@ -79,11 +79,9 @@ document.addEventListener('DOMContentLoaded', function () {
     });
 
     // ==================== FUN FRIDAY ====================
-    function getCsrf() {
-        return document.querySelector('[name=csrfmiddlewaretoken]')?.value
-            || document.cookie.split(';').map(c=>c.trim()).find(c=>c.startsWith('csrftoken='))?.split('=')[1]
-            || '';
-    }
+    // CSRF token + status-checked fetch come from base.js
+    // (window.CSRF_TOKEN / window.apiFetch): one hidden-input-first reader for
+    // the whole app instead of a copy per module.
 
     // Returns sort priority 1(green)→2(yellow✓)→3(yellow✗)→4(grey)
     function getFFCategory(row) {
@@ -107,16 +105,15 @@ document.addEventListener('DOMContentLoaded', function () {
     document.querySelectorAll('.ff-toggle-btn').forEach(btn => {
         btn.addEventListener('click', function() {
             const studentId = this.dataset.studentId;
-            fetch(`/api/students/${studentId}/fun-friday/toggle/`, {
+            window.apiFetch(`/api/students/${studentId}/fun-friday/toggle/`, {
                 method: 'POST',
-                headers: {'Content-Type':'application/json','X-CSRFToken':getCsrf()},
                 body: '{}',
-            }).then(r=>r.json()).then(data => {
+            }).then(data => {
                 if (data.success) {
                     updateFFIcon(this, data.is_this_week, data.was_last_week);
                     applyFFFilter();
                 }
-            });
+            }).catch(err => alert(window.apiErrorMessage(err)));
         });
     });
 
@@ -139,8 +136,10 @@ document.addEventListener('DOMContentLoaded', function () {
         { icon: 'check_circle',  title: 'Mostrando: Con FF esta semana',   bg: '#22c55e', color: '#ffffff' },
     ];
 
-    studentFFFilterBtn.addEventListener('click', () => {
-        ffFilterState = (ffFilterState + 1) % 3;
+    // Null-guarded like the GDPR/allergy filters below: a missing button must
+    // not abort the whole DOMContentLoaded handler (enroll modal, sort, search).
+    if (studentFFFilterBtn) studentFFFilterBtn.addEventListener('click', () => {
+        ffFilterState = (ffFilterState + 1) % ffFilterCfg.length;
         const cfg = ffFilterCfg[ffFilterState];
         studentFFFilterIcon.textContent = cfg.icon;
         studentFFFilterBtn.title = cfg.title;
@@ -173,8 +172,8 @@ document.addEventListener('DOMContentLoaded', function () {
         applyVisibility();
     }
 
-    studentTypeFilterBtn.addEventListener('click', () => {
-        typeFilterState = (typeFilterState + 1) % 4;
+    if (studentTypeFilterBtn) studentTypeFilterBtn.addEventListener('click', () => {
+        typeFilterState = (typeFilterState + 1) % typeFilterCfg.length;
         const cfg = typeFilterCfg[typeFilterState];
         studentTypeFilterIcon.textContent = cfg.icon;
         studentTypeFilterBtn.title = cfg.title;
@@ -257,6 +256,8 @@ document.addEventListener('DOMContentLoaded', function () {
         const enrollNameEl = document.getElementById('enrollStudentName');
         const enrollErrorEl = document.getElementById('enrollError');
         const enrollSpecialCb = document.getElementById('id_is_special');
+        const enrollCustomizeCb = document.getElementById('id_customize_recurring');
+        const enrollCustomizeRow = document.getElementById('enrollCustomizeRow');
         const enrollManualRow = document.getElementById('enrollManualRow');
         const enrollSpecialFeeRow = document.getElementById('enrollSpecialFeeRow');
         const enrollSubmitBtn = document.getElementById('enrollSubmitBtn');
@@ -266,8 +267,13 @@ document.addEventListener('DOMContentLoaded', function () {
 
         function toggleSpecialRows() {
             const on = enrollSpecialCb.checked;
-            enrollManualRow.style.display = on ? '' : 'none';
+            enrollCustomizeRow.style.display = on ? '' : 'none';
             enrollSpecialFeeRow.style.display = on ? '' : 'none';
+            // The cuota field only matters when "Personalizar también la cuota"
+            // is ticked — EnrollmentForm.clean() discards it otherwise, so
+            // showing it unticked invites typing an amount that would be lost.
+            if (!on) enrollCustomizeCb.checked = false;
+            enrollManualRow.style.display = on && enrollCustomizeCb.checked ? '' : 'none';
         }
 
         document.querySelectorAll('.enroll-btn').forEach(btn => {
@@ -293,6 +299,7 @@ document.addEventListener('DOMContentLoaded', function () {
         });
 
         enrollSpecialCb.addEventListener('change', toggleSpecialRows);
+        enrollCustomizeCb.addEventListener('change', toggleSpecialRows);
         document.getElementById('enrollModalClose').addEventListener('click', closeEnrollModal);
         document.getElementById('enrollCancelBtn').addEventListener('click', closeEnrollModal);
         enrollModal.addEventListener('click', (e) => { if (e.target === enrollModal) closeEnrollModal(); });
@@ -301,24 +308,33 @@ document.addEventListener('DOMContentLoaded', function () {
             e.preventDefault();
             if (!enrollStudentId) return;
             enrollSubmitBtn.disabled = true;
+            // apiFetch keeps the FormData body untouched (no Content-Type, so
+            // the browser sets the multipart boundary) and turns a 400 into a
+            // rejection carrying the server's own message.
             fetch(`/api/students/${enrollStudentId}/enroll/`, {
                 method: 'POST',
-                headers: { 'X-CSRFToken': getCsrf() },
+                headers: { 'X-CSRFToken': window.CSRF_TOKEN },
                 body: new FormData(enrollForm),
             })
-                .then(r => r.json().then(data => ({ ok: r.ok, data })))
-                .then(({ ok, data }) => {
+                .then(r => r.json().then(data => ({ ok: r.ok, status: r.status, data })),
+                      () => { throw new Error('network'); })
+                .then(({ ok, status, data }) => {
                     if (ok && data.success) {
                         // The Matrícula column and payments changed server-side.
                         window.location.reload();
                         return;
                     }
-                    enrollErrorEl.textContent = data.error || 'Error al crear la matrícula.';
+                    // 403 here is an expired session or a stale CSRF token, not
+                    // a rejected enrollment — say so instead of showing the
+                    // generic form error.
+                    enrollErrorEl.textContent = (status === 401 || status === 403)
+                        ? window.API_MESSAGES.session
+                        : (data.error || 'Error al crear la matrícula.');
                     enrollErrorEl.style.display = '';
                     enrollSubmitBtn.disabled = false;
                 })
                 .catch(() => {
-                    enrollErrorEl.textContent = 'Error de conexión. Inténtalo de nuevo.';
+                    enrollErrorEl.textContent = window.API_MESSAGES.network;
                     enrollErrorEl.style.display = '';
                     enrollSubmitBtn.disabled = false;
                 });

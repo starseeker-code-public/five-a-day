@@ -3,11 +3,13 @@
 from django.http import JsonResponse
 from django.views.decorators.http import require_http_methods
 
+from core.decorators import admin_required
 from core.models import HistoryLog
 from core.services.google_sheets_service import get_service
 
 
 @require_http_methods(["POST"])
+@admin_required
 def export_to_sheets(request):
     """
     Trigger a Sheets export from the UI. POST-only; reads `target` from the

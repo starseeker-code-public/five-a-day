@@ -127,6 +127,12 @@ def unmigrate_types(apps, schema_editor):
 class Migration(migrations.Migration):
     dependencies = [
         ("billing", "0007_alter_enrollment_options_and_more"),
+        # `audit_logs` must exist before this runs: the audit receivers are
+        # connected during migrate, and any future `enrollment.save()` added to
+        # `migrate_types` would try to INSERT an AuditLog row. Today every write
+        # here is a queryset `.update()` (which emits no signals), so it is safe
+        # by accident of style — this dependency makes it safe by construction.
+        ("core", "0004_add_audit_log"),
     ]
 
     operations = [

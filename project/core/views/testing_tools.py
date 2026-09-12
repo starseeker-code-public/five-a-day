@@ -16,6 +16,7 @@ from django.core.mail import send_mail
 from django.db.models import Q
 from django.http import HttpResponse, JsonResponse
 from django.shortcuts import render
+from django.utils import timezone
 from django.utils.text import get_valid_filename
 from django.views.decorators.http import require_http_methods
 
@@ -186,6 +187,38 @@ def api_seed_database(request):
         )
 
 
+def backlog_task_json(task):
+    """One JSON shape for a freshly created BacklogTask.
+
+    Shared by `api_create_backlog_task` here and `features.api_create_feature_task`
+    (like `email_backlog_task_created`), so a task spawned from a development
+    renders on the boards exactly like one typed into /testing/ — two hand-built
+    dicts had already drifted (one carried `description`, the other did not).
+
+    The Spanish labels come from the model's own choices so an AJAX-inserted row
+    reads exactly like a server-rendered one. Without these the board showed the
+    raw keys ("medium", "open") until the next reload, and the alternative — a
+    label map in JS — is a second copy of the choices that drifts the moment one
+    is renamed.
+    """
+    return {
+        "id": task.id,
+        "title": task.title,
+        "description": task.description,
+        "priority": task.priority,
+        "priority_display": task.get_priority_display(),
+        "status": task.status,
+        "status_display": task.get_status_display(),
+        "created_by": task.created_by,
+        # `localtime` first: `created_at` is stored aware in UTC, and a naive
+        # strftime on it prints UTC while the server-rendered rows beside it go
+        # through `|date`, which converts to Europe/Madrid. A task created at
+        # 00:30 showed up in the AJAX row as 22:30 the previous DAY, then
+        # corrected itself on reload.
+        "created_at": timezone.localtime(task.created_at).strftime("%d/%m/%Y %H:%M"),
+    }
+
+
 def email_backlog_task_created(task, screenshot=None, context_line=""):
     """Email SUPPORT_EMAIL about a newly created backlog task.
 
@@ -287,19 +320,7 @@ def api_create_backlog_task(request):
         # Email support — the screenshot is attached in-memory (never persisted).
         email_backlog_task_created(task, screenshot=screenshot)
 
-        return JsonResponse(
-            {
-                "success": True,
-                "task": {
-                    "id": task.id,
-                    "title": task.title,
-                    "priority": task.priority,
-                    "status": task.status,
-                    "created_by": task.created_by,
-                    "created_at": task.created_at.strftime("%d/%m/%Y %H:%M"),
-                },
-            }
-        )
+        return JsonResponse({"success": True, "task": backlog_task_json(task)})
     except json.JSONDecodeError:
         return JsonResponse({"success": False, "message": "JSON invalido."}, status=400)
     except Exception:
@@ -406,7 +427,11 @@ def api_update_backlog_task(request, task_id):
         if new_status == "done" and not was_done:
             _email_task_done(task)
 
-        return JsonResponse({"success": True})
+        # `status_display` for the same reason the create endpoint returns it:
+        # the board updates the badge from this response, and the raw key would
+        # render as "done" instead of "Completada" until the next reload. The
+        # label comes from the model's choices so JS never holds a second copy.
+        return JsonResponse({"success": True, "status_display": task.get_status_display()})
     except BacklogTask.DoesNotExist:
         return JsonResponse({"success": False, "message": "Tarea no encontrada."}, status=404)
     except json.JSONDecodeError:

@@ -68,6 +68,16 @@ class EnrollmentForm(forms.Form):
         widget=forms.CheckboxInput(attrs={"class": "form-check-input", "id": "id_is_special"}),
         label="Precio especial",
     )
+    # A special enrollment customises the MATRÍCULA (`special_enrollment_fee`) on
+    # its own; the recurring cuota stays standard UNLESS this box is ticked, which
+    # reveals `manual_amount`. Keeping them independent is what lets a special
+    # student be customised atomically — negotiated matrícula only, negotiated
+    # cuota only, or both — instead of forcing a manual cuota on every special.
+    customize_recurring = forms.BooleanField(
+        required=False,
+        widget=forms.CheckboxInput(attrs={"class": "form-check-input", "id": "id_customize_recurring"}),
+        label="Personalizar también la cuota",
+    )
     manual_amount = forms.DecimalField(
         required=False,
         min_value=Decimal("0.01"),
@@ -103,15 +113,86 @@ class EnrollmentForm(forms.Form):
         label="Matrícula especial (€)",
     )
 
+    def __init__(self, *args, current_start=None, **kwargs):
+        """`current_start` is the live enrollment's start date, when editing.
+
+        The date-window validation below must always accept the value already
+        stored — otherwise an ordinary edit of an enrollment from a past course
+        (whose pre-filled start date POSTs back unchanged) would be rejected by
+        a rule meant to catch typos on NEW enrollments.
+        """
+        super().__init__(*args, **kwargs)
+        self._current_start = current_start
+
+        # A pre-filled `manual_amount` IMPLIES "Personalizar también la cuota".
+        # `clean()` discards `manual_amount` whenever that box is off and then
+        # rejects the special, so a caller that pre-fills a hand price without
+        # also ticking this turns every save of that student's ficha — even a
+        # phone-number edit — into a silent no-op. Owning the invariant here
+        # means the next surface that edits a special enrollment cannot
+        # reintroduce that bug by forgetting the companion flag.
+        initial = self.initial or {}
+        if initial.get("manual_amount") is not None:
+            self.initial["customize_recurring"] = True
+
+    def clean_start_date(self):
+        start = self.cleaned_data.get("start_date")
+        if not start or start == self._current_start:
+            return start
+
+        # Bound to the courses currently in play (`relevant_academic_years` —
+        # one year most of the time, two in the May-August overlap). Unbounded,
+        # a mistyped year filed the enrollment under an old `academic_year`,
+        # which dropped the student out of the list views AND back-filled a
+        # year of already-overdue payments that the reminder cron then chased.
+        from billing.models import relevant_academic_years
+
+        years = relevant_academic_years()
+        # From 1 July before the earliest relevant course (a July/August start
+        # belongs to the course beginning that September) to the end of the
+        # summer after the latest one.
+        lower = date(int(years[0].split("-")[0]), 7, 1)
+        upper = date(int(years[-1].split("-")[1]), 8, 31)
+        if not (lower <= start <= upper):
+            raise forms.ValidationError(
+                f"La fecha de inicio debe estar dentro del curso actual "
+                f"({lower.strftime('%d/%m/%Y')} – {upper.strftime('%d/%m/%Y')}). "
+                f"Revisa el año: ¿era {start.strftime('%d/%m/%Y')}?"
+            )
+        return start
+
     def clean(self):
         cleaned_data = super().clean()
         is_special = cleaned_data.get("is_special")
         manual_amount = cleaned_data.get("manual_amount")
-        if is_special and not manual_amount:
-            raise forms.ValidationError("Debes especificar un precio manual para matrícula especial")
+        customize_recurring = cleaned_data.get("customize_recurring")
+        special_fee = cleaned_data.get("special_enrollment_fee")
+
+        # `manual_amount` prices the recurring cuota, and it only takes effect
+        # when the admin ticked "Personalizar también la cuota". Clear it
+        # otherwise so a stale value can't sneak a hand price onto a special that
+        # was meant to keep the standard cuota (create_enrollment reads this).
+        if not customize_recurring:
+            cleaned_data["manual_amount"] = None
+            manual_amount = None
+
+        if customize_recurring:
+            if not is_special:
+                raise forms.ValidationError("Marca «Precio especial» para personalizar la cuota")
+            if not manual_amount:
+                raise forms.ValidationError("Indica la cuota personalizada o desmarca «Personalizar también la cuota»")
+
+        # A special enrollment must customise SOMETHING — the matrícula, the
+        # cuota, or both. Otherwise "Precio especial" is checked but changes
+        # nothing, which just charges the standard prices under a misleading flag.
+        if is_special and not manual_amount and not special_fee:
+            raise forms.ValidationError(
+                "Para un precio especial indica una matrícula especial, una cuota personalizada, o ambas."
+            )
+
         # Silently ignoring it would charge the standard matrícula while the admin
         # believes they set one — say so instead.
-        if cleaned_data.get("special_enrollment_fee") and not is_special:
+        if special_fee and not is_special:
             raise forms.ValidationError("Marca «Precio especial» para fijar una matrícula personalizada")
         return cleaned_data
 

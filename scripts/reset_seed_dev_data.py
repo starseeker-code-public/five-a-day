@@ -8,16 +8,12 @@ from django.conf import settings
 from django.db import transaction
 from django.db.models import Count
 
-from core.models import (
-    Enrollment,
-    EnrollmentType,
-    Group,
-    Parent,
-    Payment,
-    SiteConfiguration,
-    Student,
-    Teacher,
-)
+# These models live in students.models / billing.models — NOT core.models,
+# which exports none of them. The old `from core.models import ...` raised
+# ImportError before line 1 of logic, so the production guard below had never
+# actually run despite the README advertising it as a live safety control.
+from billing.models import Enrollment, EnrollmentType, Payment, SiteConfiguration
+from students.models import Group, Parent, Student, Teacher
 
 
 def _check_environment():

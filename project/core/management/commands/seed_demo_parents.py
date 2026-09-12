@@ -101,7 +101,11 @@ class Command(BaseCommand):
     # ------------------------------------------------------------------
 
     def _seed_one(self, spec) -> bool:
-        parent = Parent.objects.filter(email__iexact=spec["email"]).first()
+        # Resolve by DNI, which is UNIQUE — not by email, which is not.
+        # `filter(email__iexact=...).first()` could pick (and then overwrite the
+        # password of) a REAL parent who happens to share the demo address on
+        # every non-production boot. DNI identifies exactly the demo row.
+        parent = Parent.objects.filter(dni=spec["dni"]).first()
         if parent is None:
             parent = Parent.objects.create(
                 first_name=spec["first_name"],
@@ -204,7 +208,13 @@ class Command(BaseCommand):
             is_adult=False,
         )
 
-        fee, returning_discount = EnrollmentService.compute_enrollment_fee(self.config, student, is_adult=False)
+        # `this_academic_year=enrollment.academic_year` matches the production
+        # helper (_create_enrollment_fee_payment): judged against TODAY's year, a
+        # start-dated enrollment reads as the student's own prior history and
+        # wrongly grants the returning-student discount.
+        fee, returning_discount = EnrollmentService.compute_enrollment_fee(
+            self.config, student, is_adult=False, this_academic_year=enrollment.academic_year
+        )
         concept = f"Matrícula {enrollment.academic_year} — {student.full_name}"
         if returning_discount:
             concept += f" (dto. alumno recurrente −{returning_discount:.2f} €)"

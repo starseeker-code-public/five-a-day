@@ -1,0 +1,37 @@
+/* ============================================================================
+   palette.css — the violet `primary` scale for HAND-WRITTEN css.
+
+   THE ONE PLACE the app's brand colours are written as CSS. Load it before
+   app.css / theme.css on any page that loads either:
+
+       <link rel="stylesheet" href="{% static 'css/palette.css' %}">
+
+   Why a separate file rather than a `:root` block inside app.css: app.css is
+   loaded ONLY by base.html, while theme.css is loaded by base.html,
+   parent_portal/base_portal.html and two_factor/verify.html. Declaring the
+   variables in app.css would leave `var(--primary-500)` undefined on the two
+   standalone pages, and an undefined var() computes to the property's INITIAL
+   value — so `html.dark .bg-primary-500` would have rendered the 2FA and portal
+   buttons transparent instead of violet. A file both stylesheets can sit behind
+   has no such gap.
+
+   The palette necessarily exists twice in total: here, and as the Tailwind
+   theme in js/tailwind-config.js (hand-written CSS cannot read a JS object, and
+   this project deliberately has no build step — see CLAUDE.md). It used to
+   exist SIX times: three pasted inline `tailwind.config` blocks plus loose hex
+   literals in app.css and theme.css.
+   `tests/integration/test_frontend_template_fixes.py` asserts the two lists
+   agree, so a shade cannot be changed in one and not the other.
+   ============================================================================ */
+:root {
+    --primary-50:  #f5f3ff;
+    --primary-100: #ede9fe;
+    --primary-200: #ddd6fe;
+    --primary-300: #c4b5fd;
+    --primary-400: #a78bfa;
+    --primary-500: #8b5cf6;
+    --primary-600: #7c3aed;
+    --primary-700: #6d28d9;
+    --primary-800: #5b21b6;
+    --primary-900: #4c1d95;
+}

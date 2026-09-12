@@ -200,17 +200,11 @@ const SupportSystem = {
         }
         
         try {
-            // Obtener CSRF token
-            const csrfToken = document.querySelector('[name=csrfmiddlewaretoken]')?.value 
-                || document.querySelector('meta[name="csrf-token"]')?.content
-                || this.getCookie('csrftoken');
-            
-            const response = await fetch('/api/support/submit/', {
+            // El token CSRF y la comprobación de estado vienen de base.js
+            // (window.CSRF_TOKEN / window.apiFetch): input oculto primero, la
+            // cookie solo como reserva.
+            const data = await window.apiFetch('/api/support/submit/', {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'X-CSRFToken': csrfToken
-                },
                 body: JSON.stringify({
                     category: this.categoryMap[this.selectedCategory] || 'exception',
                     category_display: this.categoryDisplayMap[this.selectedCategory] || this.selectedCategory,
@@ -218,10 +212,8 @@ const SupportSystem = {
                     current_url: window.location.pathname
                 })
             });
-            
-            const data = await response.json();
-            
-            if (response.ok && data.success) {
+
+            if (data.success) {
                 // Mostrar éxito
                 if (successMsg) {
                     successMsg.classList.remove('hidden');
@@ -236,9 +228,14 @@ const SupportSystem = {
                 throw new Error(data.message || 'Error al enviar el ticket');
             }
         } catch (error) {
-            console.error('Error enviando ticket:', error);
             if (errorMsg) {
-                errorMsg.textContent = error.message || 'Error de conexión. Inténtalo de nuevo.';
+                // `userMessage` is apiFetch's classification (session expired /
+                // server error / network); `message` is the server's own
+                // validation text, which is written for humans. Never the raw
+                // exception text of anything else.
+                errorMsg.textContent = error.userMessage
+                    || error.message
+                    || window.API_MESSAGES.network;
                 errorMsg.classList.remove('hidden');
             }
         } finally {
@@ -248,25 +245,11 @@ const SupportSystem = {
                 sendBtn.innerHTML = '<span class="material-symbols-outlined text-sm">send</span>';
             }
         }
-    },
-    
-    /**
-     * Obtiene el valor de una cookie
-     */
-    getCookie(name) {
-        let cookieValue = null;
-        if (document.cookie && document.cookie !== '') {
-            const cookies = document.cookie.split(';');
-            for (let i = 0; i < cookies.length; i++) {
-                const cookie = cookies[i].trim();
-                if (cookie.substring(0, name.length + 1) === (name + '=')) {
-                    cookieValue = decodeURIComponent(cookie.substring(name.length + 1));
-                    break;
-                }
-            }
-        }
-        return cookieValue;
     }
+    // `getCookie()` lived here and is gone: its only caller was the CSRF
+    // fallback in submitTicket, which now goes through window.apiFetch /
+    // window.CSRF_TOKEN. `CSRF_COOKIE_HTTPONLY` is True whenever DEBUG=False, so
+    // it could not have read the token in testing or production anyway.
 };
 
 window.SupportSystem = SupportSystem;

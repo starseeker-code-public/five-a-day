@@ -57,10 +57,10 @@ DEFAULT_CURRENCY = "EUR"
 # appeared as the enrolment type in the matriculation email while saying nothing about
 # the matrícula actually charged. There are exactly four.
 ENROLLMENT_TYPE_CHOICES = [
-    ("new_student", "New Student"),
-    ("returning_student", "Returning Student"),
-    ("adults", "Adults"),
-    ("special", "Special"),
+    ("new_student", "Nuevo estudiante"),
+    ("returning_student", "Antiguo estudiante"),
+    ("adults", "Adulto"),
+    ("special", "Especial"),
 ]
 
 # Spanish labels for EnrollmentType.display_name. The keys above are internal

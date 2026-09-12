@@ -16,6 +16,30 @@ from comms.services.email_service import email_service
 logger = logging.getLogger(__name__)
 
 
+def cheque_idioma_fee(config=None) -> str:
+    """Cuota mensual con Cheque Idioma, con el MISMO formato que el resto de tarifas.
+
+    `emails/payment_reminder.html` imprime `{{ reduced_price_cheque_idioma }}
+    euros`, igual que las otras cinco filas de la tabla — así que un valor que
+    trae su propio "€" renderiza "34€ euros". Cada emisor (la vista GET, la
+    preview, el POST y el comando `send_email`) formateaba la cifra por su
+    cuenta y todos añadían el símbolo, de modo que producción ha enviado la
+    doble unidad desde v1.0.
+
+    Se deriva de SiteConfiguration (nunca un 34 fijo) y reutiliza el formateador
+    de `PricingService.payment_reminder_fees` para que la fila del Cheque Idioma
+    no pueda separarse del resto de la tabla.
+    """
+    # `_euros` es el formateador que ya usa payment_reminder_fees (coma decimal,
+    # sin ",00" en euros enteros). Se importa en lugar de reescribirlo: dos
+    # formateadores distintos en la misma tabla es exactamente el bug de arriba.
+    from billing.services.pricing_service import PricingService, _euros
+
+    if config is None:
+        config = PricingService.get_config()
+    return _euros(config.full_time_monthly_fee - config.language_cheque_discount)
+
+
 # ============================================================================
 # 1. BIRTHDAY - Felicitacion de cumpleanos
 # ============================================================================
@@ -31,13 +55,19 @@ logger = logging.getLogger(__name__)
 # ============================================================================
 
 
-def send_monthly_report(recipient: str, report_data: dict) -> bool:
-    """Envia reporte mensual"""
+def send_monthly_report(recipient: str, report_data: dict, connection=None) -> bool:
+    """Envia reporte mensual.
+
+    `connection` reutiliza una única sesión SMTP en los envíos masivos
+    (`core.views.app_forms._mass_send`): sin ella cada padre pagaba su propio
+    TCP+TLS+AUTH.
+    """
     return email_service.send_email(
         template_name="monthly_report",
         recipients=recipient,
         subject="📊 Reporte Mensual - Five a Day",
         context=report_data,
+        connection=connection,
     )
 
 
@@ -142,6 +172,7 @@ def send_fun_friday_email(
     maximum_age: int,
     meeting_point: str = None,
     event_image_path: str = None,
+    connection=None,
 ) -> bool:
     """
     Envia invitacion a evento Fun Friday.
@@ -188,6 +219,7 @@ def send_fun_friday_email(
         },
         inline_images=inline_images if inline_images else None,
         fail_silently=True,
+        connection=connection,
     )
 
 
@@ -213,6 +245,7 @@ def send_payment_reminder_email(
     quarterly_fee: str | int | None = None,
     sibling_full_time_fee: str | int | None = None,
     attachments: list | None = None,
+    connection=None,
 ) -> bool:
     """
     Envia recordatorio de pago mensual/trimestral.
@@ -225,7 +258,9 @@ def send_payment_reminder_email(
         payment_end_day_number: Numero del dia fin
         month: Mes del pago
         iban_number: Numero IBAN para transferencias
-        reduced_price_cheque_idioma: Precio reducido con cheque idioma
+        reduced_price_cheque_idioma: Precio reducido con cheque idioma. SIN
+            unidad — la plantilla imprime "{{ ... }} euros" (ver
+            `cheque_idioma_fee`, que es de donde debe salir el valor).
         telephone_number_bizum: Telefono para Bizum
         iban_holder: Titular de la cuenta bancaria
         full_time_fee: Cuota 2 sesiones semanales
@@ -275,6 +310,7 @@ def send_payment_reminder_email(
         },
         attachments=attachments,
         fail_silently=True,
+        connection=connection,
     )
 
 
@@ -284,7 +320,13 @@ def send_payment_reminder_email(
 
 
 def send_quarterly_receipt_email(
-    parent_email: str, student_name: str, month_1: str, month_2: str, month_3: str, receipt_pdf: tuple = None
+    parent_email: str,
+    student_name: str,
+    month_1: str,
+    month_2: str,
+    month_3: str,
+    receipt_pdf: tuple = None,
+    connection=None,
 ) -> bool:
     """
     Envia recibo trimestral para ninos.
@@ -314,6 +356,7 @@ def send_quarterly_receipt_email(
         },
         attachments=attachments,
         fail_silently=True,
+        connection=connection,
     )
 
 
@@ -334,6 +377,7 @@ def send_vacation_closure_email(
     reopening_day_number: int,
     month_reopening: str,
     month_closure_end: str | None = None,
+    connection=None,
 ) -> bool:
     """
     Envia aviso de cierre por vacaciones.
@@ -362,6 +406,7 @@ def send_vacation_closure_email(
             "month_reopening": month_reopening,
         },
         fail_silently=True,
+        connection=connection,
     )
 
 
@@ -390,7 +435,7 @@ def generate_tax_certificate_pdf(parent, year: int) -> bytes:
     return generate_tax_certificate(parent, year)
 
 
-def send_tax_certificate_email(parent, year: int) -> bool:
+def send_tax_certificate_email(parent, year: int, connection=None) -> bool:
     """
     Genera y envia certificado fiscal para la declaracion de la renta.
     El PDF se genera automaticamente con todos los pagos del ano.
@@ -398,6 +443,7 @@ def send_tax_certificate_email(parent, year: int) -> bool:
     Args:
         parent: Instancia del modelo Parent (o parent_id como int)
         year: Ano fiscal del certificado
+        connection: Sesion SMTP reutilizable (ver `send_all_tax_certificates`).
 
     Returns:
         True si se envio correctamente
@@ -443,6 +489,7 @@ def send_tax_certificate_email(parent, year: int) -> bool:
         },
         attachments=[certificate_attachment],
         fail_silently=True,
+        connection=connection,
     )
 
 
@@ -455,7 +502,24 @@ def send_all_tax_certificates(year: int) -> dict[str, int]:
 
     Returns:
         Dict con {sent: N, skipped: N, failed: N}
+
+    Notas de diseño, ambas deliberadas:
+
+    - **No se excluye a las familias en lista de espera.** El resto de envíos
+      masivos sí (ver `core.views.app_forms._recipient_filters`), pero este
+      documento certifica dinero realmente cobrado: una familia cuyo hijo pasó
+      a la lista de espera pagó cuotas reales y tiene derecho a su certificado.
+      La consulta se basa en `Payment` completado, no en el estado del alumno.
+    - **No se deduplica por email.** Dos `Parent` que comparten buzón tienen
+      cada uno sus propios pagos y su propio DNI, así que son dos documentos
+      fiscales distintos: colapsarlos dejaría a uno de los dos sin certificado.
+
+    Una sola sesión SMTP para todo el lote (antes: un TCP+TLS+AUTH por familia,
+    además del PDF). Si la conexión no se puede abrir se informa de TODOS los
+    certificados como fallidos en lugar de propagar la excepción: quien llama es
+    una vista.
     """
+    from comms.services.email_service import email_service as _svc
     from students.models import Parent
 
     # Obtener todos los padres con pagos completados en ese ano
@@ -471,20 +535,49 @@ def send_all_tax_certificates(year: int) -> dict[str, int]:
     # The %d coercion also breaks the log-injection taint path (see CLAUDE.md).
     results = {"sent": 0, "skipped": 0, "failed": 0}
 
-    for parent in parents_with_payments:
+    parents = list(parents_with_payments)
+    if not parents:
+        return results
+
+    emailable = [p for p in parents if p.email]
+    results["skipped"] = len(parents) - len(emailable)
+    for parent in parents:
         if not parent.email:
             logger.warning("parent_id=%d no tiene email; se omite el certificado", parent.id)
-            results["skipped"] += 1
-            continue
+    if not emailable:
+        return results
 
-        success = send_tax_certificate_email(parent, year)
+    connection = None
+    try:
+        connection = _svc.open_connection()
+        connection.open()
+    except Exception:
+        # `open()` no es fail_silently: una caída de SMTP aquí propagaba hasta
+        # la vista como un 500. Se informa como fallo de todos los pendientes.
+        logger.exception("No se pudo abrir la conexión SMTP para los certificados fiscales %d", int(year))
+        results["failed"] = len(emailable)
+        return results
 
-        if success:
-            results["sent"] += 1
-            logger.info("Certificado fiscal enviado a parent_id=%d", parent.id)
-        else:
-            results["failed"] += 1
-            logger.error("Fallo al enviar el certificado fiscal a parent_id=%d", parent.id)
+    try:
+        for parent in emailable:
+            try:
+                success = send_tax_certificate_email(parent, year, connection=connection)
+            except Exception:
+                # Un padre problemático no puede abortar el lote — el resto de
+                # las familias sigue esperando su certificado.
+                logger.exception("Error inesperado enviando el certificado fiscal a parent_id=%d", parent.id)
+                success = False
+            if success:
+                results["sent"] += 1
+                logger.info("Certificado fiscal enviado a parent_id=%d", parent.id)
+            else:
+                results["failed"] += 1
+                logger.error("Fallo al enviar el certificado fiscal a parent_id=%d", parent.id)
+    finally:
+        try:
+            connection.close()
+        except Exception:
+            logger.exception("Error cerrando la conexión SMTP de los certificados fiscales")
 
     logger.info(
         f"Certificados fiscales {year}: {results['sent']} enviados, "

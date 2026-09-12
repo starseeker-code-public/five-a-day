@@ -2,11 +2,20 @@
 # DOCKER COMPOSE — Testing / QA overlay
 # ============================================================================
 # Layered on top of docker-compose.yml to create a production-like QA stack:
-# Gunicorn replaces runserver, and the DB lives in an isolated volume so
-# testing data never touches dev data.
+# Gunicorn replaces the image's 4-worker CMD, and the DB lives in an isolated
+# volume so testing data never touches dev data.
 #
-# Usage (after renaming .env.testing → .env):
+# Usage (after renaming .env.testing → .env) — BOTH -f files, ALWAYS:
 #   docker compose -f docker-compose.yml -f docker-compose.testing.yml up -d
+#
+# Naming the files explicitly is also what keeps docker-compose.override.yml
+# (the development file, auto-loaded on a bare `docker compose`) out of the
+# QA stack. That is deliberate: the override carries the `.:/app` source
+# mount, and with it QA ran the VM's git working tree instead of the code
+# COPYied into the image. Symptoms that cost real time: an untracked or
+# half-edited file on the VM changing app behaviour, and anything
+# `.dockerignore` drops never being noticed until production. Do NOT add a
+# `volumes: - .:/app` back to this file.
 #
 # All env vars (credentials, secrets, DJANGO_ENV=testing, teacher seeds, etc.)
 # come from .env. The base compose file already injects Docker-network values
@@ -18,7 +27,10 @@ services:
 
   db:
     # Isolate QA Postgres data from dev so a `make reset-db` in either
-    # environment never wipes the other.
+    # environment never wipes the other. THIS IS THE CRITICAL OVERRIDE: a
+    # one-file bring-up starts a different, valid, WRONG stack on the dev
+    # `postgres_data` volume, exits 0, and /health/ still reports the correct
+    # version — the v1.16.0 incident that served a months-old database.
     volumes:
       - testing_postgres_data:/var/lib/postgresql/data/pgdata
       - ./backups:/backups
@@ -27,6 +39,9 @@ services:
     # Production-style server (matches Cloud Run behaviour). The Dockerfile
     # CMD also runs gunicorn but with different flags — this override pins
     # the QA-tuned settings: 2 workers (fits e2-micro RAM), 120s timeout.
+    # (So the image's own CMD is still exercised only in production; the
+    # worker count is the reason, and it is worth the divergence on a machine
+    # with ~380 MB free RAM.)
     command: >
       gunicorn
         --chdir project
@@ -36,6 +51,15 @@ services:
         --access-logfile -
         --error-logfile -
         project.wsgi:application
+
+    # The ONLY thing bind-mounted from the VM's tree, read-only and not code:
+    # .dockerignore excludes .git/ from the image, and the QA dashboard's
+    # "last commit" card runs `git log` inside the container
+    # (core/views/testing_tools._git_info, with -c safe.directory=*). Without
+    # this the card is silently empty. Metadata only — nothing here is
+    # importable or executable by Django.
+    volumes:
+      - ./.git:/app/.git:ro
 
 volumes:
   testing_postgres_data:

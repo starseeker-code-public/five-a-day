@@ -225,7 +225,7 @@ class TestParentPortalSessionHandling:
         client = Client()
         self._log_in(client, parent)
 
-        client.get(reverse("parent_portal_logout"))
+        client.post(reverse("parent_portal_logout"))
 
         assert client.session.get("parent_id") is None
 
@@ -673,7 +673,18 @@ class TestPaymentReceiptEmail:
     marked complete in the UI sent nothing at all.
     """
 
-    def test_quick_complete_emails_a_receipt(self, student_with_parent, parent, active_enrollment):
+    def test_quick_complete_emails_a_receipt(
+        self, student_with_parent, parent, active_enrollment, django_capture_on_commit_callbacks
+    ):
+        """The receipt is dispatched from `transaction.on_commit`.
+
+        The payment write is now wrapped in `atomic()` (payment + HistoryLog
+        used to commit independently, so a log failure showed an error on a
+        payment that had already been taken). A plain `.delay()` inside that
+        block could run before the commit and read a row that does not exist
+        yet, so the dispatch moved to `on_commit` — which pytest-django's
+        non-committing test transaction would otherwise discard.
+        """
         import json
 
         from django.core import mail
@@ -690,11 +701,12 @@ class TestPaymentReceiptEmail:
             concept="probe",
         )
         mail.outbox.clear()
-        _client().post(
-            f"/api/payments/{payment.id}/quick-complete/",
-            data=json.dumps({"payment_method": "cash"}),
-            content_type="application/json",
-        )
+        with django_capture_on_commit_callbacks(execute=True):
+            _client().post(
+                f"/api/payments/{payment.id}/quick-complete/",
+                data=json.dumps({"payment_method": "cash"}),
+                content_type="application/json",
+            )
         assert len(mail.outbox) == 1
         assert parent.email in mail.outbox[0].to
 

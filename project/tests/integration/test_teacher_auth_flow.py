@@ -240,7 +240,7 @@ class TestLogoutDjangoSession:
         _make_teacher(email="lo@fiveaday.test", password="pw", admin=True)
         client.post(reverse("login"), {"username": "lo@fiveaday.test", "password": "pw"})
         assert client.session.get("_auth_user_id")
-        client.get(reverse("logout"))
+        client.post(reverse("logout"))
         assert not client.session.get("_auth_user_id")
         assert not client.session.get("is_authenticated")
 

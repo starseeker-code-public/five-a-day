@@ -179,4 +179,58 @@ def rate_limit(
     return decorator
 
 
-__all__ = ["rate_limit"]
+class ErrorAlertThrottleFilter(logging.Filter):
+    """Let at most one alert per distinct error site through per window.
+
+    Wired to the `mail_admins` handler in `settings.LOGGING` (production only).
+    `AdminEmailHandler` has no throttle of its own, and the failure mode of
+    error email is not "too few": a 500 on a page a Cloud Scheduler job hits, or
+    one bad row in a loop, produces one mail per occurrence, the inbox is muted
+    within a day, and the alerting is then worse than none because it is
+    believed to be working.
+
+    Deliberately IN-PROCESS (a dict and a monotonic clock) rather than
+    cache-backed like `rate_limit` above:
+
+    * this runs while handling an error, and the cache is the database in
+      production — an alert about the database being unreachable must not
+      depend on the database being reachable;
+    * per-process is enough. The upper bound becomes one mail per site per
+      window per worker: 4 Gunicorn workers x maxScale 2 = at most 8, versus
+      thousands. For the rate LIMITER that multiplication was the bug; for an
+      alert it is an acceptable constant.
+
+    Keyed on the logging call SITE (logger + module + line), not on the
+    formatted message, so a per-request id or a student name in the text cannot
+    defeat it — that is exactly the shape that spams.
+    """
+
+    #: One mail per site per 15 minutes. Long enough to survive a burst, short
+    #: enough that a problem lasting an afternoon reminds you it is still there.
+    WINDOW_SECONDS = 900
+    #: Bound the bookkeeping. An error storm from many distinct sites must not
+    #: grow this dict without limit inside a process that is already unhealthy.
+    MAX_TRACKED = 512
+
+    def __init__(self, name: str = "") -> None:
+        super().__init__(name)
+        self._seen: dict[tuple, float] = {}
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        key = (record.name, record.levelno, record.module, record.lineno)
+        now = time.monotonic()
+        last = self._seen.get(key)
+        if last is not None and now - last < self.WINDOW_SECONDS:
+            return False
+        if len(self._seen) >= self.MAX_TRACKED:
+            # Drop everything already outside its window; if that frees
+            # nothing, start over rather than grow. Losing throttle state means
+            # at worst one extra mail, which is the safe direction here.
+            self._seen = {k: t for k, t in self._seen.items() if now - t < self.WINDOW_SECONDS}
+            if len(self._seen) >= self.MAX_TRACKED:
+                self._seen.clear()
+        self._seen[key] = now
+        return True
+
+
+__all__ = ["ErrorAlertThrottleFilter", "rate_limit"]

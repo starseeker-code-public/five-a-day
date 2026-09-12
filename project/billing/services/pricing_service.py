@@ -1,5 +1,28 @@
 from decimal import ROUND_HALF_UP, Decimal
 
+# The money math lives in `billing.money`, a leaf module that imports no models.
+# `billing.models` imports these from there too — routing them through this
+# service is what created the `models → pricing_service → models` cycle CodeQL
+# flagged. Re-exported here so existing `from ...pricing_service import
+# round_money` / `period_base_amount` / `quarterly_price_from_monthly` callers
+# are unchanged.
+from billing.money import (
+    MONEY_QUANTUM,
+    monthly_fee_for,
+    period_base_amount,
+    quarterly_price_from_monthly,
+    round_money,
+)
+
+__all__ = [
+    "MONEY_QUANTUM",
+    "PricingService",
+    "monthly_fee_for",
+    "period_base_amount",
+    "quarterly_price_from_monthly",
+    "round_money",
+]
+
 
 class PricingService:
     """Centralized pricing logic. SiteConfiguration is the single source of truth."""
@@ -12,15 +35,16 @@ class PricingService:
 
     @staticmethod
     def get_monthly_fee(schedule_type, config=None):
-        """Get the monthly fee for a given schedule type."""
+        """Get the monthly fee for a given schedule type.
+
+        Delegates to `billing.money.monthly_fee_for` rather than carrying its own
+        copy of the mapping — a new schedule type has to price the same here, in
+        `Enrollment.save()`'s fallback and in the payment generator, or the ficha
+        and the invoice disagree.
+        """
         if config is None:
             config = PricingService.get_config()
-        fees = {
-            "full_time": config.full_time_monthly_fee,
-            "part_time": config.part_time_monthly_fee,
-            "adult_group": config.adult_group_monthly_fee,
-        }
-        return fees.get(schedule_type, config.full_time_monthly_fee)
+        return monthly_fee_for(schedule_type, config)
 
     @staticmethod
     def get_enrollment_fee(is_adult, config=None):
@@ -31,12 +55,15 @@ class PricingService:
 
     @staticmethod
     def calculate_quarterly_price(config=None):
-        """Calculate the quarterly base price (3 months * full_time - discount%)."""
+        """The advertised quarterly base price (3 months * full_time - discount%).
+
+        A thin wrapper over `quarterly_price_from_monthly` so the advertised
+        figure and the one `Enrollment.save()` / `EnrollmentService` derive from a
+        part-time or adult base cannot drift apart.
+        """
         if config is None:
             config = PricingService.get_config()
-        base = config.full_time_monthly_fee * 3
-        discount = base * (config.quarterly_enrollment_discount / Decimal("100"))
-        return base - discount
+        return quarterly_price_from_monthly(config.full_time_monthly_fee, config)
 
     @staticmethod
     def calculate_sibling_price(config=None, schedule_type="full_time"):

@@ -1,194 +1,151 @@
 <!DOCTYPE html>
-<html lang="en">
+{# lang="es": every email template that extends this file is written in       #}
+{# Spanish, and this is the attribute a client reads to decide whether to      #}
+{# offer a translation banner over the academy's own mail.                     #}
+<html lang="es">
 <head>
     <meta charset="UTF-8">
-    <meta name="color-scheme" content="dark">
-    <meta name="supported-color-schemes" content="dark">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    {# color-scheme LIGHT (not "light dark"): opts the email OUT of the client's #}
+    {# automatic dark-mode inversion. Outlook/Windows was rendering the email    #}
+    {# dark even in Outlook's light view because it derives dark from the OS      #}
+    {# theme; declaring light-only is what stops that. Single light theme on      #}
+    {# purpose — a white card is readable in every client, light or dark.         #}
+    <meta name="color-scheme" content="light">
+    <meta name="supported-color-schemes" content="light">
     <title>{% block title %}Five a Day{% endblock %}</title>
-    {% load static %}
-    <link rel="stylesheet" href="{% static 'css/email.css' %}">
+    {# NO {% static %} here: the Celery worker container never runs             #}
+    {# collectstatic, so `{% static 'css/email.css' %}` under                   #}
+    {# ManifestStaticFilesStorage raised "Missing staticfiles manifest entry"   #}
+    {# and killed EVERY worker-dispatched email. Clients strip <link> anyway.    #}
     <style>
-        /* ====================================================================
-           The email ships DARK in every client — the webapp's dark violet
-           theme (theme.css --fad-* palette) is baked into the inline styles
-           here and in every content template, because inline is the only
-           styling every client renders. This block is a backstop for clients
-           that do not inherit body/div colors into text elements (Outlook's
-           Word engine resets <p> to black). No !important: inline wins.
-           ==================================================================== */
-        body, p, li, td, th, span { color: #d5d0e6; }
-        h1, h2, h3, h4 { color: #b9a5f5; }
-        a { color: #b9a5f5; }
-        body, .email-container { background-color: #141220; }
-        .email-content { background-color: #1e1a2e; }
-        .email-footer { background-color: #241f36; }
+        :root { color-scheme: light; supported-color-schemes: light; }
+        /* Backstop for clients that reset <p> to black (Outlook Word engine);
+           inline styles in the templates win over these. */
+        body, p, li, td, th, span { color: #1f2430; }
+        h1, h2, h3, h4, a { color: #6d28d9; }
+        img { max-width: 100%; height: auto; border: 0; }
+
+        /* MOBILE. On small screens bump the text so it is comfortable to read on
+           a phone (desktop is left untouched). Clients that honour <style> media
+           queries — iOS Mail, Outlook mobile, Apple Mail — apply these; the
+           fluid-hybrid layout below is what stops the rest from zooming the
+           whole email out (which is what actually made phone text tiny). */
+        @media screen and (max-width: 600px) {
+            .email-content { padding: 22px 18px !important; }
+            .email-content p,
+            .email-content li,
+            .email-content span,
+            .email-content td { font-size: 17px !important; line-height: 1.6 !important; }
+            .email-content h1 { font-size: 26px !important; }
+            .email-content h2 { font-size: 21px !important; }
+            .email-content h3 { font-size: 18px !important; }
+            .legal, .legal * { font-size: 12px !important; line-height: 1.5 !important; }
+        }
     </style>
     {% block extra_css %}{% endblock %}
     {% block extra_head %}{% endblock %}
 </head>
-<body style="margin: 0; padding: 0; background-color: #141220; font-family: 'Trebuchet MS', Arial, sans-serif; font-size: 16px; line-height: 1.6; color: #d5d0e6;">
-    <!-- Scaffold styles are INLINE on purpose: most clients (Gmail, Outlook)
-         strip the <link> stylesheet above, so anything not inlined simply
-         does not render — which left the footer's white legal text invisible
-         on the client's default white background. -->
-    <div class="email-container" style="width: 100%; max-width: 600px; margin: 0 auto; padding: 16px 8px;">
-        <div class="email-content" style="background-color: #1e1a2e; color: #d5d0e6; border-radius: 12px; padding: 30px 24px;">
-            {% block content %}{% endblock %}
-        </div>
-        <div class="email-footer" style="background-color: #241f36; border-radius: 12px 12px 0 0; margin-top: 16px; padding: 24px 20px 8px; text-align: center; font-size: 14px; color: #ffffff;">
-            <div data-smartmail="gmail_signature" dir="ltr">
-                <div dir="ltr">
-                    <div>
-                        <div><br /></div>
-                        <div>
-                            <b style="background-color: rgb(41, 41, 41) !important;" data-ogsb="white">
-                                <font face="trebuchet ms,sans-serif" size="4" color="rgb(235, 106, 255)" style="color: rgb(235, 106, 255) !important;" data-ogsc="" data-ogac="#9900FF">
-                                    <span style="color: rgb(235, 106, 255) !important;" data-ogsc="">Five a Day English Academy</span>
-                                </font>
-                            </b>
+<body style="margin: 0; padding: 0; background-color: #f1eef9; color-scheme: light; font-family: 'Trebuchet MS', Arial, sans-serif; font-size: 16px; line-height: 1.6; color: #1f2430;">
+    <!-- Fluid-hybrid scaffold. The email is FLUID (a max-width div) so phones
+         render it at device width instead of zooming the whole thing out to fit
+         a fixed 600px — that zoom-out is what shrank the text on mobile. Outlook
+         desktop (Word engine) ignores max-width, so an MSO-only 600px table
+         keeps it from going full-bleed there. -->
+    <div style="background-color: #f1eef9; padding: 16px 8px;">
+        <!--[if mso]><table role="presentation" width="600" align="center" cellpadding="0" cellspacing="0" border="0"><tr><td><![endif]-->
+        <div style="max-width: 600px; margin: 0 auto;">
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+                <!-- Content card -->
+                <tr>
+                    <td class="email-content" style="background-color: #ffffff; color: #1f2430; border: 1px solid #d1cbe8; border-radius: 12px; padding: 30px 24px;">
+                        {% block content %}{% endblock %}
+                    </td>
+                </tr>
+                <!-- Signature -->
+                <tr>
+                    <td style="padding: 20px; text-align: center; font-size: 14px; color: #1f2430;">
+                        <div data-smartmail="gmail_signature" dir="ltr">
+                            <div dir="ltr">
+                                <div>
+                                    <div>
+                                        <b>
+                                            <font face="trebuchet ms,sans-serif" size="4" color="#6d28d9" style="color: #6d28d9;">
+                                                <span style="color: #6d28d9;">Five a Day English Academy</span>
+                                            </font>
+                                        </b>
+                                    </div>
+                                    <div>
+                                        <b><i><font face="trebuchet ms,sans-serif">C/Hermanos Jiménez 25</font></i></b>
+                                    </div>
+                                    <div>
+                                        <b><i><font face="trebuchet ms,sans-serif">967 049 096 - <a href="https://wa.me/34613481141" style="color: inherit; text-decoration: none;">613 481 141</a></font></i></b>
+                                    </div>
+                                    <div>
+                                        <a rel="noopener noreferrer" target="_blank" href="https://www.fiveadayenglish.com/" title="https://www.fiveadayenglish.com/" style="color: #6d28d9;">
+                                            <i style="color: #6d28d9;"><font face="trebuchet ms,sans-serif" color="#6d28d9" style="color: #6d28d9;">www.fiveadayenglish.com</font></i>
+                                        </a>
+                                    </div>
+                                    <div><br /></div>
+                                </div>
+                                <div>
+                                    <img height="268" width="420" src="https://ci3.googleusercontent.com/mail-sig/AIorK4ykC8m9ptc_MWVMqp002pDoZ_zHFhkWJbP6Re5BtlT3e6o9MQmzF7cvGVoeNsqBZeVvRCaqrxk" alt="Five a Day" style="max-width: 100%; height: auto;" data-imagetype="External" /><br />
+                                </div>
+                                <div><br /></div>
+                                <div>
+                                    <a rel="noopener noreferrer" target="_blank" href="https://www.instagram.com/fiveadayenglish/" title="https://www.instagram.com/fiveadayenglish/" style="color: #6d28d9;">
+                                        <img alt="Instagram" width="32" height="32" src="https://static.wixstatic.com/media/8d6893330740455c96d218258a458aa4.png/v1/fill/w_49,h_49,al_c,q_85,usm_0.66_1.00_0.01,enc_auto/8d6893330740455c96d218258a458aa4.png" data-imagetype="External" />
+                                    </a>
+                                    <span style="font-size: x-small;">&nbsp; &nbsp; &nbsp;&nbsp;</span>
+                                    <a rel="noopener noreferrer" target="_blank" href="https://www.facebook.com/profile.php?id=61550744760027" title="https://www.facebook.com/profile.php?id=61550744760027" style="color: #6d28d9;">
+                                        <img alt="Facebook" width="32" height="32" src="https://static.wixstatic.com/media/e316f544f9094143b9eac01f1f19e697.png/v1/fill/w_49,h_49,al_c,q_85,usm_0.66_1.00_0.01,enc_auto/e316f544f9094143b9eac01f1f19e697.png" data-imagetype="External" />
+                                    </a>
+                                </div>
+                            </div>
                         </div>
-                        <div>
-                            <b>
-                                <i><font face="trebuchet ms,sans-serif">C/Hermanos Jiménez 25</font></i>
-                            </b>
-                        </div>
-                        <div>
-                            <b>
-                                <i><font face="trebuchet ms,sans-serif">967 049 096 - <a href="https://wa.me/34613481141" style="color: inherit; text-decoration: none;">613 481 141</a></font></i>
-                            </b>
-                        </div>
-                        <div>
-                            <a
-                                data-auth="NotApplicable"
-                                rel="noopener noreferrer"
-                                target="_blank"
-                                href="https://www.fiveadayenglish.com/"
-                                data-linkindex="0"
-                                title="https://www.fiveadayenglish.com/"
-                                style="color: rgb(219, 151, 255) !important;"
-                                data-ogsc=""
-                            >
-                                <i style="color: rgb(219, 151, 255) !important;" data-ogsc="">
-                                    <font face="trebuchet ms,sans-serif" color="rgb(212, 144, 255)" style="color: rgb(212, 144, 255) !important;" data-ogsc="" data-ogac="blue">www.fiveadayenglish.com</font>
-                                </i>
-                            </a>
-                        </div>
-                        <div><br /></div>
-                    </div>
-                    <div><img height="268" width="420" src="https://ci3.googleusercontent.com/mail-sig/AIorK4ykC8m9ptc_MWVMqp002pDoZ_zHFhkWJbP6Re5BtlT3e6o9MQmzF7cvGVoeNsqBZeVvRCaqrxk" data-imagetype="External"/><br /></div>
-                    <div><br /></div>
-                    <div>
-                        <a
-                            style="font-size: x-small; color: rgb(219, 151, 255) !important;"
-                            data-auth="NotApplicable"
-                            rel="noopener noreferrer"
-                            target="_blank"
-                            href="https://www.instagram.com/fiveadayenglish/"
-                            data-linkindex="1"
-                            title="https://www.instagram.com/fiveadayenglish/"
-                            data-ogsc=""
-                        >
-                            <img
-                                alt="Instagram"
-                                src="https://static.wixstatic.com/media/8d6893330740455c96d218258a458aa4.png/v1/fill/w_49,h_49,al_c,q_85,usm_0.66_1.00_0.01,enc_auto/8d6893330740455c96d218258a458aa4.png"
-                                data-imagetype="External"
-                                style="color: rgb(219, 151, 255) !important;"
-                                data-ogsc=""
-                            />
-                        </a>
-                        <span style="font-size: x-small;">&nbsp; &nbsp; &nbsp;&nbsp;</span>
-                        <a
-                            style="font-size: x-small; color: rgb(219, 151, 255) !important;"
-                            data-auth="NotApplicable"
-                            rel="noopener noreferrer"
-                            target="_blank"
-                            href="https://www.facebook.com/profile.php?id=61550744760027"
-                            data-linkindex="2"
-                            title="https://www.facebook.com/profile.php?id=61550744760027"
-                            data-ogsc=""
-                        >
-                            <img
-                                alt="Facebook"
-                                src="https://static.wixstatic.com/media/e316f544f9094143b9eac01f1f19e697.png/v1/fill/w_49,h_49,al_c,q_85,usm_0.66_1.00_0.01,enc_auto/e316f544f9094143b9eac01f1f19e697.png"
-                                data-imagetype="External"
-                                style="color: rgb(219, 151, 255) !important;"
-                                data-ogsc=""
-                            />
-                        </a>
-                        <br />
-                    </div>
-                    <div>
-                        <font face="Calibri,sans-serif" color="rgb(168, 197, 255)" style="color: rgb(168, 197, 255) !important;" data-ogsc="" data-ogac="#1F497D">
-                            <span style="font-size: 16px; color: rgb(168, 197, 255) !important;" data-ogsc="">--</span>
-                        </font>
-                    </div>
-                </div>
-            </div>
-        </div>
-        <div class="email-footer" style="background-color: #241f36; border-radius: 0 0 12px 12px; padding: 8px 20px 24px; text-align: left; font-size: 14px; color: #ffffff;">
-            {% block footer %}       
-                    <div>
-                        <p style="color: rgb(255, 195, 255) !important;" data-ogsc="rgb(80, 0, 80)">
-                            <b style="color: rgb(255, 195, 255) !important;" data-ogsc="">
-                                <span style="color: rgb(255, 255, 255) !important; font-size: 7.5pt;" data-ogsc="black"><u style="color: rgb(255, 255, 255) !important;" data-ogsc="">AVISO LEGAL</u></span>
-                            </b>
-                        </p>
-                        <p style="color: rgb(255, 195, 255) !important;" data-ogsc="rgb(80, 0, 80)">
-                            <b style="color: rgb(255, 195, 255) !important;" data-ogsc="">
-                                <span style="color: rgb(255, 255, 255) !important; font-size: 7.5pt;" data-ogsc="black">
-                                    <u style="color: rgb(255, 255, 255) !important;" data-ogsc=""><br /> </u>
-                                </span>
-                            </b>
-                        </p>
-                        <p style="color: rgb(255, 195, 255) !important;" data-ogsc="rgb(80, 0, 80)">
-                            <b style="color: rgb(255, 195, 255) !important;" data-ogsc=""><span style="color: rgb(255, 255, 255) !important; font-size: 7.5pt;" data-ogsc="black">CONFIDENCIALIDAD:&nbsp;</span></b>
-                            <span style="color: rgb(255, 255, 255) !important; font-size: 7.5pt;" data-ogsc="black">
+                    </td>
+                </tr>
+                <!-- Legal -->
+                <tr>
+                    <td class="legal" style="padding: 8px 20px 24px; text-align: left; font-size: 14px; color: #4a4a57;">
+                        {% block footer %}
+                            <p style="color: #6d28d9; margin: 0 0 8px;">
+                                <b><u style="color: #4a4a57; font-size: 7.5pt;">AVISO LEGAL</u></b>
+                            </p>
+                            <p style="color: #4a4a57; font-size: 7.5pt; margin: 0 0 8px;">
+                                <b>CONFIDENCIALIDAD:&nbsp;</b>
                                 La información de este correo electrónico es privada, confidencial, y para uso exclusivo de su destinatario. Si no eres el destinatario correcto, o lo has recibido por error, te informamos que está totalmente prohibido su
-                                divulgación, distribución o reproducción por Ley. Por favor, notifícanoslo y procede a su destrucción sin continuar su lectura.<u style="color: rgb(255, 255, 255) !important;" data-ogsc=""></u>
-                                <u style="color: rgb(255, 255, 255) !important;" data-ogsc=""></u>
-                            </span>
-                        </p>
-                        <div>
-                            <b style="color: rgb(255, 195, 255) !important;" data-ogsc="rgb(80, 0, 80)"><span style="color: rgb(255, 255, 255) !important; font-size: 7.5pt;" data-ogsc="black">PROTECCIÓN DE DATOS:</span></b>
-                            <font color="rgb(255, 255, 255)" style="color: rgb(255, 255, 255) !important;" data-ogsc="" data-ogac="black"><span style="font-size: 7.5pt; color: rgb(255, 255, 255) !important;" data-ogsc="">&nbsp;</span></font>
-                            <b style="color: rgb(255, 255, 255) !important; font-size: 7.5pt;" data-ogsc="black">Responsable: Silvia Yubitza Moreno Carlín. Finalidad:</b>
-                            <font color="rgb(255, 255, 255)" style="color: rgb(255, 255, 255) !important;" data-ogsc="" data-ogac="black">
-                                <span style="font-size: 7.5pt; color: rgb(255, 255, 255) !important;" data-ogsc="">&nbsp;Gestionar las comunicaciones realizadas a través del correo electrónico de los servicios prestados.&nbsp;</span>
-                            </font>
-                            <b style="color: rgb(255, 255, 255) !important; font-size: 7.5pt;" data-ogsc="black">Legitimación:</b>
-                            <font color="rgb(255, 255, 255)" style="color: rgb(255, 255, 255) !important;" data-ogsc="" data-ogac="black">
-                                <span style="font-size: 7.5pt; color: rgb(255, 255, 255) !important;" data-ogsc="">&nbsp;Ejecución de un contrato e interés legítimo del responsable.&nbsp;</span>
-                            </font>
-                            <b style="color: rgb(255, 255, 255) !important; font-size: 7.5pt;" data-ogsc="black">Destinatarios:</b>
-                            <font color="rgb(255, 255, 255)" style="color: rgb(255, 255, 255) !important;" data-ogsc="" data-ogac="black">
-                                <span style="font-size: 7.5pt; color: rgb(255, 255, 255) !important;" data-ogsc="">&nbsp;No se cederán datos a terceros salvo obligación legal.&nbsp;</span>
-                            </font>
-                            <b style="color: rgb(255, 255, 255) !important; font-size: 7.5pt;" data-ogsc="black">Procedencia:</b>
-                            <font color="rgb(255, 255, 255)" style="color: rgb(255, 255, 255) !important;" data-ogsc="" data-ogac="black">
-                                <span style="font-size: 7.5pt; color: rgb(255, 255, 255) !important;" data-ogsc="">&nbsp;El propio interesado.&nbsp;</span>
-                            </font>
-                            <b style="color: rgb(255, 255, 255) !important; font-size: 7.5pt;" data-ogsc="black">Derechos:</b>
-                            <font color="rgb(255, 255, 255)" style="color: rgb(255, 255, 255) !important;" data-ogsc="" data-ogac="black">
-                                <span style="font-size: 7.5pt; color: rgb(255, 255, 255) !important;" data-ogsc="">
+                                divulgación, distribución o reproducción por Ley. Por favor, notifícanoslo y procede a su destrucción sin continuar su lectura.
+                            </p>
+                            <p style="color: #4a4a57; font-size: 7.5pt; margin: 0;">
+                                <b>PROTECCIÓN DE DATOS:</b>
+                                <b>Responsable: Silvia Yubitza Moreno Carlín. Finalidad:</b>
+                                <span>&nbsp;Gestionar las comunicaciones realizadas a través del correo electrónico de los servicios prestados.&nbsp;</span>
+                                <b>Legitimación:</b>
+                                <span>&nbsp;Ejecución de un contrato e interés legítimo del responsable.&nbsp;</span>
+                                <b>Destinatarios:</b>
+                                <span>&nbsp;No se cederán datos a terceros salvo obligación legal.&nbsp;</span>
+                                <b>Procedencia:</b>
+                                <span>&nbsp;El propio interesado.&nbsp;</span>
+                                <b>Derechos:</b>
+                                <span>
                                     &nbsp;Tiene derecho a acceder, rectificar y suprimir los datos, así como otros derechos, indicados en la información adicional, que puede ejercer dirigiéndose
-                                </span>
-                                <span style="font-size: 10px; color: rgb(255, 255, 255) !important;" data-ogsc="">&nbsp;por escrito a Silvia Yubitza Moreno Carlín (C/Hermanos Jiménez 25 bajo, 02004 Albacete),&nbsp;</span>
-                                <span style="font-size: 10px; color: rgb(255, 255, 255) !important;" data-ogsc="">
+                                    por escrito a Silvia Yubitza Moreno Carlín (C/Hermanos Jiménez 25 bajo, 02004 Albacete),
                                     adjuntando fotocopia del documento acreditativo de identidad o bien por correo electrónico a
-                                    <a href="mailto:hellofiveaday@gmail.com" data-linkindex="3" title="mailto:hellofiveaday@gmail.com" style="color: rgb(219, 151, 255) !important;" data-ogsc="">hellofiveaday@gmail.com</a>.
+                                    <a href="mailto:hellofiveaday@gmail.com" title="mailto:hellofiveaday@gmail.com" style="color: #6d28d9;">hellofiveaday@gmail.com</a>.
                                 </span>
-                            </font>
-                            <br />
-                        </div>
-                        <div>
-                            <span style="color: rgb(86, 184, 77) !important; font-size: 9pt; font-family: Segoe UI, sans-serif, serif, EmojiFont;" data-ogsc="forestgreen">
-                                🌳 Por favor no imprimas este correo a no ser que sea necesario. El planeta te lo agradecerá.
-                            </span>
-                            <span style="color: rgb(168, 197, 255) !important; font-size: 16px; font-family: Calibri, sans-serif, serif, EmojiFont;" data-ogsc="rgb(31, 73, 125)"><br /> </span>
-                        </div>
-                    </div>
-            {% endblock %}
+                            </p>
+                            <p style="margin: 8px 0 0;">
+                                <span style="color: #2e7d32; font-size: 9pt; font-family: 'Segoe UI', sans-serif, serif, EmojiFont;">
+                                    🌳 Por favor no imprimas este correo a no ser que sea necesario. El planeta te lo agradecerá.
+                                </span>
+                            </p>
+                        {% endblock %}
+                    </td>
+                </tr>
+            </table>
         </div>
+        <!--[if mso]></td></tr></table><![endif]-->
     </div>
 </body>
 </html>

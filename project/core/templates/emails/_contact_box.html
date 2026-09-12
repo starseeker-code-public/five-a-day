@@ -1,0 +1,35 @@
+{% comment %}
+The green "¿Tienes alguna pregunta?" WhatsApp box, shared by every content email.
+
+    {% include "emails/_contact_box.html" with topic="la matrícula" %}
+    {% include "emails/_contact_box.html" with heading="¿Alguna duda sobre este cobro?" topic="un pago" %}
+
+`topic` completes the PRE-FILLED WhatsApp message ("Hola, tengo una pregunta
+sobre <topic>"); `heading` and `body` override the wording where a template
+deliberately says something else. Encoding happens at render time, so a topic is
+written as plain Spanish here rather than hand-percent-encoded.
+
+The box existed as fifteen inline copies, which is why the light-theme migration
+had to restyle two hex values in thirteen files in lockstep — and why one missed
+copy would have left a dark-palette box on the new white card, invisible in the
+same way the portal's "Certificado fiscal" button once was. Only the colours and
+markup are shared; the copy stays per-template because several of them
+legitimately differ.
+
+Styling rules from the email gotcha apply: inline `style=""` only (Gmail and
+Outlook strip <link> and <style>), light palette, no dark variant.
+{% endcomment %}
+{% comment %}
+`firstof` rather than the `|default:` filter throughout: reading an unset
+variable logs a VariableDoesNotExist traceback at DEBUG on every render, and
+these three are unset on most of the fifteen call sites.
+{% endcomment %}
+{% firstof topic "Five a Day English Academy" as wa_topic %}
+{% firstof heading "¿Tienes alguna pregunta?" as wa_heading %}
+{% firstof body "No dudes en contactarnos. Estamos aquí para ayudarte" as wa_body %}
+<div style="background-color: #dcfce7; border-left: 4px solid #22C55E; padding: 15px; margin: 20px 0; text-align: left;">
+    <p style="color: #15803d; margin: 0; font-size: 14px;">
+        <strong>📞 {{ wa_heading }}</strong><br>
+        {{ wa_body }} — <a href="https://wa.me/34613481141?text={{ "Hola, tengo una pregunta sobre "|add:wa_topic|urlencode }}" style="color: #15803d; font-weight: 600;">escríbenos por WhatsApp</a> al <strong>613 481 141</strong>.
+    </p>
+</div>

@@ -2,12 +2,14 @@ import json
 import logging
 
 from django.db import models
-from django.http import JsonResponse
+from django.http import Http404, JsonResponse
 from django.shortcuts import get_object_or_404, render
 from django.views.decorators.http import require_http_methods
 
+from core.decorators import admin_required
 from core.models import FunFridayAttendance, HistoryLog, ScheduleSlot
 from core.schedule_utils import is_valid_slot, slot_time_range
+from core.transactions import students_on_the_roll
 from core.views.students import get_ff_student_ids, get_last_friday, get_next_friday
 from students.models import Group, Student
 
@@ -70,6 +72,7 @@ def schedule_view(request):
 
 
 @require_http_methods(["POST"])
+@admin_required
 def save_schedule_slot(request):
     """Save a single schedule slot assignment to the database."""
     try:
@@ -102,17 +105,28 @@ def save_schedule_slot(request):
         )
 
         return JsonResponse({"success": True})
+    except Http404:
+        # The group lookup — a missing/deleted group is a 404, not a "no se pudo
+        # guardar" masked by the catch-all (Http404 subclasses Exception).
+        raise
     except Exception:
         logger.exception("Error saving schedule slot")
         return JsonResponse({"success": False, "error": "No se pudo guardar el horario."}, status=400)
 
 
 def fun_friday_view(request):
-    """Vista de Fun Friday con lista de estudiantes."""
+    """Vista de Fun Friday con lista de estudiantes.
+
+    Only children who are actually studying THIS academic year belong here:
+    `active=True` alone let waiting-list entries (no enrollment, taken over the
+    phone) and students whose only enrollment is from a past course show up.
+    Fun Friday is a weekly activity for the current roll, so it is scoped the
+    same way the students list is — active, not on the waiting list, and holding
+    an enrollment in one of the relevant academic years (both cohorts during the
+    May–August overlap).
+    """
     students = (
-        Student.objects.filter(active=True, is_adult=False)
-        .select_related("group")
-        .order_by("group__group_name", "first_name")
+        students_on_the_roll(children_only=True).select_related("group").order_by("group__group_name", "first_name")
     )
     this_friday = get_next_friday()
     last_friday = get_last_friday()

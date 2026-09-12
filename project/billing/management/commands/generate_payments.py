@@ -107,9 +107,17 @@ class Command(BaseCommand):
                 # model here sets `Meta.ordering`, so this is always the case.
                 parent = next(iter(student.parents.all()), None)
                 if not parent:
-                    self.stdout.write(self.style.WARNING(f"  SKIP {student.full_name}: no parent found"))
-                    skipped_count += 1
-                    continue
+                    # Bill anyway. `Payment.parent` is nullable and `Payment.clean()`
+                    # only validates the relationship when a parent is present —
+                    # `create_payment` relies on exactly that for adult students. A
+                    # child can legitimately lack a Parent row (a waiting-list entry
+                    # promoted from the ficha keeps its contact on
+                    # `waiting_contact_*`), and skipping meant that student accrued
+                    # ZERO mensualidades for the whole year while the ficha showed
+                    # the family as up to date.
+                    self.stdout.write(
+                        self.style.WARNING(f"  AVISO {student.full_name}: sin padre/tutor — se factura sin titular")
+                    )
 
             if dry_run:
                 # Same selection the real run uses — PaymentService.pending_periods

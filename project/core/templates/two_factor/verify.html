@@ -5,10 +5,50 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Verificar 2FA · Five a Day</title>
+{% comment %}
+Pre-paint theme decision, BEFORE Tailwind loads, so the card never flashes the
+wrong colour. Same time-based default as base.html (light 10:00–16:59, dark
+otherwise); an explicit session choice in localStorage wins.
+{% endcomment %}
+<script nonce="{{ csp_nonce }}">
+    (function () {
+        try {
+            var stored = localStorage.getItem('theme');
+            var dark;
+            if (stored === 'dark' || stored === 'light') {
+                dark = stored === 'dark';
+            } else {
+                var h = new Date().getHours();
+                dark = !(h >= 10 && h < 17);
+            }
+            if (dark) document.documentElement.classList.add('dark');
+        } catch (e) { /* default light */ }
+    })();
+</script>
 <script src="{% static 'js/vendor/tailwindcss-play-3.4.17.js' %}"></script>
+{% comment %}
+The violet `primary` palette + darkMode:'class'. Without it a `primary-*`
+utility on this standalone page would emit no CSS at all (see CLAUDE.md). This
+was a third inline copy of the scale, and it had already drifted: it omitted the
+`fontFamily` override the other two carried, so this page rendered in the
+browser default instead of Trebuchet MS. Now the shared file.
+{% endcomment %}
+<script src="{% static 'js/tailwind-config.js' %}"></script>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined" rel="stylesheet">
+{# palette.css must precede theme.css — see parent_portal/base_portal.html. #}
+<link rel="stylesheet" href="{% static 'css/palette.css' %}">
+<link rel="stylesheet" href="{% static 'css/theme.css' %}">
 </head>
 <body class="min-h-screen bg-neutral-50 flex items-center justify-center p-6">
 <div class="max-w-md w-full bg-white rounded-lg shadow p-8">
+    <div class="flex justify-end mb-2">
+        <button id="theme-toggle-btn" type="button"
+                title="Cambiar tema claro/oscuro" aria-label="Cambiar tema claro/oscuro"
+                class="p-2 rounded-md text-neutral-500 hover:bg-neutral-100 hover:text-primary-700 leading-none">
+            <span class="material-symbols-outlined theme-icon-light align-middle text-lg">dark_mode</span>
+            <span class="material-symbols-outlined theme-icon-dark align-middle text-lg">light_mode</span>
+        </button>
+    </div>
     <h1 class="text-2xl font-bold text-neutral-800 mb-2">Verificación en dos pasos</h1>
     <p class="text-sm text-neutral-600 mb-6">
         Introduce el código de 6 dígitos que muestra tu app de autenticación para
@@ -26,13 +66,14 @@
                required autofocus
                class="w-full px-4 py-2 border border-neutral-300 rounded-md font-mono text-lg tracking-widest mb-4"
                placeholder="000000">
-        <button type="submit" class="w-full px-4 py-2 bg-violet-600 hover:bg-violet-700 text-white rounded-md font-medium">
+        <button type="submit" class="w-full px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white rounded-md font-medium">
             Verificar
         </button>
     </form>
     <p class="text-xs text-neutral-500 mt-4 text-center">
-        <a href="{% url 'login' %}" class="text-violet-600 hover:text-violet-800 no-underline">Cancelar y volver al login</a>
+        <a href="{% url 'login' %}" class="text-primary-600 hover:text-primary-800 no-underline">Cancelar y volver al login</a>
     </p>
 </div>
+<script src="{% static 'js/theme.js' %}"></script>
 </body>
 </html>

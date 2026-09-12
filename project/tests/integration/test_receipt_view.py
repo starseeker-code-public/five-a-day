@@ -7,8 +7,8 @@ pytestmark = pytest.mark.django_db
 
 
 class TestPaymentReceiptPdf:
-    def test_returns_pdf(self, authenticated_client, pending_payment):
-        response = authenticated_client.get(reverse("payment_receipt_pdf", args=[pending_payment.id]))
+    def test_returns_pdf(self, authenticated_client, completed_payment):
+        response = authenticated_client.get(reverse("payment_receipt_pdf", args=[completed_payment.id]))
         assert response.status_code == 200
         assert response["Content-Type"] == "application/pdf"
         assert response.content.startswith(b"%PDF-")
@@ -17,3 +17,13 @@ class TestPaymentReceiptPdf:
     def test_404_for_missing_payment(self, authenticated_client):
         response = authenticated_client.get(reverse("payment_receipt_pdf", args=[999_999]))
         assert response.status_code == 404
+
+    def test_pending_payment_is_refused_and_consumes_no_receipt_number(self, authenticated_client, pending_payment):
+        """Rendering assigns a permanent fiscal number, so uncollected money must
+        not be reachable here — a numbered receipt for a charge that is later
+        cancelled is a false document and a permanent gap in the sequence."""
+        response = authenticated_client.get(reverse("payment_receipt_pdf", args=[pending_payment.id]))
+        assert response.status_code == 404
+
+        pending_payment.refresh_from_db()
+        assert pending_payment.receipt_number == ""

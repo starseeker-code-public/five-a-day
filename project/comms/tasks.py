@@ -12,8 +12,6 @@ Usage:
     send_birthday_emails_task.delay()
 """
 
-from datetime import date
-
 from celery import shared_task
 from celery.utils.log import get_task_logger
 
@@ -90,7 +88,11 @@ def send_welcome_email_task(self, parent_id: int, student_id: int, enrollment_id
         from core.schedule_utils import get_group_schedule_lines
 
         enrollment_type = enrollment.enrollment_type
-        is_special = bool(enrollment_type and enrollment_type.name == "special")
+        # `Enrollment.is_hand_priced` — the shared predicate. This task inlined
+        # `enrollment_type and enrollment_type.name == "special"`, one of five
+        # copies of the same question; one copy disagreeing means a family is
+        # told a cadence they never agreed to.
+        is_special = enrollment.is_hand_priced
 
         # Spanish "Mensual" / "Trimestral" — parents were shown the English
         # EnrollmentType label and had no explicit payment frequency. A `special`
@@ -121,6 +123,12 @@ def send_welcome_email_task(self, parent_id: int, student_id: int, enrollment_id
             recipients=recipient_email,
             subject=f"🎓 ¡Bienvenido/a {student.full_name} a Five a Day!",
             context=context,
+            # `fail_silently=True` like every other task in this file: without it
+            # an SMTP error escaped as the raw backend exception instead of the
+            # `RuntimeError` below, which is what `autoretry_for` and the
+            # student-creation caller are written against. The retry behaviour is
+            # unchanged — `send_email` returns False and the raise still happens.
+            fail_silently=True,
         )
 
         if success:
@@ -131,11 +139,14 @@ def send_welcome_email_task(self, parent_id: int, student_id: int, enrollment_id
 
         return {"status": "success", "recipient": recipient_email}
 
-    except (Parent.DoesNotExist, Student.DoesNotExist, Enrollment.DoesNotExist) as e:
+    except (Parent.DoesNotExist, Student.DoesNotExist, Enrollment.DoesNotExist):
+        # Fixed message, not str(e): the DoesNotExist repr names the model and
+        # query, and a task result can end up in whatever consumes it (production
+        # runs eager) — same rule as the views (v1.14.4/5).
         logger.error(
             "Record not found: parent_id=%s student_id=%s enrollment_id=%s", parent_id, student_id, enrollment_id
         )
-        return {"status": "error", "message": str(e)}
+        return {"status": "error", "message": "Registro no encontrado."}
 
 
 @shared_task(
@@ -234,9 +245,13 @@ def send_birthday_emails_task(self):
     # `timezone.localdate()` so we always work in `settings.TIME_ZONE`.
     today = timezone.localdate()
 
-    # Find active students with a birthday today
+    # Find active students with a birthday today. `is_waiting=False` matches
+    # every other mass mail (see `core.views.app_forms._recipient_filters`): a
+    # student moved back onto the waiting list keeps their parents, and the
+    # manual `birthday_form` makes the same call — the cron and the button must
+    # not disagree about who gets a card.
     birthday_students = Student.objects.filter(
-        birth_date__month=today.month, birth_date__day=today.day, active=True
+        birth_date__month=today.month, birth_date__day=today.day, active=True, is_waiting=False
     ).values_list("id", flat=True)
 
     if not birthday_students:
@@ -275,6 +290,7 @@ def send_monthly_report_task(self, recipient_email: str | None = None):
 
     from django.conf import settings
     from django.db.models import Case, DecimalField, Sum, Value, When
+    from django.utils import timezone
 
     from billing.models import Payment
     from comms.services.email_service import email_service
@@ -295,12 +311,25 @@ def send_monthly_report_task(self, recipient_email: str | None = None):
         )
         return {"status": "skipped", "reason": "no recipient"}
 
-    today = date.today()
+    # `timezone.localdate()`, not `date.today()`: the container runs UTC, so a
+    # Beat/Cloud Scheduler run at 00:xx or a late-evening run in CEST reads the
+    # WRONG MONTH and the "informe mensual" then aggregates a month the operator
+    # did not ask for. `send_birthday_emails_task` was fixed for exactly this and
+    # the other three call sites in this file were left behind.
+    today = timezone.localdate()
     zero = Decimal("0.00")
+    # "Esperado" means LIVE money only (`billing.constants.LIVE_PAYMENT_STATUSES`,
+    # the same contract payments_list / dashboard.home / collection_rate share):
+    # without the status filter every cancelled/failed/refunded row due this
+    # month inflated `expected` and produced phantom `outstanding` debt — the
+    # exact pre-v1.15 bug the constant exists to prevent.
+    from billing.constants import LIVE_PAYMENT_STATUSES
+
     stats = Payment.objects.aggregate(
         expected=Sum(
             Case(
                 When(
+                    payment_status__in=LIVE_PAYMENT_STATUSES,
                     due_date__month=today.month,
                     due_date__year=today.year,
                     then="amount",
@@ -372,16 +401,23 @@ def send_payment_reminders(self):
     """
     from datetime import timedelta
 
+    from django.utils import timezone
+
     from billing.models import Payment
     from comms.services.email_service import email_service
 
-    due_date_limit = date.today() + timedelta(days=7)
+    # `timezone.localdate()`, not `date.today()` — see `send_monthly_report_task`.
+    # Read ONCE: the old code called `date.today()` twice, so a run straddling
+    # midnight built a window whose lower bound was the day AFTER its upper
+    # bound's reference and silently reminded nobody.
+    today = timezone.localdate()
+    due_date_limit = today + timedelta(days=7)
 
     # `list()` once: this was `.exists()`, then `.count()`, then the loop below —
     # three executions of the same query for one pass over the rows.
     pending_payments = list(
         Payment.objects.filter(
-            payment_status="pending", due_date__lte=due_date_limit, due_date__gte=date.today()
+            payment_status="pending", due_date__lte=due_date_limit, due_date__gte=today
         ).select_related("student", "parent")
     )
 
@@ -548,6 +584,44 @@ def send_parent_temporary_password_task(self, parent_id: int, login_url: str = "
     return {"status": "success" if success else "failed", "recipient": parent.email}
 
 
+def dispatch_payment_completed(payment_id: int) -> None:
+    """Fire every side effect of a payment becoming COMPLETED: receipt + archive.
+
+    The one statement of "what happens when money lands", because there are two
+    completion paths — the admin marking a payment cobrado and the Stripe webhook
+    — and each carried its own copy of this pair of dispatches. A third side
+    effect, or a third completion path, would have had to be written twice to be
+    right and once to be silently half-wrong.
+
+    Each dispatch gets its own ``try``: a Drive outage must not cost the family
+    their receipt email, and vice versa. Neither may raise, because production
+    runs ``CELERY_TASK_ALWAYS_EAGER`` — the "queue" is this call stack, inside
+    the request that recorded the money.
+
+    Callers inside a transaction must wrap this in ``transaction.on_commit``
+    (see ``core.views.payments._queue_payment_receipt``): eager execution re-reads
+    the payment by id, which a not-yet-committed write is invisible to.
+    """
+    try:
+        send_payment_receipt_email_task.delay(int(payment_id))
+    except Exception:  # noqa: BLE001 — receipt is nice-to-have
+        logger.exception("Failed to enqueue payment receipt for payment %d", int(payment_id))
+
+    try:
+        upload_receipt_to_drive_task.delay(int(payment_id))
+    except Exception:  # noqa: BLE001 — Drive archive is nice-to-have
+        logger.exception("Failed to enqueue Drive receipt upload for payment %d", int(payment_id))
+
+
+#: Everything `generate_payment_receipt` touches off a Payment. The receipt's
+#: discount breakdown reads the enrollment and its matrícula category, and
+#: `enrollment.student` is a separate FK cache from `payment.student` — without
+#: the pair the two receipt tasks each paid 3 extra lazy queries per payment,
+#: which production (eager Celery) spends inside the completion request and the
+#: Drive backfill multiplies by the whole archive.
+_RECEIPT_RELATIONS = ("student", "parent", "enrollment", "enrollment__enrollment_type", "enrollment__student")
+
+
 @shared_task(
     name="comms.tasks.send_payment_receipt_email_task",
     bind=True,
@@ -566,7 +640,7 @@ def send_payment_receipt_email_task(self, payment_id: int):
     from comms.services.email_service import email_service
 
     try:
-        payment = Payment.objects.select_related("student", "parent").get(id=payment_id)
+        payment = Payment.objects.select_related(*_RECEIPT_RELATIONS).get(id=payment_id)
     except Payment.DoesNotExist:
         logger.warning("send_payment_receipt_email_task: payment %s not found", payment_id)
         return {"status": "error", "message": "payment not found"}
@@ -597,6 +671,50 @@ def send_payment_receipt_email_task(self, payment_id: int):
     if not success:
         raise RuntimeError(f"send_email returned False for payment {payment_id}")
     return {"status": "success", "recipient": recipient, "payment_id": payment_id}
+
+
+@shared_task(name="comms.tasks.upload_receipt_to_drive_task", bind=True)
+def upload_receipt_to_drive_task(self, payment_id: int):
+    """Best-effort: archive a completed payment's receipt PDF to Google Drive.
+
+    Deliberately NOT auto-retrying and NOT raising: the Drive archive is a
+    convenience on top of the `Payment` row and the emailed receipt, so a Drive
+    problem must never fail the payment flow or spawn a retry storm (production
+    runs eager, so a raise here would surface inside the completion request). The
+    upload service already swallows every error and returns a status; this task
+    just resolves the payment, renders the PDF and records the outcome.
+    """
+    from billing.models import Payment
+    from billing.services.pdf_service import generate_payment_receipt
+    from core.services.drive_service import get_service as get_drive_service
+
+    drive = get_drive_service()
+    if not drive.is_configured():
+        return {"status": "not_configured", "payment_id": payment_id}
+
+    try:
+        payment = Payment.objects.select_related(*_RECEIPT_RELATIONS).get(id=payment_id)
+    except Payment.DoesNotExist:
+        logger.warning("upload_receipt_to_drive_task: payment %s not found", payment_id)
+        return {"status": "error", "message": "payment not found"}
+
+    # Only completed payments have a real receipt to archive.
+    if payment.payment_status != "completed":
+        return {"status": "skipped", "reason": "not completed", "payment_id": payment_id}
+
+    try:
+        pdf_bytes = generate_payment_receipt(payment)
+    except Exception:
+        # Rendering failing is worth knowing about, but still must not blow up the
+        # completion flow — log and stop.
+        logger.exception("upload_receipt_to_drive_task: failed to render PDF for payment %s", payment_id)
+        return {"status": "error", "message": "pdf render failed", "payment_id": payment_id}
+
+    result = drive.upload_receipt(payment, pdf_bytes)
+    if not result.success and result.status == "error":
+        # result.error is one of the service's own fixed messages, not user input.
+        logger.warning("upload_receipt_to_drive_task: payment %s not archived (%s)", payment_id, result.error)
+    return {"payment_id": payment_id, **result.as_dict()}
 
 
 @shared_task(
@@ -665,22 +783,14 @@ def send_enrollment_confirmation_task(self, enrollment_id: int, attachments_path
 
     from billing.models import Enrollment
     from comms.services.email_functions import send_enrollment_confirmation_email
-    from students.models import Parent
 
-    MONTHS_ES = [
-        "enero",
-        "febrero",
-        "marzo",
-        "abril",
-        "mayo",
-        "junio",
-        "julio",
-        "agosto",
-        "septiembre",
-        "octubre",
-        "noviembre",
-        "diciembre",
-    ]
+    # `core.constants.MESES_ES` is the one list of Spanish month names — this
+    # task carried its own copy under a different name, which is how two
+    # spellings of a month end up in the same product. Imported in the function
+    # body like the other core imports in this module (see the "known debt" note
+    # in CLAUDE.md); `comms/management/commands/send_email.py` already reads it.
+    from core.constants import MESES_ES
+    from students.models import Parent
 
     try:
         # The email filter goes INSIDE the prefetch, same as
@@ -727,7 +837,7 @@ def send_enrollment_confirmation_task(self, enrollment_id: int, attachments_path
             student_name=student.full_name,
             gender=student.gender,
             academic_year=academic_year,
-            month=MONTHS_ES[enrollment.enrollment_date.month - 1],
+            month=MESES_ES[enrollment.enrollment_date.month - 1],
             attachments=attachments if attachments else None,
         )
 
@@ -742,39 +852,13 @@ def send_enrollment_confirmation_task(self, enrollment_id: int, attachments_path
         return {"status": "error", "message": "Enrollment not found"}
 
 
-@shared_task(name="comms.tasks.send_fun_friday_emails_task", bind=True)
-def send_fun_friday_emails_task(
-    self,
-    recipients: list,
-    day_name: str,
-    day_number: int,
-    month: str,
-    start_time: str,
-    end_time: str,
-    activity_description: str,
-    minimum_age=None,
-    maximum_age=None,
-    meeting_point=None,
-):
-    """Send the Fun Friday announcement to every recipient immediately.
-
-    Kept for direct/manual sends; the scheduled path persists a
-    ``FunFridayScheduledSend`` row that ``send_due_fun_friday_emails_task``
-    drains at the right moment (``apply_async(eta=...)`` is NOT used — the
-    ETA is silently ignored under ``CELERY_TASK_ALWAYS_EAGER=True``).
-    """
-    return _send_fun_friday_batch(
-        recipients=recipients,
-        day_name=day_name,
-        day_number=day_number,
-        month=month,
-        start_time=start_time,
-        end_time=end_time,
-        activity_description=activity_description,
-        minimum_age=minimum_age,
-        maximum_age=maximum_age,
-        meeting_point=meeting_point,
-    )
+# NOTE: the old `send_fun_friday_emails_task` (an immediate fan-out taking a raw
+# `recipients` list) was removed. It had NO code callers, but was advertised as
+# the "manual send" path while bypassing the `FunFridayScheduledSend` claim guard
+# (`WHERE sent_at IS NULL`) that `_send_fun_friday_batch` implements below — so
+# anyone following the README could double-mail every family. All sends now go
+# through a persisted `FunFridayScheduledSend` row (drained immediately if its
+# slot has already passed), so the claim guard always applies.
 
 
 def _send_fun_friday_batch(
@@ -789,27 +873,53 @@ def _send_fun_friday_batch(
     maximum_age=None,
     meeting_point=None,
 ) -> dict:
-    """Send one Fun Friday announcement batch. Shared by the direct task and the drain task."""
+    """Send one Fun Friday announcement batch. Shared by the direct task and the drain task.
+
+    ONE SMTP session for the whole announcement: this loop is the academy's
+    largest single batch (every family), and it was paying a TCP+TLS+AUTH
+    handshake per address. Opening the connection is wrapped because `open()`
+    is not `fail_silently` — an unwrapped failure here would abort a drain whose
+    row is already CLAIMED, i.e. lose the announcement outright.
+    """
     from comms.services.email_functions import send_fun_friday_email
+    from comms.services.email_service import email_service
+
+    connection = None
+    try:
+        connection = email_service.open_connection()
+        connection.open()
+    except Exception:
+        logger.exception("Fun Friday batch: SMTP connection could not be opened")
+        return {"status": "failed", "sent": 0, "total": len(recipients)}
 
     sent = 0
-    for email in recipients:
+    try:
+        for index, email in enumerate(recipients, start=1):
+            try:
+                if send_fun_friday_email(
+                    recipients=email,
+                    day_name=day_name,
+                    day_number=day_number,
+                    month=month,
+                    start_time=start_time,
+                    end_time=end_time,
+                    activity_description=activity_description,
+                    minimum_age=minimum_age,
+                    maximum_age=maximum_age,
+                    meeting_point=meeting_point,
+                    connection=connection,
+                ):
+                    sent += 1
+            except Exception:  # noqa: BLE001 — one bad recipient must not abort the batch
+                # Opaque index, not the address: recipient emails are family PII
+                # and Cloud Logging retention outlives the app's own controls
+                # (this file's own rule — see the module docstring on args).
+                logger.exception("Fun Friday email failed for recipient %d of %d", index, len(recipients))
+    finally:
         try:
-            if send_fun_friday_email(
-                recipients=email,
-                day_name=day_name,
-                day_number=day_number,
-                month=month,
-                start_time=start_time,
-                end_time=end_time,
-                activity_description=activity_description,
-                minimum_age=minimum_age,
-                maximum_age=maximum_age,
-                meeting_point=meeting_point,
-            ):
-                sent += 1
-        except Exception:  # noqa: BLE001 — one bad recipient must not abort the batch
-            logger.exception("Fun Friday email failed for %s", email)
+            connection.close()
+        except Exception:
+            logger.exception("Fun Friday batch: SMTP connection could not be closed")
 
     logger.info("Fun Friday emails sent: %d/%d", sent, len(recipients))
     return {"status": "success", "sent": sent, "total": len(recipients)}

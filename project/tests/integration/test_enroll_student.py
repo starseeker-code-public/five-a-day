@@ -18,6 +18,23 @@ from students.models import Student
 pytestmark = pytest.mark.django_db
 
 
+@pytest.fixture(autouse=True)
+def _allow_elapsed_course_start_dates(monkeypatch):
+    """These tests anchor to the ELAPSED 2020-2021 course (see module docstring).
+
+    `EnrollmentForm.clean_start_date` bounds new start dates to the courses
+    currently in play (a typo-year guard), which would reject the anchor —
+    widen the window to include it. The window rule itself is covered in
+    unit/test_enrollment_start_date.py.
+    """
+    from billing.models import relevant_academic_years as _real
+
+    monkeypatch.setattr(
+        "billing.models.relevant_academic_years",
+        lambda reference_date=None: ["2020-2021", *_real(reference_date)],
+    )
+
+
 class TestEnrollStudentEndpoint:
     def test_finishes_current_enrollment_and_bills_from_start_date(
         self,
@@ -28,6 +45,27 @@ class TestEnrollStudentEndpoint:
         enrollment_type_returning_student,
         site_config,
     ):
+        # Prior history must be strictly EARLIER than the new 2020-2021 course:
+        # the fixture's active enrollment is anchored to the CURRENT course,
+        # which is LATER than the elapsed anchor, and `is_returning_student`
+        # counts earlier years only (a future-year enrollment granting the
+        # antiguo-alumno discount was a bug). This finished 2019-2020 row is
+        # what makes the student a genuine returning student here.
+        Enrollment.objects.create(
+            student=student_with_parent,
+            enrollment_type=enrollment_type_returning_student,
+            enrollment_period_start=date(2019, 9, 15),
+            enrollment_period_end=date(2020, 6, 27),
+            academic_year="2019-2020",
+            schedule_type="full_time",
+            payment_modality="monthly",
+            enrollment_amount=Decimal("54.00"),
+            discount_percentage=Decimal("0.00"),
+            final_amount=Decimal("54.00"),
+            status="finished",
+            enrollment_date=date(2019, 9, 1),
+        )
+
         response = authenticated_client.post(
             reverse("enroll_student", args=[student_with_parent.id]),
             {"enrollment_plan": "monthly_full", "start_date": "2020-11-15", "charge_enrollment_fee": "on"},
@@ -45,7 +83,7 @@ class TestEnrollStudentEndpoint:
         new_enrollment = Enrollment.objects.get(id=data["enrollment_id"])
         assert new_enrollment.status == "active"
         assert new_enrollment.enrollment_date == date(2020, 11, 15)
-        # An enrollment for another year exists → returning matrícula category.
+        # An enrollment for an EARLIER year exists → returning matrícula category.
         assert new_enrollment.enrollment_type.name == "returning_student"
 
         # Matrícula: due the last day of the START month, discounted for the

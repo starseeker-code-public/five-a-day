@@ -234,12 +234,15 @@ class TestUpdateEnrollmentModality:
         assert response.status_code == 404
 
     def test_student_not_found(self, authenticated_client):
+        # A missing row is a 404, not a 500: the get_object_or_404 used to sit
+        # inside the view's `except Exception`, which swallowed Http404 (it
+        # subclasses Exception) and converted every stale id into a server error.
         response = authenticated_client.post(
             reverse("update_enrollment_modality", kwargs={"student_id": 99999}),
             data=json.dumps({"payment_modality": "monthly"}),
             content_type="application/json",
         )
-        assert response.status_code == 500
+        assert response.status_code == 404
 
 
 class TestLanguageChequeStudents:

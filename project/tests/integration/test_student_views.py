@@ -409,6 +409,7 @@ class TestSpecialEnrollmentPricing:
             parent,
             group,
             is_special="on",
+            customize_recurring="on",
             manual_amount="35.00",
             special_enrollment_fee="25.00",
         )
@@ -432,7 +433,9 @@ class TestSpecialEnrollmentPricing:
         self, authenticated_client, parent, group, site_config, enrollment_type_special
     ):
         """A special cuota does not imply a special matrícula."""
-        response = self._post(authenticated_client, parent, group, is_special="on", manual_amount="35.00")
+        response = self._post(
+            authenticated_client, parent, group, is_special="on", customize_recurring="on", manual_amount="35.00"
+        )
         assert response.status_code == 302
 
         student = Student.objects.get(first_name="Especial")
@@ -441,6 +444,21 @@ class TestSpecialEnrollmentPricing:
         assert set(
             Payment.objects.filter(student=student, payment_type="monthly").values_list("amount", flat=True)
         ) == {first_period_amount("35.00")}
+
+    def test_special_matricula_only_keeps_the_standard_cuota(
+        self, authenticated_client, parent, group, site_config, enrollment_type_new_student
+    ):
+        """v1.28.2: a special can customise ONLY the matrícula — the cuota stays
+        standard when "Personalizar también la cuota" is left unticked."""
+        response = self._post(authenticated_client, parent, group, is_special="on", special_enrollment_fee="25.00")
+        assert response.status_code == 302
+
+        student = Student.objects.get(first_name="Especial")
+        matricula = Payment.objects.get(student=student, payment_type="enrollment")
+        assert matricula.amount == Decimal("25.00")
+        # Cuota billed at the configured 2-day fee, not hand-set.
+        monthly = Payment.objects.filter(student=student, payment_type="monthly")
+        assert set(monthly.values_list("amount", flat=True)) == {first_period_amount(site_config.full_time_monthly_fee)}
 
     def test_matricula_fee_without_the_special_checkbox_is_rejected(
         self, authenticated_client, parent, group, site_config, enrollment_type_new_student

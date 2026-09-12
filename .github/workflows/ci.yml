@@ -11,6 +11,18 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Least privilege for EVERY job in this file. This was the one workflow with no
+# top-level `permissions:` block, so its jobs ran with whatever the repository
+# default happens to be (historically read/write for everything) — while
+# executing arbitrary code from any pushed branch and from PR head refs:
+# `uv sync`, pytest, ruff plugins, a Docker build. One malicious or merely
+# compromised dependency in that set had a token that could push to a branch or
+# publish a package. Jobs that need more declare it themselves below; note a
+# job-level block REPLACES this one wholesale, so each override must repeat
+# `contents: read` (checkout needs it).
+permissions:
+  contents: read
+
 jobs:
   # ============================================================
   # JOB 1: Lint — Ruff (fast, no DB needed)
@@ -18,9 +30,10 @@ jobs:
   lint:
     name: Lint
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Install uv
         uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d  # v10.0.1
@@ -53,9 +66,10 @@ jobs:
   typecheck:
     name: Type check
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Install uv
         uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d  # v10.0.1
@@ -82,6 +96,7 @@ jobs:
   test:
     name: Tests
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     services:
       postgres:
@@ -99,7 +114,7 @@ jobs:
           --health-retries 5
 
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Install uv
         uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d  # v10.0.1
@@ -179,15 +194,16 @@ jobs:
   docker-build:
     name: Docker build
     runs-on: ubuntu-latest
+    timeout-minutes: 25
 
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f  # v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f  # v3.12.0
 
       - name: Build image (no push)
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a  # v7
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a  # v7.3.0
         with:
           context: .
           push: false
@@ -201,11 +217,13 @@ jobs:
   trivy:
     name: Trivy CVE scan
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
+      contents: read
       security-events: write
 
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Trivy — scan Python dependencies and filesystem
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
@@ -230,6 +248,7 @@ jobs:
   docker-publish:
     name: Publish image & scan
     runs-on: ubuntu-latest
+    timeout-minutes: 40
     needs: [test, docker-build]
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/testing')
     permissions:
@@ -238,20 +257,20 @@ jobs:
       security-events: write
 
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f  # v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f  # v3.12.0
 
       - name: Log in to GHCR
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3.7.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push to GHCR
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a  # v7
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a  # v7.3.0
         with:
           context: .
           push: true
@@ -261,7 +280,7 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Trivy — scan Docker image for OS-level CVEs
+      - name: Trivy — scan Docker image for OS-level CVEs (SARIF, reporting)
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
         with:
           image-ref: ghcr.io/${{ github.repository }}:${{ github.ref_name }}
@@ -274,3 +293,78 @@ jobs:
         uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938  # v4.37.9
         with:
           sarif_file: trivy-image-results.sarif
+
+      # ----------------------------------------------------------
+      # THE GATE. Everything above only REPORTS: a SARIF upload
+      # decorates the Security tab and cannot fail a check, so a
+      # CRITICAL in the runtime layer never once stopped a release.
+      # This job runs on push to main and testing, and its check run
+      # ("Publish image & scan") is inside the set deploy-production's
+      # preflight polls — so a red gate here is what actually prevents
+      # the image from being armed for production.
+      #
+      # Scope of the gate, deliberately narrow:
+      #   · HIGH + CRITICAL only (MEDIUM is noise on a Debian slim base)
+      #   · ignore-unfixed: an advisory with no fixed version available
+      #     cannot be acted on by bumping anything, so blocking on it
+      #     would only teach people to bypass the gate
+      #   · vuln class only — misconfig/secret scanning is not enabled
+      #     here (pip-audit + gitleaks-style checks live elsewhere)
+      # ESCAPE HATCH: add the CVE id to .github/trivyignore with a
+      # one-line reason and an owner — an ignore is then visible in the
+      # diff and in code review, never a silent workflow edit. It is
+      # applied to the GATE only, on purpose: the SARIF upload above
+      # keeps reporting the finding to the Security tab, so an ignored
+      # CVE stays visible rather than disappearing from the record.
+      # ----------------------------------------------------------
+      - name: Trivy — gate (JSON report for the exit check)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
+        with:
+          image-ref: ghcr.io/${{ github.repository }}:${{ github.ref_name }}
+          format: json
+          output: trivy-image-gate.json
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          trivyignores: .github/trivyignore
+          # exit-code stays 0 here: the step must produce the report so the
+          # check below can tell "clean" apart from "the scanner never ran",
+          # which is the whole point of the next step.
+          exit-code: '0'
+
+      - name: Fail the build on HIGH/CRITICAL in the image
+        run: |
+          # A scanner outage must NOT pass silently. The two failure modes are
+          # deliberately distinguished: a missing/unparseable report is an
+          # infrastructure failure (red, "re-run"), findings are a security
+          # failure (red, "fix or ignore explicitly"). An empty file, a
+          # zero-length JSON or an absent Results key are all treated as "the
+          # scan did not happen" — never as "nothing found".
+          if [ ! -s trivy-image-gate.json ]; then
+            echo "::error::Trivy produced no report (missing or empty trivy-image-gate.json). Treating as a FAILED scan, not a clean one — re-run the job."
+            exit 1
+          fi
+          if ! jq -e 'has("Results") or has("SchemaVersion")' trivy-image-gate.json > /dev/null 2>&1; then
+            echo "::error::trivy-image-gate.json is not a Trivy report (scanner error, DB download failure, or rate limit). Treating as a FAILED scan."
+            head -c 600 trivy-image-gate.json
+            exit 1
+          fi
+
+          COUNT=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity == "HIGH" or .Severity == "CRITICAL")] | length' trivy-image-gate.json)
+          echo "HIGH/CRITICAL (fixable) vulnerabilities: $COUNT"
+
+          {
+            echo "### Trivy image gate"
+            echo ""
+            echo "Fixable HIGH/CRITICAL findings: **$COUNT**"
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$COUNT" -gt 0 ]; then
+            jq -r '.Results[]? | . as $r | (.Vulnerabilities[]? | select(.Severity == "HIGH" or .Severity == "CRITICAL")
+                    | "- \(.Severity)  \(.VulnerabilityID)  \(.PkgName) \(.InstalledVersion) → \(.FixedVersion // "no fix")  [\($r.Target)]")' \
+              trivy-image-gate.json | tee -a "$GITHUB_STEP_SUMMARY"
+            echo ""
+            echo "::error::$COUNT fixable HIGH/CRITICAL vulnerabilities in the runtime image. Bump the dependency or the base image digest (Dependabot watches both), or — only with a written reason — add the id to .github/trivyignore."
+            exit 1
+          fi
+          echo "No fixable HIGH/CRITICAL findings." >> "$GITHUB_STEP_SUMMARY"

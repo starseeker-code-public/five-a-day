@@ -26,10 +26,9 @@ It is a DRY RUN unless --apply is given.
 """
 
 import contextlib
-from decimal import ROUND_HALF_UP, Decimal
 
 from django.core.management.base import BaseCommand
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.db.models import Prefetch
 
 from billing.constants import PERIODIC_PAYMENT_TYPES
@@ -176,22 +175,42 @@ class Command(BaseCommand):
                             [m for m, _ in period["months"]],
                             period["fraction"],
                             quarterly,
-                        ).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+                        )
                         concept = PaymentService.period_concept(period, quarterly)
 
                         self.stdout.write(f"  + {student.full_name}: {concept} due {due} — EUR {amount}")
                         if apply_changes:
-                            Payment.objects.create(
-                                student=student,
-                                parent=parent,
-                                enrollment=enrollment,
-                                payment_type=payment_type,
-                                payment_method="transfer",
-                                amount=amount,
-                                payment_status="pending",
-                                due_date=due,
-                                concept=concept,
-                            )
+                            # `have` is scoped to THIS enrollment, but the
+                            # unique_pending_periodic_payment_per_month index is scoped
+                            # to the STUDENT — a pending row from a superseded
+                            # enrollment (a plan change creates a fresh Enrollment and
+                            # leaves the old one's rows attached to it) occupies the
+                            # same month and this create collides with it. That is a
+                            # "month already billed", not a fault: skip it and keep
+                            # repairing, exactly as `schedule_academic_year_payments`
+                            # does. Unhandled, one collision aborted the whole run with
+                            # a raw traceback AFTER earlier enrollments had committed.
+                            try:
+                                with transaction.atomic():
+                                    Payment.objects.create(
+                                        student=student,
+                                        parent=parent,
+                                        enrollment=enrollment,
+                                        payment_type=payment_type,
+                                        payment_method="transfer",
+                                        amount=amount,
+                                        payment_status="pending",
+                                        due_date=due,
+                                        concept=concept,
+                                    )
+                            except IntegrityError:
+                                self.stdout.write(
+                                    self.style.WARNING(
+                                        f"    SKIP: otro pago pendiente de {student.full_name} ya ocupa "
+                                        f"{due.month}/{due.year} (probablemente de una matrícula anterior)."
+                                    )
+                                )
+                                continue
                         created += 1
 
             if not apply_changes:

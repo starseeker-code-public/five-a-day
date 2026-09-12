@@ -10,6 +10,8 @@ from django.views.decorators.http import require_http_methods
 
 from billing import constants
 from billing.models import Enrollment, SiteConfiguration, current_academic_year, relevant_academic_years
+from billing.services.enrollment_service import EnrollmentService
+from core.decorators import admin_required
 from core.models import HistoryLog
 from core.views.password_reset import can_change_own_password, send_password_setup_email
 from students.models import Group, Parent, Student, Teacher
@@ -45,6 +47,7 @@ def gestion_view(request):
 
 
 @require_http_methods(["POST"])
+@admin_required
 def update_site_config(request):
     """API para actualizar la configuración de precios del sitio."""
     try:
@@ -63,26 +66,55 @@ def update_site_config(request):
         if "adult_group_monthly_fee" in data:
             config.adult_group_monthly_fee = Decimal(str(data["adult_group_monthly_fee"]))
 
+        # Only the discount fields the pricing code actually READS. The five
+        # dropped here (old_student_discount, full_year_bonus, half_month_discount,
+        # one_week_discount, three_week_discount) are not rendered by the form and
+        # are consumed by no service/view/task — accepting them let a crafted
+        # payload persist a value nothing would ever apply, and old_student_discount
+        # is visually the twin of the LIVE returning_student_enrollment_discount.
+        # The columns remain (a later migration can drop them); nothing writes them.
         for field in [
             "language_cheque_discount",
             "quarterly_enrollment_discount",
-            "old_student_discount",
             "june_discount",
-            "full_year_bonus",
             "sibling_discount",
-            "half_month_discount",
-            "one_week_discount",
-            "three_week_discount",
             # v1.13 — returning-student enrollment discount (flat €)
             "returning_student_enrollment_discount",
         ]:
             if field in data:
                 setattr(config, field, Decimal(str(data[field])))
 
+        # Datos fiscales (v1.27). `academy_cif` is the one that matters: the tax
+        # certificate asserts IRPF validity and printed no CIF at all, because
+        # `pdf_service._get_academy_info()` read a field that did not exist. These
+        # are the only place in the app they can be corrected.
+        for field in [
+            "academy_name",
+            "academy_cif",
+            "academy_address",
+            "academy_phone",
+            "academy_website",
+        ]:
+            if field in data:
+                # Truncated to the column width rather than left to raise: these
+                # are free text and a 400 on a long address is unhelpful.
+                max_length = SiteConfiguration._meta.get_field(field).max_length
+                setattr(config, field, str(data[field] or "").strip()[:max_length])
+
         # Model.save() skips validators, so a negative fee (or a percentage over
         # 100) used to persist straight through and quietly break every price.
         config.full_clean()
         config.save()
+
+        # Re-derive the EnrollmentType.base_amount_* mirror from the new prices.
+        # `ensure_enrollment_types` is the single writer of that mirror, and only
+        # the seed commands called it — so after a price edit here the admin's
+        # /admin/billing/enrollmenttype/ column showed the OLD matrícula fee until
+        # the next container restart, which its own docstring says exists to make
+        # drift VISIBLE.
+        from billing.services.enrollment_type_service import ensure_enrollment_types
+
+        ensure_enrollment_types(config)
 
         HistoryLog.log("config_updated", "Precios o descuentos actualizados", icon="tune")
 
@@ -102,6 +134,7 @@ def update_site_config(request):
 
 
 @require_http_methods(["POST"])
+@admin_required
 def create_teacher(request):
     """API para crear un nuevo profesor."""
     try:
@@ -189,6 +222,7 @@ def create_teacher(request):
 
 
 @require_http_methods(["POST"])
+@admin_required
 def create_group(request):
     """API para crear un nuevo grupo."""
     try:
@@ -270,6 +304,7 @@ def create_group(request):
         )
 
 
+@require_http_methods(["GET"])
 def api_get_teachers(request):
     """API para obtener lista de profesores activos (para select de grupos)."""
     teachers = Teacher.objects.filter(active=True).order_by("first_name", "last_name")
@@ -278,13 +313,16 @@ def api_get_teachers(request):
 
 
 @require_http_methods(["POST"])
+@admin_required
 def update_enrollment_modality(request, student_id):
     """
     AJAX endpoint to change a student's payment modality (monthly/quarterly).
     Expects JSON body: {"payment_modality": "monthly"|"quarterly"}
     """
+    # Outside the try: Http404 subclasses Exception, and the catch-all turned a
+    # missing student into a 500 (pinned by a test that asserted exactly that).
+    student = get_object_or_404(Student, id=student_id)
     try:
-        student = get_object_or_404(Student, id=student_id)
         data = json.loads(request.body)
         modality = data.get("payment_modality")
 
@@ -294,22 +332,82 @@ def update_enrollment_modality(request, student_id):
                 status=400,
             )
 
-        enrollment = student.enrollments.filter(status="active").first()
+        enrollment = student.enrollments.filter(status="active").select_related("enrollment_type").first()
         if not enrollment:
             return JsonResponse(
                 {"success": False, "error": "No tiene matrícula activa"},
                 status=404,
             )
 
-        enrollment.payment_modality = modality
-        enrollment.save()
+        if modality == enrollment.payment_modality:
+            return JsonResponse(
+                {
+                    "success": True,
+                    "message": f"La modalidad ya era {enrollment.get_payment_modality_display()}.",
+                    "payment_modality": modality,
+                    "payment_modality_display": enrollment.get_payment_modality_display(),
+                }
+            )
+
+        # A hand-priced (`special`) enrollment stores the AGREED price of one
+        # period in `final_amount` — per month, or per quarter. Flipping the
+        # modality without renegotiating the figure turned a €25/month special
+        # into €25 per QUARTER (the generator scales `final_amount` by the
+        # period, as it must). That price change needs a human, not a toggle.
+        if enrollment.is_hand_priced:
+            return JsonResponse(
+                {
+                    "success": False,
+                    "error": (
+                        "Esta matrícula tiene precio especial: su importe es por periodo. "
+                        "Emite una nueva matrícula con el precio acordado en lugar de cambiar la modalidad."
+                    ),
+                },
+                status=400,
+            )
+
+        # The cadence change SUPERSEDES the enrollment instead of mutating it.
+        # Flipping `payment_modality` in place kept the original
+        # `enrollment_date` anchor, so the new cadence's `billing_periods`
+        # reached back over months already COLLECTED under the old one — and the
+        # `(student, payment_type, due month)` idempotency cannot see them,
+        # because `payment_type` is one of its keys. See
+        # `EnrollmentService.change_payment_modality` for the full trace; the
+        # logic lives there because `StudentUpdateView` and `enroll_student` need
+        # the same transition.
+        replacement, effective_start = EnrollmentService.change_payment_modality(student, enrollment, modality)
+        if replacement is None:
+            return JsonResponse(
+                {
+                    "success": False,
+                    "error": (
+                        "No quedan meses sin facturar en este curso, así que el cambio de modalidad "
+                        "no puede aplicarse sin volver a cobrar un mes ya emitido. Cancela los cobros "
+                        "pendientes afectados y vuelve a intentarlo."
+                    ),
+                },
+                status=400,
+            )
+
+        display = replacement.get_payment_modality_display()
+        HistoryLog.log(
+            "enrollment_modality_changed",
+            f"Modalidad cambiada a {display}: {student.full_name} (desde {effective_start.strftime('%d/%m/%Y')})",
+            icon="published_with_changes",
+        )
 
         return JsonResponse(
             {
                 "success": True,
-                "message": f"Modalidad cambiada a {enrollment.get_payment_modality_display()}.",
+                # The effective date is reported, never assumed: it is the first
+                # month not already invoiced, which is not always today's month.
+                "message": (
+                    f"Modalidad cambiada a {display}, con efecto desde el {effective_start.strftime('%d/%m/%Y')}."
+                ),
                 "payment_modality": modality,
-                "payment_modality_display": enrollment.get_payment_modality_display(),
+                "payment_modality_display": display,
+                "enrollment_id": replacement.id,
+                "effective_start": effective_start.isoformat(),
             }
         )
 

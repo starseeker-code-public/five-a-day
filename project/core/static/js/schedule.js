@@ -56,13 +56,11 @@ document.addEventListener('DOMContentLoaded', function () {
         return `rgb(${Math.round(r*0.55)},${Math.round(g*0.55)},${Math.round(b*0.55)})`;
     }
 
-    // Escapes quotes too: these values land inside double-quoted style/HTML
-    // attributes, where a bare `"` would close the attribute early.
-    function esc(s) {
-        return String(s)
-            .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
-            .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
-    }
+    // base.js owns the one escaping primitive for the app (it escapes quotes
+    // too, which matters here because these values land inside double-quoted
+    // style/HTML attributes where a bare `"` closes the attribute early). This
+    // file used to carry a byte-identical copy.
+    const esc = window.escapeHtml;
 
     const DAY_NAMES = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes'];
     const COLS = 2;
@@ -127,19 +125,28 @@ document.addEventListener('DOMContentLoaded', function () {
         end: FRIDAY_TIMES[`${FUN_FRIDAY_ROW}-${FUN_FRIDAY_COL}`].end,
     };
 
-    // ── CSRF helper ─────────────────────────────────────────────
-    function getCsrf() {
-        return document.querySelector('[name=csrfmiddlewaretoken]')?.value
-            || document.cookie.split(';').map(c=>c.trim()).find(c=>c.startsWith('csrftoken='))?.split('=')[1]
-            || '';
-    }
-
     // ── Save slot via API ───────────────────────────────────────
+    // CSRF token + status check come from base.js (window.CSRF_TOKEN /
+    // window.apiFetch); this file used to carry its own copy of both.
     function saveSlot(row, day, col, groupId) {
-        fetch('/api/schedule/slot/save/', {
+        // The dropped promise here made a failed save INVISIBLE: a session that
+        // expired mid-session (302 to /login/) or a stale CSRF token (403) still
+        // left the grid showing the new group, so the timetable emailed to
+        // parents reflected an assignment the server never stored. Surface the
+        // failure and tell the user their change did not save.
+        return window.apiFetch('/api/schedule/slot/save/', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCsrf() },
             body: JSON.stringify({ row, day, col, group_id: groupId }),
+        })
+        .then(data => {
+            if (!data || data.success !== true) {
+                const e = new Error('save failed');
+                e.userMessage = (data && (data.error || data.message)) || 'No se pudo guardar el horario.';
+                throw e;
+            }
+        })
+        .catch(err => {
+            alert(window.apiErrorMessage(err) + ' El horario no se ha guardado; recarga la página y vuelve a intentarlo.');
         });
     }
 
@@ -212,7 +219,10 @@ document.addEventListener('DOMContentLoaded', function () {
                 th.className = 'bg-neutral-50 border-b border-neutral-200 p-3 text-center';
                 if (i < 4) th.classList.add('border-r');
                 th.style.width = 'calc((100% - 56px) / 5)';
-                th.innerHTML = '<span style="font-size:1.1375rem;font-weight:600;color:var(--sched-strong);">' + name + '</span>';
+                // esc() even though DAY_NAMES is a local constant: one raw hole
+                // in a string of escaped ones is how the next edit (a group
+                // name, a teacher name) lands unescaped.
+                th.innerHTML = '<span style="font-size:1.1375rem;font-weight:600;color:var(--sched-strong);">' + esc(name) + '</span>';
                 headerRow.appendChild(th);
             });
         }
@@ -228,8 +238,8 @@ document.addEventListener('DOMContentLoaded', function () {
             if (row < NUM_ROWS - 1) timeTd.style.borderBottom = '1px solid var(--sched-border)';
             timeTd.style.borderRight = '1px solid var(--sched-border)';
             timeTd.innerHTML =
-                '<span style="display:block;font-size:14.3px;font-weight:600;color:var(--sched-ink);line-height:1.2;">' + ROW_TIMES[row].start + '</span>' +
-                '<span style="display:block;font-size:13px;color:var(--sched-dim);line-height:1.2;margin-top:2px;">' + ROW_TIMES[row].end + '</span>';
+                '<span style="display:block;font-size:14.3px;font-weight:600;color:var(--sched-ink);line-height:1.2;">' + esc(ROW_TIMES[row].start) + '</span>' +
+                '<span style="display:block;font-size:13px;color:var(--sched-dim);line-height:1.2;margin-top:2px;">' + esc(ROW_TIMES[row].end) + '</span>';
             tr.appendChild(timeTd);
 
             let c = 0;
@@ -313,7 +323,7 @@ document.addEventListener('DOMContentLoaded', function () {
                     '<div style="flex:1;min-width:0;">' +
                         '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">' +
                             '<span style="font-size:1.1375rem;font-weight:600;color:' + esc(cellText(g.color)) + ';">' + esc(g.name) + '</span>' +
-                            '<span style="font-size:14.3px;color:var(--sched-dim);font-weight:500;">' + b.start + ' - ' + b.end + '</span>' +
+                            '<span style="font-size:14.3px;color:var(--sched-dim);font-weight:500;">' + esc(b.start) + ' - ' + esc(b.end) + '</span>' +
                             '<span style="font-size:14.3px;color:var(--sched-dim);">·</span>' +
                             '<span style="font-size:14.3px;color:var(--sched-ink);">' + esc(g.teacher) + '</span>' +
                         '</div>' +
@@ -325,7 +335,7 @@ document.addEventListener('DOMContentLoaded', function () {
             w.className = 'bg-white rounded-lg shadow-lg overflow-hidden';
             w.innerHTML =
                 '<button type="button" class="day-toggle w-full px-6 py-4 flex justify-between items-center bg-primary-50 hover:bg-primary-100 transition-colors duration-200 focus:outline-none" data-section="' + sid + '" data-icon="' + iid + '">' +
-                    '<h3 class="text-lg font-semibold text-primary-700">' + dayName + '</h3>' +
+                    '<h3 class="text-lg font-semibold text-primary-700">' + esc(dayName) + '</h3>' +
                     '<span id="' + iid + '" class="material-symbols-outlined text-primary-600" style="transition:transform 0.2s;">expand_more</span>' +
                 '</button>' +
                 '<div id="' + sid + '" class="hidden">' +

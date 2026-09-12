@@ -1,0 +1,129 @@
+{% extends 'base.html' %}
+
+{% block title %}Five a Day - Rematricular antiguos alumnos{% endblock %}
+
+{% block page_title %}Antiguos estudiantes{% endblock %}
+{% block page_subtitle %}Rematricular en lote a alumnos de cursos anteriores{% endblock %}
+
+{% block help_content %}
+<p>Aquí puedes crear una <strong>nueva matrícula</strong> para alumnos que ya estuvieron en la academia y no están matriculados este curso. Marca a los que quieras, elige <strong>una sola vez</strong> el plan, la fecha de inicio y si cobrar matrícula, y se creará una matrícula para cada uno.</p>
+<ul style="list-style:disc;margin:0.4rem 0 0 1.25rem;line-height:1.7;">
+    <li>Todos se tratan como <strong>antiguo alumno</strong> (con su descuento de matrícula si procede).</li>
+    <li>Los alumnos <strong>inactivos</strong> se reactivan automáticamente.</li>
+    <li>Cada alumno se procesa por separado: si uno falla, el resto se matricula igualmente.</li>
+</ul>
+{% endblock %}
+
+{% block content %}
+<div class="max-w-4xl mx-auto">
+    <form method="post" action="{% url 'reenroll_old_students' %}" novalidate>
+        {% csrf_token %}
+
+        <!-- Shared settings -->
+        <div class="bg-white rounded-lg shadow-sm border border-neutral-200 p-6 mb-6">
+            <h3 class="text-lg font-medium text-neutral-700 mb-4">Datos de la matrícula (para todos los seleccionados)</h3>
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div>
+                    <label for="enrollment_plan" class="block text-sm font-medium text-neutral-700 mb-2">Plan</label>
+                    <select id="enrollment_plan" name="enrollment_plan"
+                            class="w-full px-3 py-2 border border-neutral-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500">
+                        {% for value, label in enrollment_plan_choices %}
+                        <option value="{{ value }}">{{ label }}</option>
+                        {% endfor %}
+                    </select>
+                    <p class="text-xs text-neutral-500 mt-1">Los adultos usan su cuota de adulto (el plan no les afecta).</p>
+                </div>
+                <div>
+                    <label for="start_date" class="block text-sm font-medium text-neutral-700 mb-2">Fecha de inicio</label>
+                    <input type="date" id="start_date" name="start_date" value="{{ today }}"
+                           class="w-full px-3 py-2 border border-neutral-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500">
+                    <p class="text-xs text-neutral-500 mt-1">Los pagos se generan desde esta fecha.</p>
+                </div>
+                <div class="flex items-end">
+                    <label class="flex items-center gap-2 text-sm font-medium text-neutral-700 cursor-pointer pb-2">
+                        <input type="checkbox" name="charge_enrollment_fee" class="form-check-input">
+                        Cobrar matrícula
+                    </label>
+                </div>
+            </div>
+        </div>
+
+        <!-- Candidates -->
+        <div class="bg-white rounded-lg shadow-sm border border-neutral-200 overflow-hidden">
+            <div class="px-6 py-4 border-b border-neutral-200 flex items-center justify-between">
+                <h3 class="text-lg font-medium text-neutral-700">Alumnos disponibles</h3>
+                <label class="flex items-center gap-2 text-sm text-neutral-600 cursor-pointer">
+                    <input type="checkbox" id="selectAll" class="form-check-input">
+                    Seleccionar todos
+                </label>
+            </div>
+            {% if candidates %}
+            <div class="overflow-x-auto">
+                <table class="w-full">
+                    <thead class="bg-neutral-50">
+                        <tr>
+                            <th class="px-4 py-3 w-10"></th>
+                            <th class="px-4 py-3 text-left text-sm font-semibold text-primary-700 uppercase tracking-wider">Alumno</th>
+                            <th class="px-4 py-3 text-left text-sm font-semibold text-primary-700 uppercase tracking-wider">Último curso</th>
+                            <th class="px-4 py-3 text-left text-sm font-semibold text-primary-700 uppercase tracking-wider">Grupo</th>
+                            <th class="px-4 py-3 text-center text-sm font-semibold text-primary-700 uppercase tracking-wider">Estado</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-neutral-100">
+                        {% for student in candidates %}
+                        <tr class="hover:bg-neutral-50 transition-colors">
+                            <td class="px-4 py-3 text-center">
+                                <input type="checkbox" name="student_ids" value="{{ student.id }}" class="form-check-input candidate-check">
+                            </td>
+                            <td class="px-4 py-3 text-sm text-neutral-800">
+                                {{ student.full_name }}{% if student.is_adult %} <span class="text-xs text-amber-600">(adulto)</span>{% endif %}
+                            </td>
+                            <td class="px-4 py-3 text-sm text-neutral-500">
+                                {% with last=student.enrollments.all|dictsortreversed:"academic_year"|first %}
+                                    {{ last.academic_year|default:"—" }}
+                                {% endwith %}
+                            </td>
+                            <td class="px-4 py-3 text-sm text-neutral-500">{{ student.group.group_name|default:"—" }}</td>
+                            <td class="px-4 py-3 text-center">
+                                {% if student.active %}
+                                <span class="inline-flex px-2 py-0.5 rounded-full text-xs bg-green-100 text-green-700">Activo</span>
+                                {% else %}
+                                <span class="inline-flex px-2 py-0.5 rounded-full text-xs bg-neutral-100 text-neutral-500">Inactivo</span>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            <div class="px-6 py-4 border-t border-neutral-200 flex justify-end">
+                <button type="submit"
+                        class="bg-primary-500 hover:bg-primary-600 text-white px-6 py-2.5 rounded-md font-semibold flex items-center gap-2 transition-colors">
+                    <span class="material-symbols-outlined text-[20px]">school</span>
+                    Rematricular seleccionados
+                </button>
+            </div>
+            {% else %}
+            <div class="px-6 py-12 text-center text-neutral-500">
+                <span class="material-symbols-outlined text-4xl text-neutral-300">history</span>
+                <p class="mt-2">No hay antiguos alumnos pendientes de matricular este curso.</p>
+            </div>
+            {% endif %}
+        </div>
+    </form>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script nonce="{{ csp_nonce }}">
+    (function () {
+        var selectAll = document.getElementById('selectAll');
+        if (!selectAll) return;
+        selectAll.addEventListener('change', function () {
+            document.querySelectorAll('.candidate-check').forEach(function (cb) {
+                cb.checked = selectAll.checked;
+            });
+        });
+    })();
+</script>
+{% endblock %}

@@ -156,8 +156,13 @@ class StripeService:
 
     def apply_webhook_event(self, event: dict) -> dict:
         """
-        Handle a decoded webhook event dict. Currently reconciles two events:
-          - checkout.session.completed → mark the linked Payment as completed
+        Handle a decoded webhook event dict. Currently reconciles three events:
+          - checkout.session.completed → mark the linked Payment as completed,
+            but ONLY when the session reports the money actually arrived
+            (payment_status "paid") — a SEPA checkout completes days before it
+            settles, and can still fail
+          - checkout.session.async_payment_succeeded → the delayed settlement
+            for those sessions; completes the Payment
           - checkout.session.expired   → wipe the stripe_session_id so a new
                                           link can be issued cleanly
         Anything else is a no-op.
@@ -177,7 +182,7 @@ class StripeService:
         if payment is None:
             return {"status": "ignored", "reason": "no matching payment"}
 
-        if event_type == "checkout.session.completed":
+        if event_type in ("checkout.session.completed", "checkout.session.async_payment_succeeded"):
             # Idempotent: Stripe retries webhooks for up to ~3 days after the
             # first 2xx, so a replay must not overwrite the original
             # payment_date or trigger duplicate receipt emails.
@@ -185,20 +190,61 @@ class StripeService:
                 logger.info("Stripe: payment %s already completed, ignoring replay", payment.id)
                 return {"status": "already_completed", "payment_id": payment.id}
 
+            # `checkout.session.completed` fires when the CHECKOUT finishes, not
+            # when the MONEY arrives. For delayed methods (SEPA débito — the
+            # relevant one in Spain) the session completes with
+            # payment_status="unpaid" days before the charge settles, and settling
+            # can still fail. Marking the row completed here would email a receipt
+            # for money never received. Wait for the async
+            # checkout.session.async_payment_succeeded, which carries "paid".
+            if session.get("payment_status") not in (None, "paid", "no_payment_required"):
+                # Never log the webhook's payment_status raw — it is attacker-
+                # influenced free text and slicing is taint-preserving (CodeQL
+                # log-injection). Resolve it to one of OUR OWN literals so the
+                # value written is never the tainted object.
+                raw_status = session.get("payment_status")
+                status_label = next(
+                    (known for known in ("unpaid", "processing", "requires_action") if known == raw_status),
+                    "otro",
+                )
+                logger.info(
+                    "Stripe: session for payment %s completed but not yet paid (%s); waiting for settlement",
+                    payment.id,
+                    status_label,
+                )
+                return {"status": "awaiting_payment", "payment_id": payment.id}
+
+            # A cancelled/refunded row must stay dead: cancelling freed its month
+            # under the pending-only unique index, so the schedule may already have
+            # re-billed it — completing this one again double-collects the family.
+            # The parent paid a link minted before the cancellation; that needs a
+            # human (refund or re-attach), not a silent resurrection.
+            if payment.payment_status in ("cancelled", "refunded"):
+                # Log a literal, not the field: at this point it is provably one
+                # of the two below, but CodeQL traces payment_status back to the
+                # webhook and flags the interpolation as log-injection.
+                dead_label = "refunded" if payment.payment_status == "refunded" else "cancelled"
+                logger.warning(
+                    "Stripe: session paid for %s payment %s — NOT resurrecting it; review manually",
+                    dead_label,
+                    payment.id,
+                )
+                return {"status": "ignored_dead_payment", "payment_id": payment.id}
+
             payment.payment_status = "completed"
             payment.payment_date = date.today()
             payment.stripe_payment_intent = session.get("payment_intent", "") or ""
             payment.save(update_fields=["payment_status", "payment_date", "stripe_payment_intent", "updated_at"])
             logger.info("Stripe: payment %s marked completed via checkout.session.completed", payment.id)
 
-            # Fire a receipt email so the parent has proof of payment.
+            # Receipt email + Drive archive, through the shared dispatcher that
+            # the admin "marcar cobrado" path also uses — one statement of what a
+            # completion triggers, so a new side effect cannot reach only one of
+            # the two ways a payment gets completed. It never raises.
             # Late import avoids circular imports at module load.
-            try:
-                from comms.tasks import send_payment_receipt_email_task
+            from comms.tasks import dispatch_payment_completed
 
-                send_payment_receipt_email_task.delay(payment.id)
-            except Exception:  # noqa: BLE001 — email is nice-to-have, never fail the webhook
-                logger.exception("Failed to enqueue receipt email for payment %s", payment.id)
+            dispatch_payment_completed(payment.id)
 
             return {"status": "completed", "payment_id": payment.id}
 

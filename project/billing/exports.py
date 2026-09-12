@@ -25,10 +25,28 @@ def _style_header(ws, headers):
         cell.alignment = _CENTER
 
 
+#: Rows sampled when sizing columns. Walking EVERY cell was O(rows×cols) — ~1.7M
+#: len(str()) calls on a full-history payments sheet — for a cosmetic width. The
+#: header plus the first N data rows give a good-enough width at bounded cost.
+_AUTO_WIDTH_SAMPLE_ROWS = 200
+
+
 def _auto_width(ws):
-    for col in ws.columns:
-        max_len = max((len(str(cell.value or "")) for cell in col), default=8)
-        ws.column_dimensions[col[0].column_letter].width = min(max_len + 4, 50)
+    from openpyxl.utils import get_column_letter
+
+    # Cap at the ACTUAL content — `iter_rows(max_row=N)` would otherwise
+    # materialise empty rows up to N and inflate the sheet's max_row.
+    sample_limit = min(_AUTO_WIDTH_SAMPLE_ROWS + 1, ws.max_row)  # +1 for the header row
+    widths: dict[int, int] = {}
+    # iter_rows over the sampled rows only, unlike ws.columns which materialises
+    # every column across every row.
+    for row in ws.iter_rows(min_row=1, max_row=sample_limit):
+        for cell in row:
+            length = len(str(cell.value or ""))
+            if length > widths.get(cell.column, 0):
+                widths[cell.column] = length
+    for col_idx, length in widths.items():
+        ws.column_dimensions[get_column_letter(col_idx)].width = min(length + 4, 50)
 
 
 def _d(d):
@@ -60,7 +78,8 @@ def build_students_sheet(ws):
         ],
     )
     qs = Student.objects.select_related("group").prefetch_related("parents").order_by("last_name", "first_name")
-    for s in qs:
+    # .iterator() streams model rows rather than caching the whole table.
+    for s in qs.iterator(chunk_size=2000):
         parents = list(s.parents.all())
         xlsx_safe_append(
             ws,
@@ -111,7 +130,7 @@ def build_enrollments_sheet(ws):
         ],
     )
     qs = Enrollment.objects.select_related("student", "enrollment_type").order_by("-enrollment_date")
-    for e in qs:
+    for e in qs.iterator(chunk_size=2000):
         xlsx_safe_append(
             ws,
             [
@@ -160,7 +179,7 @@ def build_payments_sheet(ws):
         ],
     )
     qs = Payment.objects.select_related("student", "parent").order_by("-due_date")
-    for p in qs:
+    for p in qs.iterator(chunk_size=2000):
         xlsx_safe_append(
             ws,
             [

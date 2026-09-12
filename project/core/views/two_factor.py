@@ -26,6 +26,7 @@ from django.contrib import messages
 from django.shortcuts import redirect, render
 from django.views.decorators.http import require_http_methods
 
+from core.decorators import admin_required
 from core.rate_limit import rate_limit
 from core.services import two_factor_service as tfs
 
@@ -56,6 +57,7 @@ def _admin_only(view):
 # ── Setup / manage / disable (post-login) ──────────────────────────────────
 
 
+@admin_required
 @_admin_only
 def two_factor_setup(request, teacher):
     """
@@ -114,6 +116,7 @@ def _payload_from_existing(teacher) -> tfs.EnrolmentPayload:
     )
 
 
+@admin_required
 @_admin_only
 def two_factor_manage(request, teacher):
     """
@@ -130,6 +133,22 @@ def two_factor_manage(request, teacher):
             new_codes = tfs.rotate_backup_codes(teacher)
             messages.success(request, "✅ Códigos de respaldo regenerados. Guárdalos ahora.")
         elif action == "disable":
+            # Re-authenticate the SECOND FACTOR before removing it. Without this,
+            # anyone holding a live admin session cookie (an unlocked laptop)
+            # could POST action=disable and then re-enrol 2FA on their own phone
+            # from /two-factor/setup/ (which mints a fresh secret whenever the
+            # stored one is empty) — taking over the admin's second factor with
+            # no password and no code. Every other credential change in the app
+            # re-authenticates first; this is the one that was missing it. A
+            # current TOTP or an unused backup code both satisfy it (a lost
+            # authenticator must still be removable with the backup codes).
+            code = (request.POST.get("code") or "").strip()
+            if not code or not tfs.verify_code(teacher, code):
+                messages.error(
+                    request,
+                    "❌ Introduce un código actual de tu app (o un código de respaldo) para desactivar 2FA.",
+                )
+                return redirect("two_factor_manage")
             tfs.disable(teacher)
             messages.success(request, "✅ 2FA desactivado.")
             return redirect("home")

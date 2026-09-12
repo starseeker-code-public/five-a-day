@@ -50,3 +50,29 @@ class TestSafeLog:
         cleaned = safe_log("x" * 200)
         assert cleaned == "x" * 200
         assert not cleaned.endswith("...")
+
+
+class TestCommsSafeLogParity:
+    """`comms.log_safe.safe_log` is a deliberate byte-for-byte copy of
+    `core.log_safe.safe_log` (comms must not import core), but it is the copy
+    on the LIVE email/SMS error paths — so it must behave identically. The core
+    copy was the only one tested; this pins the comms one too."""
+
+    @pytest.mark.parametrize(
+        "raw,expected_contains_no",
+        [
+            ("user\r\nINFO forged", "\n"),
+            ("user\rINFO forged", "\r"),
+        ],
+    )
+    def test_line_breaks_are_replaced(self, raw, expected_contains_no):
+        from comms.log_safe import safe_log as comms_safe_log
+
+        cleaned = comms_safe_log(raw)
+        assert expected_contains_no not in cleaned
+
+    def test_matches_core_implementation(self):
+        from comms.log_safe import safe_log as comms_safe_log
+
+        for value in ["plain@x.com", 42, None, "a\r\nb", "x" * 500, "x" * 200]:
+            assert comms_safe_log(value) == safe_log(value)

@@ -132,13 +132,15 @@ class TestRateLimitEdgeCases:
         req.META["REMOTE_ADDR"] = "3.3.3.3"
         assert _client_ip(req) == "3.3.3.3"
 
-    def test_client_ip_extracts_the_proxy_appended_hop(self):
+    def test_client_ip_extracts_the_proxy_appended_hop(self, settings):
         """Rightmost hop with one trusted proxy — see test_rate_limit.py for why
-        the leftmost entry is not trustworthy."""
+        the leftmost entry is not trustworthy. TRUSTED_PROXY_COUNT is pinned
+        because the settings default is now 0 outside production."""
         from django.http import HttpRequest
 
         from core.rate_limit import _client_ip
 
+        settings.TRUSTED_PROXY_COUNT = 1
         req = HttpRequest()
         req.META["HTTP_X_FORWARDED_FOR"] = "1.1.1.1, 2.2.2.2"
         assert _client_ip(req) == "2.2.2.2"

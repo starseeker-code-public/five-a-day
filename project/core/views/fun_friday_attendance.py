@@ -20,13 +20,17 @@ def toggle_fun_friday_this_week(request, student_id):
     if student.is_adult:
         return JsonResponse({"success": False, "error": "Adult students cannot participate in Fun Friday"}, status=400)
     friday = get_next_friday()
-    obj = FunFridayAttendance.objects.filter(student=student, date=friday).first()
-    if obj:
+    # get_or_create, not read-then-create: two overlapping POSTs (a double-click —
+    # this endpoint is reachable by non-admin teachers) both saw "no row" and the
+    # second create() hit the (student, date) unique constraint — an unhandled 500
+    # whose HTML error page landed in a fetch() expecting JSON, so the toggle
+    # silently reverted on screen with no error shown.
+    obj, created = FunFridayAttendance.objects.get_or_create(student=student, date=friday)
+    if created:
+        is_this_week = True
+    else:
         obj.delete()
         is_this_week = False
-    else:
-        FunFridayAttendance.objects.create(student=student, date=friday)
-        is_this_week = True
     was_last_week = FunFridayAttendance.objects.filter(student=student, date=get_last_friday()).exists()
     return JsonResponse({"success": True, "is_this_week": is_this_week, "was_last_week": was_last_week})
 

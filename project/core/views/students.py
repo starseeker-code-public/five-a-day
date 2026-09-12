@@ -6,14 +6,18 @@ from django.contrib import messages
 from django.db import transaction
 from django.db.models import Prefetch, Q
 from django.http import HttpResponseRedirect, JsonResponse
-from django.shortcuts import get_object_or_404
+from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse, reverse_lazy
+from django.utils.decorators import method_decorator
 from django.views.decorators.http import require_http_methods
 from django.views.generic import CreateView, DetailView, ListView, UpdateView
 
 from billing.forms import EnrollmentForm
 from billing.models import Enrollment, Payment, SiteConfiguration, relevant_academic_years
+from core.date_utils import first_day_of_next_month
+from core.decorators import admin_required
 from core.models import FunFridayAttendance, HistoryLog
+from core.transactions import students_on_the_roll
 from students.forms import StudentForm
 from students.models import Group, Parent, Student
 
@@ -63,7 +67,20 @@ def _create_enrollment_fee_payment(student, parent, enrollment, enrollment_form)
     start = enrollment.enrollment_date or date.today()
     due_date = date(start.year, start.month, calendar.monthrange(start.year, start.month)[1])
 
-    Payment.objects.create(
+    # A fully discounted matrícula (fee minus returning-student discount can reach
+    # 0.00) means there is nothing to collect — creating a €0.00 pending Payment
+    # would bypass `Payment.amount`'s MinValueValidator (objects.create() never
+    # validates), sit on the ficha as an uncollectable debt, and be chased by the
+    # reminder cron forever.
+    if enrollment_fee <= Decimal("0.00"):
+        logger.info(
+            "Matrícula for student %d is fully discounted (%.2f); no enrollment-fee payment created.",
+            int(student.pk),
+            enrollment_fee,
+        )
+        return enrollment_fee
+
+    payment = Payment(
         student=student,
         parent=parent,
         enrollment=enrollment,
@@ -75,9 +92,51 @@ def _create_enrollment_fee_payment(student, parent, enrollment, enrollment_form)
         due_date=due_date,
         concept=concept,
     )
+    # `objects.create()` skips validation entirely; run the model's own rules
+    # (amount floor, student-parent relationship) before persisting.
+    payment.full_clean()
+    payment.save()
     return enrollment_fee
 
 
+#: Spanish notice the create page shows when a picker list was capped. The
+#: message lives here rather than in the template so both pickers word it
+#: identically and the cap cannot be stated as one number and applied as another.
+_PICKER_TRUNCATION_NOTICE = "Mostrando solo los primeros {shown} de {total}. Usa el buscador para encontrar el resto."
+
+#: Max rows sent to the sibling picker and the "padre existente" select. Both are
+#: rendered as plain `<option>`/`<div>` lists that filter client-side, so a cap is
+#: the only bound on the response — but an unannounced cap is worse than a big one:
+#: a sibling who falls off the end is simply unfindable, and the family loses the
+#: sibling discount with nothing on screen to explain it. `_PICKER_TRUNCATION_NOTICE`
+#: is what makes the cap honest, and `search_students` is the searchable escape
+#: hatch for a roster past it.
+_PICKER_CAP = 500
+
+
+def _superseding_start(student, current, enrollment_form, parent=None):
+    """Close `current` and return the date the replacement must start on, or None.
+
+    A one-line bridge to ``EnrollmentService.supersede_enrollment``, which owns
+    the transition for all three call sites (this view's plan change,
+    ``enroll_student`` and the modality endpoint). It used to be a private helper
+    HERE, and being a view helper is precisely how it went wrong: it reached for
+    ``schedule_academic_year_payments(current, as_of=new_start - 1 day)`` to
+    close out the old plan, which always issues an enrollment's first period —
+    so the transition month was invoiced in FULL at the old price and the
+    replacement's prorated first period was then silently dropped by the
+    billed-month check. Read the service method for the rule that replaced it.
+
+    The returned date is NOT necessarily the one the admin typed, so the caller
+    must write it back onto the form before creating the replacement.
+    """
+    from billing.services.enrollment_service import EnrollmentService
+
+    requested_start = enrollment_form.cleaned_data.get("start_date") or date.today()
+    return EnrollmentService.supersede_enrollment(student, current, requested_start=requested_start, parent=parent)
+
+
+@method_decorator(admin_required, name="dispatch")
 class StudentCreateView(CreateView):
     """
     Vista para crear un nuevo estudiante.
@@ -87,6 +146,32 @@ class StudentCreateView(CreateView):
     model = Student
     form_class = StudentForm
     template_name = "student_create.html"
+
+    def get_form_kwargs(self):
+        """Tell `StudentForm` this is a waiting-list save, because it cannot see it.
+
+        `GroupCapacityMixin.clean()` exempts a waiting-list entry from
+        `Group.max_students`, and it reads the exemption off `is_waiting` in
+        `cleaned_data`. This view is the one caller where that flag is not in the
+        submitted data at all: the waiting mode arrives as `?mode=waiting` in the
+        QUERY STRING and `student_create.html` never renders the checkbox. So the
+        form saw `is_waiting=False`, applied the cap, and refused to create the
+        entry — for a group being full, which is the normal reason a student goes
+        on the list in the first place.
+
+        The POST value is checked too, and first, because `form_valid` derives
+        `is_waiting_mode` from the same pair: a mismatch between the two would
+        mean the form validated one intent and the view saved the other.
+        """
+        kwargs = super().get_form_kwargs()
+        kwargs["waiting"] = self._is_waiting_request()
+        return kwargs
+
+    def _is_waiting_request(self):
+        """One reading of the waiting-mode intent, shared by `get_form_kwargs` and
+        `form_valid` so the form can never validate one intent while the view
+        saves the other."""
+        return self.request.POST.get("is_waiting") in ("on", "true", "1") or self.request.GET.get("mode") == "waiting"
 
     def get_waiting_entry(self):
         """Waiting-list entry this enrollment came from (`?from_waiting=<id>`), if any."""
@@ -134,7 +219,23 @@ class StudentCreateView(CreateView):
                 messages.error(self.request, "El padre especificado no existe")
 
         if mode == "existing_parent":
-            context["all_parents"] = Parent.objects.all().order_by("last_name", "first_name")
+            # Was an unbounded `Parent.objects.all()`: one edit away from
+            # rendering every family on a 2,000-student roll into a single
+            # `<select>`. `.only()` names EXACTLY what `student_create.html` reads
+            # (`full_name` from the two name columns, plus email and phone) —
+            # deferring a field the template touches would cost one query per
+            # parent, which is the opposite of the point.
+            parents = Parent.objects.only("id", "first_name", "last_name", "email", "phone").order_by(
+                "last_name", "first_name"
+            )
+            total_parents = parents.count()
+            context["all_parents"] = list(parents[:_PICKER_CAP])
+            context["all_parents_total"] = total_parents
+            context["all_parents_notice"] = (
+                _PICKER_TRUNCATION_NOTICE.format(shown=_PICKER_CAP, total=total_parents)
+                if total_parents > _PICKER_CAP
+                else ""
+            )
 
         waiting_entry = self.get_waiting_entry()
         if "enrollment_form" not in context:
@@ -150,10 +251,15 @@ class StudentCreateView(CreateView):
         context["groups"] = Group.objects.filter(active=True)
         context["waiting_entry"] = waiting_entry
 
+        from billing.services.pricing_service import PricingService
+
         config = SiteConfiguration.get_config()
-        # Quarterly = 3 * full_time - 5%
+        # Quarterly = 3 * full_time - discount%. Through PricingService — this
+        # strike-through widget is what the admin sanity-checks the price against,
+        # so it must be the same derivation the advertised prices use, not a
+        # fourth hand-rolled copy of the formula.
         quarterly_gross = config.full_time_monthly_fee * 3
-        quarterly_price = quarterly_gross * (1 - config.quarterly_enrollment_discount / 100)
+        quarterly_price = PricingService.calculate_quarterly_price(config)
         context["price_config"] = {
             "monthly_full": str(config.full_time_monthly_fee),
             "monthly_part": str(config.part_time_monthly_fee),
@@ -173,11 +279,14 @@ class StudentCreateView(CreateView):
         # First-period proration. A student joining part-way through a month pays
         # only the remaining days OF THAT MONTH, so the first fee differs from the
         # recurring one and the form has to say so before the admin saves.
-        from billing.models import current_academic_year
+        from billing.models import enrollment_academic_year
         from billing.services.payment_service import MONTH_NAMES_ES, PaymentService
 
         today = date.today()
-        sequence = PaymentService.teaching_months(current_academic_year(today))
+        # Same year rule the enrollment itself will be stamped with — a 15 May
+        # signup attends the RUNNING course, so its first period is May, not the
+        # September of the next course. `student-create.js` mirrors this.
+        sequence = PaymentService.teaching_months(enrollment_academic_year(today))
         first = next(((m, y) for m, y in sequence if PaymentService._last_day(m, y) >= today), None)
         if first is not None:
             first_month, first_year = first
@@ -190,9 +299,24 @@ class StudentCreateView(CreateView):
             context["first_period_label"] = ""
             context["first_period_is_partial"] = False
 
-        # Students for sibling search (active, current year)
-        context["all_students_for_sibling"] = (
-            Student.objects.filter(active=True).select_related("group").order_by("first_name", "last_name")[:200]
+        # Students for sibling search (active). The list was silently capped at
+        # 200 with nothing said about it: past that roster size a sibling simply
+        # could not be found in the picker, the admin left "Descuento hermano"
+        # unticked, and the family lost the discount every month for the year —
+        # a mis-bill with no error message anywhere. The cap is now announced,
+        # and `search_students` (already an endpoint, used by the payment form)
+        # is the searchable route past it.
+        sibling_candidates = (
+            Student.objects.filter(active=True).select_related("group").order_by("first_name", "last_name")
+        )
+        sibling_total = sibling_candidates.count()
+        context["all_students_for_sibling"] = list(sibling_candidates[:_PICKER_CAP])
+        context["sibling_candidates_total"] = sibling_total
+        context["sibling_search_url"] = reverse("search_students")
+        context["sibling_list_notice"] = (
+            _PICKER_TRUNCATION_NOTICE.format(shown=_PICKER_CAP, total=sibling_total)
+            if sibling_total > _PICKER_CAP
+            else ""
         )
 
         return context
@@ -200,9 +324,7 @@ class StudentCreateView(CreateView):
     def form_valid(self, form):
         from comms.tasks import send_welcome_email_task
 
-        is_waiting_mode = (
-            self.request.POST.get("is_waiting") in ("on", "true", "1") or self.request.GET.get("mode") == "waiting"
-        )
+        is_waiting_mode = self._is_waiting_request()
         is_adult_mode = self.request.POST.get("is_adult_mode") == "true"
 
         # For waiting-list students we skip the enrollment form entirely — no
@@ -313,7 +435,11 @@ class StudentCreateView(CreateView):
                             enrollment_id=_enrollment_id,
                         )
                     except Exception:
-                        pass  # never fail the request over email dispatch
+                        # Never fail the request over email dispatch — but DO
+                        # record it, unlike the sibling helpers _queue_payment_receipt
+                        # and send_portal_temporary_password which log. A silent
+                        # `pass` left an unsent welcome email with no trace at all.
+                        logger.exception("Failed to enqueue welcome email for student %s", _student_id)
 
                 transaction.on_commit(_queue_welcome)
 
@@ -369,19 +495,11 @@ class StudentListView(ListView):
     context_object_name = "students"
 
     def get_queryset(self):
-        # Both cohorts during the May–August overlap: students finishing the
-        # running course and those already enrolled for the next one. Filtering
-        # on one year alone makes half the academy vanish from the list.
-        academic_years = relevant_academic_years()
+        # `students_on_the_roll` carries the "studying this course" rule — both
+        # cohorts during the May–August overlap included, or half the academy
+        # vanishes from the list for four months of every year.
         queryset = (
-            Student.objects.filter(
-                active=True,
-                is_waiting=False,
-                enrollments__academic_year__in=academic_years,
-            )
-            .distinct()
-            .select_related("group")
-            .prefetch_related("parents", "enrollments__enrollment_type")
+            students_on_the_roll().select_related("group").prefetch_related("parents", "enrollments__enrollment_type")
         )
 
         search_query = self.request.GET.get("search", "").strip()
@@ -430,6 +548,7 @@ class StudentListView(ListView):
         return context
 
 
+@method_decorator(admin_required, name="dispatch")
 class StudentUpdateView(UpdateView):
     """Vista para actualizar un estudiante existente"""
 
@@ -461,10 +580,33 @@ class StudentUpdateView(UpdateView):
                     initial["enrollment_plan"] = "monthly_part"
                 else:
                     initial["enrollment_plan"] = "monthly_full"
-                initial["discount"] = str(int(enrollment.discount_percentage))
                 initial["has_language_cheque"] = enrollment.has_language_cheque
                 initial["is_sibling_discount"] = enrollment.is_sibling_discount
-            context["enrollment_form"] = EnrollmentForm(self.request.POST or None, initial=initial)
+                # Pre-fill the price fields from the live enrollment. Without these,
+                # the form rendered its field DEFAULTS (start_date = today, special
+                # unticked), so `_enrollment_plan_changed` could not compare them —
+                # and an edit that only changed "Precio especial" or the start date
+                # was a silent no-op reported as success.
+                initial["start_date"] = enrollment.enrollment_date
+                is_special_now = enrollment.is_hand_priced
+                initial["is_special"] = is_special_now
+                if is_special_now:
+                    # `customize_recurring` is implied by a pre-filled
+                    # `manual_amount` and ticked by EnrollmentForm.__init__ — the
+                    # form owns that invariant, because forgetting it here made
+                    # every save of a hand-priced student's ficha a silent no-op.
+                    #
+                    # Pre-fill the MANUAL BASE (`enrollment_amount`), never
+                    # `final_amount`: the final figure already carries the sibling /
+                    # cheque discounts, and a re-issue runs `_apply_discounts` again —
+                    # round-tripping the discounted figure compounded the discount on
+                    # every plan/start-date change (50 → 47.50 → 45.13).
+                    initial["manual_amount"] = enrollment.enrollment_amount
+            context["enrollment_form"] = EnrollmentForm(
+                self.request.POST or None,
+                initial=initial,
+                current_start=enrollment.enrollment_date if enrollment else None,
+            )
 
         context["parents"] = self.object.parents.all()
         context["groups"] = Group.objects.filter(active=True)
@@ -492,9 +634,29 @@ class StudentUpdateView(UpdateView):
         # the plan widget, so compare only the discount flags for them.
         if current.schedule_type != "adult_group" and (current.payment_modality, current.schedule_type) != wanted:
             return True
-        return current.has_language_cheque != bool(
-            data.get("has_language_cheque")
-        ) or current.is_sibling_discount != bool(data.get("is_sibling_discount"))
+        if current.has_language_cheque != bool(data.get("has_language_cheque")) or current.is_sibling_discount != bool(
+            data.get("is_sibling_discount")
+        ):
+            return True
+
+        # Price fields the edit form also submits. Comparing only the plan meant
+        # ticking "Precio especial" + typing €25 returned False here, no new
+        # enrollment was issued, and the page still said "actualizado
+        # exitosamente" while the generator kept billing the standard rate.
+        current_is_special = current.is_hand_priced
+        wants_special = bool(data.get("is_special") and data.get("manual_amount"))
+        if current_is_special != wants_special:
+            return True
+        # Compare against the MANUAL BASE the admin typed (`enrollment_amount`),
+        # matching the pre-fill above — `final_amount` is the discounted figure,
+        # so comparing it flagged every discounted special as "price changed".
+        if wants_special and data.get("manual_amount") != current.enrollment_amount:
+            return True
+
+        # The form pre-fills start_date from the live enrollment, so a changed
+        # value here is the admin deliberately moving the start.
+        start = data.get("start_date")
+        return bool(start and current.enrollment_date and start != current.enrollment_date)
 
     def form_valid(self, form):
         from billing.services.enrollment_service import EnrollmentService
@@ -505,9 +667,20 @@ class StudentUpdateView(UpdateView):
         is_waiting_now = form.cleaned_data.get("is_waiting", False)
         student_pk = self.object.pk if self.object else None
 
+        current = None
+        if student_pk:
+            current = (
+                Student.objects.get(pk=student_pk)
+                .enrollments.filter(status="active")
+                .order_by("-enrollment_date", "-id")
+                .first()
+            )
+
         enrollment_form = None
         if not is_waiting_now:
-            enrollment_form = EnrollmentForm(self.request.POST)
+            enrollment_form = EnrollmentForm(
+                self.request.POST, current_start=current.enrollment_date if current else None
+            )
             if not enrollment_form.is_valid():
                 return self.form_invalid(form)
 
@@ -516,8 +689,17 @@ class StudentUpdateView(UpdateView):
                 student = form.save()
 
                 if is_waiting_now:
-                    # Cancel any active enrollment — the student is off the roster.
-                    EnrollmentService.close_active_enrollments(student, "cancelled")
+                    # Cancel any active enrollment — the student is off the roster —
+                    # and with it the FUTURE months of its recurring schedule.
+                    # Already-taught months (due up to the end of this one) stay
+                    # owed; leaving the future ones pending kept billing and
+                    # chasing a family whose child no longer attends.
+                    EnrollmentService.close_active_enrollments(
+                        student,
+                        "cancelled",
+                        cancel_pending_periodic=True,
+                        cancel_from=first_day_of_next_month(),
+                    )
                 else:
                     # Only re-issue the enrollment when the plan actually
                     # changed. This used to run unconditionally, so saving an
@@ -525,10 +707,46 @@ class StudentUpdateView(UpdateView):
                     # enrollment "finished" and created a duplicate — students
                     # accumulated a new enrollment row per edit, and payments
                     # then attached to whichever one came back first.
-                    current = student.enrollments.filter(status="active").order_by("-enrollment_date", "-id").first()
                     if current is None or self._enrollment_plan_changed(current, enrollment_form):
-                        EnrollmentService.close_active_enrollments(student, "finished")
-                        enrollment_form.create_enrollment(student, is_adult=student.is_adult)
+                        from billing.services.payment_service import PaymentService
+
+                        parent = student.titular_parent()
+                        requested_start = enrollment_form.cleaned_data.get("start_date") or date.today()
+                        effective_start = _superseding_start(student, current, enrollment_form, parent=parent)
+
+                        if effective_start is None:
+                            # Every remaining month of the course is already
+                            # invoiced, so the new plan could only take effect by
+                            # re-billing one. Nothing was written (the service
+                            # resolves the date before it touches anything) and
+                            # the student's own edits above still stand.
+                            messages.warning(
+                                self.request,
+                                "El plan no se ha cambiado: no quedan meses sin facturar en este curso. "
+                                "Cancela los cobros pendientes afectados y vuelve a intentarlo.",
+                            )
+                        else:
+                            # The service decides when the change takes effect —
+                            # the first month no period already invoices, and never
+                            # mid-month while the old plan is still teaching. Write
+                            # it back so `create_enrollment` anchors on the same
+                            # date the old plan was closed against.
+                            enrollment_form.cleaned_data["start_date"] = effective_start
+                            enrollment = enrollment_form.create_enrollment(student, is_adult=student.is_adult)
+                            # Issue the replacement's first period now instead of
+                            # waiting for the 1st-of-month cron: the plan change
+                            # used to leave the ficha with no payment at all under
+                            # the new plan, which reads as "nothing happened".
+                            # Idempotent against the cron.
+                            PaymentService.schedule_academic_year_payments(enrollment, parent)
+
+                            if effective_start != requested_start:
+                                messages.info(
+                                    self.request,
+                                    "El nuevo plan se aplica desde el "
+                                    f"{effective_start.strftime('%d/%m/%Y')}: "
+                                    "los meses anteriores ya estaban facturados con el plan anterior.",
+                                )
 
                 messages.success(
                     self.request,
@@ -546,9 +764,11 @@ class StudentUpdateView(UpdateView):
         return HttpResponseRedirect(self.get_success_url())
 
     def form_invalid(self, form):
-        context = self.get_context_data(form=form)
-        context["enrollment_form"] = EnrollmentForm(self.request.POST)
-        return self.render_to_response(context)
+        # get_context_data already builds the bound enrollment form (with
+        # `current_start`, which the date-window validation needs) — overriding
+        # it here with a bare EnrollmentForm(self.request.POST) would re-validate
+        # without that context and reject an unchanged past start date.
+        return self.render_to_response(self.get_context_data(form=form))
 
 
 class StudentDetailView(DetailView):
@@ -666,6 +886,7 @@ def search_students(request):
 
 
 @require_http_methods(["POST"])
+@admin_required
 def enroll_student(request, student_id):
     """AJAX: issue a NEW enrollment for an existing student (the book icon on the list).
 
@@ -676,6 +897,12 @@ def enroll_student(request, student_id):
     periodic payments from the chosen start date — ``billing_periods`` reads
     ``enrollment.enrollment_date``, so a student re-enrolled today with a
     1 November start is billed from November, not from today.
+
+    The start date is passed through ``EnrollmentService.supersede_enrollment``
+    first, which may move it forward when the outgoing plan is still teaching the
+    month or when that month is already invoiced (see
+    ``PaymentService.transition_start_date``). The date actually used comes back
+    in ``effective_start`` — the caller must not assume it is the one submitted.
 
     Returns ``{"success": bool, ...}`` JSON, like every AJAX endpoint.
     """
@@ -694,21 +921,34 @@ def enroll_student(request, student_id):
     charge_fee = request.POST.get("charge_enrollment_fee") in ("on", "true", "1")
 
     try:
-        from billing.services.enrollment_service import EnrollmentService
         from billing.services.payment_service import PaymentService
 
         with transaction.atomic():
+            # Resolved BEFORE the supersede, which bills the closing
+            # enrollment's unbilled months to the same titular.
+            parent = student.titular_parent()
+
             # One ACTIVE enrollment per student (DB constraint) — the new
             # matrícula supersedes the current one, same as StudentUpdateView
-            # does on a plan change.
-            EnrollmentService.close_active_enrollments(student, "finished")
+            # does on a plan change. The service closes out the old plan's
+            # unbilled months, cancels the schedule the new one replaces, and
+            # returns the date the new one may start from.
+            current = student.enrollments.filter(status="active").order_by("-enrollment_date", "-id").first()
+            effective_start = _superseding_start(student, current, enrollment_form, parent=parent)
+            if effective_start is None:
+                return JsonResponse(
+                    {
+                        "success": False,
+                        "error": (
+                            "No quedan meses sin facturar en este curso para esta matrícula. "
+                            "Cancela los cobros pendientes afectados o elige una fecha de inicio posterior."
+                        ),
+                    },
+                    status=400,
+                )
+            enrollment_form.cleaned_data["start_date"] = effective_start
 
             enrollment = enrollment_form.create_enrollment(student, is_adult=student.is_adult)
-
-            # Adults legitimately have no parent/guardian; for children the
-            # first parent is the titular — same explicit ordering the payment
-            # generators use.
-            parent = None if student.is_adult else student.parents.order_by("id").first()
 
             enrollment_fee = None
             if charge_fee:
@@ -737,5 +977,159 @@ def enroll_student(request, student_id):
             "academic_year": enrollment.academic_year,
             "payments_created": payments_created,
             "enrollment_fee": str(enrollment_fee) if enrollment_fee is not None else None,
+            # Not always the submitted date — see the docstring.
+            "effective_start": effective_start.isoformat(),
         }
     )
+
+
+def _reenroll_candidates(*, for_display=True):
+    """Students eligible for the 'Antiguo estudiante' bulk flow.
+
+    A candidate is any non-waiting student who is NOT already enrolled this
+    academic year — the pool of prior students (usually inactive, but also an
+    active student whose enrollment lapsed) who could be re-enrolled. Waiting-list
+    placeholders are excluded: they are not real students and have their own page.
+
+    `for_display=False` drops the joins the page needs but the POST does not. The
+    POST re-runs this only to re-check the handful of submitted ids against the
+    candidacy rule, and on a roll near this academy's ceiling the display
+    prefetch pulled every candidate's entire enrollment history to answer a
+    question about three students.
+    """
+    academic_years = relevant_academic_years()
+    enrolled_ids = Enrollment.objects.filter(status="active", academic_year__in=academic_years).values_list(
+        "student_id", flat=True
+    )
+    candidates = Student.objects.filter(is_waiting=False).exclude(id__in=enrolled_ids)
+    if for_display:
+        candidates = candidates.select_related("group").prefetch_related("enrollments")
+    return candidates.order_by("first_name", "last_name")
+
+
+@require_http_methods(["GET", "POST"])
+@admin_required
+def reenroll_old_students(request):
+    """Re-enroll one or more prior ("antiguo") students in one action.
+
+    The 4th "Nuevo Estudiante" option. Pick existing students from the list,
+    choose the plan / start date / whether to charge the matrícula ONCE, and a
+    new enrollment is created for each — every one treated as a returning student
+    (the antiguo-alumno matrícula). Inactive students are reactivated. Each
+    student is committed in its own transaction so one failure does not lose the
+    rest; the response reports how many succeeded and names any that did not.
+    """
+    from billing.services.payment_service import PaymentService
+
+    if request.method == "GET":
+        # The plan list comes from the form that validates the POST, not from a
+        # second copy typed into the template — those had already forked on the
+        # labels, and a plan added to `ENROLLMENT_PLAN_CHOICES` would never have
+        # appeared here.
+        from billing.forms import ENROLLMENT_PLAN_CHOICES
+
+        return render(
+            request,
+            "reenroll_old.html",
+            {
+                "candidates": _reenroll_candidates(),
+                "today": date.today().isoformat(),
+                "enrollment_plan_choices": ENROLLMENT_PLAN_CHOICES,
+            },
+        )
+
+    ids = request.POST.getlist("student_ids")
+    if not ids:
+        messages.error(request, "Selecciona al menos un alumno para matricular.")
+        return redirect("reenroll_old_students")
+
+    # The plan / start date / matrícula choice is shared by every selected
+    # student, so validate it ONCE with a throwaway form (a child form: adults
+    # ignore the plan anyway). is_returning_student is forced on — the whole
+    # point of this flow is the antiguo-alumno matrícula.
+    shared = EnrollmentForm(
+        {
+            "enrollment_plan": request.POST.get("enrollment_plan", "monthly_full"),
+            "start_date": request.POST.get("start_date") or "",
+            "is_returning_student": "on",
+        }
+    )
+    if not shared.is_valid():
+        error_text = " ".join(msg for errors in shared.errors.values() for msg in errors)
+        messages.error(request, error_text or "Datos de matrícula no válidos.")
+        return redirect("reenroll_old_students")
+
+    charge_fee = request.POST.get("charge_enrollment_fee") in ("on", "true", "1")
+
+    # Re-resolve candidates so a stale checkbox can't enrol a student who was
+    # already enrolled in another tab since the page loaded. Narrowed to the
+    # submitted ids: the candidacy rule is still applied (it is the queryset's
+    # own filter), but the whole pool no longer has to be fetched to check three.
+    try:
+        requested_ids = {int(raw) for raw in ids}
+    except (TypeError, ValueError):
+        messages.error(request, "Selección de alumnos no válida.")
+        return redirect("reenroll_old_students")
+
+    selectable = {s.id: s for s in _reenroll_candidates(for_display=False).filter(id__in=requested_ids)}
+
+    created, skipped, failed = 0, 0, []
+    for raw_id in requested_ids:
+        student = selectable.get(raw_id)
+        if student is None:
+            skipped += 1
+            continue
+        try:
+            with transaction.atomic():
+                parent = student.titular_parent()
+
+                # A lapsed student usually still carries an ACTIVE enrollment from
+                # a prior course (nothing finishes enrollments at year end), and
+                # `unique_active_enrollment_per_student` is year-blind — so the old
+                # row has to be closed before the new one can exist.
+                #
+                # Through `supersede_enrollment`, exactly like the single-student
+                # "Nueva matrícula" modal and the plan-change paths. Closing the
+                # enrollment by hand here skipped `close_out_periods`, and
+                # `generate_payments` visits only ACTIVE enrollments — so any month
+                # the old plan taught and never invoiced became structurally
+                # unbillable the instant this view finished it, with no back-fill
+                # able to reach it. It also returns the date the new enrollment may
+                # safely start from, which is not always the one the admin typed.
+                current = student.enrollments.filter(status="active").order_by("-enrollment_date", "-id").first()
+                effective_start = _superseding_start(student, current, shared, parent=parent)
+                if effective_start is None:
+                    # Every remaining month of the course is already invoiced;
+                    # nothing was written. Re-billing them is the one outcome worse
+                    # than not re-enrolling today.
+                    skipped += 1
+                    continue
+                shared.cleaned_data["start_date"] = effective_start
+
+                # Only now that the enrollment is going ahead — a student we
+                # refused above must not be left reactivated with no matrícula.
+                if not student.active:
+                    student.active = True
+                    student.save(update_fields=["active", "updated_at"])
+
+                enrollment = shared.create_enrollment(student, is_adult=student.is_adult)
+                if charge_fee:
+                    _create_enrollment_fee_payment(student, parent, enrollment, shared)
+                PaymentService.schedule_academic_year_payments(enrollment, parent)
+                HistoryLog.log(
+                    "student_enrolled",
+                    f"Rematrícula (antiguo alumno): {student.full_name} — {enrollment.academic_year}",
+                    icon="school",
+                )
+            created += 1
+        except Exception:
+            logger.exception("Bulk re-enrollment failed for student %d", int(raw_id))
+            failed.append(student.full_name)
+
+    if created:
+        messages.success(request, f"✅ {created} alumno(s) rematriculado(s) correctamente.")
+    if skipped:
+        messages.info(request, f"{skipped} se omitieron (ya matriculados o sin meses por facturar este curso).")
+    if failed:
+        messages.error(request, "No se pudo matricular a: " + ", ".join(failed))
+    return redirect("students_list")

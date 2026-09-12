@@ -5,25 +5,28 @@ from datetime import date
 from django.http import HttpResponse
 from django.shortcuts import render
 
+from core.decorators import admin_required
 from core.services.analytics_service import dashboard_report
+from core.utils import MAX_QUERY_YEAR, MIN_QUERY_YEAR, safe_int
 
 
 def _parse_month_year(request):
+    """Month/year from the query string, via the shared `safe_int`.
+
+    This was the third hand-rolled copy of that helper — the one `safe_int`'s
+    own docstring says it consolidated — and its semantics were OPPOSITE:
+    it clamped where the others reject, so `?month=13` rendered December here
+    and the current month everywhere else, and `?year=99999` rendered a
+    dashboard for the year 9999. Out-of-range now falls back to today, and
+    the valid year range is the same pair of constants every other view uses.
+    """
     today = date.today()
-    try:
-        month = int(request.GET.get("month") or today.month)
-        year = int(request.GET.get("year") or today.year)
-    except (TypeError, ValueError):
-        month, year = today.month, today.year
-    # Clamp month to 1-12 — anything outside makes queries return empty and
-    # renders a confusing dashboard.
-    month = max(1, min(month, 12))
-    # Clamp the year too: `?year=-1` raised "year -1 is out of range" and a
-    # huge value raised OverflowError, both 500s from a hand-edited URL.
-    year = max(date.min.year, min(year, date.max.year))
+    month = safe_int(request.GET.get("month"), default=today.month, low=1, high=12)
+    year = safe_int(request.GET.get("year"), default=today.year, low=MIN_QUERY_YEAR, high=MAX_QUERY_YEAR)
     return month, year
 
 
+@admin_required
 def reports_view(request):
     """Full-page report dashboard with month/year controls."""
     month, year = _parse_month_year(request)
@@ -39,6 +42,7 @@ def reports_view(request):
     )
 
 
+@admin_required
 def reports_pdf(request):
     """Download the current report as a reportlab-rendered PDF.
 

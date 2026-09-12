@@ -241,9 +241,28 @@
                             {% endif %}
                             <a href="{% url 'student_detail' student.id %}"
                                class="inline-flex items-center gap-1 px-3 py-1.5 bg-neutral-100 hover:bg-neutral-200 text-neutral-700 rounded-md text-sm font-medium transition-colors no-underline"
-                               title="Ver ficha">
+                               title="Ver ficha" aria-label="Ver la ficha del estudiante">
                                 <span class="material-symbols-outlined text-sm">visibility</span>
                             </a>
+                            {% if is_admin_user %}
+                            {# A waiting entry is a phone placeholder, not a real student — admins can drop one that never enrols. #}
+                            {% comment %}
+                            data-confirm, not onsubmit: base.js has a delegated handler for it, and an
+                            inline event attribute cannot carry a nonce — under the enforced CSP the
+                            browser drops it, so the confirmation on a destructive delete would
+                            silently disappear.
+                            {% endcomment %}
+                            <form method="post" action="{% url 'remove_from_waiting_list' student.id %}"
+                                  data-confirm="¿Quitar a {{ student.full_name }} de la lista de espera? Esta acción no se puede deshacer."
+                                  style="display:inline;">
+                                {% csrf_token %}
+                                <button type="submit"
+                                        class="inline-flex items-center gap-1 px-3 py-1.5 bg-red-50 hover:bg-red-100 text-red-600 rounded-md text-sm font-medium transition-colors"
+                                        title="Quitar de la lista de espera" aria-label="Quitar de la lista de espera">
+                                    <span class="material-symbols-outlined text-sm">delete</span>
+                                </button>
+                            </form>
+                            {% endif %}
                         </div>
                     </td>
                 </tr>

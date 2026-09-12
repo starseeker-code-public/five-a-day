@@ -27,9 +27,20 @@
                 <h2 class="text-2xl font-bold text-neutral-800 mb-2">{{ student.full_name }}</h2>
                 <p class="text-neutral-600">Estudiante ID: #{{ student.id }}</p>
             </div>
+            {% comment %}
+               Student.birth_date is optional (a waiting-list entry is taken over the
+               phone with a first name and a number) and Student.age returns None for
+               those, which Django renders as the literal "None" — this card read
+               "None años" above a blank date.
+            {% endcomment %}
             <div class="text-right">
+                {% if student.age is not None %}
                 <div class="text-2xl font-bold text-primary-600">{{ student.age }} años</div>
                 <div class="text-sm text-neutral-500">{{ student.birth_date|date:"d/m/Y" }}</div>
+                {% else %}
+                <div class="text-2xl font-bold text-neutral-300" title="Sin fecha de nacimiento">—</div>
+                <div class="text-sm text-neutral-500">Sin fecha de nacimiento</div>
+                {% endif %}
             </div>
         </div>
 
@@ -72,8 +83,8 @@
             <div class="space-y-3 text-sm">
                 <div><span class="font-medium text-neutral-600">Nombre:</span> {{ student.first_name }}</div>
                 <div><span class="font-medium text-neutral-600">Apellidos:</span> {{ student.last_name }}</div>
-                <div><span class="font-medium text-neutral-600">Fecha nacimiento:</span> {{ student.birth_date|date:"d/m/Y" }}</div>
-                <div><span class="font-medium text-neutral-600">Edad:</span> {{ student.age }} años</div>
+                <div><span class="font-medium text-neutral-600">Fecha nacimiento:</span> {{ student.birth_date|date:"d/m/Y"|default:"—" }}</div>
+                <div><span class="font-medium text-neutral-600">Edad:</span> {% if student.age is not None %}{{ student.age }} años{% else %}—{% endif %}</div>
                 {% if student.is_adult %}
                 <div><span class="font-medium text-neutral-600">Email:</span> {{ student.email|default:"—" }}</div>
                 <div><span class="font-medium text-neutral-600">Teléfono:</span> {{ student.phone|default:"—" }}</div>
@@ -123,7 +134,16 @@
                         <th class="px-4 py-3 text-left">Modalidad pago</th>
                         <th class="px-4 py-3 text-left">Curso académico</th>
                         <th class="px-4 py-3 text-left">Fecha alta</th>
-                        <th class="px-4 py-3 text-left">Importe</th>
+                        {% comment %}
+                           `Enrollment.final_amount` is money. student_detail stays
+                           reachable by a non-admin teacher on purpose — the ficha is that
+                           role's core surface (they need the parent's phone number) — but
+                           the financial columns are exactly what the trimmed dashboard
+                           withholds, so the column is dropped rather than blanked (a
+                           header over empty cells reads as broken data). Header and cell
+                           must stay behind the SAME condition or the row misaligns.
+                        {% endcomment %}
+                        {% if is_admin_user %}<th class="px-4 py-3 text-left">Importe</th>{% endif %}
                         <th class="px-4 py-3 text-left">Estado</th>
                         <th class="px-4 py-3 text-left">Extras</th>
                     </tr>
@@ -139,13 +159,19 @@
                                 <span id="modality-label-{{ enrollment.id }}" class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium {% if enrollment.payment_modality == 'monthly' %}bg-blue-100 text-blue-800{% else %}bg-green-100 text-green-800{% endif %}">
                                     {{ enrollment.get_payment_modality_display }}
                                 </span>
+                                {# Admin-only: `update_enrollment_modality` is not in    #}
+                                {# NON_ADMIN_ALLOWED_URL_NAMES, so for a non-admin       #}
+                                {# teacher this was a button that could only ever fail.  #}
+                                {# Changing the modality also re-prices the whole year.  #}
+                                {% if is_admin_user %}
                                 <button type="button" class="modality-toggle-btn text-neutral-400 hover:text-primary-600 transition-colors"
                                         data-enrollment-id="{{ enrollment.id }}"
                                         data-student-id="{{ student.id }}"
                                         data-current="{{ enrollment.payment_modality }}"
-                                        title="Cambiar modalidad">
+                                        title="Cambiar modalidad" aria-label="Cambiar la modalidad de pago">
                                     <span class="material-symbols-outlined text-sm">swap_horiz</span>
                                 </button>
+                                {% endif %}
                             </div>
                             {% else %}
                                 {{ enrollment.get_payment_modality_display }}
@@ -153,7 +179,7 @@
                         </td>
                         <td class="px-4 py-3">{{ enrollment.academic_year }}</td>
                         <td class="px-4 py-3">{{ enrollment.enrollment_date|date:"d/m/Y" }}</td>
-                        <td class="px-4 py-3">€{{ enrollment.final_amount }}</td>
+                        {% if is_admin_user %}<td class="px-4 py-3">€{{ enrollment.final_amount }}</td>{% endif %}
                         <td class="px-4 py-3">{{ enrollment.get_status_display }}</td>
                         <td class="px-4 py-3">
                             <div class="flex gap-1">
@@ -195,7 +221,7 @@
                             {% with today=entry.date %}
                             {% endwith %}
                         </div>
-                        <button data-ff-remove="{{ entry.date|date:'Y-m-d' }}"
+                        <button data-ff-remove="{{ entry.date|date:'Y-m-d' }}" title="Eliminar esta fecha de Fun Friday" aria-label="Eliminar esta fecha de Fun Friday"
                             class="text-neutral-400 hover:text-red-500 transition-colors p-1 rounded">
                             <span class="material-symbols-outlined text-sm">delete</span>
                         </button>
@@ -222,6 +248,15 @@
         </div>
     </div>
 
+    {% comment %}
+       ADMIN-ONLY. `student_detail` is deliberately reachable by a non-admin teacher —
+       the ficha is that role's core surface, they need the parent's phone number — but
+       the whole point of the trimmed non-admin UI is that this role does not see money.
+       Every amount, status and receipt below, plus the "Historial en PDF" download
+       (`student_payments_pdf` is not whitelisted, so it was a dead button too), is
+       financial. The card is removed rather than emptied.
+    {% endcomment %}
+    {% if is_admin_user %}
     <div class="bg-white rounded-lg shadow-lg p-6">
         <div class="flex items-center justify-between flex-wrap gap-3 mb-4">
             <h3 class="text-lg font-semibold text-neutral-800 flex items-center gap-2">
@@ -259,7 +294,7 @@
                         <td class="px-4 py-3">{{ payment.due_date|date:"d/m/Y" }}</td>
                         <td class="px-4 py-3">{% if payment.payment_date %}{{ payment.payment_date|date:"d/m/Y" }}{% else %}—{% endif %}</td>
                         <td class="px-4 py-3">
-                            <a href="{% url 'payment_detail_view' payment.id %}" class="inline-flex p-2 text-primary-600 hover:bg-primary-100 rounded-full transition-all duration-200" style="text-decoration:none;" title="Ver pago"><span class="material-symbols-outlined text-base">visibility</span></a>
+                            <a href="{% url 'payment_detail_view' payment.id %}" class="inline-flex p-2 text-primary-600 hover:bg-primary-100 rounded-full transition-all duration-200" style="text-decoration:none;" title="Ver pago" aria-label="Ver detalle del pago"><span class="material-symbols-outlined text-base">visibility</span></a>
                         </td>
                     </tr>
                     {% empty %}
@@ -271,6 +306,7 @@
             </table>
         </div>
     </div>
+    {% endif %}
 </div>
 {% endblock %}
 

@@ -5,8 +5,91 @@ from students.models import Group, Parent, Student
 
 DATE_INPUT_FORMATS = ["%Y-%m-%d", "%d/%m/%Y"]
 
+#: Shown when `Group.max_students` would be exceeded. Defined once so the app
+#: form and the admin form cannot word the same refusal two ways.
+GROUP_FULL_MESSAGE = "El grupo «{group}» está completo ({places} plazas). Elige otro grupo o amplía el cupo."
 
-class StudentForm(ModelForm):
+#: Non-blocking notice for a duplicate portal email. Used by
+#: `ParentCreateView` (app UI) and by `ParentAdmin.save_model` for a collision
+#: that already existed before the save.
+PORTAL_EMAIL_COLLISION_WARNING = (
+    "Aviso: ya existe otro padre/tutor con ese email. El portal de familias identifica "
+    "a cada familia por su email, así que dos cuentas con el mismo email no podrán entrar "
+    "ni recuperar la contraseña. Usa un email distinto para cada tutor si ambos van a usar el portal."
+)
+
+#: Blocking version, for the admin — where the email is being SET to a value
+#: that already belongs to another family. See `ParentAdminForm.clean_email`.
+PORTAL_EMAIL_COLLISION_ERROR = (
+    "Ya existe otro padre/tutor con este email. El portal de familias identifica a cada "
+    "familia por su email y rechaza una coincidencia ambigua, así que guardarlo dejaría a "
+    "AMBAS familias sin acceso al portal y sin poder recuperar la contraseña. Usa un email "
+    "distinto, o corrige primero el registro duplicado."
+)
+
+
+def validate_group_capacity(group, *, exclude_student_pk=None):
+    """Raise when `group` has no room for one more student.
+
+    Thin wrapper over `Group.has_room_for()` — the predicate lives on the model
+    so the message can live here and both the app form and the admin form can
+    reuse the pair.
+    """
+    if group is None or group.has_room_for(exclude_student_pk=exclude_student_pk):
+        return
+    raise forms.ValidationError(GROUP_FULL_MESSAGE.format(group=group.group_name, places=group.max_students))
+
+
+class GroupCapacityMixin:
+    """Enforce `Group.max_students` on every ModelForm that can set `Student.group`.
+
+    The cap was only ever checked on the `assign_from_waiting_list` GET
+    redirect, so every real write — creating a student, editing one into a
+    different group, the admin — ignored it.
+
+    It lives in `clean()` and NOT in `clean_group()` on purpose. The exemption
+    below depends on `is_waiting`, and Django cleans fields in `Meta.fields`
+    order: `group` comes before `is_waiting`, so inside `clean_group()` the key
+    is not in `cleaned_data` yet, `.get()` returns None and the exemption never
+    fired. The visible cost was that editing an existing waiting-list student
+    was BLOCKED whenever their preferred group was full — which is the normal
+    state of affairs, since students go on the list precisely because the group
+    is full — so even a spelling correction to a name could not be saved.
+    `exclude(pk=...)` did not save it either: a waiting student was never in the
+    occupied queryset to begin with (it filters `is_waiting=False`).
+
+    A waiting-list save is exempt because a waiting entry does not occupy a
+    place. Editing a student who is already IN this group is not blocked by the
+    group being full either — the current occupant is discounted.
+    """
+
+    #: Set by a caller that knows the student will land on the waiting list even
+    #: though the checkbox is not part of the submitted data. `None` means "read
+    #: it off `cleaned_data`", which is right for every form that renders the
+    #: field (the student edit page and the admin both do).
+    waiting = None
+
+    def clean(self):
+        cleaned = super().clean() or self.cleaned_data
+
+        if self._skips_group_capacity(cleaned):
+            return cleaned
+
+        try:
+            validate_group_capacity(cleaned.get("group"), exclude_student_pk=self.instance.pk)
+        except forms.ValidationError as exc:
+            # Attached to `group`, not to the form: the message has to render
+            # beside the select the user must change.
+            self.add_error("group", exc)
+        return cleaned
+
+    def _skips_group_capacity(self, cleaned):
+        if self.waiting is not None:
+            return bool(self.waiting)
+        return bool(cleaned.get("is_waiting"))
+
+
+class StudentForm(GroupCapacityMixin, ModelForm):
     class Meta:
         model = Student
         fields = [
@@ -40,9 +123,28 @@ class StudentForm(ModelForm):
             "is_waiting": "En lista de espera",
         }
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, waiting=None, **kwargs):
+        """`waiting=True` exempts this save from the group-capacity cap.
+
+        For callers whose waiting-list intent is NOT in the submitted data:
+        `StudentCreateView` takes it from `?mode=waiting` in the query string
+        and the create template never renders the checkbox, so the form has no
+        way to see it. Every other caller (the student edit page, the admin)
+        renders the field and can leave this as `None`.
+        """
         super().__init__(*args, **kwargs)
-        self.fields["birth_date"].input_formats = DATE_INPUT_FORMATS
+        if waiting is not None:
+            self.waiting = waiting
+        birth_date = self.fields["birth_date"]
+        birth_date.input_formats = DATE_INPUT_FORMATS
+        # `Student.birth_date` is null/blank on the model — a waiting-list entry
+        # is taken over the phone with a first name and a number — so the field
+        # must not advertise itself as required. Asserted explicitly (rather
+        # than left to the ModelForm default) because the create page printed a
+        # red asterisk beside it, and `Student.age` returning None for these
+        # rows is a supported state, not an accident.
+        birth_date.required = False
+        birth_date.help_text = "Opcional: puede quedar en blanco si aún no se conoce (un alta por teléfono)."
         # `Student.last_name` is blank=True so a waiting-list entry can be taken
         # over the phone without one. The real ficha still demands it.
         self.fields["last_name"].required = True
@@ -165,11 +267,33 @@ class ParentForm(forms.ModelForm):
             "iban": "IBAN (opcional)",
         }
 
+    #: True after `clean_email()` when the submitted address already belongs to
+    #: another Parent row. Read by `ParentCreateView.form_valid` to warn.
+    email_collides_with_other_family = False
+
     def clean_dni(self):
         dni = self.cleaned_data.get("dni", "").upper().strip()
         if dni and len(dni) < 8:
             raise forms.ValidationError("El DNI debe tener al menos 8 caracteres")
         return dni
+
+    def clean_email(self):
+        """DETECT a duplicate portal email — deliberately without rejecting it.
+
+        Raising here would break the second-sibling flow, which re-types the
+        SAME parent (same DNI, therefore the same email) and relies on
+        `ParentCreateView.form_valid` reusing the existing row: an email error
+        would make the form invalid and `form_valid` would never run. Two
+        tutors legitimately sharing one mailbox is also a real case, and this
+        is the phone-call-in-progress screen — so the app UI warns and
+        continues, and the flag is what it warns from. `ParentAdminForm` makes
+        the stricter call for a deliberate admin edit.
+        """
+        email = (self.cleaned_data.get("email") or "").strip()
+        self.email_collides_with_other_family = bool(
+            email and Parent.other_families_sharing_email(email, exclude_pk=self.instance.pk).exists()
+        )
+        return email
 
     def validate_unique(self):
         """Skip the DNI uniqueness check so the view can handle duplicates.

@@ -6,11 +6,13 @@
 {% block page_subtitle %}Registra y categoriza los gastos de la academia{% endblock %}
 
 {% block header_actions %}
-{# TODO: replace the href with the real Google Drive receipts folder URL #}
-<a href="https://drive.google.com/" target="_blank" rel="noopener"
+{# Only shown when GOOGLE_DRIVE_RECEIPTS_URL is configured — otherwise the button pointed at Drive's generic home page (a dead-end that looked functional). #}
+{% if drive_receipts_url %}
+<a href="{{ drive_receipts_url }}" target="_blank" rel="noopener"
    class="header-action-btn bg-primary-500 hover:bg-primary-600 text-white px-6 py-3 rounded-md flex items-center gap-2 transition-all duration-200 transform hover:scale-105 hover:shadow-md text-base font-semibold leading-none no-underline">
     <span class="material-symbols-outlined text-xl">receipt_long</span> Consultar recibos
 </a>
+{% endif %}
 {% endblock %}
 
 {% block help_content %}
@@ -38,8 +40,10 @@
     <li>Más abajo, <strong>Plantillas recurrentes</strong> muestra las reglas activas con su frecuencia. Borrar una plantilla detiene la generación futura de ese gasto.</li>
 </ul>
 
+{% if drive_receipts_url %}
 <h4 style="font-weight:700;margin-top:1rem;">Recibos</h4>
 <p>El botón <strong>Consultar recibos</strong> (cabecera) abre la carpeta de Google Drive donde se guardan los justificantes.</p>
+{% endif %}
 
 <h4 style="font-weight:700;margin-top:1rem;">Consejos</h4>
 <ul style="list-style:disc;margin:0.4rem 0 0 1.25rem;line-height:1.7;">
@@ -247,7 +251,23 @@
                     <td class="px-6 py-3 text-center text-sm">{{ e.get_category_display }}</td>
                     <td class="px-6 py-3 text-right font-medium text-red-500">-{{ e.amount|floatformat:2 }} €</td>
                     <td class="px-6 py-3 text-center whitespace-nowrap">
-                        <button type="button" class="expense-edit-btn text-primary-600 hover:text-primary-800 mr-2" title="Editar"
+                        {% comment %}
+                           Admin-only. `update_expense` and `delete_expense` are NOT in
+                           NON_ADMIN_ALLOWED_URL_NAMES (a destructive financial write held
+                           by the least-privileged role), so for a non-admin teacher these
+                           controls only ever redirect home with a permission flash — a
+                           dead button that reads as a broken feature.
+                           As of v1.27 `expenses_list` itself is out of the whitelist too
+                           (this page IS the monthly P&L, exactly what the trimmed non-admin
+                           dashboard withholds), so a non-admin never reaches the page at
+                           all. These gates are belt-and-braces and still correct: the
+                           middleware whitelist is one edit away from changing, the money
+                           columns on /students/<id>/ are gated the same way, and a template
+                           that only renders controls its viewer can actually use never
+                           needs revisiting when it does.
+                        {% endcomment %}
+                        {% if is_admin_user %}
+                        <button type="button" class="expense-edit-btn text-primary-600 hover:text-primary-800 mr-2" title="Editar" aria-label="Editar gasto"
                                 data-id="{{ e.id }}"
                                 data-description="{{ e.description }}"
                                 data-category="{{ e.category }}"
@@ -263,10 +283,13 @@
                         </button>
                         <form method="post" action="{% url 'delete_expense' e.id %}" data-confirm="¿Eliminar este gasto?" class="inline">
                             {% csrf_token %}
-                            <button type="submit" class="text-red-500 hover:text-red-700" title="Eliminar">
+                            <button type="submit" class="text-red-500 hover:text-red-700" title="Eliminar" aria-label="Eliminar gasto">
                                 <span class="material-symbols-outlined text-sm">delete</span>
                             </button>
                         </form>
+                        {% else %}
+                        <span class="text-xs text-neutral-400">—</span>
+                        {% endif %}
                     </td>
                 </tr>
                 {% empty %}
@@ -304,7 +327,8 @@
                 <td class="py-2 text-center">{{ t.recurring_summary }}</td>
                 <td class="py-2 text-right">{{ t.amount|floatformat:2 }} €</td>
                 <td class="py-2 text-center whitespace-nowrap">
-                    <button type="button" class="expense-edit-btn text-primary-600 hover:text-primary-800 mr-2" title="Editar plantilla"
+                    {% if is_admin_user %}
+                    <button type="button" class="expense-edit-btn text-primary-600 hover:text-primary-800 mr-2" title="Editar plantilla" aria-label="Editar plantilla de gasto"
                             data-id="{{ t.id }}"
                             data-description="{{ t.description }}"
                             data-category="{{ t.category }}"
@@ -320,8 +344,11 @@
                     </button>
                     <form method="post" action="{% url 'delete_expense' t.id %}" data-confirm="¿Eliminar plantilla?" class="inline">
                         {% csrf_token %}
-                        <button type="submit" class="text-red-500 hover:text-red-700"><span class="material-symbols-outlined text-sm">delete</span></button>
+                        <button type="submit" class="text-red-500 hover:text-red-700" title="Eliminar plantilla" aria-label="Eliminar plantilla de gasto"><span class="material-symbols-outlined text-sm">delete</span></button>
                     </form>
+                    {% else %}
+                    <span class="text-xs text-neutral-400">—</span>
+                    {% endif %}
                 </td>
             </tr>
             {% endfor %}
@@ -332,7 +359,12 @@
 
 
 <!-- Edit modal. One form for both a concrete expense and a recurring template;
-     the row's data-* attributes fill it, and it posts to update_expense. -->
+     the row's data-* attributes fill it, and it posts to update_expense.
+     Admin-only, like the triggers above: `update_expense` is not whitelisted
+     for non-admin teachers, so the modal would only produce a rejected POST.
+     expenses.js null-guards every binding so its absence does not abort the
+     script (the recurrence toggling on the create form must keep working). -->
+{% if is_admin_user %}
 <div id="expense-edit-modal" class="fixed inset-0 z-50 hidden items-center justify-center p-4" style="background:rgba(0,0,0,.5);"
      data-update-url-template="{% url 'update_expense' 0 %}"
          role="dialog" aria-modal="true" aria-label="Editar gasto">
@@ -341,7 +373,7 @@
             {% csrf_token %}
             <div class="flex items-center justify-between mb-4">
                 <h3 class="text-lg font-semibold text-neutral-700">Editar gasto</h3>
-                <button type="button" id="expense-edit-close" class="text-neutral-400 hover:text-neutral-700">
+                <button type="button" id="expense-edit-close" class="text-neutral-400 hover:text-neutral-700" title="Cerrar" aria-label="Cerrar">
                     <span class="material-symbols-outlined">close</span>
                 </button>
             </div>
@@ -428,6 +460,7 @@
         </form>
     </div>
 </div>
+{% endif %}
 
 {% block extra_js %}
 {% load static %}

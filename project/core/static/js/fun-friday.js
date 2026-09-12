@@ -3,11 +3,8 @@
 
 const ffStudentList = document.getElementById('ffStudentList');
 
-function getCsrf() {
-    return document.querySelector('[name=csrfmiddlewaretoken]')?.value
-        || document.cookie.split(';').map(c=>c.trim()).find(c=>c.startsWith('csrftoken='))?.split('=')[1]
-        || '';
-}
+// CSRF token + status-checked fetch come from base.js (window.CSRF_TOKEN /
+// window.apiFetch). This file used to carry its own copy of the token reader.
 
 // Dual-flag visibility
 function applyVisibility() {
@@ -42,16 +39,15 @@ function updateFFIcon(btn, isThis, isLast) {
 document.querySelectorAll('.ff-toggle-btn').forEach(btn => {
     btn.addEventListener('click', function() {
         const studentId = this.dataset.studentId;
-        fetch(`/api/students/${studentId}/fun-friday/toggle/`, {
+        window.apiFetch(`/api/students/${studentId}/fun-friday/toggle/`, {
             method: 'POST',
-            headers: {'Content-Type':'application/json','X-CSRFToken':getCsrf()},
             body: '{}',
-        }).then(r=>r.json()).then(data => {
+        }).then(data => {
             if (data.success) {
                 updateFFIcon(this, data.is_this_week, data.was_last_week);
                 applyFFFilter();
             }
-        });
+        }).catch(err => alert(window.apiErrorMessage(err)));
     });
 });
 

@@ -121,7 +121,7 @@ class TestAuthMiddleware:
         assert response.status_code == 200  # Re-renders login page
 
     def test_logout(self, authenticated_client):
-        response = authenticated_client.get(reverse("logout"))
+        response = authenticated_client.post(reverse("logout"))
         assert response.status_code == 302
         # After logout, accessing home should redirect to login
         response = authenticated_client.get(reverse("home"))
@@ -421,14 +421,31 @@ class TestAppFormViews:
 
 class TestEnrollmentAPI:
     def test_update_modality(self, authenticated_client, student, active_enrollment):
+        """A modality change SUPERSEDES the enrollment rather than mutating it.
+
+        Mutating it in place re-billed months already collected under the old
+        cadence: billed-month idempotency is keyed on payment_type, so a
+        completed monthly September was invisible to a newly-anchored quarter
+        and the cron charged it again. The replacement is anchored past every
+        covered month, which is why the cadence now lives on a NEW row and the
+        old one is kept, finished, as the record of what it billed.
+        """
         response = authenticated_client.post(
             reverse("update_enrollment_modality", kwargs={"student_id": student.id}),
             data=json.dumps({"payment_modality": "quarterly"}),
             content_type="application/json",
         )
         assert response.status_code == 200
+
         active_enrollment.refresh_from_db()
-        assert active_enrollment.payment_modality == "quarterly"
+        assert active_enrollment.status == "finished"
+        assert active_enrollment.payment_modality == "monthly", (
+            "the superseded row must keep the cadence it actually billed"
+        )
+
+        replacement = student.enrollments.get(status="active")
+        assert replacement.pk != active_enrollment.pk
+        assert replacement.payment_modality == "quarterly"
 
     def test_update_modality_invalid(self, authenticated_client, student, active_enrollment):
         response = authenticated_client.post(

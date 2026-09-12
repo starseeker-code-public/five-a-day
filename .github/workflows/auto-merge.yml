@@ -4,6 +4,8 @@ name: Auto-merge development → testing
 #   1. development has commits not yet in testing
 #   2. the last commit on development is at least 3h old
 #   3. CI is passing on the latest development commit
+#   4. the version named in the last commit subject (if any) matches pyproject.toml
+#      — a mismatch FAILS the run (red), it does not quietly skip
 # After a successful merge, creates a PR from testing → main (if one doesn't exist).
 
 on:
@@ -16,18 +18,51 @@ permissions:
   pull-requests: write
   checks: read
 
+# This workflow PUSHES a branch and a tag, and opens a PR. Two overlapping runs
+# (the hourly cron plus a manual dispatch, or a cron tick that outlived the
+# hour) would race on all three: the second `git push origin testing` can
+# fast-forward over a merge the first is still tagging, and both would try to
+# create testing-vX.Y.Z. Serialise, and never cancel — a run killed between the
+# push and the tag leaves testing merged with no staging tag, which then fails
+# production's provenance gate.
+concurrency:
+  group: auto-merge-development-testing
+  cancel-in-progress: false
+
+env:
+  # Alert/notification recipient, resolved ONCE with a non-secret last resort.
+  # `SUPPORT_EMAIL || OWNER_EMAILS` alone meant that if neither secret was set
+  # the `to:` field was empty and the alert path itself failed — losing exactly
+  # the message you cannot afford to lose. EMAIL_HOST_USER is the account these
+  # steps already authenticate as, so it is always deliverable when mail works
+  # at all; the academy's real addresses are never written into this public
+  # file. If EMAIL_HOST_USER is missing too, the mailer cannot authenticate at
+  # all and the step fails red — loud, which is the requirement.
+  ALERT_TO: ${{ secrets.SUPPORT_EMAIL || secrets.OWNER_EMAILS || secrets.EMAIL_HOST_USER }}
+
 jobs:
   auto-merge:
     name: Check and merge
     runs-on: ubuntu-latest
+    # Everything here is git plumbing plus a CI-status read; 20 min is
+    # generous. Without a cap a hung `git fetch` or a stuck API call held a
+    # runner for the 6-hour default while the next cron tick queued behind it.
+    timeout-minutes: 20
 
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           fetch-depth: 0
           # Use a PAT so that the push and PR creation trigger downstream CI.
           # Falls back to GITHUB_TOKEN if GH_PAT is not configured.
           token: ${{ secrets.GH_PAT || github.token }}
+          # Do NOT leave the token in .git/config. With the default
+          # (persist-credentials: true) a repo-WRITE PAT sat in the checkout
+          # for the whole job, readable by every later step — including two
+          # `github-script` steps and a third-party mail action. The two steps
+          # that genuinely push supply the credential themselves, for the
+          # length of one command, via http.extraheader.
+          persist-credentials: false
 
       - name: Check merge conditions
         id: conditions
@@ -100,24 +135,46 @@ jobs:
           # see the `env:` blocks on the merge and PR steps.
           LAST_MSG=$(git log origin/development -1 --format="%s")
 
+          # 4. If the commit subject names a version, it must be pyproject's.
+          # A release commit titled "v1.26.8" whose tree carried pyproject
+          # 1.27.0 produced PR #65 with a v1.26.8 title over a v1.27.0 body
+          # and staging tag — a reviewer cannot tell which half to trust.
+          # This is a repo-state ERROR, not a "not yet" state, so it fails
+          # the run loudly instead of the quiet should_merge=false skip.
+          # (The subject is only ever read through the quoted variable, and
+          # SUBJECT_VERSION is regex-constrained to digits and dots.)
+          SUBJECT_VERSION=$(printf '%s' "$LAST_MSG" | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' | head -1 | sed 's/^v//')
+          if [ -n "$SUBJECT_VERSION" ] && [ "$SUBJECT_VERSION" != "$DEV_VERSION" ]; then
+            echo "::error::Last development commit subject names v${SUBJECT_VERSION} but pyproject.toml on development says ${DEV_VERSION}. The subject of the LAST commit becomes the merge message and the release PR title, so fix the mismatch before this can merge: push a commit whose subject carries v${DEV_VERSION}, or correct pyproject.toml with 'make version'."
+            exit 1
+          fi
+
           echo "should_merge=true"    >> "$GITHUB_OUTPUT"
           echo "last_sha=$LAST_SHA"   >> "$GITHUB_OUTPUT"
           echo "new_version=$DEV_VERSION" >> "$GITHUB_OUTPUT"
           echo "old_version=$TESTING_VERSION" >> "$GITHUB_OUTPUT"
-          # Delimiter form: a plain `k=v` line lets a value containing a newline
-          # forge additional outputs. `%s` is a subject line so it cannot contain
-          # one, but this is the shape that is safe by construction.
 
+          # Delimiter form: a plain `k=v` line lets a value containing a newline
+          # forge additional outputs. Two details make this safe by
+          # construction rather than by luck:
+          #   printf '%s\n' — never `echo "$VAR"`. echo eats a leading -n/-e,
+          #     and under a shell where it interprets escapes a subject
+          #     containing \n would inject a line break INTO the heredoc body.
+          #   a run-unique delimiter — a fixed marker is author-guessable, and
+          #     a commit subject containing that exact line would end the block
+          #     early and let the rest forge outputs (the deploy workflows and
+          #     GitHub's own docs use the same random-delimiter shape).
+          DELIM="FAD_EOF_$(openssl rand -hex 12 2>/dev/null || date +%s%N)"
           {
-            echo "last_msg<<__FAD_MSG_EOF__"
-            echo "$LAST_MSG"
-            echo "__FAD_MSG_EOF__"
+            printf 'last_msg<<%s\n' "$DELIM"
+            printf '%s\n' "$LAST_MSG"
+            printf '%s\n' "$DELIM"
           } >> "$GITHUB_OUTPUT"
 
       - name: Check CI status on development
         id: ci
         if: steps.conditions.outputs.should_merge == 'true'
-        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b  # v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b  # v7.1.0
         env:
           LAST_SHA: ${{ steps.conditions.outputs.last_sha }}
         with:
@@ -131,16 +188,24 @@ jobs:
             // an empty expression invalidates the whole workflow file.)
             const sha = process.env.LAST_SHA;
 
-            const { data } = await github.rest.checks.listForRef({
+            // PAGINATED. `per_page: 100` is a page size, not a limit: past 100
+            // check runs on one commit the 101st was simply not in `data`, so
+            // a required check could read as "never ran" and the fail-closed
+            // branch below turned a green commit into a false red that blocks
+            // every later merge until someone reruns CI. With six CI jobs plus
+            // CodeQL, Scorecard and re-runs (each re-run adds a check run),
+            // 100 is reachable on a busy release commit.
+            const allRuns = await github.paginate(github.rest.checks.listForRef, {
               owner: context.repo.owner,
               repo: context.repo.repo,
               ref: sha,
               filter: 'latest',
               per_page: 100
             });
+            console.log(`check runs on ${sha}: ${allRuns.length}`);
 
             // Exclude this workflow itself from the check
-            const relevant = data.check_runs.filter(r => r.name !== 'Check and merge');
+            const relevant = allRuns.filter(r => r.name !== 'Check and merge');
 
             // Fail CLOSED. Zero check runs does not mean "healthy", it means "unknown":
             // a commit pushed with GITHUB_TOKEN never triggers workflows, Actions may be
@@ -195,6 +260,9 @@ jobs:
           # executed arbitrary code in this job — which checked out with GH_PAT,
           # leaving a repo-write token in .git/config for that code to read.
           LAST_MSG: ${{ steps.conditions.outputs.last_msg }}
+          # The push credential lives in this step's environment only, never in
+          # .git/config (persist-credentials: false on the checkout).
+          GIT_PUSH_TOKEN: ${{ secrets.GH_PAT || github.token }}
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -203,7 +271,12 @@ jobs:
 
           git checkout -B testing origin/testing
           git merge origin/development --no-ff -m "$MERGE_MSG"
-          git push origin testing
+
+          # Same mechanism actions/checkout uses to persist credentials, but
+          # scoped to this one command instead of the whole job. The header is
+          # built here and not stored anywhere.
+          AUTH_B64=$(printf 'x-access-token:%s' "$GIT_PUSH_TOKEN" | base64 -w0)
+          git -c http.extraheader="AUTHORIZATION: basic $AUTH_B64" push origin testing
 
           # Two variants on purpose: the raw one is the PR title and the commit
           # message (escaping there would literally write "&amp;" into git
@@ -211,13 +284,16 @@ jobs:
           html_escape() {
             printf '%s' "$1"               | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'                     -e 's/"/\&quot;/g' -e "s/'/\&#39;/g"
           }
+          # printf + run-unique delimiters, for the reason spelled out in the
+          # conditions step: the value is a commit subject.
+          DELIM="FAD_EOF_$(openssl rand -hex 12 2>/dev/null || date +%s%N)"
           {
-            echo "merge_msg<<__FAD_MSG_EOF__"
-            echo "$MERGE_MSG"
-            echo "__FAD_MSG_EOF__"
-            echo "merge_msg_html<<__FAD_HTML_EOF__"
-            html_escape "$MERGE_MSG"; echo
-            echo "__FAD_HTML_EOF__"
+            printf 'merge_msg<<%s\n' "$DELIM"
+            printf '%s\n' "$MERGE_MSG"
+            printf '%s\n' "$DELIM"
+            printf 'merge_msg_html<<%s\n' "$DELIM"
+            printf '%s\n' "$(html_escape "$MERGE_MSG")"
+            printf '%s\n' "$DELIM"
           } >> "$GITHUB_OUTPUT"
           echo "Merged with message: $MERGE_MSG"
 
@@ -236,8 +312,9 @@ jobs:
           password: ${{ secrets.EMAIL_SECRET }}
           from: "Five a Day CI <${{ secrets.EMAIL_HOST_USER }}>"
           # Dev/support only — the academy inbox is notified exclusively on
-          # successful deploys.
-          to: ${{ secrets.SUPPORT_EMAIL || secrets.OWNER_EMAILS }}
+          # successful deploys. ALERT_TO adds EMAIL_HOST_USER as a last resort
+          # so this alert cannot be addressed to nobody (see env: at the top).
+          to: ${{ env.ALERT_TO }}
           subject: "[Five a Day] ⚠️ Auto-merge development → testing falló (conflicto)"
           html_body: |
             <div style="font-family: sans-serif; color:#1f2937; max-width:640px;">
@@ -259,12 +336,17 @@ jobs:
           # Read out of pyproject.toml with a regex that excludes double quotes
           # but not single ones, so this was a shell-injection sink too.
           NEW_VER: ${{ steps.conditions.outputs.new_version }}
+          GIT_PUSH_TOKEN: ${{ secrets.GH_PAT || github.token }}
         run: |
           TAG="testing-v${NEW_VER}"
 
+          # Credential for this step only — see the merge step.
+          AUTH_B64=$(printf 'x-access-token:%s' "$GIT_PUSH_TOKEN" | base64 -w0)
+          gitauth() { git -c http.extraheader="AUTHORIZATION: basic $AUTH_B64" "$@"; }
+
           # Defensive — the version-progression check should prevent collisions,
           # but if the tag exists already, skip rather than clobber.
-          if git ls-remote --tags origin "refs/tags/$TAG" | grep -q "refs/tags/$TAG"; then
+          if gitauth ls-remote --tags origin "refs/tags/$TAG" | grep -q "refs/tags/$TAG"; then
             echo "Tag $TAG already exists on origin — skipping tag creation."
             echo "created=false" >> "$GITHUB_OUTPUT"
             echo "tag=$TAG"       >> "$GITHUB_OUTPUT"
@@ -273,7 +355,7 @@ jobs:
 
           # Annotated tag — richer metadata than a lightweight tag, shows up in the Tags tab.
           git tag -a "$TAG" -m "Staging $TAG — auto-merged development → testing. The matching release tag v${NEW_VER} will be created on main when the PR lands."
-          git push origin "refs/tags/$TAG"
+          gitauth push origin "refs/tags/$TAG"
 
           echo "Created and pushed staging tag $TAG on testing HEAD."
           echo "created=true" >> "$GITHUB_OUTPUT"
@@ -282,7 +364,7 @@ jobs:
       - name: Create PR testing → main
         id: pr
         if: steps.merge.conclusion == 'success'
-        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b  # v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b  # v7.1.0
         env:
           # Every value via env. Interpolating `${{ }}` into this body was a JS
           # injection sink twice over: `'${{ ... }}'` breaks out on a single
@@ -331,14 +413,39 @@ jobs:
                 `**Staging tag (on testing):** \`${stagingTag}\``,
                 `**Release tag (on main, created after this PR merges):** \`v${newVersion}\``,
                 '',
-                'Merge strategy is flexible — staging and release tags are independent, so squash/rebase/merge-commit all work.',
+                '## ⚠️ MERGE THIS WITH A MERGE COMMIT — never squash, never rebase',
+                '',
+                'Use **"Create a merge commit"**. This is not a style preference, it is a',
+                'requirement of the deploy pipeline:',
+                '',
+                `- \`deploy-production.yml\`'s **provenance gate** refuses to arm a release unless`,
+                `  the staging tag \`${stagingTag}\` is an **ancestor of \`main\`** — that ancestry is`,
+                '  the proof the version travelled `development → testing → main` through this PR',
+                '  and not via a stray direct merge. A squash or a rebase creates *new* commits,',
+                '  so the tagged commit never becomes an ancestor and this version can then only',
+                `  be shipped with \`force=true\` — which **also skips the QA sign-off gate**, i.e.`,
+                '  the workaround silently lowers the safety bar on the release it is applied to.',
+                '- A squash also re-orphans the branch history. `main` held **4 commits** before',
+                '  v1.16.0, all single-parent squashes, so `merge-base(testing, main)` stayed',
+                '  pinned ~90 commits behind and every release re-diffed from that stale base —',
+                '  which is why the *same six files* (`README.md`, `CLAUDE.md`, `pyproject.toml`,',
+                '  `project/project/settings.py`, `uv.lock`, `project/core/README.md`) conflicted',
+                '  on **every single release**. Merging #41 as a real merge commit took `main` to',
+                '  239 commits and the base now advances on its own.',
+                '',
+                'The `main-protection` ruleset allows `merge` and `squash`, so the wrong button is',
+                'still clickable — the correctness of this release depends on picking the right one.',
                 '',
                 '### Pre-merge checklist',
                 '- [ ] All CI checks passing on this PR',
                 '- [ ] Manual review completed',
-                '- [ ] Version confirmed in `pyproject.toml` and `project/settings.py`',
+                '- [ ] Version matches in `pyproject.toml`, the `README.md` badge and `uv.lock`',
+                '      (`settings.py` derives `APP_VERSION` from pyproject — nothing to bump there)',
                 '- [ ] `DEPLOYMENT.md` is up to date if infrastructure changed',
                 '- [ ] No breaking changes to the DB schema without a migration',
+                '- [ ] Any destructive migration (`DeleteModel` / `RemoveField` / `DROP`) is',
+                '      intentional — the production deploy will demand an explicit acknowledgement',
+                '- [ ] **Merging with a merge commit** (see above)',
               ].join('\n'),
               head: 'testing',
               base: 'main'
@@ -361,13 +468,13 @@ jobs:
           # Dev/support only — the academy inbox is notified when the version
           # actually DEPLOYS to the VM (the nightly deploy-testing email), not
           # when it merely lands on the branch.
-          to: ${{ secrets.SUPPORT_EMAIL || secrets.OWNER_EMAILS }}
+          to: ${{ env.ALERT_TO }}
           subject: "[Five a Day] v${{ steps.conditions.outputs.new_version }} fusionada en testing — se despliega esta noche"
           html_body: |
             <div style="font-family: sans-serif; color:#1f2937; max-width:640px;">
               <h2 style="color:#6d28d9;">🚀 v${{ steps.conditions.outputs.new_version }} fusionada en la rama testing</h2>
               <table cellpadding="6" style="border-collapse:collapse; font-family:sans-serif; font-size:13px;">
-                <tr><td><strong>Situación</strong></td><td>fusionada en la <em>rama</em> <code>testing</code> — la VM la desplegará en el próximo ciclo nocturno (02:00–05:00 Madrid; el email de despliegue confirmará); PR de release hacia <code>main</code> abierta</td></tr>
+                <tr><td><strong>Situación</strong></td><td>fusionada en la <em>rama</em> <code>testing</code> — la VM la desplegará en el próximo ciclo nocturno (01:00–06:00 Madrid; el email de despliegue confirmará); PR de release hacia <code>main</code> abierta</td></tr>
                 <tr><td><strong>Versión</strong></td><td><code>${{ steps.conditions.outputs.old_version }}</code> → <code>${{ steps.conditions.outputs.new_version }}</code></td></tr>
                 <tr><td><strong>Commit de fusión</strong></td><td><code>${{ steps.merge.outputs.merge_msg_html }}</code></td></tr>
                 <tr><td><strong>Etiquetas</strong></td><td>staging <code>${{ steps.tag.outputs.tag }}</code> · release <code>v${{ steps.conditions.outputs.new_version }}</code> (se creará en <code>main</code> al fusionar la PR)</td></tr>

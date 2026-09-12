@@ -345,12 +345,23 @@ if [ "$DO_PRODUCTION" = true ]; then
   #                    because Cloud Build's default SA is resolved at build
   #                    time; run.admin already implies the ability to run code
   #                    as fiveaday-run, so this widens little in practice.
+  # cloudscheduler.viewer  READ-ONLY list of the Cloud Scheduler entries in
+  #                    europe-west1. deploy-production.yml's pre-mutation
+  #                    "Inventory" step compares the live jobs AND schedules
+  #                    against the expected set, which is how a scheduled task
+  #                    that stopped running gets noticed (prune_audit_log had a
+  #                    wrapper, a Beat entry and a docs row for eight versions
+  #                    while its job had never been created). Viewer, not admin:
+  #                    the pipeline reports drift, it never creates or resumes a
+  #                    schedule — that stays a human decision, like the
+  #                    deliberately paused ones.
   for ROLE in \
     roles/run.admin \
     roles/cloudbuild.builds.editor \
     roles/artifactregistry.writer \
     roles/cloudsql.editor \
     roles/logging.viewer \
+    roles/cloudscheduler.viewer \
     roles/serviceusage.serviceUsageConsumer \
     roles/iam.serviceAccountUser
     # --format=none: add-iam-policy-binding echoes the entire project policy on

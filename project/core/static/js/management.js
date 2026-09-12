@@ -1,3 +1,10 @@
+// The page still passes its own token through MANAGEMENT_CONFIG (rendered from
+// {% csrf_token %}, so it is input-derived and correct); window.apiFetch adds
+// window.CSRF_TOKEN when a caller does not supply one. What every request here
+// lacked was a STATUS check: `await response.json()` on a 403 (expired session)
+// or a 302-to-login threw a SyntaxError that landed in the generic
+// `catch (error)` and showed "Error al guardar la configuración" — the user
+// re-typed the prices and it failed again.
 const csrfToken = window.MANAGEMENT_CONFIG.csrfToken;
 let editMode = false;
 
@@ -51,6 +58,23 @@ function showToast(message, type = 'success') {
     }, 3000);
 }
 
+// The academy's fiscal details (`academy_name`, `academy_cif`, …) are TEXT, so
+// they carry `.config-text-input` and are collected as strings. They must never
+// wear `.config-input`: that class is run through Number.parseFloat below and a
+// NaN aborts the entire save, so one text field there would make every price
+// unsaveable.
+function setTextInputsEnabled(enabled) {
+    document.querySelectorAll('.config-text-input').forEach(input => {
+        input.disabled = !enabled;
+        input.classList.toggle('bg-neutral-100', !enabled);
+        input.classList.toggle('cursor-not-allowed', !enabled);
+        input.classList.toggle('bg-white', enabled);
+        input.classList.toggle('focus:ring-2', enabled);
+        input.classList.toggle('focus:ring-primary-500', enabled);
+        input.classList.toggle('focus:border-primary-500', enabled);
+    });
+}
+
 // Modo edición de configuración
 // Every binding below is null-guarded: a non-admin teacher gets this page in
 // view-only mode, so the admin controls are absent from the DOM and an
@@ -68,6 +92,7 @@ if (btnEditValues) btnEditValues.addEventListener('click', function() {
             input.classList.remove('bg-neutral-100', 'cursor-not-allowed');
             input.classList.add('bg-white', 'focus:ring-2', 'focus:ring-primary-500', 'focus:border-primary-500');
         });
+        setTextInputsEnabled(true);
         saveContainer.classList.remove('hidden');
         editBtn.innerHTML = '<span class="material-symbols-outlined">close</span> Cancelar Edición';
         editBtn.classList.remove('bg-primary-500', 'hover:bg-primary-600');
@@ -94,6 +119,7 @@ function cancelEdit() {
         input.classList.add('bg-neutral-100', 'cursor-not-allowed');
         input.classList.remove('bg-white', 'focus:ring-2', 'focus:ring-primary-500', 'focus:border-primary-500');
     });
+    setTextInputsEnabled(false);
     saveContainer.classList.add('hidden');
     editBtn.innerHTML = '<span class="material-symbols-outlined">edit</span> Cambiar Valores';
     editBtn.classList.add('bg-primary-500', 'hover:bg-primary-600');
@@ -107,28 +133,43 @@ if (btnCancelEdit) btnCancelEdit.addEventListener('click', cancelEdit);
 const btnSaveConfig = document.getElementById('btn-save-config');
 if (btnSaveConfig) btnSaveConfig.addEventListener('click', async function() {
     const data = {};
+    let invalid = null;
     document.querySelectorAll('.config-input').forEach(input => {
         if (!input.disabled && input.name) {
             const parsedValue = Number.parseFloat(String(input.value).replace(',', '.'));
             if (Number.isNaN(parsedValue)) {
-                showToast('Revisa los importes antes de guardar', 'error');
+                // `return` here only skipped ONE input — the loop finished, the
+                // bad field was dropped from `data`, the request fired anyway
+                // and update_site_config saved the rest, so a mistyped fee
+                // showed a green "guardado" while the OLD price stayed live.
+                // Record it and ABORT the whole save below.
+                if (!invalid) invalid = input;
                 return;
             }
             data[input.name] = parsedValue;
         }
     });
 
+    if (invalid) {
+        showToast('Revisa los importes: hay un valor no válido. No se ha guardado nada.', 'error');
+        if (invalid.focus) invalid.focus();
+        return;
+    }
+
+    // Academy fiscal details — strings, sent verbatim (all five are blank=True,
+    // so an empty box legitimately clears the field).
+    document.querySelectorAll('.config-text-input').forEach(input => {
+        if (!input.disabled && input.name) {
+            data[input.name] = input.value.trim();
+        }
+    });
+
     try {
-        const response = await fetch(window.MANAGEMENT_CONFIG.updateConfigUrl, {
+        const result = await window.apiFetch(window.MANAGEMENT_CONFIG.updateConfigUrl, {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'X-CSRFToken': csrfToken
-            },
+            headers: { 'X-CSRFToken': csrfToken },
             body: JSON.stringify(data)
         });
-
-        const result = await response.json();
 
         if (result.success) {
             showToast(result.message, 'success');
@@ -137,7 +178,7 @@ if (btnSaveConfig) btnSaveConfig.addEventListener('click', async function() {
             showToast(result.message, 'error');
         }
     } catch (error) {
-        showToast('Error al guardar la configuración', 'error');
+        showToast(window.apiErrorMessage(error), 'error');
     }
 });
 
@@ -161,16 +202,11 @@ if (formTeacher) formTeacher.addEventListener('submit', async function(e) {
     };
 
     try {
-        const response = await fetch(window.MANAGEMENT_CONFIG.createTeacherUrl, {
+        const result = await window.apiFetch(window.MANAGEMENT_CONFIG.createTeacherUrl, {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'X-CSRFToken': csrfToken
-            },
+            headers: { 'X-CSRFToken': csrfToken },
             body: JSON.stringify(data)
         });
-
-        const result = await response.json();
 
         if (result.success) {
             showToast(result.message, 'success');
@@ -183,7 +219,7 @@ if (formTeacher) formTeacher.addEventListener('submit', async function(e) {
             showToast(result.message, 'error');
         }
     } catch (error) {
-        showToast('Error al crear el profesor', 'error');
+        showToast(window.apiErrorMessage(error), 'error');
     }
 });
 
@@ -192,11 +228,14 @@ const btnNewGroup = document.getElementById('btn-new-group');
 if (btnNewGroup) btnNewGroup.addEventListener('click', async function() {
     // Refrescar lista de profesores antes de abrir
     try {
-        const response = await fetch(window.MANAGEMENT_CONFIG.getTeachersUrl);
-        const data = await response.json();
+        const data = await window.apiFetch(window.MANAGEMENT_CONFIG.getTeachersUrl);
 
         const select = document.getElementById('select-teacher');
-        select.innerHTML = '<option value="">Seleccionar profesor...</option>';
+        select.replaceChildren();
+        const blank = document.createElement('option');
+        blank.value = '';
+        blank.textContent = 'Seleccionar profesor...';
+        select.appendChild(blank);
 
         data.teachers.forEach(teacher => {
             const option = document.createElement('option');
@@ -205,7 +244,9 @@ if (btnNewGroup) btnNewGroup.addEventListener('click', async function() {
             select.appendChild(option);
         });
     } catch (error) {
-        console.error('Error al cargar profesores:', error);
+        // Silent console.error left the modal open with an EMPTY teacher list
+        // and no explanation, and the group form requires a teacher.
+        showToast(window.apiErrorMessage(error), 'error');
     }
 
     openModal('modal-group');
@@ -225,16 +266,11 @@ if (formGroup) formGroup.addEventListener('submit', async function(e) {
     };
 
     try {
-        const response = await fetch(window.MANAGEMENT_CONFIG.createGroupUrl, {
+        const result = await window.apiFetch(window.MANAGEMENT_CONFIG.createGroupUrl, {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'X-CSRFToken': csrfToken
-            },
+            headers: { 'X-CSRFToken': csrfToken },
             body: JSON.stringify(data)
         });
-
-        const result = await response.json();
 
         if (result.success) {
             showToast(result.message, 'success');
@@ -245,7 +281,7 @@ if (formGroup) formGroup.addEventListener('submit', async function(e) {
             showToast(result.message, 'error');
         }
     } catch (error) {
-        showToast('Error al crear el grupo', 'error');
+        showToast(window.apiErrorMessage(error), 'error');
     }
 });
 
@@ -276,24 +312,15 @@ if (formPassword) formPassword.addEventListener('submit', async function(e) {
     }
 
     try {
-        const response = await fetch(window.MANAGEMENT_CONFIG.changePasswordUrl, {
+        // apiFetch turns the rate limiter's 429 (answered as text/plain, so
+        // .json() would throw) into a rejection carrying the "demasiados
+        // intentos" message, and a 403 into "sesión caducada" — the two
+        // outcomes this endpoint actually produces besides success.
+        const result = await window.apiFetch(window.MANAGEMENT_CONFIG.changePasswordUrl, {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'X-CSRFToken': csrfToken
-            },
+            headers: { 'X-CSRFToken': csrfToken },
             body: JSON.stringify(data)
         });
-
-        // The rate limiter answers 429 as text/plain, so response.json()
-        // would throw and the real reason ("too many attempts") would surface
-        // as a generic error.
-        if (response.status === 429) {
-            showToast('Demasiados intentos. Prueba de nuevo en unos minutos.', 'error');
-            return;
-        }
-
-        const result = await response.json();
 
         if (result.success) {
             showToast(result.message, 'success');
@@ -303,7 +330,7 @@ if (formPassword) formPassword.addEventListener('submit', async function(e) {
             showToast(result.message, 'error');
         }
     } catch (error) {
-        showToast('Error al cambiar la contraseña', 'error');
+        showToast(window.apiErrorMessage(error), 'error');
     }
 });
 

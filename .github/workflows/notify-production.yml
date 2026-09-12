@@ -10,21 +10,48 @@ on:
 permissions:
   contents: write   # needs write for pushing the release tag
 
+# This workflow PUSHES the release tag vX.Y.Z. Two pushes to main in quick
+# succession (a release merge followed by a docs fix) would otherwise run
+# concurrently and race on `git ls-remote` → `git tag` → `git push`, where the
+# loser fails on a tag that appeared between its check and its push.
+# Deliberately NOT the shared `deploy-production` group: that group can sit
+# occupied for hours waiting on the environment approval, and queueing behind
+# it would delay creating the release tag — which the production preflight's
+# migration list reads.
+concurrency:
+  group: notify-production
+  cancel-in-progress: false
+
+env:
+  # Non-secret last resort so a release heads-up can never be addressed to
+  # nobody. See the same block in auto-merge.yml.
+  ALERT_TO: ${{ secrets.SUPPORT_EMAIL || secrets.OWNER_EMAILS || secrets.EMAIL_HOST_USER }}
+
 jobs:
   notify:
     name: Send production notification
     runs-on: ubuntu-latest
+    timeout-minutes: 10
 
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           fetch-depth: 2  # Need HEAD and HEAD~1 for diff summary
           token: ${{ secrets.GH_PAT || github.token }}
+          # Keep the repo-write token out of .git/config for the rest of the
+          # job (a third-party mail action runs later in it). The tag step
+          # supplies it for the length of one push.
+          persist-credentials: false
 
       - name: Gather commit info
         id: info
+        env:
+          # Via env, never interpolated into the body. `github.sha` is a hex
+          # string so this one was harmless, but the rule has no exceptions —
+          # the engine substitutes before bash parses, and the next value
+          # somebody adds here may not be hex.
+          SHA: ${{ github.sha }}
         run: |
-          SHA=${{ github.sha }}
           SHORT_SHA=$(git rev-parse --short "$SHA")
           MESSAGE=$(git log -1 --format="%s" "$SHA")
           AUTHOR=$(git log -1 --format="%an" "$SHA")
@@ -47,17 +74,25 @@ jobs:
           MESSAGE=$(html_escape "$MESSAGE")
           AUTHOR=$(html_escape "$AUTHOR")
 
+          # Free-form values (subject, author, diffstat) go through the
+          # <<DELIMITER form with a run-unique marker and printf '%s\n' — a
+          # plain `k=v` line lets a value carrying a newline forge extra
+          # outputs, and `echo` would additionally eat a leading -n/-e.
+          DELIM="FAD_EOF_$(openssl rand -hex 12 2>/dev/null || date +%s%N)"
           {
-            echo "short_sha=$SHORT_SHA"
-            echo "message=$MESSAGE"
-            echo "author=$AUTHOR"
-            echo "files_changed=$FILES_CHANGED"
-            echo "new_version=$NEW_VERSION"
-            echo "old_version=${OLD_VERSION:-$NEW_VERSION}"
+            printf 'short_sha=%s\n' "$SHORT_SHA"
+            printf 'new_version=%s\n' "$NEW_VERSION"
+            printf 'old_version=%s\n' "${OLD_VERSION:-$NEW_VERSION}"
+            printf 'message<<%s\n' "$DELIM"; printf '%s\n' "$MESSAGE";       printf '%s\n' "$DELIM"
+            printf 'author<<%s\n'  "$DELIM"; printf '%s\n' "$AUTHOR";        printf '%s\n' "$DELIM"
+            printf 'files_changed<<%s\n' "$DELIM"; printf '%s\n' "$FILES_CHANGED"; printf '%s\n' "$DELIM"
           } >> "$GITHUB_OUTPUT"
 
       - name: Create release tag on main
         id: tag
+        env:
+          # Push credential scoped to this step (persist-credentials: false).
+          GIT_PUSH_TOKEN: ${{ secrets.GH_PAT || github.token }}
         run: |
           # Read the authoritative version from pyproject.toml on the just-pushed commit
           VERSION=$(grep -E '^[[:space:]]*version[[:space:]]*=' pyproject.toml \
@@ -73,9 +108,14 @@ jobs:
 
           TAG="v${VERSION}"
 
+          # Same mechanism actions/checkout uses, scoped to these commands
+          # instead of persisted in .git/config for the whole job.
+          AUTH_B64=$(printf 'x-access-token:%s' "$GIT_PUSH_TOKEN" | base64 -w0)
+          gitauth() { git -c http.extraheader="AUTHORIZATION: basic $AUTH_B64" "$@"; }
+
           # Skip if the release tag already exists (e.g. a main push that doesn't bump version,
           # like a direct docs fix or a re-deploy of the same version).
-          if git ls-remote --tags origin "refs/tags/$TAG" | grep -q "refs/tags/$TAG"; then
+          if gitauth ls-remote --tags origin "refs/tags/$TAG" | grep -q "refs/tags/$TAG"; then
             echo "Release tag $TAG already exists — skipping."
             echo "created=false" >> "$GITHUB_OUTPUT"
             echo "tag=$TAG"      >> "$GITHUB_OUTPUT"
@@ -86,7 +126,7 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
           git tag -a "$TAG" -m "Release $TAG (production) — merged from testing"
-          git push origin "refs/tags/$TAG"
+          gitauth push origin "refs/tags/$TAG"
 
           echo "Created and pushed release tag $TAG on main HEAD."
           echo "created=true" >> "$GITHUB_OUTPUT"
@@ -103,7 +143,7 @@ jobs:
           from: "Five a Day CI <${{ secrets.EMAIL_HOST_USER }}>"
           # Dev/support only — the academy inbox (hellofiveaday) is notified
           # exclusively on successful deploys, and this is a release heads-up.
-          to: ${{ secrets.SUPPORT_EMAIL || secrets.OWNER_EMAILS }}
+          to: ${{ env.ALERT_TO }}
           subject: "[Five a Day] v${{ steps.info.outputs.new_version }} lista para producción"
           html_body: |
             <div style="font-family: sans-serif; color:#1f2937; max-width:640px;">

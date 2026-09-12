@@ -44,6 +44,12 @@ class HistoryLogAdmin(admin.ModelAdmin):
     def has_change_permission(self, request, obj=None):
         return False
 
+    def has_delete_permission(self, request, obj=None):
+        # Add and change were blocked but delete was not, so the whole feed was
+        # one `delete_selected` from erasure. The feed self-manages via its
+        # 1,000-row cap; it should not be hand-deletable either.
+        return False
+
 
 @admin.register(TodoItem)
 class TodoItemAdmin(admin.ModelAdmin):

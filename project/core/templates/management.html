@@ -168,6 +168,74 @@
                     </form>
                 </div>
 
+                <!-- Datos fiscales de la academia -->
+                {% comment %}
+                   These five SiteConfiguration fields had NO input anywhere in the app,
+                   which made them unreachable rather than merely unset (see the "fields
+                   absent from a fieldsets are unreachable" note in CLAUDE.md). It matters
+                   most for `academy_cif`: that is the field that makes a tax certificate
+                   deductible, and it has been blank on every certificate the academy has
+                   ever issued.
+
+                   They carry `config-text-input`, NOT `config-input`: management.js runs
+                   every `.config-input` through Number.parseFloat and ABORTS the whole
+                   save on a NaN, so a text field wearing that class would make the
+                   prices unsaveable. Both classes are enabled/disabled together and
+                   posted together to /api/config/update/.
+                {% endcomment %}
+                <div class="mt-8">
+                    <h4 class="text-md font-semibold text-neutral-700 flex items-center gap-2 mb-4">
+                        <span class="material-symbols-outlined text-sm">badge</span>
+                        Datos de la academia
+                    </h4>
+                    <form id="academy-form" class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div class="md:col-span-2">
+                            <label for="cfg-academy-name" class="block text-sm font-medium text-neutral-600 mb-1">Nombre fiscal</label>
+                            <input type="text" id="cfg-academy-name" name="academy_name" maxlength="200"
+                                   value="{{ config.academy_name|default_if_none:'' }}"
+                                   placeholder="Five a Day English Academy"
+                                   class="config-text-input w-full px-4 py-2 border border-neutral-300 rounded-md bg-neutral-100 cursor-not-allowed"
+                                   disabled>
+                        </div>
+                        <div>
+                            <label for="cfg-academy-cif" class="block text-sm font-medium text-neutral-600 mb-1">CIF / NIF</label>
+                            <input type="text" id="cfg-academy-cif" name="academy_cif" maxlength="20"
+                                   value="{{ config.academy_cif|default_if_none:'' }}"
+                                   placeholder="B12345678"
+                                   class="config-text-input w-full px-4 py-2 border border-neutral-300 rounded-md bg-neutral-100 cursor-not-allowed"
+                                   disabled>
+                            <p class="text-xs text-neutral-500 mt-1">
+                                Aparece en los <strong>certificados fiscales</strong>. Sin él, la familia no puede
+                                desgravar el gasto.
+                            </p>
+                        </div>
+                        <div>
+                            <label for="cfg-academy-phone" class="block text-sm font-medium text-neutral-600 mb-1">Teléfono</label>
+                            <input type="text" id="cfg-academy-phone" name="academy_phone" maxlength="30"
+                                   value="{{ config.academy_phone|default_if_none:'' }}"
+                                   placeholder="967 000 000"
+                                   class="config-text-input w-full px-4 py-2 border border-neutral-300 rounded-md bg-neutral-100 cursor-not-allowed"
+                                   disabled>
+                        </div>
+                        <div class="md:col-span-2">
+                            <label for="cfg-academy-address" class="block text-sm font-medium text-neutral-600 mb-1">Dirección</label>
+                            <input type="text" id="cfg-academy-address" name="academy_address" maxlength="255"
+                                   value="{{ config.academy_address|default_if_none:'' }}"
+                                   placeholder="Calle, número, 02001 Albacete"
+                                   class="config-text-input w-full px-4 py-2 border border-neutral-300 rounded-md bg-neutral-100 cursor-not-allowed"
+                                   disabled>
+                        </div>
+                        <div class="md:col-span-2">
+                            <label for="cfg-academy-website" class="block text-sm font-medium text-neutral-600 mb-1">Web</label>
+                            <input type="text" id="cfg-academy-website" name="academy_website" maxlength="200"
+                                   value="{{ config.academy_website|default_if_none:'' }}"
+                                   placeholder="https://fiveadayacademy.es"
+                                   class="config-text-input w-full px-4 py-2 border border-neutral-300 rounded-md bg-neutral-100 cursor-not-allowed"
+                                   disabled>
+                        </div>
+                    </form>
+                </div>
+
                 <!-- Botón guardar (oculto por defecto) -->
                 <div id="save-config-container" class="hidden mt-6 flex justify-end gap-3">
                     <button type="button" id="btn-cancel-edit" class="px-6 py-2 bg-neutral-200 text-neutral-700 rounded-md hover:bg-neutral-300 transition-colors duration-200">
@@ -284,7 +352,7 @@
     <div class="bg-white rounded-lg shadow-xl w-full max-w-md mx-4 overflow-hidden">
         <div class="px-6 py-4 flex justify-between items-center" style="background-color:#fff; border-bottom:1px solid #f3f4f6;">
             <h3 class="text-lg font-semibold" style="color:#8b5cf6;">Nuevo Profesor</h3>
-            <button type="button" data-close-modal="modal-teacher" class="p-1.5 rounded-full transition-colors modal-x-hover" style="color:#9ca3af;">
+            <button type="button" data-close-modal="modal-teacher" class="p-1.5 title="Cerrar" aria-label="Cerrar" rounded-full transition-colors modal-x-hover" style="color:#9ca3af;">
                 <span class="material-symbols-outlined text-xl">close</span>
             </button>
         </div>
@@ -329,7 +397,7 @@
     <div class="bg-white rounded-lg shadow-xl w-full max-w-md mx-4 overflow-hidden">
         <div class="px-6 py-4 flex justify-between items-center" style="background-color:#fff; border-bottom:1px solid #f3f4f6;">
             <h3 class="text-lg font-semibold" style="color:#8b5cf6;">Nuevo Grupo</h3>
-            <button type="button" data-close-modal="modal-group" class="p-1.5 rounded-full transition-colors modal-x-hover" style="color:#9ca3af;">
+            <button type="button" data-close-modal="modal-group" class="p-1.5 title="Cerrar" aria-label="Cerrar" rounded-full transition-colors modal-x-hover" style="color:#9ca3af;">
                 <span class="material-symbols-outlined text-xl">close</span>
             </button>
         </div>
@@ -384,7 +452,7 @@
     <div class="bg-white rounded-lg shadow-xl w-full max-w-md mx-4 overflow-hidden">
         <div class="px-6 py-4 flex justify-between items-center" style="background-color:#fff; border-bottom:1px solid #f3f4f6;">
             <h3 class="text-lg font-semibold" style="color:#8b5cf6;">Cambiar Contraseña</h3>
-            <button type="button" data-close-modal="modal-password" class="p-1.5 rounded-full transition-colors modal-x-hover" style="color:#9ca3af;">
+            <button type="button" data-close-modal="modal-password" class="p-1.5 title="Cerrar" aria-label="Cerrar" rounded-full transition-colors modal-x-hover" style="color:#9ca3af;">
                 <span class="material-symbols-outlined text-xl">close</span>
             </button>
         </div>

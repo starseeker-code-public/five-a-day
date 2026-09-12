@@ -31,9 +31,16 @@ class TestSeedResetGuard:
 
     def test_reset_passes_the_guard_outside_production(self):
         """Outside production the guard must not fire. The command then fails
-        further in (it requires the seeded admin teachers), and THAT error —
-        not CommandError from the guard — is the proof the guard let it
-        through, without paying for a full seed run in a unit test."""
+        further in (it requires the seeded admin teachers), and THAT error is
+        the proof the guard let it through, without paying for a full seed run
+        in a unit test.
+
+        Both failures are now `CommandError` — the admin-teacher precondition
+        raised a bare `RuntimeError` until v1.27.1, which printed a traceback
+        that read like a crash for what is really a fixable missing
+        precondition. So the discriminator is the MESSAGE, not the type: the
+        guard says "bloqueado en produccion", this one says "admin teachers".
+        """
         with override_settings(ENVIRONMENT="development"):
-            with pytest.raises(RuntimeError, match="admin teachers"):
+            with pytest.raises(CommandError, match="admin teachers"):
                 call_command("seed_testdata", reset=True, small=True, stdout=StringIO())

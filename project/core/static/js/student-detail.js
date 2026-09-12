@@ -3,36 +3,31 @@
 
 const STUDENT_ID = window.STUDENT_ID;
 
-function getCsrf() {
-    return document.querySelector('[name=csrfmiddlewaretoken]')?.value
-        || document.cookie.split(';').map(c=>c.trim()).find(c=>c.startsWith('csrftoken='))?.split('=')[1]
-        || '';
-}
+// CSRF token + status-checked fetch come from base.js (window.CSRF_TOKEN /
+// window.apiFetch). This file used to carry its own copy of the token reader.
 
 function addFunFriday() {
     const inp = document.getElementById('ff-new-date');
     const d = inp.value;
     if (!d) return;
-    fetch(`/api/students/${STUDENT_ID}/fun-friday/add/`, {
+    window.apiFetch(`/api/students/${STUDENT_ID}/fun-friday/add/`, {
         method: 'POST',
-        headers: {'Content-Type':'application/json','X-CSRFToken':getCsrf()},
         body: JSON.stringify({date: d}),
-    }).then(r=>r.json()).then(data => {
+    }).then(data => {
         if (data.success) { inp.value=''; location.reload(); }
         else alert(data.error);
-    });
+    }).catch(err => alert(window.apiErrorMessage(err)));
 }
 
 function removeFunFriday(d) {
     if (!confirm('\u00bfEliminar esta fecha?')) return;
-    fetch(`/api/students/${STUDENT_ID}/fun-friday/remove/`, {
+    window.apiFetch(`/api/students/${STUDENT_ID}/fun-friday/remove/`, {
         method: 'POST',
-        headers: {'Content-Type':'application/json','X-CSRFToken':getCsrf()},
         body: JSON.stringify({date: d}),
-    }).then(r=>r.json()).then(data => {
+    }).then(data => {
         if (data.success) location.reload();
         else alert(data.error);
-    });
+    }).catch(err => alert(window.apiErrorMessage(err)));
 }
 
 // ==================== MODALITY TOGGLE ====================
@@ -45,11 +40,10 @@ document.querySelectorAll('.modality-toggle-btn').forEach(btn => {
 
         if (!confirm(`\u00bfCambiar modalidad de pago a ${newModality === 'monthly' ? 'Mensual' : 'Trimestral'}?`)) return;
 
-        fetch(`/api/students/${studentId}/enrollment/modality/`, {
+        window.apiFetch(`/api/students/${studentId}/enrollment/modality/`, {
             method: 'POST',
-            headers: {'Content-Type':'application/json','X-CSRFToken':getCsrf()},
             body: JSON.stringify({payment_modality: newModality}),
-        }).then(r=>r.json()).then(data => {
+        }).then(data => {
             if (data.success) {
                 // Update the label
                 const label = document.getElementById(`modality-label-${enrollmentId}`);
@@ -66,10 +60,7 @@ document.querySelectorAll('.modality-toggle-btn').forEach(btn => {
             } else {
                 alert(data.error || 'Error al cambiar modalidad');
             }
-        }).catch(err => {
-            console.error('Error:', err);
-            alert('Error de conexi\u00f3n');
-        });
+        }).catch(err => alert(window.apiErrorMessage(err)));
     });
 });
 

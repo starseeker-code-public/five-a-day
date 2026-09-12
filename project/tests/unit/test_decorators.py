@@ -37,7 +37,7 @@ def _view(request):
 
 class TestQaAccessRequired:
     def test_allows_admin_teacher_in_testing_env(self, rf):
-        req = _make_request(rf, authenticated=True, teacher=SimpleNamespace(admin=True))
+        req = _make_request(rf, authenticated=True, teacher=SimpleNamespace(admin=True, active=True))
         with patch("core.decorators.settings") as mock_settings:
             mock_settings.IS_TESTING_ENV = True
             response = _view(req)
@@ -45,7 +45,17 @@ class TestQaAccessRequired:
         assert response.content == b"ok"
 
     def test_404_for_non_admin_teacher(self, rf):
-        req = _make_request(rf, authenticated=True, teacher=SimpleNamespace(admin=False))
+        req = _make_request(rf, authenticated=True, teacher=SimpleNamespace(admin=False, active=True))
+        with patch("core.decorators.settings") as mock_settings:
+            mock_settings.IS_TESTING_ENV = True
+            with pytest.raises(Http404):
+                _view(req)
+
+    def test_404_for_deactivated_admin_teacher(self, rf):
+        """Deactivation is how the academy offboards: the gate must enforce
+        `active` itself, not just have the icon hidden by the context processor
+        (`may_use_qa_tools` is the one predicate both read)."""
+        req = _make_request(rf, authenticated=True, teacher=SimpleNamespace(admin=True, active=False))
         with patch("core.decorators.settings") as mock_settings:
             mock_settings.IS_TESTING_ENV = True
             with pytest.raises(Http404):

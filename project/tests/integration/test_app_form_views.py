@@ -85,8 +85,18 @@ class TestFunFridayForm:
         assert scheduled.sent_at is None  # future send — nothing goes out yet
         assert scheduled.recipients  # parent emails captured
 
-    def test_send_all_past_monday_drains_immediately(self, authenticated_client, student_with_parent):
-        """An event created after its Monday-14:30 slot is sent right away (eager drain)."""
+    def test_send_all_past_monday_drains_immediately(
+        self, authenticated_client, student_with_parent, django_capture_on_commit_callbacks
+    ):
+        """An event created after its Monday-14:30 slot is sent right away (eager drain).
+
+        The drain is dispatched via `transaction.on_commit`, so the row is
+        guaranteed to exist before the task reads it. pytest-django wraps each
+        test in a transaction that never commits, which would discard the
+        callback — `django_capture_on_commit_callbacks` executes it instead.
+        Production is unaffected: there is no ATOMIC_REQUESTS, so the `save()`
+        autocommits and the callback fires immediately.
+        """
         from django.utils import timezone
 
         from core.models import FunFridayScheduledSend
@@ -96,18 +106,20 @@ class TestFunFridayForm:
         with patch(
             "comms.tasks._send_fun_friday_batch", return_value={"status": "success", "sent": 1, "total": 1}
         ) as mock_batch:
-            response = authenticated_client.post(
-                reverse("fun_friday_form"),
-                {
-                    "event_date": past_friday.isoformat(),
-                    "start_time": "17:00",
-                    "end_time": "18:30",
-                    "activity_description": "<b>Crafts</b>",
-                    "min_age": "5",
-                    "max_age": "12",
-                },
-            )
+            with django_capture_on_commit_callbacks(execute=True) as callbacks:
+                response = authenticated_client.post(
+                    reverse("fun_friday_form"),
+                    {
+                        "event_date": past_friday.isoformat(),
+                        "start_time": "17:00",
+                        "end_time": "18:30",
+                        "activity_description": "<b>Crafts</b>",
+                        "min_age": "5",
+                        "max_age": "12",
+                    },
+                )
         assert response.status_code == 302
+        assert callbacks, "the drain must be dispatched on commit, not inline"
         assert mock_batch.called
         scheduled = FunFridayScheduledSend.objects.get()
         assert scheduled.sent_at is not None

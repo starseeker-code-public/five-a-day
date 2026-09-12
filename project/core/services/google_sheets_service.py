@@ -178,11 +178,17 @@ class GoogleSheetsService:
 
             ws = self._get_or_create_worksheet(worksheet_name, cols=len(headers))
             ws.clear()
-            ws.update(rows, "A1")
+            # raw=True pinned explicitly (gspread's default): RAW input means a
+            # student name like "=IMPORTXML(...)" is stored as literal text, never
+            # a live formula — the Sheets equivalent of csv_safe/xlsx_safe_append.
+            ws.update(rows, "A1", raw=True)
             return ExportResult(success=True, worksheet=worksheet_name, rows_written=len(rows) - 1)
-        except Exception as e:  # noqa: BLE001 — never re-raise; caller wants a result object
+        except Exception:  # noqa: BLE001 — never re-raise; caller wants a result object
+            # Fixed message, not str(e): the exception text (a gspread APIError
+            # embeds the full Google API error JSON) reaches the client verbatim
+            # via export_to_sheets — the project-wide "never return str(e)" rule.
             logger.exception("export_students failed")
-            return ExportResult(success=False, worksheet=worksheet_name, error=str(e))
+            return ExportResult(success=False, worksheet=worksheet_name, error="No se pudo exportar a Google Sheets.")
 
     def export_payments(
         self,
@@ -233,11 +239,12 @@ class GoogleSheetsService:
 
             ws = self._get_or_create_worksheet(worksheet_name, cols=len(headers))
             ws.clear()
-            ws.update(rows, "A1")
+            # raw=True: see export_students — formula-injection guard, pinned.
+            ws.update(rows, "A1", raw=True)
             return ExportResult(success=True, worksheet=worksheet_name, rows_written=len(rows) - 1)
-        except Exception as e:  # noqa: BLE001
+        except Exception:  # noqa: BLE001
             logger.exception("export_payments failed")
-            return ExportResult(success=False, worksheet=worksheet_name, error=str(e))
+            return ExportResult(success=False, worksheet=worksheet_name, error="No se pudo exportar a Google Sheets.")
 
 
 def get_service() -> GoogleSheetsService:
