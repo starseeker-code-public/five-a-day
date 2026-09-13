@@ -13,6 +13,7 @@ from billing.models import Enrollment, SiteConfiguration, current_academic_year,
 from billing.services.enrollment_service import EnrollmentService
 from core.decorators import admin_required
 from core.models import HistoryLog
+from core.transactions import visible_students_for
 from core.views.password_reset import can_change_own_password, send_password_setup_email
 from students.models import Group, Parent, Student, Teacher
 
@@ -63,6 +64,8 @@ def update_site_config(request):
             config.full_time_monthly_fee = Decimal(str(data["full_time_monthly_fee"]))
         if "part_time_monthly_fee" in data:
             config.part_time_monthly_fee = Decimal(str(data["part_time_monthly_fee"]))
+        if "part_time_child_monthly_fee" in data:
+            config.part_time_child_monthly_fee = Decimal(str(data["part_time_child_monthly_fee"]))
         if "adult_group_monthly_fee" in data:
             config.adult_group_monthly_fee = Decimal(str(data["adult_group_monthly_fee"]))
 
@@ -430,6 +433,11 @@ def language_cheque_students(request):
             status="active",
             academic_year__in=academic_years,
             has_language_cheque=True,
+            # This endpoint is in NON_ADMIN_ALLOWED_URL_NAMES and returns names,
+            # groups and guardians, so it is a student directory unless it is
+            # scoped the same way the roll and the ficha are: a non-admin
+            # teacher sees only the students in their own groups.
+            student__in=visible_students_for(request, Student.objects.all()),
         )
         .select_related("student", "student__group")
         # Ordered so the parent shown is the same one `.first()` used to return

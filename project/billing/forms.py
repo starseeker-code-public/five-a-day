@@ -7,6 +7,12 @@ from django import forms
 ENROLLMENT_PLAN_CHOICES = [
     ("monthly_full", "Mensual (2 días/semana)"),
     ("monthly_part", "Mensual (1 día/semana)"),
+    # Same timetable as `monthly_part`, cheaper band for the youngest children
+    # (`schedule_type="part_time_child"`). Offered to everyone in the dropdown
+    # and deliberately NOT validated against `Student.is_adult` — an adult
+    # resolves to `adult_group` before the plan is even read, and the academy
+    # picks this band by hand in a handful of cases a year.
+    ("monthly_part_child", "Mensual (1 día/semana, infantil)"),
     ("quarterly", "Trimestral"),
 ]
 

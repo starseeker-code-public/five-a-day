@@ -17,7 +17,7 @@ from billing.models import Enrollment, Payment, SiteConfiguration, relevant_acad
 from core.date_utils import first_day_of_next_month
 from core.decorators import admin_required
 from core.models import FunFridayAttendance, HistoryLog
-from core.transactions import students_on_the_roll
+from core.transactions import students_on_the_roll, visible_students_for
 from students.forms import StudentForm
 from students.models import Group, Parent, Student
 
@@ -266,6 +266,10 @@ class StudentCreateView(CreateView):
         context["price_config"] = {
             "monthly_full": str(config.full_time_monthly_fee),
             "monthly_part": str(config.part_time_monthly_fee),
+            # Keys match ENROLLMENT_PLAN_CHOICES exactly — student-create.js looks
+            # the plan's price up as `priceConfig[planSelect.value]`, so a missing
+            # key silently previews €0 rather than erroring.
+            "monthly_part_child": str(config.part_time_child_monthly_fee),
             "quarterly": str(quarterly_price),
             # The pre-discount total (3 mensualidades). `quarterly` already has the
             # -5% baked in, so the price widget was striking through the discounted
@@ -497,8 +501,16 @@ class StudentListView(ListView):
         # `students_on_the_roll` carries the "studying this course" rule — both
         # cohorts during the May–August overlap included, or half the academy
         # vanishes from the list for four months of every year.
+        #
+        # `visible_students_for` then narrows it to the requesting session: a
+        # non-admin teacher sees only the students in the groups they teach.
+        # Admins are unaffected. `_total_count` below is computed AFTER this, so
+        # the "mostrando N de M" notice reports the teacher's own roll rather
+        # than the academy's.
         queryset = (
-            students_on_the_roll().select_related("group").prefetch_related("parents", "enrollments__enrollment_type")
+            visible_students_for(self.request, students_on_the_roll())
+            .select_related("group")
+            .prefetch_related("parents", "enrollments__enrollment_type")
         )
 
         search_query = self.request.GET.get("search", "").strip()
@@ -577,6 +589,8 @@ class StudentUpdateView(UpdateView):
                     initial["enrollment_plan"] = "quarterly"
                 elif enrollment.schedule_type == "part_time":
                     initial["enrollment_plan"] = "monthly_part"
+                elif enrollment.schedule_type == "part_time_child":
+                    initial["enrollment_plan"] = "monthly_part_child"
                 else:
                     initial["enrollment_plan"] = "monthly_full"
                 initial["has_language_cheque"] = enrollment.has_language_cheque
@@ -626,6 +640,8 @@ class StudentUpdateView(UpdateView):
             wanted = ("quarterly", "full_time")
         elif plan == "monthly_part":
             wanted = ("monthly", "part_time")
+        elif plan == "monthly_part_child":
+            wanted = ("monthly", "part_time_child")
         else:
             wanted = ("monthly", "full_time")
 
@@ -778,6 +794,18 @@ class StudentDetailView(DetailView):
     context_object_name = "student"
     pk_url_kwarg = "student_id"
 
+    def get_queryset(self):
+        """Scope the ficha to the requesting session — 404 for anyone else's student.
+
+        `student_detail` is in `NON_ADMIN_ALLOWED_URL_NAMES` (it is this role's
+        core surface — it is how a teacher gets a parent's phone number), so
+        without this a non-admin teacher could read the full ficha of ANY
+        student — name, school, allergies, guardians, addresses, phone numbers —
+        by typing an id into the URL. `visible_students_for` returning a
+        narrowed queryset makes that a plain 404 via `get_object_or_404`.
+        """
+        return visible_students_for(self.request, super().get_queryset())
+
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context["parents"] = self.object.parents.all()
@@ -853,7 +881,10 @@ def search_students(request):
         return JsonResponse({"results": []})
 
     students = (
-        Student.objects.filter(active=True)
+        # Scoped to the requesting session: a non-admin teacher autocompletes
+        # only their own students. Without it the endpoint is a name-and-guardian
+        # directory for the whole academy, reachable from any page.
+        visible_students_for(request, Student.objects.filter(active=True))
         .filter(Q(first_name__icontains=query) | Q(last_name__icontains=query))
         .select_related("group")
         # `order_by("id")` is not cosmetic: the parent returned here is the one

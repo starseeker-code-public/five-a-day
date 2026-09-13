@@ -5,7 +5,7 @@
  * Requires window.STUDENT_CREATE_CONFIG to be set by an inline script:
  *   window.STUDENT_CREATE_CONFIG = {
  *       studentsListUrl: '{% url "students_list" %}',
- *       priceConfig: { monthly_full: ..., monthly_part: ..., quarterly: ..., adult_group: ... },
+ *       priceConfig: { monthly_full: ..., monthly_part: ..., monthly_part_child: ..., quarterly: ..., adult_group: ... },
  *       languageChequeDiscount: ...,
  *       siblingDiscount: ...,
  *       isAdultMode: true|false
@@ -42,6 +42,7 @@ document.addEventListener('DOMContentLoaded', function () {
     const priceConfig = cfg.priceConfig || {
         'monthly_full': 0,
         'monthly_part': 0,
+        'monthly_part_child': 0,
         'quarterly': 0,
         'adult_group': 0
     };

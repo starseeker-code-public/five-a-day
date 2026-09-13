@@ -671,8 +671,12 @@ class TestNonAdminLedger:
     `create_expense` is a financial write against it."""
 
     @pytest.fixture
-    def non_admin_client(self, client):
-        return _logged_in(client, _make_teacher(email="led@fiveaday.test", admin=False))
+    def ledger_teacher(self, db):
+        return _make_teacher(email="led@fiveaday.test", admin=False)
+
+    @pytest.fixture
+    def non_admin_client(self, client, ledger_teacher):
+        return _logged_in(client, ledger_teacher)
 
     @pytest.mark.parametrize("url_name", ["expenses_list", "create_expense"])
     def test_expenses_are_not_in_the_whitelist(self, url_name):
@@ -687,9 +691,16 @@ class TestNonAdminLedger:
         response = non_admin_client.post(reverse("create_expense"), {"description": "x", "amount": "10"})
         assert response.status_code == 302
 
-    def test_the_ficha_is_still_reachable(self, non_admin_client, student):
+    def test_the_ficha_is_still_reachable(self, non_admin_client, ledger_teacher, group, student):
         """Kept deliberately: the roll is this role's core surface. The payment
-        history it renders is gated in the TEMPLATE on `is_admin_user`."""
+        history it renders is gated in the TEMPLATE on `is_admin_user`.
+
+        Reachable for THEIR OWN students only — the ficha is now scoped to the
+        groups the teacher teaches (`core.transactions.visible_students_for`),
+        so the group has to be theirs for this to be a 200.
+        """
+        group.teacher = ledger_teacher
+        group.save(update_fields=["teacher"])
         assert non_admin_client.get(reverse("student_detail", args=[student.id])).status_code == 200
 
 

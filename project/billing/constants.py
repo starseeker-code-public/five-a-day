@@ -16,6 +16,13 @@ ADULT_ENROLLMENT_FEE = Decimal("20.00")  # Matrícula adultos (1 año)
 
 FULL_TIME_MONTHLY_FEE = Decimal("54.00")  # Jornada completa (2 clases/semana)
 PART_TIME_MONTHLY_FEE = Decimal("36.00")  # Media jornada (1 clase/semana)
+# Media jornada INFANTIL — same one-class-a-week timetable as `part_time`, at
+# the reduced rate the academy charges the youngest children. It is a separate
+# schedule type rather than a discount because it is a PRICE BAND: every
+# discount (hermano, cheque idioma, junio) layers on top of it exactly as it
+# does on the others. Seed value only — the live figure is
+# `SiteConfiguration.part_time_child_monthly_fee`, editable in /management/.
+PART_TIME_CHILD_MONTHLY_FEE = Decimal("32.00")  # Media jornada infantil (1 clase/semana)
 ADULT_GROUP_MONTHLY_FEE = Decimal("60.00")  # Grupo adultos (1 clase/semana)
 
 
@@ -32,11 +39,17 @@ FULL_YEAR_BONUS = (Decimal("20.00"), "flat")  # Año completo (NO adultos)
 SIBLING_DISCOUNT = (Decimal("5.00"), "percentage")  # Hermanos (5% cada mes)
 HALF_MONTH_DISCOUNT = (Decimal("50.00"), "percentage")  # Medio mes (septiembre)
 # The day classes start in September, i.e. the day the academy's own reminder
-# email prorates the first month from ("empezamos el 15"). Billing itself
+# email prorates the first month from ("empezamos el 16"). Billing itself
 # prorates each enrollment from its OWN `enrollment_date`; this default only
 # feeds the September payment-reminder email (`PricingService.payment_reminder_special`),
 # and the form can override it for a year that starts on another day.
-SEPTEMBER_CLASSES_START_DAY = 15
+#
+# 16, not 15: September has 30 days and `proration_fraction` counts the joining
+# day, so the 16th bills 15/30 — EXACTLY half the month, which is what the
+# academy tells families ("solo se cobra medio mes"). Starting on the 15th
+# billed 16/30 = 53 %, so the email's own explanatory text and its figures
+# disagreed with each other on the academy's most-read parent email.
+SEPTEMBER_CLASSES_START_DAY = 16
 ONE_WEEK_DISCOUNT = (Decimal("75.00"), "percentage")  # Solo 1 semana (primer mes)
 THREE_WEEK_DISCOUNT = (Decimal("25.00"), "percentage")  # Solo 3 semanas
 # v1.13 — returning-student enrollment discount (flat euros off the one-time
@@ -84,6 +97,11 @@ ENROLLMENT_TYPE_DISPLAY_ES = {
 SCHEDULE_TYPE_CHOICES = [
     ("full_time", "2 días/semana"),
     ("part_time", "1 día/semana"),
+    # Same timetable as `part_time`, cheaper band for the youngest children. It
+    # is deliberately NOT validated against `Student.is_adult`: the academy
+    # picks the band by hand and this is a rare case, so a wrong pick is an
+    # admin correcting a dropdown, not a data-integrity problem worth a rule.
+    ("part_time_child", "Infantil (1 día/semana)"),
     ("adult_group", "Adultos (1 día/semana)"),
 ]
 

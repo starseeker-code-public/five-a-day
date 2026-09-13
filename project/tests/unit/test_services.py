@@ -49,6 +49,9 @@ class TestPricingService:
         assert PricingService.payment_reminder_fees() == {
             "full_time_fee": "54",
             "part_time_fee": "36",
+            # Media jornada infantil — printed as a sub-line of the part-time row
+            # rather than as a row of its own; it is the same class at its own band.
+            "part_time_child_fee": "32",
             "adult_fee": "60",
             "quarterly_fee": "153,90",
             "sibling_full_time_fee": "51,30",

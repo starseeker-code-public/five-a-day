@@ -817,7 +817,14 @@ def payment_reminder_form(request):
                 messages.warning(request, "⚠️ No hay padres con email para enviar")
                 return redirect("apps")
 
-            fee_keys = ("full_time_fee", "part_time_fee", "adult_fee", "quarterly_fee", "sibling_full_time_fee")
+            fee_keys = (
+                "full_time_fee",
+                "part_time_fee",
+                "part_time_child_fee",
+                "adult_fee",
+                "quarterly_fee",
+                "sibling_full_time_fee",
+            )
             fees = {key: special[key] for key in fee_keys}
             # Everything the special template reads beyond the sender's named
             # arguments (`september_start_day`, `proration_percent`,

@@ -324,11 +324,15 @@ NON_ADMIN_ALLOWED_URL_NAMES = frozenset(
         "waiting_list_create",
         # Schedule — view-only for non-admin teachers (save_schedule_slot stays admin-only)
         "schedule_view",
-        # Fun Friday (attendance view + attendance API)
-        "fun_friday_view",
-        "add_fun_friday_attendance",
-        "remove_fun_friday_attendance",
-        "toggle_fun_friday_this_week",
+        # Fun Friday is GONE from this list entirely — the page AND all three
+        # attendance endpoints (`fun_friday_view`, `add_fun_friday_attendance`,
+        # `remove_fun_friday_attendance`, `toggle_fun_friday_this_week`), which
+        # also carry `@admin_required` at the view. Deciding who comes on a
+        # Friday is the academy's call, not a teacher's, and the page listed
+        # every child on the roll — which is also the only place a teacher could
+        # still see students outside their own groups. They keep the READ:
+        # `students.html` renders each of their students' Fun Friday state as a
+        # plain icon instead of a toggle, and the ficha still lists the dates.
         # Management page — view-only. Write endpoints below are NOT in this list:
         #   update_site_config, create_teacher, create_group,
         #   update_enrollment_modality  (admin-only writes)
@@ -545,6 +549,16 @@ class SimpleAuthMiddleware:
 
     def _portal_gate(self, request, path):
         """Default-deny for `/parent/…`, or None to let the request through."""
+        # PARENT PORTAL KILL SWITCH — see settings.PARENT_PORTAL_ENABLED.
+        # While the portal is off every /parent/ URL is a 404, including the
+        # login and recovery pages, so a family holding an old link finds
+        # nothing rather than a form that cannot help them. Flip the setting to
+        # True to bring the whole portal back; nothing else needs changing.
+        if not getattr(settings, "PARENT_PORTAL_ENABLED", False):
+            from django.http import Http404
+
+            raise Http404
+
         try:
             url_name = resolve(path).url_name
         except Exception:

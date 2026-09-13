@@ -229,7 +229,17 @@
                         {% if student.is_adult %}
                             <span class="text-neutral-300">—</span>
                         {% else %}
-                        <button class="ff-toggle-btn inline-flex items-center justify-center w-7 h-7 rounded-full cursor-pointer" style="background:none;border:none;padding:0;" data-student-id="{{ student.id }}">
+                        {% comment %}
+                            Same icon for everyone, but only an admin gets the
+                            TOGGLE. A non-admin teacher may see which of their
+                            students is coming on Friday and may not change it —
+                            `toggle_fun_friday_this_week` is admin-only, so the
+                            button would 403 on click and silently revert on
+                            screen. Rendered as a <span> for them rather than a
+                            disabled <button>: `students.js` binds every
+                            `.ff-toggle-btn`, so the class is what must be absent.
+                        {% endcomment %}
+                        {% if is_admin_user %}<button class="ff-toggle-btn inline-flex items-center justify-center w-7 h-7 rounded-full cursor-pointer" style="background:none;border:none;padding:0;" data-student-id="{{ student.id }}">{% else %}<span class="inline-flex items-center justify-center w-7 h-7" title="Fun Friday (solo lectura)">{% endif %}
                             {% if student.id in this_week_ids %}
                                 {% if student.id in last_week_ids %}
                                     <span class="material-symbols-outlined text-base ff-icon" style="color:#f59e0b;">check_circle</span>
@@ -243,7 +253,7 @@
                                     <span class="material-symbols-outlined text-base ff-icon" style="color:#d1d5db;">cancel</span>
                                 {% endif %}
                             {% endif %}
-                        </button>
+                        {% if is_admin_user %}</button>{% else %}</span>{% endif %}
                         {% endif %}
                     </td>
                     <td class="px-3 py-4 border-l border-neutral-200 bg-neutral-50 text-center">

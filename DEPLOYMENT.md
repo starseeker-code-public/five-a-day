@@ -461,6 +461,7 @@ gcloud run deploy fiveaday \
   --set-env-vars="DJANGO_ALLOWED_HOSTS=fiveaday-332600671945.europe-southwest1.run.app" \
   --set-env-vars="DATABASE_URL=postgres://fiveaday_user:PASSWORD@/fiveaday_db?host=/cloudsql/$PROJECT_ID:$REGION:fiveaday-db" \
   --set-env-vars="CELERY_TASK_ALWAYS_EAGER=True" \
+  --set-env-vars="CACHE_DB=True" \
   --set-env-vars="RUN_MIGRATIONS_ON_START=false" \
   --set-env-vars="GOOGLE_REDIRECT_URI=https://fiveaday-332600671945.europe-southwest1.run.app/auth/google/callback/" \
   --set-env-vars="TEACHER_SEED_1_ADMIN=True" \
@@ -486,6 +487,33 @@ gcloud run deploy fiveaday \
 > (`--set-env-vars` would drop the other ~30 vars and 6 Secret Manager refs). Development and the
 > testing VM leave it unset on purpose — there the self-migrate on boot is what you want.
 
+> **Every Cloud Run JOB carries its OWN env set — updating the service does not touch them.** This
+> is the same trap as the image tag (jobs pin their own, so `gcloud run deploy` leaves them on the
+> previous release), and it bites harder: the vars that drive the production posture guard in
+> `project/settings.py` are asserted at **import** time, so a job missing one does not fail its
+> task — it cannot start at all, and a Cloud Scheduler trigger reports nothing when it doesn't.
+> `CACHE_DB` was the live case: the service had it, none of the 12 jobs ever did, and they only
+> kept working because the deployed image predated the guard. The first release carrying the guard
+> failed at `migrate` and rolled back; had migrate not run first, all 12 scheduled tasks would have
+> stopped silently. `deploy-production.yml` now asserts job-vs-service parity over `POSTURE_ENV_KEYS`
+> (plus "CACHE_DB or CACHE_URL") in the same pre-mutation gate that inventories the jobs. When you
+> add or change a posture var on the service, apply it to the jobs in the same motion — merge, never
+> replace:
+>
+> ```bash
+> for J in $(gcloud run jobs list --project=$PROJECT_ID --region=$REGION --format='value(metadata.name)'); do
+>   gcloud run jobs update "$J" --project=$PROJECT_ID --region=$REGION \
+>     --update-env-vars="CACHE_DB=True" --quiet
+> done
+> ```
+
+> **The deploy service account needs `roles/cloudscheduler.viewer`.** `scripts/setup_cicd.sh` grants
+> it, but a service account provisioned before that line was added will not have it, and the
+> inventory gate then fails with `PERMISSION_DENIED: lacks cloudscheduler.jobs.list` — which is a
+> gap in the **check**, not evidence about the schedules. Viewer, not admin: the pipeline reports
+> drift and never resumes a schedule. Repair with
+> `gcloud projects add-iam-policy-binding $PROJECT_ID --member="serviceAccount:fiveaday-deploy@$PROJECT_ID.iam.gserviceaccount.com" --role=roles/cloudscheduler.viewer --condition=None`.
+
 **Optional env vars / secrets** — omit any feature you are not using; each one is dormant and
 harmless when unset. Add them to the same `gcloud run deploy` invocation:
 
@@ -500,6 +528,11 @@ harmless when unset. Add them to the same `gcloud run deploy` invocation:
   --set-secrets="ACADEMY_IBAN=ACADEMY_IBAN:latest" \
   --set-secrets="ACADEMY_IBAN_HOLDER=ACADEMY_IBAN_HOLDER:latest" \
   --set-secrets="ACADEMY_PHONE=ACADEMY_PHONE:latest" \
+  # Parent portal (v1.29.4) — OFF by default, so production needs NOTHING here to keep it
+  # off. While it is off every /parent/ URL 404s and no invitation or recovery mail is sent.
+  # To turn it on:  --set-env-vars="PARENT_PORTAL_ENABLED=True"   (merge with
+  # --update-env-vars, never --set-env-vars alone, which replaces the whole set). The Stripe
+  # keys below only matter while the portal is enabled — "Pagar online" lives inside it.
   # Stripe (v1.11) — STRIPE_WEBHOOK_SECRET is REQUIRED if STRIPE_SECRET_KEY is set,
   # otherwise the webhook skips signature verification entirely
   --set-secrets="STRIPE_SECRET_KEY=STRIPE_SECRET_KEY:latest" \
@@ -672,11 +705,14 @@ run inline):
 | `purge_expired_sessions` | `purge_sessions` | daily, 03:30 | `30 3 * * *` |
 | — (ops only, no Beat task) | `backup_retention --apply` | daily, 05:30 | `30 5 * * *` |
 
-> **Provisioning status (verified 2026-09-02).** 12 Cloud Run Jobs, 11 Cloud Scheduler
-> entries: `fiveaday-archive-gcp-costs` + its 3rd-of-month schedule already exist, created
-> ahead of the v1.26.x release with `GCP_BILLING_EXPORT_TABLE` in the job env; the schedule
-> is **PAUSED** until that release is live (see the `archive_gcp_costs` note below).
-> `fiveaday-migrate` has no schedule by design (deploy-time only). Note the
+> **Provisioning status (verified 2026-09-13).** 12 Cloud Run Jobs, 11 Cloud Scheduler
+> entries, **all of them ENABLED**. `fiveaday-migrate` has no schedule by design
+> (deploy-time only). The three "create it PAUSED until its release ships" notes below are
+> HISTORY — every one of those releases is live and every schedule has been resumed, which is
+> why `PAUSED_OK_SCHEDULES` in `deploy-production.yml` is now **empty**: an exemption is only
+> safe while it is still true, and a stale one is exactly the dead tolerance the paused-schedule
+> gate exists to prevent. If you ever pause a schedule again, add it to that list **in the same
+> commit**, and remove it in the release that resumes it. Note the
 > **schedulers live in `europe-west1`**, not the service's `europe-southwest1` — Cloud
 > Scheduler is not available in that region, so `gcloud scheduler jobs list --location`
 > must say `europe-west1` or it silently returns nothing.
@@ -685,10 +721,9 @@ run inline):
 > from v1.15 but no job and no schedule were ever created, so the audit trail was never
 > actually pruned in production. Created and smoke-tested.
 >
-> `sched-fiveaday-purge-sessions` is **PAUSED** until v1.23.0 is deployed — the
-> `purge_sessions` command does not exist in the currently-deployed image, so an enabled
-> schedule would just fail nightly. **Resume it immediately after the v1.23.0 production
-> deploy:**
+> `sched-fiveaday-purge-sessions` was created **PAUSED** until v1.23.0 was deployed — the
+> `purge_sessions` command did not exist in the image at the time, so an enabled schedule
+> would just have failed nightly. **Resumed; kept here as the recipe for the next time:**
 >
 > ```bash
 > gcloud scheduler jobs resume sched-fiveaday-purge-sessions >   --project=five-a-day-evolution --location=europe-west1
@@ -764,9 +799,9 @@ run inline):
 > `fiveaday-archive-gcp-costs` Cloud Run Job also exists already (cloned via YAML replace
 > from `fiveaday-prune-audit-log`, args `project/manage.py archive_gcp_costs`, env includes
 > `GCP_BILLING_EXPORT_TABLE`; the release deploy repoints its image like the other 11) and
-> `sched-fiveaday-archive-gcp-costs` (`45 6 3 * *`, Europe/Madrid, europe-west1) is created
-> **PAUSED**. The single remaining step, right after the release with `archive_gcp_costs`
-> is live in production:
+> `sched-fiveaday-archive-gcp-costs` (`45 6 3 * *`, Europe/Madrid, europe-west1) was created
+> **PAUSED**. That release is live and the schedule has been **resumed** — kept here as the
+> recipe for the next time a schedule has to wait for its command:
 >
 > ```bash
 > gcloud scheduler jobs resume sched-fiveaday-archive-gcp-costs --project=five-a-day-evolution --location=europe-west1
