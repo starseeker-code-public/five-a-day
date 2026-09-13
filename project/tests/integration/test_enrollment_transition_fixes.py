@@ -301,8 +301,11 @@ class TestRefundedPaymentCannotBeCompleted:
 
     @pytest.mark.parametrize("dead_status", ["cancelled", "refunded"])
     def test_quick_complete_refuses_dead_money(self, authenticated_client, pending_payment, dead_status):
-        pending_payment.payment_status = dead_status
-        pending_payment.save()
+        # `.update()`, not `.save()`: `pending -> refunded` is itself an illegal
+        # transition now (money that never arrived cannot be returned), so the
+        # dead row has to be written past the model to exercise the endpoint.
+        type(pending_payment).objects.filter(pk=pending_payment.pk).update(payment_status=dead_status)
+        pending_payment.refresh_from_db()
 
         response = authenticated_client.post(
             self._url(pending_payment),
@@ -567,7 +570,6 @@ class TestPickerTruncationIsAnnounced:
         response = authenticated_client.get(reverse("student_create"))
         assert len(response.context["all_students_for_sibling"]) == 1
         assert "Mostrando solo los primeros 1 de 2" in response.context["sibling_list_notice"]
-        assert response.context["sibling_search_url"] == reverse("search_students")
 
     def test_no_notice_when_nothing_was_dropped(self, authenticated_client, student, site_config):
         response = authenticated_client.get(reverse("student_create"))

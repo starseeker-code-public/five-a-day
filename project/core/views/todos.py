@@ -66,8 +66,6 @@ def complete_todo(request, todo_id):
 
 @admin_required
 def history_list(request):
-    from django.utils.timesince import timesince
-
     try:
         offset = int(request.GET.get("offset", 0))
     except (ValueError, TypeError):
@@ -86,8 +84,8 @@ def history_list(request):
                 "action_display": entry.get_action_display(),
                 "message": entry.message,
                 "icon": entry.icon,
+                # ISO with offset; base.js formats the relative time client-side.
                 "created_at": entry.created_at.isoformat(),
-                "time_ago": timesince(entry.created_at) + " ago",
             }
         )
 

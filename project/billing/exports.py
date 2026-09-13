@@ -5,7 +5,10 @@ Each function returns an openpyxl Workbook (or a single Worksheet) so callers
 can decide how to deliver it (HTTP response, save to file, attach to email, …).
 """
 
+from datetime import datetime
+
 import openpyxl
+from django.utils import timezone
 from openpyxl.styles import Alignment, Font, PatternFill
 
 from billing.models import Enrollment, Payment
@@ -50,7 +53,17 @@ def _auto_width(ws):
 
 
 def _d(d):
-    return d.strftime("%d/%m/%Y") if d else ""
+    """dd/mm/yyyy for a date OR an aware datetime.
+
+    The three `created_at` columns are aware UTC datetimes; formatting them
+    directly printed the UTC calendar day, which is YESTERDAY for anything
+    created between local midnight and 01:00/02:00 in Madrid.
+    """
+    if not d:
+        return ""
+    if isinstance(d, datetime):
+        d = timezone.localtime(d)
+    return d.strftime("%d/%m/%Y")
 
 
 def build_students_sheet(ws):
@@ -63,6 +76,7 @@ def build_students_sheet(ws):
             "Fecha Nacimiento",
             "Colegio",
             "Alergias",
+            "Autorizados recogida",
             "RGPD Firmado",
             "Grupo",
             "Activo",
@@ -90,6 +104,7 @@ def build_students_sheet(ws):
                 _d(s.birth_date),
                 s.school,
                 s.allergies,
+                s.pickup_authorized,
                 "Sí" if s.gdpr_signed else "No",
                 s.group.group_name if s.group else "",
                 "Sí" if s.active else "No",

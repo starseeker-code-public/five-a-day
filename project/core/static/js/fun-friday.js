@@ -13,15 +13,6 @@ function applyVisibility() {
     });
 }
 
-// Sort priority 1(green)->2(yellow check)->3(yellow x)->4(grey)
-function getFFCategory(row) {
-    const t = row.dataset.ffThis === '1', l = row.dataset.ffLast === '1';
-    if (t && !l) return 1;
-    if (t && l)  return 2;
-    if (!t && l) return 3;
-    return 4;
-}
-
 function updateFFIcon(btn, isThis, isLast) {
     const span = btn.querySelector('.ff-icon');
     const row = btn.closest('.ff-student-row');

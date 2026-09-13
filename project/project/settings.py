@@ -111,7 +111,9 @@ if not DEBUG:
 
     # Otros headers de seguridad
     SECURE_CONTENT_TYPE_NOSNIFF = os.getenv("SECURE_CONTENT_TYPE_NOSNIFF", "True").lower() == "true"
-    SECURE_BROWSER_XSS_FILTER = os.getenv("SECURE_BROWSER_XSS_FILTER", "True").lower() == "true"
+    # No SECURE_BROWSER_XSS_FILTER: Django removed the setting in 4.0 (the
+    # X-XSS-Protection header it emitted is ignored by every current browser),
+    # so assigning it here was a no-op that read as a control.
     X_FRAME_OPTIONS = os.getenv("X_FRAME_OPTIONS", "DENY")
 
     # Trust the X-Forwarded-Proto header from reverse proxies (Nginx, Cloud Run LB)

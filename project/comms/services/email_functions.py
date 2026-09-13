@@ -33,11 +33,11 @@ def cheque_idioma_fee(config=None) -> str:
     # `_euros` es el formateador que ya usa payment_reminder_fees (coma decimal,
     # sin ",00" en euros enteros). Se importa en lugar de reescribirlo: dos
     # formateadores distintos en la misma tabla es exactamente el bug de arriba.
+    # La cifra sale de `PricingService.cheque_idioma_price`, que la calcula con
+    # la MISMA aritmética que factura el generador — no de un `fee - 20` local.
     from billing.services.pricing_service import PricingService, _euros
 
-    if config is None:
-        config = PricingService.get_config()
-    return _euros(config.full_time_monthly_fee - config.language_cheque_discount)
+    return _euros(PricingService.cheque_idioma_price(config))
 
 
 # ============================================================================
@@ -246,6 +246,9 @@ def send_payment_reminder_email(
     sibling_full_time_fee: str | int | None = None,
     attachments: list | None = None,
     connection=None,
+    template_name: str = "payment_reminder",
+    subject_suffix: str = "",
+    extra_context: dict | None = None,
 ) -> bool:
     """
     Envia recordatorio de pago mensual/trimestral.
@@ -269,6 +272,14 @@ def send_payment_reminder_email(
         quarterly_fee: Cuota trimestral (3 mensualidades - descuento trimestral)
         sibling_full_time_fee: Cuota 2 sesiones con descuento hermano
         attachments: Lista de PDFs (tarifas, instrucciones)
+        template_name: `payment_reminder` (el mes normal) o una de sus variantes
+            de mes especial — `payment_reminder_september` / `_june` / `_april`
+            (ver `PricingService.payment_reminder_special`, que devuelve el
+            nombre junto a las tarifas ya ajustadas a ese mes).
+        subject_suffix: Coletilla del asunto para los meses especiales.
+        extra_context: Claves adicionales que la variante necesita
+            (`september_start_day`, `proration_percent`, `june_discount`,
+            `standard_*`).
 
     Las cinco tarifas se calculan desde SiteConfiguration cuando la llamada no
     las pasa (PricingService.payment_reminder_fees), para que ningun emisor
@@ -293,10 +304,11 @@ def send_payment_reminder_email(
         fees = {key: (defaults[key] if value is None else value) for key, value in fees.items()}
 
     return email_service.send_email(
-        template_name="payment_reminder",
+        template_name=template_name,
         recipients=recipients,
-        subject=f"💳 Recordatorio de Pago - {month}",
+        subject=f"💳 Recordatorio de Pago - {month}{subject_suffix}",
         context={
+            **(extra_context or {}),
             "payment_start_day_name": payment_start_day_name,
             "payment_start_day_number": payment_start_day_number,
             "payment_end_day_name": payment_end_day_name,

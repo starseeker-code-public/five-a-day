@@ -10,6 +10,7 @@ from django.db import IntegrityError, transaction
 from django.db.models import Case, DecimalField, Max, Min, Q, Sum, Value, When
 from django.http import Http404, HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
+from django.utils import timezone
 from django.views.decorators.http import require_http_methods
 
 from billing import constants
@@ -73,6 +74,20 @@ def _queue_payment_receipt(payment_id: int) -> None:
         dispatch_payment_completed(int(payment_id))
 
     transaction.on_commit(_dispatch)
+
+
+def _current_enrollment_for(student):
+    """The enrollment a payment for `student` should hang off.
+
+    Prefer the ACTIVE enrollment; fall back to the most recent one. Shared by
+    `create_payment` and `update_payment` (when the student is re-pointed) so
+    the two cannot pick differently — an unordered `enrollments.first()` used to
+    attach payments to whichever row came first, usually a finished one.
+    """
+    return (
+        student.enrollments.filter(status="active").order_by("-enrollment_date", "-id").first()
+        or student.enrollments.order_by("-enrollment_date", "-id").first()
+    )
 
 
 def _validated_choice(value, choices, default):
@@ -292,14 +307,7 @@ def create_payment(request):
                 )
                 return redirect("payments_list")
 
-            # Prefer the ACTIVE enrollment. `enrollments.first()` has no
-            # ordering and no status filter, so for a returning student it
-            # picked whichever row happened to come first — usually the old
-            # finished one — and attached the payment to it.
-            enrollment = (
-                student.enrollments.filter(status="active").order_by("-enrollment_date", "-id").first()
-                or student.enrollments.order_by("-enrollment_date", "-id").first()
-            )
+            enrollment = _current_enrollment_for(student)
 
             # Choice fields are not validated by Model.objects.create(), so a
             # crafted or stale form could persist e.g. payment_status="wat",
@@ -487,10 +495,25 @@ def update_payment(request, payment_id):
         else:
             data = request.POST
 
+        # A numbered receipt is a fiscal document the family already holds.
+        # Restating its amount or its student would silently make the emailed
+        # PDF and the database disagree about the same `YYYY-NNN`.
+        if payment.receipt_number and any(key in data for key in ("amount", "student_id")):
+            raise ValidationError(
+                f"Este pago tiene recibo emitido (nº {payment.receipt_number}): "
+                "no se puede cambiar el importe ni el alumno."
+            )
+
         # Update fields
         if "student_id" in data:
             student = get_object_or_404(Student, id=data["student_id"])
-            payment.student = student
+            if student.pk != payment.student_id:
+                payment.student = student
+                # Re-point the enrollment WITH the student: left alone, the row
+                # kept hanging off the previous student's enrollment, so it
+                # counted towards that child's debt and the receipt breakdown
+                # re-priced it against the wrong plan.
+                payment.enrollment = _current_enrollment_for(student)
         if "parent_id" in data:
             # An empty parent_id clears the link (valid for adult students),
             # rather than 404-ing on a lookup for "".
@@ -518,6 +541,13 @@ def update_payment(request, payment_id):
             payment.currency = data["currency"]
         if "payment_status" in data:
             payment.payment_status = data["payment_status"]
+            # Reopening clears the collection date, as the admin's "Marcar como
+            # pendientes" does: every income figure filters on `payment_date`,
+            # and a re-completion later would otherwise book the money into the
+            # OLD month (and file the receipt under it) because `clean()` only
+            # backfills the date when it is empty.
+            if payment.payment_status == "pending" and "payment_date" not in data:
+                payment.payment_date = None
         if "due_date" in data:
             payment.due_date = parse_date_value(data["due_date"])
         if "payment_date" in data:
@@ -557,6 +587,11 @@ def update_payment(request, payment_id):
             }
         )
 
+    except json.JSONDecodeError:
+        # A malformed body is the CLIENT's fault: answer 400 like
+        # `validate_student_parent` does, rather than a logged 500 (which on the
+        # QA VM also mails an error report for a plain bad request).
+        return JsonResponse({"success": False, "error": "Datos de pago inválidos."}, status=400)
     except InvalidOperation:
         # A Decimal parse failure. Its str() is internal noise ("[<class
         # 'decimal.ConversionSyntax'>]"), useless to the user and the last
@@ -616,6 +651,12 @@ def delete_payment(request, payment_id):
     # Outside the try — a double-clicked delete used to 500 ("Error al eliminar")
     # on the second request while the first had already succeeded.
     payment = get_object_or_404(Payment.objects.select_related("student"), id=payment_id)
+    # The model's rule (`Payment.assert_deletable`), shared with the admin.
+    # Refused before the try so it answers 400, not a logged 500.
+    try:
+        payment.assert_deletable()
+    except ValidationError as e:
+        return JsonResponse({"success": False, "error": " ".join(e.messages)}, status=400)
     try:
         student_name = payment.student.full_name
 
@@ -646,11 +687,20 @@ def deactivate_payment(request, payment_id):
     """
     payment = get_object_or_404(Payment, id=payment_id)
     try:
+        # Cancelling COLLECTED money is refused — the model's rule, the same one
+        # `PaymentAdmin._bulk_set_status` applies. This view used to skip it: a
+        # plain `save()` never runs `clean()`, so the "Cancelar" button on the
+        # payments list voided completed rows and silently dropped banked income
+        # out of already-reported months. Checked on the loaded status, before
+        # the row is mutated, so the answer is an actionable 400.
+        payment.assert_voidable(previous_status=payment.payment_status)
         payment.payment_status = "cancelled"
         payment.save()
 
         return JsonResponse({"success": True, "message": "Pago desactivado exitosamente."})
 
+    except ValidationError as e:
+        return JsonResponse({"success": False, "message": " ".join(e.messages)}, status=400)
     except Exception:
         logger.exception("Error deactivating payment %d", int(payment_id))
         return JsonResponse(
@@ -730,6 +780,8 @@ def quick_complete_payment(request, payment_id):
             }
         )
 
+    except json.JSONDecodeError:
+        return JsonResponse({"success": False, "error": "Datos de pago inválidos."}, status=400)
     except ValidationError as e:
         # `ValidationError.messages` is Django's (and the model's) written-for-humans
         # text — the resurrection refusal above arrives here.
@@ -772,7 +824,9 @@ def get_payment_details(request, payment_id):
                     "concept": payment.concept,
                     "reference_number": payment.reference_number,
                     "observations": payment.observations,
-                    "created_at": payment.created_at.strftime("%Y-%m-%d %H:%M:%S"),
+                    # `localtime` first: the column is aware UTC, and a bare strftime
+                    # printed it one or two hours behind the server-rendered rows.
+                    "created_at": timezone.localtime(payment.created_at).strftime("%Y-%m-%d %H:%M:%S"),
                 },
             }
         )
@@ -898,7 +952,7 @@ def export_payments(request):
                     payment.get_payment_status_display(),
                     payment.due_date.strftime("%d/%m/%Y") if payment.due_date else "",
                     (payment.payment_date.strftime("%d/%m/%Y") if payment.payment_date else ""),
-                    payment.created_at.strftime("%d/%m/%Y %H:%M"),
+                    timezone.localtime(payment.created_at).strftime("%d/%m/%Y %H:%M"),
                 ]
             )
         )

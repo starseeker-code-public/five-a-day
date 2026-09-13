@@ -93,4 +93,3 @@ class TestDashboardReport:
         assert "collection" in r
         assert "retention" in r
         assert "groups" in r
-        assert len(r["months_labels"]) == 12

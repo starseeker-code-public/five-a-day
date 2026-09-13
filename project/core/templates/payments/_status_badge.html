@@ -1,0 +1,35 @@
+{% comment %}
+   THE payment-status badge. It was hand-written as a five-branch chain in four
+   templates and the copies had drifted: all_info.html hard-coded its own labels,
+   coloured `pending` red and had no `refunded` branch at all (a refunded payment
+   rendered no badge there). The label always comes from
+   `get_payment_status_display`, so a renamed status cannot leave a stale word
+   behind. Include with:
+
+     {% include "payments/_status_badge.html" with payment=payment %}
+     {% include "payments/_status_badge.html" with payment=payment classes="px-3 py-1 text-sm font-medium" show_days=True %}
+
+   `classes` sets the size (defaults to the compact list variant); `show_days`
+   appends "(N días)" to an overdue badge. Keep `status-badge` in the class list:
+   payments.js swaps the cell's contents by that hook after a quick-complete.
+{% endcomment %}
+{% firstof classes "px-2 py-1 text-xs font-bold" as size_classes %}
+{% with base="status-badge inline-flex items-center rounded-full "|add:size_classes %}
+{% if payment.payment_status == 'completed' %}
+<span class="{{ base }} bg-green-100 text-green-800"><span class="material-symbols-outlined text-sm mr-2">check_circle</span>{{ payment.get_payment_status_display }}</span>
+{% elif payment.payment_status == 'pending' %}
+{% if payment.is_overdue %}
+<span class="{{ base }} bg-red-100 text-red-800"><span class="material-symbols-outlined text-sm mr-2">warning</span>Vencido{% if show_days %} ({{ payment.days_overdue }} días){% endif %}</span>
+{% else %}
+<span class="{{ base }} bg-amber-100 text-amber-800"><span class="material-symbols-outlined text-sm mr-2">schedule</span>{{ payment.get_payment_status_display }}</span>
+{% endif %}
+{% elif payment.payment_status == 'failed' %}
+<span class="{{ base }} bg-red-100 text-red-800"><span class="material-symbols-outlined text-sm mr-2">cancel</span>{{ payment.get_payment_status_display }}</span>
+{% elif payment.payment_status == 'cancelled' %}
+<span class="{{ base }} bg-neutral-100 text-neutral-800"><span class="material-symbols-outlined text-sm mr-2">block</span>{{ payment.get_payment_status_display }}</span>
+{% elif payment.payment_status == 'refunded' %}
+<span class="{{ base }} bg-blue-100 text-blue-800"><span class="material-symbols-outlined text-sm mr-2">undo</span>{{ payment.get_payment_status_display }}</span>
+{% else %}
+<span class="{{ base }} bg-neutral-100 text-neutral-800">{{ payment.get_payment_status_display }}</span>
+{% endif %}
+{% endwith %}

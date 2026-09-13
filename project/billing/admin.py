@@ -10,6 +10,7 @@ from django.db.models import Count, DecimalField, Q, Sum, Value
 from django.db.models.functions import Coalesce
 from django.http import HttpResponse
 from django.urls import reverse
+from django.utils import timezone
 from django.utils.html import format_html
 
 from billing.constants import PERIODIC_PAYMENT_TYPES
@@ -325,8 +326,34 @@ class PaymentAdmin(admin.ModelAdmin):
 
     mark_as_pending.short_description = "Marcar como pendientes"
 
-    #: Statuses `_bulk_set_status` refuses to move COLLECTED money into.
-    _VOIDING_STATUSES = ("failed", "cancelled")
+    def has_delete_permission(self, request, obj=None):
+        """A collected, refunded or receipt-numbered payment is a fiscal record.
+
+        `delete_payment` in the app refused these; the admin's row Delete button
+        and `delete_selected` did not, so the rule was one click away from a
+        permanent hole in the `YYYY-NNN` receipt sequence. Same predicate as the
+        view (`Payment.is_deletable`); the bulk action is filtered in
+        `delete_queryset` below because Django asks this method without an
+        object for it.
+        """
+        if obj is not None and not obj.is_deletable:
+            return False
+        return super().has_delete_permission(request, obj)
+
+    def delete_queryset(self, request, queryset):
+        """`delete_selected`, minus the rows `assert_deletable` protects."""
+        protected = [p for p in queryset if not p.is_deletable]
+        if protected:
+            names = ", ".join(f"{p.student} ({p.concept})" for p in protected[:5])
+            if len(protected) > 5:
+                names += f" y {len(protected) - 5} más"
+            self.message_user(
+                request,
+                f"{len(protected)} pago(s) sin eliminar: están cobrados, reembolsados o tienen recibo emitido — {names}.",
+                level=messages.WARNING,
+            )
+            queryset = queryset.exclude(pk__in=[p.pk for p in protected])
+        super().delete_queryset(request, queryset)
 
     def _bulk_set_status(self, queryset, status: str):
         """Set `payment_status` row by row so the audit signals fire.
@@ -356,7 +383,11 @@ class PaymentAdmin(admin.ModelAdmin):
         for payment in queryset:
             if payment.payment_status == status:
                 continue
-            if payment.payment_status == "completed" and status in self._VOIDING_STATUSES:
+            # The model's rule, not a copy of it: `assert_voidable` decides which
+            # rows are protected (collected AND refunded money since v1.29.2).
+            try:
+                payment.assert_voidable(previous_status=payment.payment_status)
+            except DjangoValidationError:
                 protected.append(payment)
                 continue
             payment.payment_status = status
@@ -371,7 +402,7 @@ class PaymentAdmin(admin.ModelAdmin):
             if len(protected) > 5:
                 names += f" y {len(protected) - 5} más"
             message += (
-                f" {len(protected)} sin tocar: están completados, es decir cobrados, "
+                f" {len(protected)} sin tocar: están cobrados (o reembolsados), "
                 f"y anularlos restaría ese dinero de los ingresos ya declarados. "
                 f"Reábrelos con «Marcar como pendientes» si hay que corregirlos — {names}."
             )
@@ -436,7 +467,8 @@ class PaymentAdmin(admin.ModelAdmin):
                         payment.due_date.strftime("%Y-%m-%d") if payment.due_date else "",
                         payment.payment_date.strftime("%Y-%m-%d") if payment.payment_date else "",
                         payment.reference_number,
-                        payment.created_at.strftime("%Y-%m-%d %H:%M"),
+                        # Aware UTC column — convert before formatting by hand.
+                        timezone.localtime(payment.created_at).strftime("%Y-%m-%d %H:%M"),
                     ]
                 )
             )

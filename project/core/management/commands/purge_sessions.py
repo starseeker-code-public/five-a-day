@@ -13,7 +13,7 @@ from django.core.management.base import BaseCommand
 
 
 class Command(BaseCommand):
-    help = "Delete expired sessions and spent parent portal password tokens"
+    help = "Delete expired django_session rows (the parent-portal token table no longer exists)"
 
     def handle(self, *args, **options):
         from core.tasks import purge_expired_sessions

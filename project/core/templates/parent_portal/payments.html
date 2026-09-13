@@ -46,7 +46,7 @@
                         <span class="material-symbols-outlined text-sm leading-none">download</span>
                         Recibo
                     </a>
-                    {% elif p.payment_status == 'pending' %}
+                    {% elif p.is_open %}
                     <button type="button"
                             data-payment-id="{{ p.id }}"
                             data-url="{% url 'stripe_create_checkout_link' p.id %}"

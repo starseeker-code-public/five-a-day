@@ -3,6 +3,20 @@
 
 {% block title %}Recordatorio de pago · Five a Day{% endblock %}
 
+{% comment %}
+    The regular monthly reminder. Three months are NOT regular and have their own
+    template, each extending THIS one and overriding only the blocks below:
+      emails/payment_reminder_september.html  — half month (classes start mid-month)
+      emails/payment_reminder_june.html       — last month, fin-de-curso discount
+      emails/payment_reminder_april.html      — quarterly block that carries that discount
+    `PricingService.payment_reminder_special` picks the template AND supplies the
+    figures; the IBAN / Bizum / opening-hours shell lives only here.
+      reminder_notice   — an explanation box between the plazo and the bank data
+      fee_table_title   — heading of the tarifas table
+      fee_rows          — the rows of that table
+      cheque_box        — the red Cheque Idioma box
+{% endcomment %}
+
 {% block content %}
 <div style="text-align: center; padding: 40px 20px;">
     <h1 style="color: #6d28d9; font-size: 32px; margin-bottom: 20px;">
@@ -19,6 +33,8 @@
             Nos ponemos en contacto con vosotros para recordaros que se debe realizar el pago de este mes entre el {{ payment_start_day_name }} {{ payment_start_day_number }} y {{ payment_end_day_name }} {{ payment_end_day_number }} de {{ month }}.
         </p>
     </div>
+
+    {% block reminder_notice %}{% endblock %}
 
     <div style="background-color: #ede9fe; border-radius: 12px; padding: 25px; margin: 30px 0; text-align: left;">
         <h2 style="color: #6d28d9; font-size: 18px; margin: 0 0 15px 0;">
@@ -54,9 +70,10 @@
 
     <div style="background-color: #ede9fe; border-radius: 12px; padding: 25px; margin: 30px 0; text-align: left;">
         <h2 style="color: #6d28d9; font-size: 18px; margin: 0 0 15px 0;">
-            💶 Tarifas
+            {% block fee_table_title %}💶 Tarifas{% endblock %}
         </h2>
         <table style="width: 100%; font-size: 14px; color: #1f2430;">
+            {% block fee_rows %}
             <tr>
                 <td style="padding: 8px 0; border-bottom: 1px solid #d1cbe8;">
                     Cuota trimestral
@@ -97,14 +114,17 @@
                     {{ adult_fee }} euros
                 </td>
             </tr>
+            {% endblock %}
         </table>
     </div>
 
+    {% block cheque_box %}
     <div style="background-color: #fee2e2; border-left: 4px solid #EF4444; padding: 15px; margin: 20px 0; text-align: left;">
         <p style="color: #b91c1c; margin: 0; font-size: 14px;">
             Si os beneficiáis del Cheque Idioma, la cuota sería de {{ reduced_price_cheque_idioma }} euros y tenéis que venir a la academia a <strong>firmar</strong> el recibo.
         </p>
     </div>
+    {% endblock %}
 
     <div style="background-color: #ede9fe; border-radius: 12px; padding: 25px; margin: 30px 0; text-align: left;">
         <h2 style="color: #6d28d9; font-size: 18px; margin: 0 0 15px 0;">
