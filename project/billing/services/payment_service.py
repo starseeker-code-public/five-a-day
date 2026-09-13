@@ -214,13 +214,20 @@ class PaymentService:
     def _round_money(value):
         """The ONE rounding for a period price — floor €0.01, quantize HALF_UP.
 
-        Delegates to `billing.services.pricing_service.round_money`, which is
-        where the rule now lives because `Enrollment.save()` needs it too and
-        cannot import this module (it is imported BY this module). This method
-        stays as the name every billing caller already reaches for; see the
-        helper for why the floor and the HALF_UP matter.
+        Delegates to `billing.money.round_money` — the LEAF module, not
+        `pricing_service`, which merely re-exports it. Reaching for the
+        re-export made this module import `pricing_service` while
+        `pricing_service._standard_period_price` imports this one, and CodeQL
+        flagged the resulting `pricing_service -> payment_service ->
+        pricing_service` cycle on PR #68. Both imports are function-local so it
+        never broke at runtime, which is exactly why it needed a scan to find.
+
+        `billing/money.py` exists for this: it is stdlib-only and imports
+        nothing from the app, so anything that reaches it cannot start a cycle.
+        `Enrollment.save()` and `EnrollmentService._apply_discounts` already go
+        straight there. Do not route this back through `pricing_service`.
         """
-        from billing.services.pricing_service import round_money
+        from billing.money import round_money
 
         return round_money(value)
 
