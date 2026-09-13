@@ -292,6 +292,12 @@
                         <label for="{{ form.allergies.id_for_label }}" class="block text-sm font-medium text-neutral-700 mb-2">{{ form.allergies.label }}</label>
                         {{ form.allergies }}
                     </div>
+                    <div>
+                        <label for="{{ form.pickup_authorized.id_for_label }}" class="block text-sm font-medium text-neutral-700 mb-2">{{ form.pickup_authorized.label }}</label>
+                        {{ form.pickup_authorized }}
+                        {% if form.pickup_authorized.help_text %}<p class="mt-1 text-xs text-neutral-500">{{ form.pickup_authorized.help_text }}</p>{% endif %}
+                        {% if form.pickup_authorized.errors %}<p class="mt-1 text-sm" style="color:#dc2626;">{{ form.pickup_authorized.errors.0 }}</p>{% endif %}
+                    </div>
                     <div class="flex items-center space-x-3">
                         {{ form.gdpr_signed }}
                         <label for="{{ form.gdpr_signed.id_for_label }}" class="text-sm font-medium text-neutral-700">{{ form.gdpr_signed.label }}</label>

@@ -797,7 +797,10 @@ class Command(BaseCommand):
             ("payment_completed", "Pago recibido de Isabel Garrido"),
             ("email_sent", "Email de bienvenida enviado a isabel.garrido@test.com"),
             ("config_updated", "Configuración del sitio actualizada"),
-            ("expense_added", "Gasto registrado: material de oficina"),
+            # Only DECLARED actions: an undeclared slug renders raw in the feed
+            # (`get_action_display()` falls through), which is what the
+            # `email_scheduled` entry in HistoryLog.ACTION_CHOICES exists to stop.
+            ("payment_created", "Pago creado: Lucia Garrido — €54.00 (Mensualidad)"),
         ]
         for action, msg in entries:
             HistoryLog.log(action, msg)

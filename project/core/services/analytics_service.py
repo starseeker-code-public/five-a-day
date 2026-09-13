@@ -7,7 +7,6 @@ and group utilisation. Pure query helpers — no HTTP, no rendering, no PDF.
 
 from __future__ import annotations
 
-import calendar
 from datetime import UTC, date, timedelta
 from decimal import Decimal
 from typing import Any
@@ -237,7 +236,6 @@ def dashboard_report(month: int | None = None, year: int | None = None) -> dict[
         "collection": collection_rate(m, y),
         "retention": retention_snapshot(today),
         "groups": group_utilisation(),
-        "months_labels": [calendar.month_abbr[i] for i in range(1, 13)],
     }
 
 

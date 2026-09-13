@@ -81,9 +81,16 @@ class PaymentService:
         ``calculate_monthly_amount`` and ``calculate_quarterly_amount`` are thin
         wrappers over it so the standard-price helpers and the generator can
         never drift apart. The order of operations mirrors
-        ``EnrollmentService._apply_discounts``:
+        ``EnrollmentService._apply_discounts``, then scales the NET figure for a
+        short or partial period, then takes the June discount:
 
-            (months x monthly - quarterly%) - sibling% - (cheque x months) - june
+            ((months x monthly - quarterly%) - sibling% - (cheque x months)) x proration - june
+
+        The cheque idioma is a flat per-month amount, so it is subtracted BEFORE
+        proration and the proration scales what is left. Mathematically the same
+        total as prorating first — ``(base - 20) x 16/30 == base x 16/30 - 20 x 16/30``
+        — but the receipt then reads "Cheque idioma −20,00 €" instead of a
+        "−10,67 €" nobody recognises as their 20 € cheque (see ``price_breakdown``).
 
         A ``special`` matricula short-circuits all of it — see
         ``hand_priced_amount`` — but is still scaled when the period is short or
@@ -133,6 +140,13 @@ class PaymentService:
         equals ``total`` to the cent — the column on the receipt always adds up,
         with no residual line to paper over half-cent drift.
 
+        Line order is the order the price is built in: percentage discounts, the
+        flat cheque idioma (whole cheques, one per month the period spans), THEN
+        the proration of a partial first period, then June. The cheque sits
+        before the proration on purpose — it is a fixed 20 € a month, and a
+        receipt showing it scaled to 10,67 € reads as a mistake to the family
+        holding a 20 € cheque, even though the total is identical either way.
+
         ``lines`` is empty for a hand-priced (``special``) enrollment: a
         negotiated figure has no standard base to break down against.
         """
@@ -143,37 +157,47 @@ class PaymentService:
 
         base = PaymentService._get_base_monthly_fee(enrollment, config)
         full_period = Decimal(len(months))
+        with_discounts = enrollment.schedule_type != "adult_group"  # adults pay a flat rate
 
         # (label, exact running total AFTER the step) — exact, because the whole
         # point of one implementation is that the total is rounded exactly once.
         steps: list[tuple[str, Decimal]] = []
         total = base * full_period
 
-        if effective != full_period:
-            # Only the first month of the first period is ever partial, and a
-            # close-out block can be short at the end; both show up here as
-            # "fewer months than the period spans".
-            total = base * effective
-            steps.append(("Prorrateo primer periodo", total))
-
         if quarterly:
             total -= total * (config.quarterly_enrollment_discount / Decimal("100"))
             steps.append((f"Descuento trimestral ({config.quarterly_enrollment_discount:.0f}%)", total))
 
-        # Adult groups pay a flat rate — no sibling / cheque / June discounts.
-        if enrollment.schedule_type != "adult_group":
-            if enrollment.is_sibling_discount:
-                total -= total * (config.sibling_discount / Decimal("100"))
-                steps.append((f"Descuento hermano ({config.sibling_discount:.0f}%)", total))
+        if with_discounts and enrollment.is_sibling_discount:
+            total -= total * (config.sibling_discount / Decimal("100"))
+            steps.append((f"Descuento hermano ({config.sibling_discount:.0f}%)", total))
 
-            if enrollment.has_language_cheque:
-                # The cheque is a per-month amount; a period covers `effective` of them.
-                total -= config.language_cheque_discount * effective
-                steps.append(("Cheque idioma", total))
+        if with_discounts and enrollment.has_language_cheque:
+            # The cheque is a flat per-month amount — 20 € per month the period
+            # spans — and it is taken off the FULL period, before proration, so
+            # the line always reads as whole cheques: "−20,00 €" on a month,
+            # "(3 meses) −60,00 €" on a quarter. It used to be scaled by
+            # `effective`, which printed "Cheque idioma −10,67 €" on a family's
+            # first (prorated) September receipt: the total was right, the line
+            # described a cheque nobody had been given. Because the proration
+            # below scales what is LEFT, the total is unchanged to the cent —
+            # `(base − cheque) × f == base × f − cheque × f`.
+            total -= config.language_cheque_discount * full_period
+            label = "Cheque idioma" if full_period == 1 else f"Cheque idioma ({len(months)} meses)"
+            steps.append((label, total))
 
-            if 6 in months:  # June carries the "complete the year" discount
-                total -= config.june_discount
-                steps.append(("Descuento junio (curso completo)", total))
+        if effective != full_period:
+            # Only the first month of the first period is ever partial, and a
+            # close-out block can be short at the end; both show up here as
+            # "fewer months than the period spans". The NET price is scaled, so
+            # the family reads "cuota con descuentos × la parte del mes que
+            # asistió", which is how the ficha's preview already explains it.
+            total = total * (effective / full_period)
+            steps.append(("Prorrateo primer periodo", total))
+
+        if with_discounts and 6 in months:  # June carries the "complete the year" discount
+            total -= config.june_discount
+            steps.append(("Descuento junio (curso completo)", total))
 
         total = PaymentService._round_money(total)
 
@@ -190,13 +214,20 @@ class PaymentService:
     def _round_money(value):
         """The ONE rounding for a period price — floor €0.01, quantize HALF_UP.
 
-        Delegates to `billing.services.pricing_service.round_money`, which is
-        where the rule now lives because `Enrollment.save()` needs it too and
-        cannot import this module (it is imported BY this module). This method
-        stays as the name every billing caller already reaches for; see the
-        helper for why the floor and the HALF_UP matter.
+        Delegates to `billing.money.round_money` — the LEAF module, not
+        `pricing_service`, which merely re-exports it. Reaching for the
+        re-export made this module import `pricing_service` while
+        `pricing_service._standard_period_price` imports this one, and CodeQL
+        flagged the resulting `pricing_service -> payment_service ->
+        pricing_service` cycle on PR #68. Both imports are function-local so it
+        never broke at runtime, which is exactly why it needed a scan to find.
+
+        `billing/money.py` exists for this: it is stdlib-only and imports
+        nothing from the app, so anything that reaches it cannot start a cycle.
+        `Enrollment.save()` and `EnrollmentService._apply_discounts` already go
+        straight there. Do not route this back through `pricing_service`.
         """
-        from billing.services.pricing_service import round_money
+        from billing.money import round_money
 
         return round_money(value)
 

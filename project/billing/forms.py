@@ -196,14 +196,22 @@ class EnrollmentForm(forms.Form):
             raise forms.ValidationError("Marca «Precio especial» para fijar una matrícula personalizada")
         return cleaned_data
 
-    def create_enrollment(self, student, is_adult=False):
+    def create_enrollment(self, student, is_adult=False, *, start_date=None):
         """Create and save an Enrollment from form data.
-        Delegates to EnrollmentService for business logic."""
+        Delegates to EnrollmentService for business logic.
+
+        `start_date` overrides the form's own value: a plan change goes through
+        `EnrollmentService.supersede_enrollment`, which may move the start to a
+        later month, and the replacement must anchor on THAT date. Callers used
+        to write it back into `cleaned_data` — a side channel that, on the bulk
+        re-enrol form shared by several students, carried one student's
+        effective date into the next student's request.
+        """
         from billing.services.enrollment_service import EnrollmentService
 
         enrollment_data = {
             "enrollment_plan": self.cleaned_data.get("enrollment_plan", "monthly_full"),
-            "start_date": self.cleaned_data.get("start_date"),
+            "start_date": start_date if start_date is not None else self.cleaned_data.get("start_date"),
             "has_language_cheque": self.cleaned_data.get("has_language_cheque", False),
             "is_sibling_discount": self.cleaned_data.get("is_sibling_discount", False),
             "is_special": self.cleaned_data.get("is_special", False),

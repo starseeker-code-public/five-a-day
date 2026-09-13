@@ -23,6 +23,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from django.conf import settings
+from django.utils import timezone
 
 from billing.models import Payment, current_academic_year
 from students.models import Student
@@ -171,7 +172,7 @@ class GoogleSheetsService:
                         "Sí" if s.is_adult else "No",
                         "Sí" if s.gdpr_signed else "No",
                         "Sí" if s.is_waiting else "No",
-                        s.created_at.strftime("%Y-%m-%d") if s.created_at else "",
+                        timezone.localtime(s.created_at).strftime("%Y-%m-%d") if s.created_at else "",
                         parent_names,
                     ]
                 )

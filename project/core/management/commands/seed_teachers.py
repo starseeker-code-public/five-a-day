@@ -1,9 +1,9 @@
 """
 Idempotently seed Teacher + linked auth.User from TEACHER_SEED_<N>_* env vars.
 
-Intended to run on container start for the testing and production environments
-(see entrypoint.sh). In development no teachers are seeded — the dev
-environment uses env-var basic-auth, not Teacher login.
+Runs on container start in EVERY environment (see entrypoint.sh); it is a no-op
+without the env vars. In development it is the only way to log in as a
+non-admin Teacher, because the env-var admin login always yields a superuser.
 
 Env var contract (N starts at 1, iteration stops at the first missing FIRST_NAME):
     TEACHER_SEED_<N>_FIRST_NAME     required

@@ -609,6 +609,16 @@ class Student(models.Model):
     phone = models.CharField(max_length=20, blank=True, verbose_name="Teléfono (solo adultos)")
     school = models.CharField(max_length=200, blank=True)
     allergies = models.TextField(blank=True)
+    # Free text, one person per line, because the academy collects it as such:
+    # the family writes down who may collect the child, with a DNI when they
+    # have it to hand. A structured table would demand a DNI per row (the one
+    # thing families most often leave out) and buy nothing — nothing in the
+    # app looks a collector up; the ficha is READ at the door.
+    pickup_authorized = models.TextField(
+        blank=True,
+        verbose_name="Autorizados para la recogida",
+        help_text="Personas autorizadas a recoger al alumno: nombre y DNI (opcional), una por línea.",
+    )
     gdpr_signed = models.BooleanField(default=False)
     # Nullable for the same reason as birth_date: a waiting-list entry may not
     # have a preferred group yet. `assign_from_waiting_list` already guarded

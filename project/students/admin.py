@@ -197,7 +197,13 @@ class StudentAdmin(admin.ModelAdmin):
                 "description": "Un alumno adulto no tiene padre/tutor: su email y teléfono son el único contacto.",
             },
         ),
-        ("Salud y preferencias", {"fields": ("allergies", "gdpr_signed", "observations")}),
+        (
+            "Salud, recogida y preferencias",
+            {
+                "fields": ("allergies", "pickup_authorized", "gdpr_signed", "observations"),
+                "description": "Autorizados para la recogida: nombre y DNI (opcional) de cada persona, una por línea.",
+            },
+        ),
         (
             "Situación",
             {

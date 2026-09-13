@@ -33,11 +33,6 @@ document.addEventListener('DOMContentLoaded', function () {
         return window.localDateISO(d);
     }
 
-    function formatDisplayDate(isoStr) {
-        const [y, m, da] = isoStr.split('-');
-        return `${da}/${m}/${y}`;
-    }
-
     function setActiveBtn(mode) {
         activeMode = mode;
         dateBtns.forEach(btn => {

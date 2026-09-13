@@ -98,6 +98,7 @@ class StudentForm(GroupCapacityMixin, ModelForm):
             "birth_date",
             "school",
             "allergies",
+            "pickup_authorized",
             "gdpr_signed",
             "group",
             "is_waiting",
@@ -108,6 +109,13 @@ class StudentForm(GroupCapacityMixin, ModelForm):
             "birth_date": forms.DateInput(format="%Y-%m-%d", attrs={"class": "form-control", "type": "date"}),
             "school": forms.TextInput(attrs={"class": "form-control", "placeholder": "Colegio"}),
             "allergies": forms.Textarea(attrs={"class": "form-control", "rows": 3, "placeholder": "Alergias"}),
+            "pickup_authorized": forms.Textarea(
+                attrs={
+                    "class": "form-control",
+                    "rows": 3,
+                    "placeholder": "Nombre y apellidos — DNI (opcional), una persona por línea",
+                }
+            ),
             "gdpr_signed": forms.CheckboxInput(attrs={"class": "form-check-input"}),
             "group": forms.Select(attrs={"class": "form-control"}),
             "is_waiting": forms.CheckboxInput(attrs={"class": "form-check-input"}),
@@ -118,6 +126,7 @@ class StudentForm(GroupCapacityMixin, ModelForm):
             "birth_date": "Fecha de nacimiento",
             "school": "Colegio",
             "allergies": "Alergias",
+            "pickup_authorized": "Autorizados para la recogida",
             "gdpr_signed": "GDPR Firmado",
             "group": "Grupo",
             "is_waiting": "En lista de espera",

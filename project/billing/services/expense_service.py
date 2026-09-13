@@ -119,7 +119,8 @@ def materialize_recurring(month: int, year: int) -> int:
     last_day_of_month = calendar.monthrange(year, month)[1]
 
     for tpl in templates:
-        # Day-of-month is capped at 28 by validation; clamp anyway to be safe.
+        # `recurring_day` is 1-31; 29/30/31 mean "the last day of the month" in a
+        # shorter month, which is what this clamp implements.
         day = min(tpl.recurring_day or 1, last_day_of_month)
         target_date = date(year, month, day)
         created += _create_if_absent(tpl, target_date)

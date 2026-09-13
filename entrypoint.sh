@@ -119,8 +119,8 @@ case "$FIRST_ARG" in
         python project/manage.py seed_enrollment_types
 
         # Parent-portal demo data. Refused outright in production by the
-        # command itself (and the portal's password login is refused there too),
-        # so this is a belt-and-braces guard, not the only one.
+        # command itself (a demo family with a known password must never sit in
+        # the real roll), so this is a belt-and-braces guard, not the only one.
         if [ "$DJANGO_ENV" != "production" ]; then
             echo "👪 Seeding demo parents from DEMO_PARENT_* env vars..."
             python project/manage.py seed_demo_parents || echo "⚠️  seed_demo_parents reported an issue (non-fatal)"

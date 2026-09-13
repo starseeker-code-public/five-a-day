@@ -806,6 +806,94 @@ class Payment(models.Model):
     #: in both cases the row is a historical record, not a collectable debt.
     DEAD_STATUSES = ("cancelled", "refunded")
 
+    #: Statuses that VOID a payment. Collected (`completed`) money must never be
+    #: moved into one of them: it is counted as income in a month that is very
+    #: likely already closed and reported, and neither status describes what
+    #: happened (it did not fail, and it was not withdrawn from the schedule).
+    #: Reopen it to `pending` first — that route is auditable and has to pass
+    #: `unique_pending_periodic_payment_per_month`, which is exactly the check a
+    #: re-collection needs.
+    VOIDING_STATUSES = ("failed", "cancelled")
+
+    #: Statuses under which the money is still OWED: the charge can be collected
+    #: (`quick_complete_payment`), paid online (`create_checkout_link`) or voided.
+    #: `failed` stays open on purpose — a failed card retried in cash is a real
+    #: workflow. THE predicate behind every "may this row be acted on" button:
+    #: the payments list, the parent portal and the Stripe view all read
+    #: `is_open` rather than spelling their own status list.
+    OPEN_STATUSES = ("pending", "failed")
+
+    @property
+    def is_open(self) -> bool:
+        """True while the charge is still collectable — see `OPEN_STATUSES`."""
+        return self.payment_status in self.OPEN_STATUSES
+
+    @property
+    def is_deletable(self) -> bool:
+        """True only for a row that is NOT a fiscal record — see `assert_deletable`."""
+        return self.payment_status not in ("completed", "refunded") and not self.receipt_number
+
+    def _stored_status(self):
+        """The status the database currently holds for this row (None when unsaved)."""
+        if not self.pk:
+            return None
+        return type(self).objects.filter(pk=self.pk).values_list("payment_status", flat=True).first()
+
+    def assert_transition(self, previous_status, new_status):
+        """Raise ValidationError when `previous_status -> new_status` must not happen.
+
+        ONE table of what a payment may become, so the admin, the views, the
+        Stripe webhook and `clean()` cannot each keep a slightly different copy
+        (v1.27.1 found `quick_complete_payment` missing `refunded`; v1.29.2 found
+        `deactivate_payment` voiding collected money — the same shape twice):
+
+        * to `completed`   — never from a DEAD status (`assert_completable`)
+        * to `failed` / `cancelled` — never from collected or refunded money
+                                       (`assert_voidable`)
+        * to `refunded`    — ONLY from `completed`: money can only be returned
+                             if it arrived. `update_payment` used to accept
+                             `pending -> refunded`, recording a refund of a
+                             charge nobody ever paid.
+        * to `pending`     — always (reopening is the auditable repair path)
+
+        Same-status writes are a no-op here; `save()` enforces this for every
+        existing row (see there), and `clean()` calls it too so a validating
+        write path gets the Spanish message before the database is touched.
+        """
+        if previous_status is None or previous_status == new_status:
+            return
+        if new_status == "completed":
+            self.assert_completable(previous_status=previous_status)
+        elif new_status in self.VOIDING_STATUSES:
+            self.assert_voidable(previous_status=previous_status)
+        elif new_status == "refunded" and previous_status != "completed":
+            raise ValidationError(
+                "Solo un pago cobrado puede marcarse como reembolsado: este pago no llegó a cobrarse."
+            )
+
+    def assert_voidable(self, previous_status=None):
+        """Raise ValidationError if this payment must not be failed/cancelled.
+
+        The mirror image of `assert_completable`: that one stops a dead payment
+        being resurrected, this one stops money that MOVED — collected, or
+        collected and returned — being voided. Until v1.29.2 only the admin's
+        bulk action enforced it (and only for `completed`) — `deactivate_payment`
+        (the payments-list "Cancelar" button) and `update_payment` cancelled a
+        completed row with a plain `save()`, silently subtracting banked income
+        from a closed month with nothing in the UI to say so. A refunded row is
+        protected for the same reason: it is the record that money was returned.
+
+        The view passes the loaded status explicitly so it can answer 400 before
+        mutating the row; `save()` is the net under every other caller.
+        """
+        if previous_status is None:
+            previous_status = self._stored_status()
+        if previous_status in ("completed", "refunded"):
+            raise ValidationError(
+                "Este pago ya está cobrado o reembolsado y no puede cancelarse ni marcarse como fallido: "
+                "ese dinero cuenta como ingreso declarado. Márcalo primero como pendiente si hay que corregirlo."
+            )
+
     def assert_completable(self, previous_status=None):
         """Raise ValidationError if this payment must not be marked completed.
 
@@ -817,24 +905,55 @@ class Payment(models.Model):
         went back to the family, so completing it re-books income that no longer
         exists and emails a receipt for a refund.
 
-        The check is a method rather than inline in `clean()` because the two
-        callers need it at different moments. `clean()` runs it on every write
-        path that validates, and re-reads the stored status because the instance's
-        own field has already been overwritten by then. `quick_complete_payment`
-        runs it on the row as loaded, BEFORE mutating it, so it can answer with a
-        400 and the constraint's own Spanish wording instead of the caller
-        inventing a second copy of the status list (`refunded` was missing from
-        that copy, which is how the endpoint resurrected refunds).
+        `quick_complete_payment` runs it on the row as loaded, BEFORE mutating
+        it, so it can answer with a 400 and the model's own Spanish wording
+        instead of the caller inventing a second copy of the status list
+        (`refunded` was missing from that copy, which is how the endpoint
+        resurrected refunds). `assert_transition` is the one table these
+        per-direction checks hang off.
         """
         if previous_status is None:
-            if not self.pk:
-                return
-            previous_status = type(self).objects.filter(pk=self.pk).values_list("payment_status", flat=True).first()
+            previous_status = self._stored_status()
         if previous_status in self.DEAD_STATUSES:
             raise ValidationError(
                 "Este pago está cancelado o reembolsado y no puede marcarse como completado. "
                 "Crea un pago nuevo si hay que volver a cobrarlo."
             )
+
+    def assert_deletable(self):
+        """Raise ValidationError if this row is a fiscal record that must survive.
+
+        A COLLECTED (or refunded) payment is the record of money that moved, and
+        once a receipt has been issued its `YYYY-NNN` number continues the
+        academy's paper books — deleting the row leaves a permanent hole in that
+        sequence. Soft-delete is `payment_status="cancelled"`; hard delete is
+        only for an open row created by mistake. Read by `delete_payment` AND by
+        `PaymentAdmin` (`has_delete_permission` / `delete_queryset`), which until
+        v1.29.2 deleted anything — the rule lived only in the view.
+        """
+        if not self.is_deletable:
+            raise ValidationError(
+                "Un pago cobrado, reembolsado o con recibo emitido no se puede eliminar. "
+                "Márcalo como pendiente desde /admin/ si hay que corregirlo."
+            )
+
+    def save(self, *args, **kwargs):
+        """Refuse an illegal status transition on EVERY save of an existing row.
+
+        The transition rule used to be opt-in: each view, admin action and the
+        Stripe webhook had to remember to call the right `assert_*` before a
+        plain `save()`, and three releases in a row found one that had not. The
+        check now runs here, comparing the stored status with the new one, so a
+        forgotten caller fails loudly instead of silently voiding or resurrecting
+        money. Skipped when `update_fields` does not touch `payment_status` (a
+        receipt-number or reference edit costs no extra query), and for new rows
+        (nothing to transition from). Callers that want a friendly 400 still
+        pre-check with the loaded status — that is the message, this is the net.
+        """
+        update_fields = kwargs.get("update_fields")
+        if self.pk and (update_fields is None or "payment_status" in update_fields):
+            self.assert_transition(self._stored_status(), self.payment_status)
+        super().save(*args, **kwargs)
 
     @property
     def receipt_date(self):
@@ -937,10 +1056,11 @@ class Payment(models.Model):
         return self.receipt_number
 
     def clean(self):
-        """Validation logic"""
+        """Validation logic. Messages are USER-FACING (they reach the payments
+        list, the edit endpoint's JSON and the admin form), so they are Spanish."""
 
-        if self.pk and self.payment_status == "completed":
-            self.assert_completable()
+        if self.pk:
+            self.assert_transition(self._stored_status(), self.payment_status)
 
         # If payment is completed, payment_date should be set
         if self.payment_status == "completed" and not self.payment_date:
@@ -948,12 +1068,20 @@ class Payment(models.Model):
 
         # Payment date should not be in the future for completed payments
         if self.payment_status == "completed" and self.payment_date and self.payment_date > date.today():
-            raise ValidationError("Payment date cannot be in the future for completed payments.")
+            raise ValidationError("La fecha de cobro de un pago completado no puede ser futura.")
 
         # Validate student-parent relationship (skip for adult students)
         if self.student and self.parent and not self.student.is_adult:
             if not self.student.parents.filter(id=self.parent.id).exists():
-                raise ValidationError("The selected parent is not associated with this student.")
+                raise ValidationError("El padre/tutor seleccionado no está asociado con este estudiante.")
+
+        # The enrollment a payment hangs off must be the SAME student's.
+        # `update_payment` can re-point `student` (a payment created for the
+        # wrong sibling); left attached to the old enrollment, the row counted
+        # towards the other child's `payment_totals()` and the receipt breakdown
+        # re-priced it against the wrong plan.
+        if self.enrollment_id and self.student_id and self.enrollment.student_id != self.student_id:
+            raise ValidationError("La matrícula seleccionada pertenece a otro alumno.")
 
     @property
     def is_overdue(self):

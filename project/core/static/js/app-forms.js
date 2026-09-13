@@ -101,6 +101,25 @@
     }
 }());
 
+/* ── Payment reminder: September-only "día de inicio" field ──────────────────
+   The half-month figures of the September reminder are prorated from the day
+   classes start, so the input only means something when that month is selected.
+   `data-month-number` on each <option> avoids matching on the Spanish name. */
+(function () {
+    const monthSelect = document.getElementById('month');
+    const septemberField = document.getElementById('september-start-day-field');
+    if (!monthSelect || !septemberField) return;
+
+    function syncSeptemberField() {
+        const option = monthSelect.options[monthSelect.selectedIndex];
+        const monthNumber = option ? parseInt(option.dataset.monthNumber, 10) : NaN;
+        septemberField.classList.toggle('hidden', monthNumber !== 9);
+    }
+
+    monthSelect.addEventListener('change', syncSeptemberField);
+    syncSeptemberField();
+}());
+
 /**
  * Generic form submit handler for app forms.
  * Add data-confirm="message" to a form to get a confirmation dialog.

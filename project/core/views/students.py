@@ -114,26 +114,31 @@ _PICKER_TRUNCATION_NOTICE = "Mostrando solo los primeros {shown} de {total}. Usa
 _PICKER_CAP = 500
 
 
-def _superseding_start(student, current, enrollment_form, parent=None):
+def _superseding_start(student, current, requested_start, parent=None):
     """Close `current` and return the date the replacement must start on, or None.
 
     A one-line bridge to ``EnrollmentService.supersede_enrollment``, which owns
-    the transition for all three call sites (this view's plan change,
-    ``enroll_student`` and the modality endpoint). It used to be a private helper
-    HERE, and being a view helper is precisely how it went wrong: it reached for
+    the transition for every call site (``StudentUpdateView``'s plan change,
+    ``enroll_student``, ``reenroll_old_students`` and the modality endpoint). It
+    used to be a private helper HERE, and being a view helper is precisely how
+    it went wrong: it reached for
     ``schedule_academic_year_payments(current, as_of=new_start - 1 day)`` to
     close out the old plan, which always issues an enrollment's first period —
     so the transition month was invoiced in FULL at the old price and the
     replacement's prorated first period was then silently dropped by the
     billed-month check. Read the service method for the rule that replaced it.
 
-    The returned date is NOT necessarily the one the admin typed, so the caller
-    must write it back onto the form before creating the replacement.
+    Takes the DATE, not the form. The returned date is NOT necessarily the one
+    the admin typed; pass it to ``EnrollmentForm.create_enrollment(...,
+    start_date=effective)`` rather than writing it into ``cleaned_data`` — that
+    write-back is how the bulk re-enrol flow leaked one student's effective
+    date into the next student's request.
     """
     from billing.services.enrollment_service import EnrollmentService
 
-    requested_start = enrollment_form.cleaned_data.get("start_date") or date.today()
-    return EnrollmentService.supersede_enrollment(student, current, requested_start=requested_start, parent=parent)
+    return EnrollmentService.supersede_enrollment(
+        student, current, requested_start=requested_start or date.today(), parent=parent
+    )
 
 
 @method_decorator(admin_required, name="dispatch")
@@ -205,7 +210,6 @@ class StudentCreateView(CreateView):
         mode = self.request.GET.get("mode", "normal")
         context["creation_mode"] = mode
         context["is_adult_mode"] = mode == "adult"
-        context["is_waiting_mode"] = mode == "waiting"
 
         parent_id = self.request.GET.get("parent_id")
         if parent_id:
@@ -230,7 +234,6 @@ class StudentCreateView(CreateView):
             )
             total_parents = parents.count()
             context["all_parents"] = list(parents[:_PICKER_CAP])
-            context["all_parents_total"] = total_parents
             context["all_parents_notice"] = (
                 _PICKER_TRUNCATION_NOTICE.format(shown=_PICKER_CAP, total=total_parents)
                 if total_parents > _PICKER_CAP
@@ -270,8 +273,6 @@ class StudentCreateView(CreateView):
             "quarterly_gross": str(quarterly_gross),
             "adult_group": str(config.adult_group_monthly_fee),
         }
-        context["enrollment_fee_children"] = str(config.children_enrollment_fee)
-        context["enrollment_fee_adult"] = str(config.adult_enrollment_fee)
         context["language_cheque_discount"] = str(config.language_cheque_discount)
         context["sibling_discount"] = str(config.sibling_discount)
         context["returning_student_discount"] = str(config.returning_student_enrollment_discount)
@@ -311,8 +312,6 @@ class StudentCreateView(CreateView):
         )
         sibling_total = sibling_candidates.count()
         context["all_students_for_sibling"] = list(sibling_candidates[:_PICKER_CAP])
-        context["sibling_candidates_total"] = sibling_total
-        context["sibling_search_url"] = reverse("search_students")
         context["sibling_list_notice"] = (
             _PICKER_TRUNCATION_NOTICE.format(shown=_PICKER_CAP, total=sibling_total)
             if sibling_total > _PICKER_CAP
@@ -712,7 +711,7 @@ class StudentUpdateView(UpdateView):
 
                         parent = student.titular_parent()
                         requested_start = enrollment_form.cleaned_data.get("start_date") or date.today()
-                        effective_start = _superseding_start(student, current, enrollment_form, parent=parent)
+                        effective_start = _superseding_start(student, current, requested_start, parent=parent)
 
                         if effective_start is None:
                             # Every remaining month of the course is already
@@ -728,11 +727,11 @@ class StudentUpdateView(UpdateView):
                         else:
                             # The service decides when the change takes effect —
                             # the first month no period already invoices, and never
-                            # mid-month while the old plan is still teaching. Write
-                            # it back so `create_enrollment` anchors on the same
-                            # date the old plan was closed against.
-                            enrollment_form.cleaned_data["start_date"] = effective_start
-                            enrollment = enrollment_form.create_enrollment(student, is_adult=student.is_adult)
+                            # mid-month while the old plan is still teaching — and
+                            # the replacement anchors on that same date.
+                            enrollment = enrollment_form.create_enrollment(
+                                student, is_adult=student.is_adult, start_date=effective_start
+                            )
                             # Issue the replacement's first period now instead of
                             # waiting for the 1st-of-month cron: the plan change
                             # used to leave the ficha with no payment at all under
@@ -934,7 +933,8 @@ def enroll_student(request, student_id):
             # unbilled months, cancels the schedule the new one replaces, and
             # returns the date the new one may start from.
             current = student.enrollments.filter(status="active").order_by("-enrollment_date", "-id").first()
-            effective_start = _superseding_start(student, current, enrollment_form, parent=parent)
+            requested_start = enrollment_form.cleaned_data.get("start_date") or date.today()
+            effective_start = _superseding_start(student, current, requested_start, parent=parent)
             if effective_start is None:
                 return JsonResponse(
                     {
@@ -946,9 +946,10 @@ def enroll_student(request, student_id):
                     },
                     status=400,
                 )
-            enrollment_form.cleaned_data["start_date"] = effective_start
 
-            enrollment = enrollment_form.create_enrollment(student, is_adult=student.is_adult)
+            enrollment = enrollment_form.create_enrollment(
+                student, is_adult=student.is_adult, start_date=effective_start
+            )
 
             enrollment_fee = None
             if charge_fee:
@@ -1060,6 +1061,12 @@ def reenroll_old_students(request):
         return redirect("reenroll_old_students")
 
     charge_fee = request.POST.get("charge_enrollment_fee") in ("on", "true", "1")
+    # The date the admin TYPED, resolved once and passed EXPLICITLY per student.
+    # The form used to be the carrier — `_superseding_start` read `start_date`
+    # off it and the loop wrote each student's EFFECTIVE date back onto the same
+    # shared form — so one student whose September was already invoiced silently
+    # pushed everyone processed after them to October.
+    requested_start = shared.cleaned_data.get("start_date") or date.today()
 
     # Re-resolve candidates so a stale checkbox can't enrol a student who was
     # already enrolled in another tab since the page loaded. Narrowed to the
@@ -1074,7 +1081,9 @@ def reenroll_old_students(request):
     selectable = {s.id: s for s in _reenroll_candidates(for_display=False).filter(id__in=requested_ids)}
 
     created, skipped, failed = 0, 0, []
-    for raw_id in requested_ids:
+    # Sorted: a set iterates in hash order, so which student went first — and
+    # therefore the order of the "No se pudo matricular a" list — was arbitrary.
+    for raw_id in sorted(requested_ids):
         student = selectable.get(raw_id)
         if student is None:
             skipped += 1
@@ -1097,14 +1106,13 @@ def reenroll_old_students(request):
                 # able to reach it. It also returns the date the new enrollment may
                 # safely start from, which is not always the one the admin typed.
                 current = student.enrollments.filter(status="active").order_by("-enrollment_date", "-id").first()
-                effective_start = _superseding_start(student, current, shared, parent=parent)
+                effective_start = _superseding_start(student, current, requested_start, parent=parent)
                 if effective_start is None:
                     # Every remaining month of the course is already invoiced;
                     # nothing was written. Re-billing them is the one outcome worse
                     # than not re-enrolling today.
                     skipped += 1
                     continue
-                shared.cleaned_data["start_date"] = effective_start
 
                 # Only now that the enrollment is going ahead — a student we
                 # refused above must not be left reactivated with no matrícula.
@@ -1112,7 +1120,7 @@ def reenroll_old_students(request):
                     student.active = True
                     student.save(update_fields=["active", "updated_at"])
 
-                enrollment = shared.create_enrollment(student, is_adult=student.is_adult)
+                enrollment = shared.create_enrollment(student, is_adult=student.is_adult, start_date=effective_start)
                 if charge_fee:
                     _create_enrollment_fee_payment(student, parent, enrollment, shared)
                 PaymentService.schedule_academic_year_payments(enrollment, parent)

@@ -136,7 +136,6 @@ def testing_tools_view(request):
         "app_version": settings.APP_VERSION,
         "environment": settings.ENVIRONMENT,
         "debug": settings.DEBUG,
-        "database_engine": settings.DATABASES["default"]["ENGINE"],
         "database_name": settings.DATABASES["default"].get("NAME", "—"),
         "python_version": sys.version.split()[0],
         "django_version": django.get_version(),
@@ -242,7 +241,7 @@ def email_backlog_task_created(task, screenshot=None, context_line=""):
         f"Titulo:      {task.title}\n"
         f"Prioridad:   {task.priority}\n"
         f"Creado por:  {task.created_by}\n"
-        f"Fecha:       {task.created_at:%Y-%m-%d %H:%M}\n"
+        f"Fecha:       {timezone.localtime(task.created_at):%Y-%m-%d %H:%M}\n"
         f"{context_line}\n\n"
         f"Descripcion:\n{task.description or '(ninguna)'}\n\n"
         f"{'Se adjunta una captura de pantalla.' if screenshot else ''}\n"
@@ -461,7 +460,7 @@ def _email_task_done(task):
                 f"Titulo:      {task.title}\n"
                 f"Prioridad:   {task.priority}\n"
                 f"Creada por:  {task.created_by}\n"
-                f"Fecha:       {task.created_at:%Y-%m-%d %H:%M}\n\n"
+                f"Fecha:       {timezone.localtime(task.created_at):%Y-%m-%d %H:%M}\n\n"
                 f"Descripcion:\n{task.description or '(ninguna)'}\n\n"
                 f"{'=' * 50}\nFive a Day — Entorno QA\n"
             ),

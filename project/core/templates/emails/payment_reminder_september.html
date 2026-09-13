@@ -1,0 +1,85 @@
+{% extends 'emails/payment_reminder.html' %}
+
+{% block title %}Recordatorio de pago · Septiembre (medio mes) · Five a Day{% endblock %}
+
+{% comment %}
+    September variant of the payment reminder. Classes start mid-month, so the
+    monthly fees quoted here are the standard ones scaled by the SAME proration
+    the payment generator bills a mid-September enrollment with
+    (`PricingService.payment_reminder_special`, case "september"). The wording
+    says "medio mes" because that is how the academy explains it to families;
+    the figure is the billed one so a transfer of it is never short.
+    Context (on top of the regular reminder's): september_start_day,
+    proration_percent, and every regular figure under `standard_*`.
+{% endcomment %}
+
+{% block reminder_notice %}
+<div style="background-color: #ede9fe; border-left: 4px solid #6d28d9; padding: 15px; margin: 20px 0; text-align: left;">
+    <p style="color: #6d28d9; margin: 0 0 6px 0; font-size: 15px;">
+        <strong>🗓️ Septiembre: solo se cobra medio mes</strong>
+    </p>
+    <p style="color: #1f2430; margin: 0; font-size: 14px; line-height: 1.6;">
+        Las clases empiezan el <strong>{{ september_start_day }} de septiembre</strong>, así que este mes solo se cobra la parte
+        proporcional de la cuota: del {{ september_start_day }} al 30 de septiembre, un <strong>{{ proration_percent }}&nbsp;%</strong>
+        de la cuota mensual. A partir de octubre se abona la cuota completa de siempre.
+    </p>
+</div>
+{% endblock %}
+
+{% block fee_table_title %}💶 Cuotas de septiembre (del {{ september_start_day }} al 30){% endblock %}
+
+{% block fee_rows %}
+<tr>
+    <td style="padding: 8px 0; border-bottom: 1px solid #d1cbe8;">
+        Cuota 2 sesiones semanales
+    </td>
+    <td style="padding: 8px 0; border-bottom: 1px solid #d1cbe8; text-align: right;">
+        <strong>{{ full_time_fee }} euros</strong><br>
+        <span style="font-size: 12px; color: #4a4a57;">mes completo: {{ standard_full_time_fee }} euros</span>
+    </td>
+</tr>
+<tr>
+    <td style="padding: 8px 0; border-bottom: 1px solid #d1cbe8;">
+        Cuota 2 sesiones semanales descuento hermano
+    </td>
+    <td style="padding: 8px 0; border-bottom: 1px solid #d1cbe8; text-align: right;">
+        <strong>{{ sibling_full_time_fee }} euros</strong><br>
+        <span style="font-size: 12px; color: #4a4a57;">mes completo: {{ standard_sibling_full_time_fee }} euros</span>
+    </td>
+</tr>
+<tr>
+    <td style="padding: 8px 0; border-bottom: 1px solid #d1cbe8;">
+        Cuota 1 sesión semanal
+    </td>
+    <td style="padding: 8px 0; border-bottom: 1px solid #d1cbe8; text-align: right;">
+        <strong>{{ part_time_fee }} euros</strong><br>
+        <span style="font-size: 12px; color: #4a4a57;">mes completo: {{ standard_part_time_fee }} euros</span>
+    </td>
+</tr>
+<tr>
+    <td style="padding: 8px 0; border-bottom: 1px solid #d1cbe8;">
+        Cuota adultos
+    </td>
+    <td style="padding: 8px 0; border-bottom: 1px solid #d1cbe8; text-align: right;">
+        <strong>{{ adult_fee }} euros</strong><br>
+        <span style="font-size: 12px; color: #4a4a57;">mes completo: {{ standard_adult_fee }} euros</span>
+    </td>
+</tr>
+<tr>
+    <td style="padding: 8px 0;">
+        Cuota trimestral (trimestre completo)
+    </td>
+    <td style="padding: 8px 0; text-align: right;">
+        {{ quarterly_fee }} euros
+    </td>
+</tr>
+{% endblock %}
+
+{% block cheque_box %}
+<div style="background-color: #fee2e2; border-left: 4px solid #EF4444; padding: 15px; margin: 20px 0; text-align: left;">
+    <p style="color: #b91c1c; margin: 0; font-size: 14px; line-height: 1.6;">
+        Si os beneficiáis del Cheque Idioma, la cuota de septiembre sería de <strong>{{ reduced_price_cheque_idioma }} euros</strong>
+        (mes completo: {{ standard_reduced_price_cheque_idioma }} euros) y tenéis que venir a la academia a <strong>firmar</strong> el recibo.
+    </p>
+</div>
+{% endblock %}

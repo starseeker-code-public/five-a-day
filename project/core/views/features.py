@@ -17,6 +17,7 @@ from django.core.mail import send_mail
 from django.db.models import Count, Q
 from django.http import HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, render
+from django.utils import timezone
 from django.utils.dateparse import parse_date
 from django.views.decorators.http import require_http_methods
 
@@ -110,7 +111,8 @@ def _feature_payload(feature):
         "deadline_display": feature.deadline.strftime("%d/%m/%Y") if feature.deadline else None,
         "is_overdue": feature.is_overdue,
         "created_by": feature.created_by,
-        "created_at": feature.created_at.strftime("%d/%m/%Y %H:%M"),
+        # `localtime` first — see `testing_tools.backlog_task_json`.
+        "created_at": timezone.localtime(feature.created_at).strftime("%d/%m/%Y %H:%M"),
         "task_count": feature.task_count,
         "done_task_count": feature.done_task_count,
     }
@@ -144,7 +146,7 @@ def _email_feature(feature, kind):
         f"Estado:        {feature.get_status_display()}\n"
         f"Fecha limite:  {deadline}\n"
         f"Creado por:    {feature.created_by}\n"
-        f"Fecha:         {feature.created_at:%Y-%m-%d %H:%M}\n"
+        f"Fecha:         {timezone.localtime(feature.created_at):%Y-%m-%d %H:%M}\n"
         f"Tareas:        {feature.done_task_count}/{feature.task_count} hechas\n\n"
         f"Descripcion:\n{feature.description or '(ninguna)'}\n\n"
         f"{'=' * 50}\n"

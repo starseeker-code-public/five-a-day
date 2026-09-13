@@ -193,7 +193,7 @@ Monthly payments are due every month from **September** to **June**.
 
 **Monthly Discounts:**
 - **Sibling discount**: -5% for the younger sibling (both share the same parent)
-- **Cheque idioma** (language ticket): -20€/month flat discount. Students with this must be reported to the government monthly.
+- **Cheque idioma** (language ticket): -20€/month flat discount. Students with this must be reported to the government monthly. It is taken off the full month **before** any proration (v1.29.3), so a prorated first month is `(fee − 20) × fraction` — the same total as prorating first, but the receipt line reads a whole cheque.
 - **June discount**: -20€ for completing the academic year
 
 ### Quarterly Payments
@@ -213,7 +213,8 @@ monthly student would receive**.
 
 - **Sibling discount** applies (percentage, on the discounted quarterly total).
 - **Language cheque** applies per covered month — three cheques on a full quarter, one on a
-  June stub (`calculate_period_amount` scales by the months the block actually covers).
+  June stub — and is subtracted from the full block before a partial first month is prorated
+  (v1.29.3; the receipt labels it `Cheque idioma (3 meses)`).
 - **June discount** applies to whichever block **contains June**.
 - **Adult groups** keep the flat rate: quarterly percentage only, no further discounts — matching
   `calculate_monthly_amount`, which returns the adult base fee untouched.
@@ -324,6 +325,7 @@ Cancelled payments count as existing, so a payment an admin soft-deleted through
 base = full_time_monthly_fee (54€)
 - sibling_discount if applicable (-5%)
 - language_cheque_discount if applicable (-20€)
+× proration_fraction if this is the prorated first month (v1.29.3: scales the NET figure)
 - june_discount if June and completing year (-20€)
 ```
 
@@ -332,6 +334,7 @@ base = full_time_monthly_fee (54€)
 base = part_time_monthly_fee (36€)
 - sibling_discount if applicable (-5%)
 - language_cheque_discount if applicable (-20€)
+× proration_fraction if this is the prorated first month
 - june_discount if June and completing year (-20€)
 ```
 
@@ -339,10 +342,17 @@ base = part_time_monthly_fee (36€)
 ```
 base = 3 × monthly_fee × 0.95
 - sibling_discount % if applicable
-- language_cheque_discount × 3 if applicable
-- june_discount if Q3 (due month = April, covers April–June)
+- language_cheque_discount × months in the block (3 on a full quarter, 1 on the June stub)
+× (effective months / months in the block) when the first month is partial
+- june_discount if the block contains June
 minimum 0.01€
 ```
+
+> The proration used to be applied FIRST, and the cheque scaled with it, so a family's prorated
+> September receipt printed `Cheque idioma −10,67 €`. The two orders give the same total to the
+> cent — `(base − 20) × f == base × f − 20 × f` — which is why nobody noticed until a family holding
+> a 20 € cheque read the line. `PaymentService.price_breakdown()` is the one implementation of this
+> order; `tests/integration/test_qa_pickup_receipts_and_reminders.py` pins both the `−20,00 €` line and the unchanged total.
 
 **Adult monthly:**
 ```
@@ -491,6 +501,25 @@ left to the UI:
 
 The reference date for both the number's year and the Drive archive's folder is one property,
 `Payment.receipt_date` (`payment_date` → `due_date` → today).
+
+### The payment-reminder email in September, June and April (v1.29.3)
+
+The monthly reminder (`Aplicaciones → Recordatorio de Pago`) is a mass email with a tariff table
+that families transfer from, so three months need their own wording — and their own figures:
+
+| Month | Template | What changes |
+|-------|----------|--------------|
+| September | `emails/payment_reminder_september.html` | **Medio mes.** Every monthly row is the standard fee prorated from the day classes start (`SEPTEMBER_CLASSES_START_DAY` = 15, overridable from the form) with `PaymentService.proration_fraction` — the same fraction a 15-September enrollment is billed with — shown beside the full-month figure. The quarterly row is the full quarter. |
+| June | `emails/payment_reminder_june.html` | **Último mes.** Every monthly row carries `june_discount` (adults excluded, as in billing). The quarterly row is unchanged: a quarterly family saw the discount in April. |
+| April | `emails/payment_reminder_april.html` | The quarterly row is the April–June block, which contains June and therefore carries the discount. Monthly rows are unchanged. |
+
+`PricingService.payment_reminder_special(config, month)` is the one source — template name, subject
+suffix, adjusted rows and the Cheque Idioma figure — and every figure is
+`PaymentService.calculate_period_amount` on a bare carrier, never a `fee − 20` typed in the service.
+The wording says "medio mes" because that is how the academy explains September; the **amount** is
+the billed one, because a family transferring the emailed figure must not come up short against the
+payment the app is waiting for. Nothing about billing itself changes: the proration rule and the
+quarter anchoring above are untouched.
 
 ---
 

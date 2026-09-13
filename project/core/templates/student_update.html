@@ -34,7 +34,7 @@
         <h2 class="text-lg font-semibold text-neutral-800 mb-4">Datos del estudiante</h2>
         <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
             {% for field in form %}
-                <div class="{% if field.name == 'allergies' %}md:col-span-2{% endif %}">
+                <div class="{% if field.name == 'allergies' or field.name == 'pickup_authorized' %}md:col-span-2{% endif %}">
                     <label for="{{ field.id_for_label }}" class="block text-xs text-neutral-500 mb-1">
                         {{ field.label }}{% if field.field.required %} *{% endif %}
                     </label>

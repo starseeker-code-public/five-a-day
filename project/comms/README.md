@@ -76,7 +76,7 @@ inline part (`inline_images=`), so a path helper nobody passes to that argument 
 anything; it was deleted rather than kept "just in case", because it read like the logo was already
 being embedded.
 
-Templates live in `core/templates/emails/` and extend `emails/base_email.html`. There are currently **19 content templates** (20 files including the shared base): `happy_birthday`, `welcome_student`, `enrollment_child`, `enrollment_adult`, `fun_friday`, `payment_reminder`, `payment_reminder_simple`, `payment_receipt`, `receipt_quarterly_child`, `receipt_adult`, `receipt_enrollment`, `vacation_closure`, `tax_certificate`, `monthly_report`, `admin_monthly_report`, `newsletter`, `parent_temporary_password`, `teacher_activation`, `password_reset`, plus the shared `base_email`.
+Templates live in `core/templates/emails/` and extend `emails/base_email.html`. There are currently **22 content templates** (23 files including the shared base): `happy_birthday`, `welcome_student`, `enrollment_child`, `enrollment_adult`, `fun_friday`, `payment_reminder` (a shell with four overridable blocks since v1.29.3), `payment_reminder_september` / `payment_reminder_june` / `payment_reminder_april` (v1.29.3 — the special-month variants, each extending `payment_reminder`), `payment_reminder_simple`, `payment_receipt`, `receipt_quarterly_child`, `receipt_adult`, `receipt_enrollment`, `vacation_closure`, `tax_certificate`, `monthly_report`, `admin_monthly_report`, `newsletter`, `parent_temporary_password`, `teacher_activation`, `password_reset`, plus the shared `base_email`.
 
 **Every content template must define its own `{% block title %}`** (v1.20.0). `base_email.html` supplies a generic "Five a Day" fallback and 11 of the 18 were silently taking it, so the document title bore no relation to the subject line. Give a new template a title matching its `subject=`, in the shared `"<asunto> · Five a Day"` shape.
 
@@ -100,7 +100,7 @@ Convenience functions for each email type. Each wraps `email_service.send_email(
 | `send_welcome_email` | `welcome_student` | On student creation |
 | `send_enrollment_confirmation_email` | `enrollment_child` / `enrollment_adult` | On enrollment |
 | `send_fun_friday_email` | `fun_friday` | Weekly manual |
-| `send_payment_reminder_email` | `payment_reminder` | Monthly manual — takes five fee figures (`full_time_fee`, `part_time_fee`, `adult_fee`, `quarterly_fee`, `sibling_full_time_fee`). Any left `None` are filled from `PricingService.payment_reminder_fees()`, so no caller can send the tariff table blank (v1.20.0). `reduced_price_cheque_idioma` carries **no unit** — the template prints `{{ ... }} euros` (see `cheque_idioma_fee`) |
+| `send_payment_reminder_email` | `payment_reminder` (or, via `template_name=`, `payment_reminder_september` / `_june` / `_april`) | Monthly manual — takes five fee figures (`full_time_fee`, `part_time_fee`, `adult_fee`, `quarterly_fee`, `sibling_full_time_fee`). Any left `None` are filled from `PricingService.payment_reminder_fees()`, so no caller can send the tariff table blank (v1.20.0). `reduced_price_cheque_idioma` carries **no unit** — the template prints `{{ ... }} euros` (see `cheque_idioma_fee`). v1.29.3 adds `template_name`, `subject_suffix` and `extra_context` — the three values `PricingService.payment_reminder_special()` returns for a special month, so the view never picks a template by hand |
 | `send_quarterly_receipt_email` | `receipt_quarterly_child` | Quarterly manual |
 | `send_vacation_closure_email` | `vacation_closure` | Manual |
 | `send_tax_certificate_email` | `tax_certificate` | Yearly (April) |
@@ -110,7 +110,7 @@ Convenience functions for each email type. Each wraps `email_service.send_email(
 
 Plus one non-sending helper:
 
-- **`cheque_idioma_fee(config=None) -> str`** (v1.27.1) — the monthly fee with Cheque Idioma applied, formatted **exactly like the other five rows** of the reminder tariff table. `emails/payment_reminder.html` prints `{{ reduced_price_cheque_idioma }} euros`, so a value carrying its own `€` rendered **"34€ euros"** — and all four emitters (the GET view, the preview, the POST and the `send_email` command) appended the symbol independently, so production has sent the double unit since v1.0. It derives from `SiteConfiguration` (never a fixed 34) and reuses `PricingService._euros`, because two different formatters in one table is precisely the bug above. `core.views.app_forms._cheque_idioma_text` is the request-side wrapper: it strips a trailing `€` an operator typed into the form and falls back to this helper.
+- **`cheque_idioma_fee(config=None) -> str`** (v1.27.1) — the monthly fee with Cheque Idioma applied, formatted **exactly like the other five rows** of the reminder tariff table. `emails/payment_reminder.html` prints `{{ reduced_price_cheque_idioma }} euros`, so a value carrying its own `€` rendered **"34€ euros"** — and all four emitters (the GET view, the preview, the POST and the `send_email` command) appended the symbol independently, so production has sent the double unit since v1.0. It derives from `SiteConfiguration` (never a fixed 34) and reuses `PricingService._euros`, because two different formatters in one table is precisely the bug above. Since v1.29.3 the figure itself is `PricingService.cheque_idioma_price()` — priced through the generator's arithmetic — rather than a local `fee − discount`. `core.views.app_forms._cheque_idioma_text` is the request-side wrapper: it strips a trailing `€` an operator typed into the form and falls back to this helper.
 
 `send_all_tax_certificates` is the one batch that **deliberately does not follow the mass-mail
 rules** — two exceptions, both because the document attests money actually **paid**:
@@ -227,6 +227,11 @@ python manage.py test_all_emails --only fun_friday,birthday
 python manage.py test_all_emails --list              # List available templates
 python manage.py test_all_emails --to admin@test.com
 ```
+
+Since v1.29.3 the list includes the three special-month payment reminders (`payment_reminder_september`,
+`payment_reminder_april`, `payment_reminder_june`), each built with the same base context as the
+regular reminder plus what `PricingService.payment_reminder_special()` returns for its month — so the
+preview shows exactly the half-month / fin-de-curso figures a family would be asked for.
 
 ### Beat-task wrappers (for external schedulers)
 

@@ -343,13 +343,15 @@ class TestQuickCompletePayment:
         )
         assert response.status_code == 400
 
-    def test_broken_json_returns_500(self, authenticated_client, pending_payment):
+    def test_broken_json_returns_400(self, authenticated_client, pending_payment):
+        # A malformed body is the client's fault — answered 400 like every
+        # other JSON endpoint, not a logged 500 that mails a QA error report.
         response = authenticated_client.post(
             self._url(pending_payment.id),
             data="not-json",
             content_type="application/json",
         )
-        assert response.status_code == 500
+        assert response.status_code == 400
 
 
 # ============================================================================

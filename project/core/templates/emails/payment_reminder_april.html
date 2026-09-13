@@ -1,0 +1,70 @@
+{% extends 'emails/payment_reminder.html' %}
+
+{% block title %}Recordatorio de pago · Abril (trimestre con descuento fin de curso) · Five a Day{% endblock %}
+
+{% comment %}
+    April variant of the payment reminder. Quarterly families pay the
+    April-June block now, and that block contains June, so it carries the
+    fin-de-curso discount (`PaymentService.price_breakdown` takes `june_discount`
+    off any period containing June). Monthly fees are unchanged in April — their
+    discount arrives in June's own email. Figures from
+    `PricingService.payment_reminder_special`, case "april".
+    Context (on top of the regular reminder's): june_discount, standard_*.
+{% endcomment %}
+
+{% block reminder_notice %}
+<div style="background-color: #dcfce7; border-left: 4px solid #16a34a; padding: 15px; margin: 20px 0; text-align: left;">
+    <p style="color: #15803d; margin: 0 0 6px 0; font-size: 15px;">
+        <strong>🎓 Abril: último trimestre del curso, con descuento</strong>
+    </p>
+    <p style="color: #1f2430; margin: 0; font-size: 14px; line-height: 1.6;">
+        Los alumnos con pago trimestral abonan ahora el trimestre de <strong>abril, mayo y junio</strong>, que por completar
+        el curso lleva un <strong>descuento de {{ june_discount }} euros</strong>. Las cuotas mensuales de abril no cambian:
+        ese descuento se aplica en la cuota de junio.
+    </p>
+</div>
+{% endblock %}
+
+{% block fee_rows %}
+<tr>
+    <td style="padding: 8px 0; border-bottom: 1px solid #d1cbe8;">
+        Cuota trimestral (abril–junio, con descuento fin de curso)
+    </td>
+    <td style="padding: 8px 0; border-bottom: 1px solid #d1cbe8; text-align: right;">
+        <strong>{{ quarterly_fee }} euros</strong><br>
+        <span style="font-size: 12px; color: #4a4a57;">trimestre habitual: {{ standard_quarterly_fee }} euros</span>
+    </td>
+</tr>
+<tr>
+    <td style="padding: 8px 0; border-bottom: 1px solid #d1cbe8;">
+        Cuota 2 sesiones semanales
+    </td>
+    <td style="padding: 8px 0; border-bottom: 1px solid #d1cbe8; text-align: right;">
+        {{ full_time_fee }} euros
+    </td>
+</tr>
+<tr>
+    <td style="padding: 8px 0; border-bottom: 1px solid #d1cbe8;">
+        Cuota 2 sesiones semanales descuento hermano
+    </td>
+    <td style="padding: 8px 0; border-bottom: 1px solid #d1cbe8; text-align: right;">
+        {{ sibling_full_time_fee }} euros
+    </td>
+</tr>
+<tr>
+    <td style="padding: 8px 0; border-bottom: 1px solid #d1cbe8;">
+        Cuota 1 sesión semanal
+    </td>
+    <td style="padding: 8px 0; border-bottom: 1px solid #d1cbe8; text-align: right;">
+        {{ part_time_fee }} euros
+    </td>
+</tr>
+<tr>
+    <td style="padding: 8px 0;">
+        Cuota adultos
+    </td>
+    <td style="padding: 8px 0; text-align: right;">
+        {{ adult_fee }} euros
+    </td>
+</tr>
+{% endblock %}

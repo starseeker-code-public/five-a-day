@@ -91,6 +91,7 @@
                 {% else %}
                 <div><span class="font-medium text-neutral-600">Colegio:</span> {{ student.school|default:"—" }}</div>
                 <div><span class="font-medium text-neutral-600">Alergias:</span> {{ student.allergies|default:"—" }}</div>
+                <div><span class="font-medium text-neutral-600">Autorizados recogida:</span> {% if student.pickup_authorized %}<span class="inline-block align-top whitespace-pre-line">{{ student.pickup_authorized }}</span>{% else %}—{% endif %}</div>
                 {% endif %}
                 <div class="flex items-center gap-1"><span class="font-medium text-neutral-600">Grupo:</span> {% if student.group %}<span class="w-2.5 h-2.5 rounded-full inline-block ml-1" style="background-color: {{ student.group.color }};"></span> {{ student.group.group_name }}{% else %}—{% endif %}</div>
                 <div><span class="font-medium text-neutral-600">Creado:</span> {{ student.created_at|date:"d/m/Y H:i" }}</div>
@@ -218,8 +219,6 @@
                         <div class="flex items-center gap-2">
                             <span class="material-symbols-outlined text-sm" style="color:#8b5cf6;">event</span>
                             <span class="text-sm text-neutral-700 font-medium">{{ entry.date|date:"d/m/Y" }}</span>
-                            {% with today=entry.date %}
-                            {% endwith %}
                         </div>
                         <button data-ff-remove="{{ entry.date|date:'Y-m-d' }}" title="Eliminar esta fecha de Fun Friday" aria-label="Eliminar esta fecha de Fun Friday"
                             class="text-neutral-400 hover:text-red-500 transition-colors p-1 rounded">

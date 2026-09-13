@@ -209,7 +209,6 @@ def home(request):
             )
 
     upcoming_events.sort(key=lambda x: x["date"])
-    next_event = upcoming_events[0] if upcoming_events else None
 
     # A weekly send (Fun Friday) yields one event per remaining Friday, so the card
     # listed the same name four times. Collapse repeats into a single entry showing
@@ -256,21 +255,9 @@ def home(request):
                 output_field=DecimalField(),
             )
         ),
-        monthly_income_count=Sum(
-            Case(
-                When(
-                    payment_status="completed",
-                    payment_date__month=current_month,
-                    payment_date__year=current_year,
-                    then=Value(1),
-                ),
-                default=Value(0),
-            )
-        ),
     )
     expected_revenue = revenue_stats["expected_revenue"] or _zero
     monthly_income_total = revenue_stats["monthly_income_total"] or _zero
-    monthly_income_count = revenue_stats["monthly_income_count"] or 0
 
     todos = list(TodoItem.objects.order_by("due_date", "created_at"))
     overdue_todos_count = sum(1 for t in todos if t.is_overdue)
@@ -304,12 +291,9 @@ def home(request):
         "birthday_count": birthday_count,
         "birthdays": birthdays_display,
         "has_more_birthdays": has_more_birthdays,
-        "current_month_name": today.strftime("%B"),
         "upcoming_events_count": upcoming_events_count,
         "upcoming_events": grouped_events[:5],
-        "next_event": next_event,
         "expected_revenue": expected_revenue,
-        "monthly_income_count": monthly_income_count,
         "monthly_income_total": monthly_income_total,
         "todos": todos,
         "overdue_todos_count": overdue_todos_count,
