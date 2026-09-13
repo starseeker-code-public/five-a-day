@@ -55,8 +55,40 @@ ENV PYTHONUNBUFFERED=1 \
 # git: used by the QA testing dashboard to show the last commit (branch, hash,
 #      author, date) — see core/views/testing_tools._git_info.
 # tzdata: so the TZ env var above resolves to a real zoneinfo (Madrid DST).
-# hadolint ignore=DL3008
-RUN apt-get update && apt-get install -y --no-install-recommends \
+#
+# `apt-get upgrade` applies Debian's security updates to the BASE image's own
+# packages, and it is here because the digest pin above cannot do that job.
+# Docker Hub rebuilds `python:3.14-slim` on its own schedule, so between a
+# Debian security release and that rebuild the pinned digest is, by
+# construction, out of date — and `Publish image & scan` fails the moment it is,
+# on packages we never chose to install. That is not hypothetical: on
+# 2026-09-13 the gate failed on five fixable HIGHs in gzip (CVE-2026-41992),
+# libpcre2-8-0 (CVE-2026-86145, CVE-2026-89161) and libsqlite3-0
+# (CVE-2026-11822, CVE-2026-11824), every one of them already fixed in Debian
+# (deb13u1 → deb13u2) and none of them fixable from this repo: the pinned
+# digest WAS still the newest `python:3.14-slim`, so there was no digest to bump
+# to. The remedy the gate's own error message suggests did not exist.
+#
+# The alternative was `.github/trivyignore`, and the pip block below spells out
+# why that is the wrong shape of fix: an ignore leaves the vulnerable code in
+# the image and switches the control off. Upgrading leaves the control armed and
+# actually removes the vulnerability.
+#
+# The cost is that the runtime layer is no longer bit-reproducible from the
+# digest alone — two builds a week apart can carry different patch levels of the
+# same packages. That is the deliberate trade: the digest pin still fixes the
+# starting point (so a rebuild cannot silently land on a different Python or a
+# different Debian release), and this line only ever moves packages FORWARD
+# within it. `--no-install-recommends` keeps the upgrade from pulling in
+# anything new, and the `rm -rf` in the same RUN keeps it to one layer.
+#
+# DL3005 is hadolint's blanket "do not use apt-get upgrade", aimed at exactly
+# the reproducibility point above. It is ignored knowingly, not by accident —
+# for a published image behind a fail-on-fixable-CVE gate, an unpatched base is
+# the larger of the two problems.
+# hadolint ignore=DL3008,DL3005
+RUN apt-get update && apt-get upgrade -y --no-install-recommends \
+    && apt-get install -y --no-install-recommends \
     postgresql-client \
     libpq-dev \
     git \
