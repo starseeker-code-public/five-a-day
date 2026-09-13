@@ -138,7 +138,7 @@ const localDateISO = window.localDateISO;
     const typeFilterCfg = [
         { icon: 'tune',           title: 'Tipo: Todos',                 bg: '',        color: '', match: null },
         { icon: 'event_repeat',   title: 'Mensual 2 d\u00edas/sem',          bg: '#3b82f6', color: '#fff', match: r => r.dataset.paymentType === 'monthly' && r.dataset.scheduleType === 'full_time' },
-        { icon: 'event_note',     title: 'Mensual 1 d\u00eda/sem',           bg: '#8b5cf6', color: '#fff', match: r => r.dataset.paymentType === 'monthly' && (r.dataset.scheduleType === 'part_time' || r.dataset.scheduleType === 'adult_group') },
+        { icon: 'event_note',     title: 'Mensual 1 d\u00eda/sem',           bg: '#8b5cf6', color: '#fff', match: r => r.dataset.paymentType === 'monthly' && (r.dataset.scheduleType === 'part_time' || r.dataset.scheduleType === 'part_time_child' || r.dataset.scheduleType === 'adult_group') },
         { icon: 'date_range',     title: 'Trimestral',                  bg: '#059669', color: '#fff', match: r => r.dataset.paymentType === 'quarterly' },
     ];
 

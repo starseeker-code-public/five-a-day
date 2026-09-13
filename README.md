@@ -15,11 +15,11 @@ Built to centralize student records, automate billing cycles, and streamline par
 ### Project Status
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v1.29.3-brightgreen?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-v1.29.4-brightgreen?style=flat-square" alt="Version">
   &nbsp;|&nbsp;
   <a href="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml?query=branch%3Amain"><img src="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml/badge.svg?branch=main&style=flat-square" alt="CI main"></a>
   &nbsp;|&nbsp;
-  <img src="https://img.shields.io/badge/coverage-95.12%25-brightgreen?style=flat-square" alt="Coverage">
+  <img src="https://img.shields.io/badge/coverage-95.09%25-brightgreen?style=flat-square" alt="Coverage">
   &nbsp;|&nbsp;
   <a href="https://github.com/starseeker-code-public/five-a-day/actions/workflows/scorecard.yml"><img src="https://img.shields.io/badge/OpenSSF%20Scorecard-monitored-blueviolet?style=flat-square" alt="OSSF Scorecard"></a>
   &nbsp;|&nbsp;
@@ -36,9 +36,9 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 | Version | Date | Description |
 |---------|------|-------------|
-| **v1.29.3** | 2026-09-13 | Pickup-authorised persons, cheque idioma line, test send, Sep/Jun/Apr reminders |
+| **v1.29.4** | 2026-09-13 | Media jornada infantil, per-teacher student scoping, parent portal off |
+| v1.29.3 | 2026-09-13 | Pickup-authorised persons, cheque idioma line, test send, Sep/Jun/Apr reminders |
 | v1.29.2 | 2026-09-13 | Payment status transition table, shared status badge, review fixes |
-| v1.29.1 | 2026-09-12 | Receipts only for collected money, one pricing source, QA fixes |
 
 ---
 
@@ -140,8 +140,126 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 ## Version History
 
-<details id="v1293" open>
-<summary><strong>v1.29.3 — Pickup-authorised persons, a legible cheque line, working test sends, special-month reminders (current)</strong></summary>
+<details id="v1294" open>
+<summary><strong>v1.29.4 — Media jornada infantil, a teacher sees only their own students, the family portal switched off (current)</strong></summary>
+
+**Media jornada infantil — a third children's price band**
+
+- New `schedule_type` **`part_time_child`** ("Infantil (1 día/semana)") and enrollment plan
+  `monthly_part_child`, priced from the new `SiteConfiguration.part_time_child_monthly_fee`
+  (seed 32 €, migration `billing/0016`) and editable from `/management/` like every other fee.
+  It is the **same one-session-a-week timetable as `part_time`** at the reduced rate the academy
+  charges the youngest children.
+- Modelled as a **price band, not a discount**: every discount (hermano, cheque idioma, junio)
+  layers on top of it exactly as it does on the other bands, and the schedule → fee mapping is
+  still the single `billing.money.monthly_fee_for`, so the ficha's live preview and the invoice
+  cannot price it differently. The create form's `priceConfig` key matches the plan value
+  exactly — a missing key would silently preview €0 rather than error.
+- The payment-reminder emails print it as a **sub-line under "Cuota 1 sesión semanal"**, not as a
+  sixth row: it is the same class at another price, and a sixth line in a five-line table reads
+  like a sixth product. The September and June variants show it beside their own "mes completo" /
+  "cuota habitual" figures.
+- Deliberately not validated against `Student.is_adult` — an adult resolves to `adult_group`
+  before the plan is read, and the academy picks this band by hand in a handful of cases a year.
+
+**A non-admin teacher sees only their own students**
+
+- **`core.transactions.visible_students_for(request, queryset)` is the one place that rule is
+  written.** A non-admin teacher now sees only the students in the groups they teach
+  (`Group.teacher`); admins take an early return and are unaffected. It is read by the roll
+  (`StudentListView`), the **ficha** (`StudentDetailView.get_queryset`, so anyone else's student
+  is a plain 404), the autocomplete (`search_students`) and the language-cheque endpoint.
+- The ficha was the hole worth closing: `student_detail` is deliberately in
+  `NON_ADMIN_ALLOWED_URL_NAMES` because it is this role's core surface, so without the scope a
+  teacher could read **any** family's name, school, allergies, guardians, addresses and phone
+  numbers by typing an id into the URL. The autocomplete had the same shape — a
+  name-and-guardian directory for the whole academy, reachable from any page.
+- Two deliberate edges: **waiting-list placeholders stay visible** (a waiting entry is nobody's
+  student yet, usually has no group, and managing that queue is in this role's whitelist —
+  scoping them out would 404 a teacher on the ficha they had just created), and a restricted
+  session with **no Teacher row sees nothing**, matching how every other control here fails.
+- The "mostrando N de M" notice counts the teacher's own roll, not the academy's.
+
+**Fun Friday is admin-only**
+
+- `fun_friday_view` and all three attendance endpoints (`toggle_fun_friday_this_week`,
+  `add_fun_friday_attendance`, `remove_fun_friday_attendance`) left
+  `NON_ADMIN_ALLOWED_URL_NAMES` **and** gained `@admin_required` — both controls, as everywhere
+  else. Deciding who comes on a Friday is the academy's call, and the page listed every child on
+  the roll, which was also the last place a teacher could see students outside their own groups.
+  The sidebar entry moved into the admin branch (it used to be the one page a teacher had that an
+  admin did not).
+- Teachers keep the **read**: the Fun Friday column on the students list renders as a plain icon
+  and the ficha still lists the dates, both without the add/remove controls. The icon is a
+  `<span>` rather than a disabled `<button>` — `students.js` binds every `.ff-toggle-btn`, so the
+  class is what has to be absent, otherwise the control 403s on click and silently reverts on
+  screen.
+
+**The family portal is switched off**
+
+- New `PARENT_PORTAL_ENABLED` setting, **default `False`**. While it is off every `/parent/` URL —
+  login and recovery included — is a 404, so a family holding an old link finds nothing rather
+  than a form that cannot help them, and **no access email is sent at all**.
+- Exactly three places read it, each marked `PARENT PORTAL KILL SWITCH`:
+  `SimpleAuthMiddleware._portal_gate`, `send_portal_temporary_password` /
+  `send_portal_invitation_once`, and `ParentAdmin.resend_portal_invitation` (which stamps the
+  once-only guard *before* it sends, so it has to stop before the stamp rather than rely on the
+  sender refusing). `Parent.portal_invite_sent_at` is deliberately **not** stamped while the
+  portal is off, so re-enabling it later still invites every family exactly once.
+- Done as a switch, not a deletion: removing the URLs would make the mailer's
+  `reverse("parent_portal_login")` raise `NoReverseMatch`, turning a flag into a refactor. Setting
+  it to `True` brings the whole portal back with nothing else to change.
+- The feature is switched off, not withdrawn, so the suite keeps exercising it:
+  `settings_test.py` turns it **on**, and `integration/test_parent_portal_disabled.py` is the one
+  file that overrides it back off to prove the switch bites.
+
+**The September reminder's "medio mes" is actually half**
+
+- `SEPTEMBER_CLASSES_START_DAY` is **16, not 15**. September has 30 days and `proration_fraction`
+  counts the joining day, so the 16th bills 15/30 — exactly the half month the academy tells
+  families about. The 15th billed 16/30 = 53 %, so the email's own explanatory text and its
+  figures disagreed with each other on the academy's most-read parent email.
+- **No Cheque Idioma box in September or June.** The cheque is a fixed amount per month and the
+  academy applies it in neither the first (half) month nor the last month of the course, so the
+  box quoted a price nobody is charged. Both variants now override that block empty; April and
+  every ordinary month keep it, and the form's help text says which is which.
+
+**Deploy: "the job exists" was never the same question as "the job can start"**
+
+- A Cloud Run **Job carries its own env set**, and `gcloud run services update` never reaches it —
+  so the service can be correct while all 12 jobs are not. The vars feeding the production posture
+  guard in `settings.py` are asserted at **import** time, so a job missing one does not fail its
+  task: it cannot start, and a Cloud Scheduler trigger reports nothing when it doesn't. `CACHE_DB`
+  was the live case — the service had it, no job ever did, and they only kept working because the
+  deployed image predated the guard. The first release carrying it died at `migrate` with
+  `CACHE_URL or CACHE_DB must be set in production` and auto-rolled back; had migrate not run
+  first, all 12 scheduled tasks would have stopped silently.
+- Gate 2 of `deploy-production.yml` now asserts **job-vs-service env parity** over
+  `POSTURE_ENV_KEYS` plus "CACHE_DB or CACHE_URL", reading the expected value **from the service**
+  so it cannot drift from what production actually runs. The inventory gate had only ever asked
+  whether each job existed.
+- **`PAUSED_OK_SCHEDULES` is now empty.** `purge-sessions` and `archive-gcp-costs` sat there while
+  v1.23.0 and v1.26.0 rolled out; both shipped, both schedules are enabled and firing, and the
+  entries had turned into dead tolerance — the two schedules the gate would have waved through
+  were exactly the two most likely to hide a silent pause.
+- `ACADEMY_IBAN_HOLDER` is finally correct **where it is used**: the payment reminder is sent by a
+  job, and every previous repair had targeted the service, so `fiveaday-payment-reminders` still
+  held `Carl?n` while the docs said the bug was fixed. All 12 jobs now carry the ASCII value.
+- The deploy service account needs `roles/cloudscheduler.viewer`; without it the inventory gate
+  fails with `PERMISSION_DENIED`, which is a gap in the **check**, not evidence about the
+  schedules. `DEPLOYMENT.md` documents both the parity rule and the IAM repair.
+
+**Testing**
+
+- Suite at **2,355 tests, 95.09 % coverage** (7,333 statements, 360 uncovered, 53 files at 100 %). New `unit/test_part_time_child_modality.py`,
+  `unit/test_deploy_posture_gate.py` (the workflow's env-parity and paused-schedule rules parsed
+  straight out of the YAML) and `integration/test_parent_portal_disabled.py`; the teacher
+  auth-flow, mass-mail and QA reminder suites gained the scoping and special-month cases.
+
+</details>
+
+<details id="v1293">
+<summary><strong>v1.29.3 — Pickup-authorised persons, a legible cheque line, working test sends, special-month reminders</strong></summary>
 
 Four QA requests from the first weeks of the 2026-2027 course.
 
@@ -3948,6 +4066,7 @@ erDiagram
         decimal adult_enrollment_fee
         decimal full_time_monthly_fee
         decimal part_time_monthly_fee
+        decimal part_time_child_monthly_fee
         decimal adult_group_monthly_fee
         decimal language_cheque_discount
         decimal quarterly_enrollment_discount
@@ -4416,6 +4535,17 @@ TWILIO_AUTH_TOKEN=
 TWILIO_FROM_NUMBER=                 # E.164 format, e.g. +34600111222
 
 # ============================================================================
+# PARENT PORTAL  (v1.29.4 — all environments)
+# ============================================================================
+# Master switch for the families' self-service portal (/parent/...). OFF by
+# default: every /parent/ URL 404s, including the public login and recovery
+# pages, and no invitation or recovery email is sent at all. The once-only
+# invitation guard (Parent.portal_invite_sent_at) is deliberately NOT stamped
+# while it is off, so turning the portal back on still invites every family
+# exactly once. Set to True to restore the whole portal — nothing else changes.
+PARENT_PORTAL_ENABLED=False
+
+# ============================================================================
 # STRIPE  (v1.11 — optional, all environments)
 # ============================================================================
 # STRIPE_SECRET_KEY toggles the parent-portal "Pagar online" button.
@@ -4644,7 +4774,9 @@ The table below describes every variable in the [.env template](#env-template) a
 | `TWILIO_ACCOUNT_SID` | Twilio Account SID | No | — |
 | `TWILIO_AUTH_TOKEN` | Twilio Auth Token | No | — |
 | `TWILIO_FROM_NUMBER` | E.164-format sender (e.g. `+34600111222`) | No | — |
-| **Stripe (v1.11)** — optional, gates the parent-portal "Pagar online" button | | | |
+| **Parent portal (v1.29.4)** | | | |
+| `PARENT_PORTAL_ENABLED` | Master switch for the families' self-service portal. **Off by default**: while it is off every `/parent/` URL 404s (login and recovery included) and no invitation or recovery email is sent, with `Parent.portal_invite_sent_at` left unstamped so re-enabling still invites each family exactly once. Set to `True` to bring the whole portal back — nothing else changes | No | `False` |
+| **Stripe (v1.11)** — optional, gates the parent-portal "Pagar online" button (only reachable while `PARENT_PORTAL_ENABLED` is on) | | | |
 | `STRIPE_SECRET_KEY` | Stripe Secret Key (`sk_test_…` in dev/testing, `sk_live_…` in prod) | No | — |
 | `STRIPE_PUBLISHABLE_KEY` | Stripe Publishable Key (`pk_…`) — client-side reference only | No | — |
 | `STRIPE_WEBHOOK_SECRET` | Webhook signing secret (`whsec_…`) — **REQUIRED in prod**; when unset the webhook view rejects all events | For prod Stripe | — |
@@ -4835,7 +4967,7 @@ five-a-day/
 │   │   └── management/commands/  send_email, test_all_emails, plus 4 Beat-task wrappers
 │   │                             (v1.14.2 — birthday, reminders, report, Fun Friday drain)
 │   │
-│   ├── tests/                    pytest suite (2,302 tests, 95.12 % coverage) — unit/ + integration/
+│   ├── tests/                    pytest suite (2,355 tests, 95.09 % coverage) — unit/ + integration/
 │   ├── templates/registration/   Password-reset templates (form, done, confirm, complete + email body)
 │   ├── templates/admin/          Django admin overrides (branded theme)
 │   └── conftest.py               Shared fixtures (models + authenticated_client)
@@ -4905,7 +5037,7 @@ Dashboard, authentication, scheduling, and shared utilities. Owns all views and 
 | **Models** | 9 — TodoItem, HistoryLog (1000-entry cap), FunFridayAttendance, FunFridayScheduledSend, ScheduleSlot, BacklogTask (QA; `verified` is the tester's tick, separate from `status="done"`, v1.20.0; `feature` FK, v1.21.0), Feature (QA epics — no priority, nullable `deadline`, v1.21.0), QAConfiguration (QA), plus AuditLog in `audit_models.py` |
 | **Views** | 23 modules: auth, password_reset, dashboard, students, parents, payments, management, app_forms, schedule, fun_friday_attendance, todos, support, errors, testing_tools, features, waiting_list, sheets, expenses, reports, parent_portal, stripe_views, pwa, two_factor |
 | **Services** | 4 — analytics_service, google_sheets_service, two_factor_service, drive_service (v1.29.0 — receipt archive) |
-| **Middleware** | 4 — NoHtmlCacheMiddleware (no-cache on dynamic HTML), QAErrorEmailMiddleware, SimpleAuthMiddleware (session auth public allow-list incl. `/password-reset/` + non-admin teacher URL-name whitelist), AuditActorMiddleware |
+| **Middleware** | 4 — NoHtmlCacheMiddleware (no-cache on dynamic HTML), QAErrorEmailMiddleware, SimpleAuthMiddleware (session auth public allow-list incl. `/password-reset/` + non-admin teacher URL-name whitelist + the v1.29.4 parent-portal kill switch, which 404s every `/parent/` URL while `PARENT_PORTAL_ENABLED` is off), AuditActorMiddleware |
 | **Templates** | base.html (layout — v1.26.8 renders the global flash-message block and gates the bell / history feed / per-view help on `is_admin_user`), 25 page templates (v1.21.0: `features.html`, `feature_detail.html`) + the shared `qa/_qa_styles.html` partial, 19 email templates + `base_email.html` (v1.28.2: ONE light theme that opts out of client dark-mode, written inline; v1.29.1 factors the shared WhatsApp contact box out of fifteen inline copies into `emails/_contact_box.html`), error pages, plus `templates/registration/` for the password-reset and teacher-activation flows |
 | **Static** | 4 CSS files (app.css, theme.css — which gained the flatpickr dark theme in v1.29.1, admin_custom.css, plus `palette.css` — v1.27.1, the `--primary-*` vars, deliberately separate because only `base.html` loads app.css while theme.css is loaded by three shells) + `vendor-flatpickr-*.css` (v1.28.2); `email.css` was deleted in v1.29.1 (an email template can never use `{% static %}`, so it had no reader). 17 JS behaviour modules (incl. `date-picker.js` — v1.28.2, which exposes `window.setDateValue()` / `window.dateInputElement()` since v1.29.1) + `tailwind-config.js` (v1.27.1 — the shared `tailwind.config`, previously copied inline into three shells and already drifted), `vendor/` (self-hosted Tailwind Play build + flatpickr), images |
 | **Commands** | seed_teachers (Teacher + auth.User from env vars; v1.26.8 optional `USERNAME` login handle), seed_demo_parents (v1.26.8 — the parent-portal demo family, `CommandError` in production), seed_testdata, export_to_sheets, reset_two_factor, cleanup_backlog_tasks, prune_audit_log (v1.15), backup_retention (v1.26.0), purge_sessions (v1.23.0), set_ready_for_prod (v1.26.4; since v1.26.7 `on` also fires the repository_dispatch that arms `Deploy production`) |
@@ -4933,9 +5065,9 @@ Financial management with a dedicated service layer.
 
 | Component | Details |
 |-----------|---------|
-| **Models** | 5 — SiteConfiguration (singleton pricing; v1.27.1 adds the five `academy_*` fiscal fields — until then `pdf_service` read fields that did not exist, so the **CIF was blank on every tax certificate**, on a document asserting IRPF deductibility), EnrollmentType (matrícula categories), Enrollment (discount flags, `is_hand_priced`), Payment (overdue detection, Stripe ids, `assert_completable()` refusing resurrection of a cancelled/refunded row), Expense (three recurring cadences; `recurring_day` is 1-31, where 29-31 clamp to the month's last day) |
+| **Models** | 5 — SiteConfiguration (singleton pricing; v1.29.4 adds `part_time_child_monthly_fee`, the media-jornada-infantil band; v1.27.1 adds the five `academy_*` fiscal fields — until then `pdf_service` read fields that did not exist, so the **CIF was blank on every tax certificate**, on a document asserting IRPF deductibility), EnrollmentType (matrícula categories), Enrollment (discount flags, `is_hand_priced`), Payment (overdue detection, Stripe ids, `assert_completable()` refusing resurrection of a cancelled/refunded row), Expense (three recurring cadences; `recurring_day` is 1-31, where 29-31 clamp to the month's last day) |
 | **Services** | 8 — EnrollmentService (creation + discounts + returning-student detection; v1.26.8 honours the form's `start_date` and the "Antiguo alumno" override, and `compute_enrollment_fee` is judged against the enrollment's own academic year), EnrollmentTypeService (`ensure_enrollment_types()`, the idempotent provisioning of the four matrícula categories), PaymentService (generation + calculations; v1.15 quarterly amounts now carry sibling / language-cheque / June discounts; v1.20.0 `hand_priced_amount()` bills a `special` matrícula at its agreed price instead of re-deriving it from config; v1.22.0 `billing_periods()` anchors quarters to the enrollment month, `proration_fraction()` prorates the first period only, and `calculate_period_amount()` becomes the single place a period is priced; v1.29.3 `price_breakdown()` takes the flat cheque idioma off the full period BEFORE the proration, so the receipt line reads −20 € instead of −10,67 € at an identical total), PricingService (centralized config access; v1.20.0 `payment_reminder_fees()` computes the five figures the reminder email prints; v1.29.3 `payment_reminder_special()` picks and prices the September / June / April reminder variants through the generator's own arithmetic), ExpenseService, PdfService (reportlab; v1.15 per-student payment history), StripeService (httpx, no SDK dependency), GcpCostService (real GCP spend from the BigQuery billing export — live for the running month, archived as a `software` Expense row when the month closes) |
-| **Constants** | Pricing seeds, ENROLLMENT_TYPE_CHOICES, SCHEDULE_TYPE_CHOICES, PAYMENT_METHOD_CHOICES, etc. Every choice **label** is Spanish (v1.20.0) — `get_<field>_display()` output is user-facing; the keys stay English |
+| **Constants** | Pricing seeds, ENROLLMENT_TYPE_CHOICES, SCHEDULE_TYPE_CHOICES (four bands since v1.29.4 — `full_time`, `part_time`, `part_time_child`, `adult_group`), PAYMENT_METHOD_CHOICES, etc. Every choice **label** is Spanish (v1.20.0) — `get_<field>_display()` output is user-facing; the keys stay English |
 | **Exports** | build_database_workbook() → multi-sheet .xlsx |
 | **Celery tasks** | 4 — generate_monthly_payments_task, materialize_recurring_expenses_task, materialize_recurring_expenses_daily_task, archive_gcp_costs_task (3rd of month) |
 | **Commands** | `generate_payments --month X --year Y [--dry-run]`, `materialize_recurring_expenses [--daily]`, `archive_gcp_costs [--month X --year Y]`, `backfill_drive_receipts [--apply]` (v1.29.0) |
@@ -4965,7 +5097,7 @@ See [comms/README.md](project/comms/README.md) for details.
 | Views stay in core | Models split across apps, but all views in `core/views/` avoids template/URL fragmentation. Each app's `urls.py` imports from core. |
 | Service layer in billing | Business logic (pricing, discounts, payment generation) extracted from forms/views into testable services. |
 | SiteConfiguration singleton | All pricing editable from UI. Auto-creates with defaults. No hardcoded prices in views. |
-| Two-mode auth | Dev compares against `LOGIN_USERNAME`/`LOGIN_PASSWORD` env vars; testing/production authenticates Teachers via the linked `auth.User`. SimpleAuthMiddleware adds a non-admin Teacher whitelist on top so role-based gating is enforced even on direct URL access. |
+| Two-mode auth | Dev compares against `LOGIN_USERNAME`/`LOGIN_PASSWORD` env vars; testing/production authenticates Teachers via the linked `auth.User`. SimpleAuthMiddleware adds a non-admin Teacher whitelist on top so role-based gating is enforced even on direct URL access, and since v1.29.4 `visible_students_for` narrows a non-admin teacher's student querysets to their own groups, so a whitelisted page cannot become a directory of the whole academy. |
 | Tailwind CDN | Zero build tools. All utilities available instantly. Custom violet palette in config block. |
 | PostgreSQL everywhere | Same database engine in development, testing, and production. Avoids SQLite behavioral differences. |
 
@@ -4992,13 +5124,14 @@ Student management with toolbar, inline actions, and real-time filtering.
 - **Student table** — columns: name, group (color badge), enrollment type, Fun Friday status icon. Rows have `data-*` attributes for client-side filtering.
 - **Search** — real-time filter by name (client-side, no server round-trip).
 - **Sort** — 4-state cycle: date ascending → date descending → name A-Z → name Z-A.
-- **Fun Friday toggle** — per-row button. States: green check (registered this week), amber check (this + last week), amber X (only last week), grey X (neither). AJAX POST to `/api/students/{id}/fun-friday/toggle/`.
+- **Fun Friday toggle** — per-row button, **admin only** since v1.29.4. States: green check (registered this week), amber check (this + last week), amber X (only last week), grey X (neither). AJAX POST to `/api/students/{id}/fun-friday/toggle/`. A non-admin teacher gets the same icon rendered as a plain `<span>` — the state is readable, the toggle is not there to click.
 - **Fun Friday filter** — 3-state cycle: all → not this week → this week only.
 - **Type filter** — 4-state cycle: all → children only → adults only → language cheque students.
 - **New student dropdown** — choose creation flow: new parent → new student, existing parent → new student, or adult student (no parent). Admin-only, like the row's pencil and book icons.
 - **New enrollment (v1.26.8)** — the book icon on each row opens a modal that issues a **new matrícula** for an existing student: pick the plan, the discounts and a **start date**, and optionally charge the matrícula. The current active enrollment is finished, and the year's payments are generated from the chosen date, so a student re-enrolling today for a 1 November start is billed from November.
 - **Antiguo estudiante — bulk re-enrolment (v1.28.2)** — a 4th "Nuevo Estudiante" option opens a page listing prior students not enrolled this course (inactive ones included). Tick several, choose the plan / start date / whether to charge the matrícula **once**, and each gets a new returning-student enrollment (reactivated if inactive), processed independently so one failure doesn't lose the rest.
-- **Read-only for non-admin teachers (v1.26.8)** — a non-admin teacher may browse the roll, open a ficha and toggle Fun Friday, but the create / edit / enroll routes are out of the middleware whitelist and their buttons are not rendered.
+- **Read-only for non-admin teachers (v1.26.8)** — a non-admin teacher may browse the roll and open a ficha, but the create / edit / enroll routes are out of the middleware whitelist and their buttons are not rendered.
+- **Scoped to the teacher's own students (v1.29.4)** — a non-admin teacher's roll, ficha, autocomplete and language-cheque list contain only the students in the groups they teach (`Group.teacher`), through the single `core.transactions.visible_students_for`. Anyone else's ficha is a 404, so an id typed into the URL no longer exposes a family's guardians, addresses and phone numbers. Waiting-list placeholders stay visible (managing that queue is in this role's whitelist); admins are unaffected.
 
 ### Student Create
 
@@ -5006,7 +5139,7 @@ Multi-step creation form with live price calculator.
 
 - **Parent selection** — either create new (name, DNI, phone, email, IBAN) or search existing parents with pagination (6 per page).
 - **Student fields** — first name, last name, birth date (validated: not future), school, allergies, **Autorizados para la recogida** (v1.29.3 — name and optional DNI of each person who may collect the child, one per line; children only), GDPR consent, group selector.
-- **Enrollment plan** — dropdown: monthly full-time (2 days/week), monthly part-time (1 day/week), quarterly. Checkboxes: language cheque discount, sibling discount (with sibling search), **Antiguo alumno** (v1.26.8 — forces the returning-student matrícula for a student with no prior `Enrollment` row; pre-ticked when promoting a waiting-list entry that has history), special/manual price.
+- **Enrollment plan** — dropdown: monthly full-time (2 days/week), monthly part-time (1 day/week), **monthly part-time infantil** (v1.29.4 — the same one-day timetable at the reduced children's band, `part_time_child`), quarterly. Checkboxes: language cheque discount, sibling discount (with sibling search), **Antiguo alumno** (v1.26.8 — forces the returning-student matrícula for a student with no prior `Enrollment` row; pre-ticked when promoting a waiting-list entry that has history), special/manual price.
 - **Fecha de inicio (v1.26.8)** — the day the student actually starts, defaulting to today. It becomes `Enrollment.enrollment_date`, so the academic year, the matrícula's due month and the first billing period all derive from it, and the amber "Primer pago (parcial)" preview follows the chosen date rather than today.
 - **Two independent hand-set prices** (v1.20.0, atomic since v1.28.2) — ticking **Precio especial** reveals **Matrícula especial (€)** (the optional one-time matrícula, charged verbatim, no returning-student discount). The *recurring* **Cuota personalizada (€)** appears only when **Personalizar también la cuota** is also ticked. So a special can customise the matrícula only, the cuota only, or both (it must customise at least one); a matrícula-only special keeps the standard recurring fee. Everything is only accepted with "Precio especial" ticked.
 - **Live price calculator** — updates as you change plan/discounts. Shows base price, strikethrough, final price, and breakdown text (e.g., "trimestral incl. -5%, -20 cheque"). The strike-through uses the **pre-discount** total (`quarterly_gross`) — it used to strike the already-discounted quarterly figure and print the same number twice.
@@ -5016,7 +5149,7 @@ Multi-step creation form with live price calculator.
 
 ### Student Detail & Update
 
-- **Detail view** — personal info (incl. the pickup-authorised persons, v1.29.3), linked parents with contact details, enrollment history (all enrollments, active highlighted), payment history, Fun Friday dates with add/remove.
+- **Detail view** — personal info (incl. the pickup-authorised persons, v1.29.3), linked parents with contact details, enrollment history (all enrollments, active highlighted), payment history, Fun Friday dates with add/remove (the dates stay visible to a non-admin teacher, the add/remove controls do not — v1.29.4). A non-admin teacher reaching a student outside their own groups gets a 404.
 - **Enrollment modality toggle** — switch monthly ↔ quarterly via AJAX.
 - **Update view** — same form as create, pre-filled. Saves student changes + finishes old enrollment + creates new enrollment.
 
@@ -5066,9 +5199,9 @@ Weekly class timetable with drag-and-drop group assignment.
 
 ### Fun Friday
 
-Dedicated attendance management for the weekly Fun Friday event.
+Dedicated attendance management for the weekly Fun Friday event. **Admin only** since v1.29.4 — the page lists every child on the roll and setting the Friday list is the academy's call, so `fun_friday_view` and its three attendance endpoints carry `@admin_required` and are absent from `NON_ADMIN_ALLOWED_URL_NAMES`. Teachers keep the read-only view of their own students' attendance on the students list and on each ficha.
 
-- **Student list** — all non-adult active students, grouped by class group.
+- **Student list** — all non-adult students enrolled this academic year, grouped by class group.
 - **Toggle buttons** — same icon system as student list. AJAX toggles.
 - **This week / Last week panels** — lists of registered students for each Friday.
 - **Search, sort, filter** — same tools as student list.
@@ -5111,7 +5244,7 @@ Hub page listing all 10 email communication tools. Each follows a consistent pat
 
 Admin configuration panel with live editing.
 
-- **Pricing config** — all fees and discounts from SiteConfiguration. Toggle edit mode → modify values → save via AJAX. Fields: children/adult enrollment fees, full-time/part-time/adult monthly fees, 8 discount types.
+- **Pricing config** — all fees and discounts from SiteConfiguration. Toggle edit mode → modify values → save via AJAX. Fields: children/adult enrollment fees, full-time / part-time / **infantil** (v1.29.4) / adult monthly fees, 8 discount types.
 - **Teachers** — create via modal (name, email, phone). Validates unique email. Lists active teachers. Since v1.26.8 the new teacher is **emailed a "choose your password" link** on creation (it used to send nothing, so every account looked broken on first login); the toast says whether the mail went out. Teachers created here are **always non-admin** (`create_teacher` hard-codes `admin=False`) — only seeded teachers (`TEACHER_SEED_<N>_ADMIN=True`) and the superuser are admins, and an existing admin promotes others via `/admin/`.
 - **Groups** — create via modal (name, color picker, teacher dropdown). Teacher list populated via AJAX from `/api/teachers/`. Validates unique name.
 - **Cambiar Contraseña (v1.26.8)** — change your **own** password from a modal (`POST /api/password-change/`, rate-limited 5/5 min/IP). The session survives the change. Self-service, so non-admin teachers get it too; hidden for Google-OAuth sessions and for accounts with no usable password.
@@ -5158,6 +5291,8 @@ Public flow at `/password-reset/...` that lets a teacher recover access without 
 
 `/parent/` (v1.9, re-authenticated in v1.27) — a separate, family-facing surface with its own session, styled and themed like the rest of the app.
 
+> **Switched OFF since v1.29.4.** `PARENT_PORTAL_ENABLED` defaults to `False`, and while it is off every `/parent/` URL is a 404 — login and recovery included — and no invitation or recovery email is sent. The feature below is intact and fully tested; only the switch stands in front of it. `Parent.portal_invite_sent_at` is deliberately left unstamped while it is off, so setting the flag to `True` still invites every family exactly once.
+
 - **Email + password login** — `/parent/login/` is the same shape as the staff login. The password is a Django hash on `Parent`, **deliberately not an `auth.User`**: `_authenticate_teacher` authenticates any `auth.User`, so a family holding one would hold a staff login into the admin app. The portal keeps a `parent_id` session and never touches `django.contrib.auth`.
 - **Invitation, sent once** — when a parent record is created, `send_parent_temporary_password_task` emails a generated temporary password. `Parent.portal_invite_sent_at` guards it, so a family with three children receives exactly one invitation, and the stamp is written *before* the send is queued.
 - **`¿Has olvidado tu contraseña?`** — one form covering both recovery and a never-opened invitation, which is why it never says whether a password exists. It re-issues a temporary password, replacing any previous one.
@@ -5183,11 +5318,11 @@ Public flow at `/password-reset/...` that lets a teacher recover access without 
 
 | Metric | Value |
 |--------|-------|
-| **Total tests** | 2,302 |
-| **Test files** | 110 (61 unit + 49 integration) |
-| **Coverage** | 95% (95.12% — 7,295 statements, 356 uncovered) |
+| **Total tests** | 2,355 |
+| **Test files** | 113 (63 unit + 50 integration) |
+| **Coverage** | 95% (95.09% — 7,333 statements, 360 uncovered) |
 | **Coverage thresholds** | **≥ 90%** (target, no warning) / **75-89%** (CI warning, pre-commit still blocks below 75) / **< 75%** (CI fails, pre-commit rejects the commit) |
-| **Runtime** | ~195 seconds (parallel workers via `pytest-xdist -n auto`) |
+| **Runtime** | ~190 seconds (parallel workers via `pytest-xdist -n auto`) |
 | **Database** | PostgreSQL (same as production) — **always use `make test`** |
 | **Framework** | pytest 9 + pytest-django + pytest-cov + pytest-xdist + pytest-randomly |
 | **Type checking** | mypy + django-stubs (pre-commit hook) |
@@ -5231,7 +5366,7 @@ Within each file, related tests are grouped into classes. Where a large file abs
 
 ### Unit Tests
 
-**61 files, 960 tests.** Direct-call tests — no HTTP stack, no URL resolver, no template rendering.
+**63 files, 989 tests.** Direct-call tests — no HTTP stack, no URL resolver, no template rendering.
 
 | File | Count | Coverage |
 | --- | --- | --- |
@@ -5296,10 +5431,12 @@ Within each file, related tests are grouped into classes. Where a large file abs
 | [`unit/test_testing_tools_helpers.py`](project/tests/unit/test_testing_tools_helpers.py) | 2 | `_git_info` helper: success path + non-zero returncode branch with `subprocess.run` mocked |
 | [`unit/test_audit_pruning.py`](project/tests/unit/test_audit_pruning.py) | 16 | `core.tasks.prune_audit_log` and its Cloud Scheduler command wrapper — the ONLY code path that deletes from `audit_logs`, a table the admin deliberately makes immutable (no add, no change, no delete). It had **zero test references for eight versions** while permanently destroying rows, and `*/admin.py` being coverage-omitted meant nothing else exercised the surrounding rules either. Pins the retention window and its boundary, the floor that refuses a window short enough to erase the course being taught (`--days 0` would have deleted every row, including the entries incriminating whoever ran it), `--dry-run` counting exactly what a real run deletes, and the floor surfacing as a `CommandError` so a Cloud Run Job reports a clean failure instead of a Celery traceback. Rows are backdated with `queryset.update()` because `created_at` is `auto_now_add` |
 | [`unit/test_drive_service.py`](project/tests/unit/test_drive_service.py) | 26 | `core.services.drive_service.DriveReceiptService` (v1.29.0) — the folder-path logic (`Curso YYYY/YYYY+1/Recibos/<Mes> YY/`, whose Curso rolls over in **August**, deliberately NOT the billing academic-year boundary), find-or-create at each level, idempotency by the `<paymentID>_` filename prefix so re-completion and `backfill_drive_receipts` never duplicate, and the **never-raises** guarantee: every failure path returns a `DriveUploadResult` with a status (`uploaded` / `skipped_exists` / `not_configured` / `error`) instead of propagating, because the Drive copy is a convenience on top of the `Payment` row and the emailed receipt — an unshared folder or a bad credential must leave payment completion untouched |
+| [`unit/test_part_time_child_modality.py`](project/tests/unit/test_part_time_child_modality.py) | 12 | The **infantil** band (v1.29.4): `part_time_child` present in `SCHEDULE_TYPE_CHOICES` and `monthly_part_child` in `ENROLLMENT_PLAN_CHOICES`, `monthly_fee_for` / `period_base_amount` / `quarterly_price_from_monthly` resolving it off `SiteConfiguration.part_time_child_monthly_fee`, `EnrollmentService._resolve_plan` returning the right `(amount, schedule_type, modality)` for both the standard and the hand-priced case, and every discount (hermano, cheque idioma, junio) layering on top of it exactly as on full time |
+| [`unit/test_deploy_posture_gate.py`](project/tests/unit/test_deploy_posture_gate.py) | 17 | `POSTURE_ENV_KEYS` in `deploy-production.yml` pinned to the production posture guard in `settings.py` (v1.29.4) — the two are one rule written in two languages and cannot be a shared constant, so the test parses the YAML and loads `settings.py` in isolation under a private module name. A key the guard checks but the gate does not compare is how `CACHE_DB` reached production on the service and on none of the 12 jobs; a key the gate demands but the guard ignores (`DJANGO_ALLOWED_HOSTS`) is a false positive that fails a real deploy. Also asserts `PAUSED_OK_SCHEDULES` is empty and that an empty inventory is fatal |
 
 ### Integration Tests
 
-**49 files, 1,342 tests.** Full HTTP stack through Django's test client.
+**50 files, 1,366 tests.** Full HTTP stack through Django's test client.
 
 | File | Count | Coverage |
 | --- | --- | --- |
@@ -5319,7 +5456,7 @@ Within each file, related tests are grouped into classes. Where a large file abs
 | [`integration/test_student_views.py`](project/tests/integration/test_student_views.py) | 36 | `StudentListView` (search, exclude inactive, context), `StudentDetailView` (parents visible, 404), `StudentCreateView` (form + adult mode + success + full POST + error paths including invalid parent, existing-parent mode, create_sibling flag, email-task swallow), `search_students` JSON endpoint (results + short-query empty), and the v1.20.0 pricing surface: `price_config` exposing `quarterly_gross`, both hand-set prices reaching the payments, the matrícula falling back to the standard fee when left blank, and a special matrícula fee rejected without "Precio especial" ticked. v1.22.0 adds the first-period proration the creation form previews, asserting the context fraction comes from the same `PaymentService` helper the generator bills with. v1.26.0 adds the 500-row list cap. v1.28.2: the special pricing tests now drive `customize_recurring`, plus a matrícula-only special that keeps the standard cuota |
 | [`integration/test_management_views.py`](project/tests/integration/test_management_views.py) | 27 | `gestion_view` + `update_site_config` (all fields + bad JSON), `create_teacher` (success + duplicate + missing field + bad JSON), `create_group` (success + missing fields + duplicate + nonexistent teacher + bad JSON), `api_get_teachers`, `update_enrollment_modality` (success + invalid + no enrollment + student not found), `language_cheque_students` |
 | [`integration/test_dev_teacher_login.py`](project/tests/integration/test_dev_teacher_login.py) | 14 | Development login now reaches Teacher auth (v1.26.8): the env-var admin path still works and still mints a superuser, a seeded **non-admin** Teacher logs in by handle *and* by email, that session is not granted admin, missing `LOGIN_USERNAME`/`LOGIN_PASSWORD` no longer blocks Teacher auth, and an email matching two `auth.User` rows is refused rather than resolved arbitrarily |
-| [`integration/test_teacher_auth_flow.py`](project/tests/integration/test_teacher_auth_flow.py) | 33 | Login dispatcher branches (dev env-var vs `auth.User`-backed Teacher login), OAuth user creation/Teacher-linking, `_finalize_session_login` setting both `_auth_user_id` and `is_authenticated`, `SimpleAuthMiddleware` whitelist behaviour for non-admin Teachers (allowed routes, 403 JSON for `/api/*`, dashboard redirect with flash for HTML), template gating (sidebar swap, read-only management) |
+| [`integration/test_teacher_auth_flow.py`](project/tests/integration/test_teacher_auth_flow.py) | 41 | Login dispatcher branches (dev env-var vs `auth.User`-backed Teacher login), OAuth user creation/Teacher-linking, `_finalize_session_login` setting both `_auth_user_id` and `is_authenticated`, `SimpleAuthMiddleware` whitelist behaviour for non-admin Teachers (allowed routes, 403 JSON for `/api/*`, dashboard redirect with flash for HTML), template gating (sidebar swap, read-only management). v1.29.4 adds the per-teacher student scope — the roll, the ficha (404 on another teacher's student), the autocomplete and the language-cheque endpoint all narrowed by `visible_students_for`, waiting-list placeholders still visible, a restricted session with no Teacher row seeing nothing, admins unaffected — and Fun Friday being admin-only at both layers |
 | [`integration/test_password_management.py`](project/tests/integration/test_password_management.py) | 17 | The two authenticated password entry points (v1.26.8). `change_password`: the happy path (session survives via `update_session_auth_hash`, an `AuditLog` row is written), wrong current password, mismatched confirmation, Django's validators, a non-object JSON body, GET refused, the 5/5 min rate limit, and the 403 for Google-OAuth sessions and accounts with no usable password. `send_password_setup_email`: `create_teacher` mails the activation link, the message says which of the two outcomes happened, a dead SMTP hop still keeps the Teacher, and the link actually sets a password on an account Django's stock `PasswordResetForm` would have skipped |
 | [`integration/test_two_factor_views.py`](project/tests/integration/test_two_factor_views.py) | 18 | 2FA views and the login gate (v1.13): setup page (QR + secret), manage page (disable, rotate backup codes), the login gate flow (TOTP accepted, backup code accepted, wrong code rejected), and the `reset_two_factor` management command |
 | [`integration/test_dashboard_views.py`](project/tests/integration/test_dashboard_views.py) | 15 | `home` view quote-cookie branches (valid cookie, corrupt cookie -> API, API failure, API empty, `[AUTH]` placeholder filtered, with pending payments), `all_info` sort variants (default, first_name, last_name, id_asc, payments_sort=student_asc) |
@@ -5350,22 +5487,23 @@ Within each file, related tests are grouped into classes. Where a large file abs
 | [`integration/test_iteration2_fixes.py`](project/tests/integration/test_iteration2_fixes.py) | 7 | Second-pass review fixes |
 | [`integration/test_iteration4_fixes.py`](project/tests/integration/test_iteration4_fixes.py) | 5 | Fourth-pass review fixes |
 | [`integration/test_v1282_qa_fixes.py`](project/tests/integration/test_v1282_qa_fixes.py) | 15 | v1.28.2 + v1.29.1 QA fixes: manual payments born pending, waiting-list removal (delete + 404 on a real student), bulk "antiguo estudiante" re-enrolment (reactivates + returning-student type, and since v1.29.1 routed through `supersede_enrollment` so the closing plan's uninvoiced months are billed before the hand-over), receipt numbering (`2026-633` seed, January restart, idempotent, and never assigned to a payment that is not `completed`), and the **reconstruct-or-say-nothing** discount breakdown — shown only when re-pricing the period reproduces the amount to the cent, so the June stub, a re-download after a price change and a negotiated matrícula fall back to the bare `Importe` line instead of inventing a "Prorrateo" / "Ajuste" / "Descuento antiguo alumno" |
-| [`integration/test_qa_pickup_receipts_and_reminders.py`](project/tests/integration/test_qa_pickup_receipts_and_reminders.py) | 32 | v1.29.3 QA fixes: the receipt's **Cheque idioma line is whole cheques** (−20,00 € on a prorated September month, `(3 meses)` −60,00 € on a quarter, cheque before proration in the line order, and the total unchanged to the cent by the reordering); the **"Enviar prueba" recipient fallback** (`EMAIL_TEST_*` → the logged-in teacher's address → `SUPPORT_EMAIL` → a refusal naming all three, threaded through every form); `Student.pickup_authorized` on the form, the create view, the children-only create page, the ficha, the update view and the admin fieldsets; and the **September / June / April reminder emails** — `payment_reminder_special` figures equal the generator's own for each month, the start-day override and its validation, the previews' wording and figures, the mass send picking the special template and subject, and `test_all_emails` previewing the three variants |
+| [`integration/test_qa_pickup_receipts_and_reminders.py`](project/tests/integration/test_qa_pickup_receipts_and_reminders.py) | 38 | v1.29.3 QA fixes: the receipt's **Cheque idioma line is whole cheques** (−20,00 € on a prorated September month, `(3 meses)` −60,00 € on a quarter, cheque before proration in the line order, and the total unchanged to the cent by the reordering); the **"Enviar prueba" recipient fallback** (`EMAIL_TEST_*` → the logged-in teacher's address → `SUPPORT_EMAIL` → a refusal naming all three, threaded through every form); `Student.pickup_authorized` on the form, the create view, the children-only create page, the ficha, the update view and the admin fieldsets; and the **September / June / April reminder emails** — `payment_reminder_special` figures equal the generator's own for each month, the start-day override and its validation, the previews' wording and figures, the mass send picking the special template and subject, and `test_all_emails` previewing the three variants. v1.29.4 adds `SEPTEMBER_CLASSES_START_DAY = 16` billing exactly half of a 30-day September, the Cheque Idioma box being **absent** from the September and June variants (present in April and in the ordinary template), and the media-jornada-infantil sub-line appearing in all four |
 | [`integration/test_drive_receipts.py`](project/tests/integration/test_drive_receipts.py) | 8 | The dispatch half of the Drive archive (v1.29.0) — `_queue_payment_receipt` and the Stripe webhook queue the upload in their **own** `try/except`, separate from the receipt email, so neither can take the other down; the task is a no-op unless `GOOGLE_DRIVE_RECEIPTS_FOLDER_ID` is set; and it is NOT a Beat task, so nothing expects a Cloud Scheduler entry for it |
+| [`integration/test_parent_portal_disabled.py`](project/tests/integration/test_parent_portal_disabled.py) | 10 | The parent-portal **kill switch** (v1.29.4). `settings_test` turns `PARENT_PORTAL_ENABLED` **on** so the rest of the suite keeps proving the feature works; this is the one module that overrides it back off, via an autouse fixture (a module-level `override_settings` in `pytestmark` is not a Mark and fails at collection). Asserts every `/parent/` URL 404s including the public login and recovery pages, that none of the three senders queues an access email, and that `Parent.portal_invite_sent_at` is **not** stamped — so re-enabling the portal later still invites every family exactly once |
 
 ### Coverage Report
 
 | File | Stmts | Miss | Cover | Missing lines |
 | --- | --- | --- | --- | --- |
-| `billing/forms.py` | 55 | 2 | 96% | 136, 181 |
-| `billing/models.py` | 372 | 27 | 93% | 73-74, 839, 890, 916, 1019-1020, 1047-1048, 1071, 1257, 1259-1287, 1302, 1304, 1316-1317, 1325 |
-| `billing/services/enrollment_service.py` | 151 | 8 | 95% | 175, 278-280, 340, 473, 475, 509 |
+| `billing/forms.py` | 55 | 2 | 96% | 142, 187 |
+| `billing/models.py` | 373 | 27 | 93% | 73-74, 852, 903, 929, 1032-1033, 1060-1061, 1084, 1270, 1272-1300, 1315, 1317, 1329-1330, 1338 |
+| `billing/services/enrollment_service.py` | 155 | 8 | 95% | 175, 278-280, 340, 473, 477, 514 |
 | `billing/services/expense_service.py` | 56 | 6 | 89% | 99-105, 152-154 |
 | `billing/services/gcp_cost_service.py` | 148 | 14 | 91% | 170-171, 208-209, 223-225, 231-232, 242-243, 292-294 |
-| `billing/services/payment_service.py` | 239 | 16 | 93% | 388, 420, 504, 582-590, 618-626, 679, 712, 729-736 |
+| `billing/services/payment_service.py` | 239 | 16 | 93% | 395, 427, 511, 589-597, 625-633, 686, 719, 736-743 |
 | `billing/services/pdf_service.py` | 210 | 5 | 98% | 155, 322, 333, 377, 382 |
 | `billing/services/stripe_service.py` | 118 | 3 | 97% | 139-140, 179 |
-| `comms/services/email_functions.py` | 94 | 6 | 94% | 552, 577-581, 591-592 |
+| `comms/services/email_functions.py` | 94 | 6 | 94% | 557, 582-586, 596-597 |
 | `comms/services/email_service.py` | 81 | 5 | 94% | 184-185, 222-224 |
 | `comms/services/sms_service.py` | 50 | 3 | 94% | 58, 63-64 |
 | `comms/tasks.py` | 317 | 16 | 95% | 522, 612-613, 672, 707-711, 716, 891-893, 913-917, 921-922, 957 |
@@ -5373,29 +5511,30 @@ Within each file, related tests are grouped into classes. Where a large file abs
 | `core/context_processors.py` | 43 | 1 | 98% | 72 |
 | `core/date_utils.py` | 6 | 1 | 83% | 23 |
 | `core/decorators.py` | 34 | 2 | 94% | 63-64 |
-| `core/middleware.py` | 197 | 13 | 93% | 151, 200, 211-216, 273, 279, 432, 444, 487, 550-551, 591-592 |
+| `core/middleware.py` | 200 | 13 | 94% | 151, 200, 211-216, 273, 279, 436, 448, 491, 564-565, 605-606 |
 | `core/models.py` | 178 | 2 | 99% | 336, 369 |
 | `core/services/drive_service.py` | 140 | 4 | 97% | 323-324, 350-352 |
 | `core/services/google_sheets_service.py` | 100 | 9 | 91% | 75-77, 113-119 |
-| `core/views/app_forms.py` | 577 | 32 | 94% | 247, 317-322, 410-411, 500, 591-593, 605-608, 614-615, 753-754, 774-775, 812-814, 1055, 1244, 1259-1263, 1391, 1584-1588, 1606-1609 |
+| `core/transactions.py` | 23 | 2 | 91% | 67, 72 |
+| `core/views/app_forms.py` | 577 | 32 | 94% | 247, 317-322, 410-411, 500, 591-593, 605-608, 614-615, 753-754, 774-775, 812-814, 1062, 1251, 1266-1270, 1398, 1591-1595, 1613-1616 |
 | `core/views/auth.py` | 200 | 11 | 94% | 66, 69-71, 254, 271, 319, 338, 383, 466-467 |
 | `core/views/dashboard.py` | 148 | 5 | 97% | 133-140, 184 |
 | `core/views/expenses.py` | 135 | 11 | 92% | 30-31, 160, 183-184, 217-219, 252-254 |
 | `core/views/features.py` | 174 | 20 | 89% | 139, 163-164, 214-218, 276-282, 329-333 |
-| `core/views/management.py` | 150 | 5 | 97% | 343, 380, 414-416 |
-| `core/views/parent_portal.py` | 220 | 6 | 97% | 112, 254, 487, 605, 660, 681 |
+| `core/views/management.py` | 153 | 5 | 97% | 346, 383, 417-419 |
+| `core/views/parent_portal.py` | 224 | 6 | 97% | 112, 262, 503, 621, 676, 697 |
 | `core/views/parents.py` | 60 | 1 | 98% | 51 |
 | `core/views/password_reset.py` | 74 | 2 | 97% | 141, 143 |
 | `core/views/payments.py` | 380 | 31 | 92% | 303-308, 366, 372-373, 385-394, 521, 575-576, 603-604, 616, 624-635, 641-642, 789-791, 1055 |
-| `core/views/schedule.py` | 67 | 1 | 99% | 111 |
-| `core/views/students.py` | 439 | 39 | 91% | 299-301, 436-441, 603, 628, 639, 648, 653, 684, 696, 722, 755-761, 770, 939, 966-969, 1044-1045, 1059-1061, 1077-1079, 1089-1090, 1114-1115, 1133-1135, 1140, 1142 |
+| `core/views/schedule.py` | 68 | 1 | 99% | 111 |
+| `core/views/students.py` | 445 | 41 | 91% | 303-305, 440-445, 593, 617, 642, 644, 655, 664, 669, 700, 712, 738, 771-777, 786, 970, 997-1000, 1075-1076, 1090-1092, 1108-1110, 1120-1121, 1145-1146, 1164-1166, 1171, 1173 |
 | `core/views/testing_tools.py` | 231 | 20 | 91% | 72-73, 77-79, 234, 298, 305, 307, 325-327, 436-440, 453, 471-472 |
 | `core/views/two_factor.py` | 94 | 8 | 91% | 39, 50-51, 189-191, 196-197 |
 | `core/views/waiting_list.py` | 117 | 1 | 99% | 340 |
 | `students/forms.py` | 101 | 2 | 98% | 321-322 |
 | `students/models.py` | 336 | 9 | 97% | 159-160, 484, 568-569, 774-777 |
 
-**54 files** have 100% coverage (skipped above). Total coverage: **95.12%** across 7,295 statements. Coverage is **very good**. Coverage is enforced at three levels: pre-commit hook (>= 75%), CI hard floor (>= 75%), and CI warning (< 90%).
+**53 files** have 100% coverage (skipped above). Total coverage: **95.09%** across 7,333 statements. Coverage is **very good**. Coverage is enforced at three levels: pre-commit hook (≥ 75%), CI hard floor (≥ 75%), and CI warning (< 90%).
 
 ---
 
@@ -6057,7 +6196,7 @@ make up                        # Start Docker (PostgreSQL + Redis + Django + Cel
 1. Work on `development` (or a short-lived branch off `development`)
 2. Make changes following the conventions below
 3. Run `make pc-run` — Ruff + mypy + bandit all pass, offers to auto-bump the patch version on success, and auto-stages `uv.lock` if regenerated
-4. Run `make test` — all 2,302 tests must pass (PostgreSQL via Docker, parallel, with coverage)
+4. Run `make test` — all 2,355 tests must pass (PostgreSQL via Docker, parallel, with coverage)
 5. `git commit` with a message like `v1.14.7 — Short description` (version first, em dash — matches every other release commit in the project)
 6. `git push origin development`
 7. CI runs automatically on your push (see [CI/CD](#cicd--github-actions))

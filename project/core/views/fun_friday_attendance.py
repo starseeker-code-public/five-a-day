@@ -6,22 +6,31 @@ from django.http import JsonResponse
 from django.shortcuts import get_object_or_404
 from django.views.decorators.http import require_http_methods
 
+from core.decorators import admin_required
 from core.models import FunFridayAttendance
 from core.views.students import get_last_friday, get_next_friday
 from students.models import Student
 
 logger = logging.getLogger(__name__)
 
+# All three endpoints below are ADMIN ONLY. Marking a student for Fun Friday is
+# the academy's decision, not a teacher's, so none of them is in
+# `NON_ADMIN_ALLOWED_URL_NAMES` either — both controls, as everywhere else.
+# A non-admin teacher can still SEE their own students' attendance: the Fun
+# Friday column on `students.html` renders as a plain icon for them and the
+# ficha lists the dates without the add/remove controls.
+
 
 @require_http_methods(["POST"])
+@admin_required
 def toggle_fun_friday_this_week(request, student_id):
     """Toggle a student's attendance for this week's Fun Friday."""
     student = get_object_or_404(Student, id=student_id)
     if student.is_adult:
         return JsonResponse({"success": False, "error": "Adult students cannot participate in Fun Friday"}, status=400)
     friday = get_next_friday()
-    # get_or_create, not read-then-create: two overlapping POSTs (a double-click —
-    # this endpoint is reachable by non-admin teachers) both saw "no row" and the
+    # get_or_create, not read-then-create: two overlapping POSTs (a double-click
+    # on the Fun Friday column) both saw "no row" and the
     # second create() hit the (student, date) unique constraint — an unhandled 500
     # whose HTML error page landed in a fetch() expecting JSON, so the toggle
     # silently reverted on screen with no error shown.
@@ -36,6 +45,7 @@ def toggle_fun_friday_this_week(request, student_id):
 
 
 @require_http_methods(["POST"])
+@admin_required
 def add_fun_friday_attendance(request, student_id):
     student = get_object_or_404(Student, id=student_id)
     try:
@@ -50,6 +60,7 @@ def add_fun_friday_attendance(request, student_id):
 
 
 @require_http_methods(["POST"])
+@admin_required
 def remove_fun_friday_attendance(request, student_id):
     student = get_object_or_404(Student, id=student_id)
     try:

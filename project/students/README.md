@@ -74,6 +74,11 @@ are pinned by `tests/integration/test_students_periphery_fixes.py`, alongside th
   the action calls the direct sender, not the guarded one, so the only effect of the
   `None`-write was that a later sibling enrollment re-fired the invitation *and* rotated the
   temporary password, killing the credential the family had just been told to use.
+  **v1.29.4** — it bails out with a warning while `settings.PARENT_PORTAL_ENABLED` is off (the
+  default). The sender already refuses, but this action stamps the once-only guard *before* it
+  sends, so without its own check it would burn each family's invitation on mail nobody received
+  and report "Invitaciones reenviadas: 0" without explaining why. It is one of exactly three
+  readers of the flag.
 - `TeacherAdmin` (v1.26.0) — **excludes** `two_factor_secret` and `two_factor_backup_codes`.
   Teacher was registered bare until then, so every field rendered as an editable input,
   including the plaintext TOTP seed: any admin could read a colleague's, enrol it in their

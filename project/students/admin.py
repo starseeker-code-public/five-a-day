@@ -364,7 +364,23 @@ class ParentAdmin(admin.ModelAdmin):
 
     @admin.action(description="Reenviar invitación al portal (nueva contraseña temporal)")
     def resend_portal_invitation(self, request, queryset):
+        from django.conf import settings
+
         from core.views.parent_portal import send_portal_temporary_password
+
+        # PARENT PORTAL KILL SWITCH — see settings.PARENT_PORTAL_ENABLED.
+        # Bail out BEFORE the `portal_invite_sent_at` stamp below: the sender
+        # already refuses while the portal is off, but this action stamps first,
+        # so without this the action would burn each family's once-only
+        # invitation guard on mail that was never sent — and say "Invitaciones
+        # reenviadas: 0" rather than explaining why.
+        if not getattr(settings, "PARENT_PORTAL_ENABLED", False):
+            self.message_user(
+                request,
+                "El portal de familias está desactivado: no se ha enviado ninguna invitación.",
+                level=messages.WARNING,
+            )
+            return
 
         sent = skipped = 0
         for parent in queryset:

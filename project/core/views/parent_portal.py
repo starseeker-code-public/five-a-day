@@ -250,6 +250,14 @@ def send_portal_temporary_password(request, parent, *, reset: bool = False, resp
     raises — an SMTP problem must not break the enrolment this is a side effect
     of.
     """
+    # PARENT PORTAL KILL SWITCH — see settings.PARENT_PORTAL_ENABLED.
+    # While the portal is off no access email goes out at all: the invitation,
+    # the admin's "Reenviar invitación" action and the self-service recovery
+    # form all pass through here. Mailing a password for pages that 404 would
+    # be worse than sending nothing. Flip the setting to True to restore it.
+    if not getattr(settings, "PARENT_PORTAL_ENABLED", False):
+        return False
+
     if not parent.email:
         return False
 
@@ -284,6 +292,14 @@ def send_portal_invitation_once(request, parent) -> bool:
     missed one is recoverable from "¿Has olvidado tu contraseña?" while the
     duplicate is an unexplained second email about a family's payment history.
     """
+    # PARENT PORTAL KILL SWITCH — see settings.PARENT_PORTAL_ENABLED.
+    # Checked BEFORE the stamp below, deliberately: stamping while the portal is
+    # off would burn each family's one-and-only invitation on an email that was
+    # never sent, so turning the portal back on would leave every parent created
+    # in the meantime silently uninvited.
+    if not getattr(settings, "PARENT_PORTAL_ENABLED", False):
+        return False
+
     if parent.portal_invite_sent_at is not None or not parent.email:
         return False
 

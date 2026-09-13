@@ -26,9 +26,11 @@ from django.contrib.auth.models import User
 from django.core import mail
 from django.urls import reverse
 
+from billing.constants import SEPTEMBER_CLASSES_START_DAY
 from billing.models import Enrollment, Payment
 from billing.services.payment_service import PaymentService
 from billing.services.pricing_service import PricingService, _euros
+from core.constants import MESES_ES
 from students.models import Student
 
 pytestmark = pytest.mark.django_db
@@ -349,18 +351,22 @@ class TestReminderSpecialMonths:
         assert ctx["template_name"] == "payment_reminder"
         assert ctx["subject_suffix"] == ""
         assert ctx["full_time_fee"] == _euros(site_config.full_time_monthly_fee)
+        assert ctx["part_time_child_fee"] == _euros(site_config.part_time_child_monthly_fee)
         assert ctx["reduced_price_cheque_idioma"] == _euros(
             site_config.full_time_monthly_fee - site_config.language_cheque_discount
         )
 
     def test_september_prorates_the_monthly_rows_like_the_generator(self, site_config):
         ctx = PricingService.payment_reminder_special(site_config, 9)
-        fraction = PaymentService.proration_fraction(date(2026, 9, 15), 9, 2026)
+        fraction = PaymentService.proration_fraction(date(2026, 9, SEPTEMBER_CLASSES_START_DAY), 9, 2026)
         assert ctx["template_name"] == "payment_reminder_september"
-        assert ctx["september_start_day"] == 15
-        assert ctx["proration_percent"] == 53
+        assert ctx["september_start_day"] == SEPTEMBER_CLASSES_START_DAY
+        assert ctx["proration_percent"] == 50
         assert ctx["full_time_fee"] == _euros(PaymentService._round_money(site_config.full_time_monthly_fee * fraction))
         assert ctx["part_time_fee"] == _euros(PaymentService._round_money(site_config.part_time_monthly_fee * fraction))
+        assert ctx["part_time_child_fee"] == _euros(
+            PaymentService._round_money(site_config.part_time_child_monthly_fee * fraction)
+        )
         assert ctx["adult_fee"] == _euros(PaymentService._round_money(site_config.adult_group_monthly_fee * fraction))
         # Cheque idioma: whole cheque, then the proration — the receipt's order.
         cheque_net = (site_config.full_time_monthly_fee - site_config.language_cheque_discount) * fraction
@@ -369,15 +375,27 @@ class TestReminderSpecialMonths:
         assert ctx["quarterly_fee"] == ctx["standard_quarterly_fee"]
         assert ctx["standard_full_time_fee"] == _euros(site_config.full_time_monthly_fee)
 
-    def test_september_start_day_can_be_overridden_and_is_validated(self, site_config):
-        ctx = PricingService.payment_reminder_special(site_config, 9, september_start_day="16")
-        assert ctx["september_start_day"] == 16
+    def test_the_default_september_is_exactly_half_the_month(self, site_config):
+        """The copy says "solo se cobra medio mes"; the figures must agree.
+
+        September has 30 days and `proration_fraction` counts the joining day,
+        so the default start day has to be the 16th (15/30). The 15th bills
+        16/30 = 53 %, which is what this email used to quote underneath a
+        paragraph promising half a month.
+        """
+        ctx = PricingService.payment_reminder_special(site_config, 9)
         assert ctx["proration_percent"] == 50
         assert ctx["full_time_fee"] == _euros(site_config.full_time_monthly_fee / 2)
+        assert ctx["part_time_fee"] == _euros(site_config.part_time_monthly_fee / 2)
+
+    def test_september_start_day_can_be_overridden_and_is_validated(self, site_config):
+        ctx = PricingService.payment_reminder_special(site_config, 9, september_start_day="15")
+        assert ctx["september_start_day"] == 15
+        assert ctx["proration_percent"] == 53
         for bad in ("", "abc", "0", "31", None):
             assert (
                 PricingService.payment_reminder_special(site_config, 9, september_start_day=bad)["september_start_day"]
-                == 15
+                == SEPTEMBER_CLASSES_START_DAY
             )
 
     def test_june_takes_the_fin_de_curso_discount_off_every_monthly_fee(self, site_config):
@@ -386,6 +404,7 @@ class TestReminderSpecialMonths:
         assert ctx["template_name"] == "payment_reminder_june"
         assert ctx["full_time_fee"] == _euros(site_config.full_time_monthly_fee - june)
         assert ctx["part_time_fee"] == _euros(site_config.part_time_monthly_fee - june)
+        assert ctx["part_time_child_fee"] == _euros(site_config.part_time_child_monthly_fee - june)
         assert ctx["sibling_full_time_fee"] == _euros(
             PaymentService._round_money(PricingService.calculate_sibling_price(site_config) - june)
         )
@@ -426,7 +445,7 @@ class TestReminderSpecialMonths:
             PaymentService.calculate_period_amount(enrollment, site_config, [6])
         )
         september = PricingService.payment_reminder_special(site_config, 9)
-        fraction = PaymentService.proration_fraction(date(2026, 9, 15), 9, 2026)
+        fraction = PaymentService.proration_fraction(date(2026, 9, SEPTEMBER_CLASSES_START_DAY), 9, 2026)
         assert september["reduced_price_cheque_idioma"] == _euros(
             PaymentService.calculate_period_amount(enrollment, site_config, [9], fraction)
         )
@@ -452,16 +471,44 @@ class TestReminderFormUsesTheSpecialEmails:
     def test_september_preview_explains_the_half_month(self, authenticated_client, site_config):
         html = self._preview(authenticated_client, "septiembre")
         assert "solo se cobra medio mes" in html
-        assert "del 15 al 30" in html
+        assert f"del {SEPTEMBER_CLASSES_START_DAY} al 30" in html
+        assert "50&nbsp;%" in html
         ctx = PricingService.payment_reminder_special(site_config, 9)
         assert f"{ctx['full_time_fee']} euros" in html
-        # The operator's full-month cheque figure is NOT printed beside a half-month table.
-        assert f"sería de <strong>{ctx['reduced_price_cheque_idioma']} euros" in html
+
+    @pytest.mark.parametrize("month", ["octubre", "septiembre", "junio", "abril"])
+    def test_every_month_names_the_infantil_band_under_media_jornada(self, authenticated_client, site_config, month):
+        """The reduced "infantil" band rides WITH the part-time row.
+
+        It is the same one-session-a-week class at its own price, so it is a
+        sub-line rather than a sixth row — but it has to appear in EVERY variant,
+        including the two whose part-time row is adjusted (September prorates it,
+        June discounts it). A month that quoted only the standard 36 € would send
+        those families the wrong figure to transfer.
+        """
+        html = self._preview(authenticated_client, month)
+        ctx = PricingService.payment_reminder_special(
+            site_config, MESES_ES.index(month) + 1 if month in MESES_ES else None
+        )
+        assert "infantil" in html
+        assert f"infantil: {ctx['part_time_child_fee']} euros" in html
+
+    def test_september_and_june_carry_no_cheque_idioma_box(self, authenticated_client, site_config):
+        """The cheque is not applied in the first (half) or last month of the course.
+
+        Quoting a cheque-idioma figure for a month nobody is charged it is worse
+        than silence: families read the reminder and transfer what it names.
+        """
+        for month in ("septiembre", "junio"):
+            html = self._preview(authenticated_client, month)
+            assert "Cheque Idioma" not in html, month
+        # Every other month still carries it.
+        assert "Cheque Idioma" in self._preview(authenticated_client, "octubre")
 
     def test_september_preview_follows_the_start_day(self, authenticated_client, site_config):
-        html = self._preview(authenticated_client, "septiembre", september_start_day="16")
-        assert "del 16 al 30" in html
-        assert "50&nbsp;%" in html
+        html = self._preview(authenticated_client, "septiembre", september_start_day="15")
+        assert "del 15 al 30" in html
+        assert "53&nbsp;%" in html
 
     def test_june_preview_shows_the_discounted_fees(self, authenticated_client, site_config):
         html = self._preview(authenticated_client, "junio")
@@ -509,19 +556,19 @@ class TestReminderFormUsesTheSpecialEmails:
                 "payment_start_date": "2026-09-01",
                 "payment_end_date": "2026-09-05",
                 "month": "septiembre",
-                "september_start_day": "16",
+                "september_start_day": "15",
                 "iban_number": "ES1234567890",
                 "telephone_number_bizum": "600000000",
             },
         )
         message = mail.outbox[0]
         assert "(medio mes)" in message.subject
-        assert "del 16 al 30" in message.alternatives[0][0]
+        assert "del 15 al 30" in message.alternatives[0][0]
 
     def test_form_page_carries_the_start_day_input(self, authenticated_client, site_config):
         page = authenticated_client.get(reverse("payment_reminder_form")).content.decode()
         assert 'name="september_start_day"' in page
-        assert 'value="15"' in page
+        assert f'value="{SEPTEMBER_CLASSES_START_DAY}"' in page
 
     def test_test_all_emails_previews_the_three_variants(self, site_config):
         from comms.management.commands.test_all_emails import get_email_apps
