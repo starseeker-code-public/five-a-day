@@ -271,7 +271,18 @@ class TestEnrollmentForm:
 
 
 class TestTestSendNoEnvVars:
-    """Test that test_send fails gracefully without EMAIL_TEST_* env vars."""
+    """Test that test_send fails gracefully with NO test recipient at all.
+
+    Since v1.29.3 the env vars are only the first choice — the logged-in
+    teacher's address and then `SUPPORT_EMAIL` are tried next (the QA VM never
+    had the env vars, so the button was dead there). `authenticated_client` is
+    a session-only login with no Django user, so clearing `SUPPORT_EMAIL` as
+    well is what leaves nobody to send to.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _no_support_email(self, settings):
+        settings.SUPPORT_EMAIL = None
 
     def test_fun_friday_test_send_no_env(self, authenticated_client, monkeypatch):
         monkeypatch.delenv("EMAIL_TEST_1", raising=False)
@@ -928,9 +939,10 @@ class TestNewsletterExtra:
         )
         assert response.json()["success"] is True
 
-    def test_test_send_no_env(self, authenticated_client, monkeypatch):
+    def test_test_send_no_env(self, authenticated_client, monkeypatch, settings):
         monkeypatch.delenv("EMAIL_TEST_1", raising=False)
         monkeypatch.delenv("EMAIL_TEST_2", raising=False)
+        settings.SUPPORT_EMAIL = None  # v1.29.3: the last-resort test recipient
         response = authenticated_client.post(
             reverse("newsletter_form"),
             {
@@ -1081,9 +1093,10 @@ class TestEnrollmentFormExtra:
         )
         assert response.json()["success"] is True
 
-    def test_test_send_welcome_no_env(self, authenticated_client, monkeypatch):
+    def test_test_send_welcome_no_env(self, authenticated_client, monkeypatch, settings):
         monkeypatch.delenv("EMAIL_TEST_1", raising=False)
         monkeypatch.delenv("EMAIL_TEST_2", raising=False)
+        settings.SUPPORT_EMAIL = None  # v1.29.3: the last-resort test recipient
         response = authenticated_client.post(
             reverse("enrollment_form"),
             {"action": "test_send", "email_type": "welcome"},
@@ -1110,9 +1123,10 @@ class TestEnrollmentFormExtra:
         )
         assert response.json()["success"] is True
 
-    def test_test_send_enrollment_no_env(self, authenticated_client, monkeypatch):
+    def test_test_send_enrollment_no_env(self, authenticated_client, monkeypatch, settings):
         monkeypatch.delenv("EMAIL_TEST_1", raising=False)
         monkeypatch.delenv("EMAIL_TEST_2", raising=False)
+        settings.SUPPORT_EMAIL = None  # v1.29.3: the last-resort test recipient
         response = authenticated_client.post(
             reverse("enrollment_form"),
             {

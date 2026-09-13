@@ -45,11 +45,31 @@
                         Mes del pago <span class="text-red-500">*</span>
                     </label>
                     <select id="month" name="month" required
+                            data-special-months="{{ special_months|join:',' }}"
                             class="w-full px-4 py-2 border border-neutral-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500">
                         {% for m in months %}
-                        <option value="{{ m }}" {% if m == current_month %}selected{% endif %}>{{ m|title }}</option>
+                        <option value="{{ m }}" data-month-number="{{ forloop.counter }}" {% if m == current_month %}selected{% endif %}>{{ m|title }}</option>
                         {% endfor %}
                     </select>
+                    <p class="mt-1 text-xs text-neutral-500">
+                        Septiembre, abril y junio tienen su propio correo: medio mes, trimestre con descuento de fin de curso
+                        y último mes con descuento. Las cuotas se calculan solas para ese mes.
+                    </p>
+                </div>
+                {# Only meaningful for September: the day the classes start, which is #}
+                {# what the half-month figures are prorated from. app-forms.js shows it #}
+                {# when that month is selected and hides it otherwise.                  #}
+                <div id="september-start-day-field" class="hidden">
+                    <label for="september_start_day" class="block text-sm font-medium text-neutral-700 mb-1">
+                        Día de inicio de las clases (septiembre)
+                    </label>
+                    <input type="number" id="september_start_day" name="september_start_day" min="1" max="30"
+                           value="{{ september_start_day }}"
+                           class="w-full px-4 py-2 border border-neutral-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500">
+                    <p class="mt-1 text-xs text-neutral-500">
+                        Las cuotas de septiembre se cobran desde este día hasta el 30 («medio mes»), con el mismo
+                        prorrateo que aplica la app a una matrícula que empieza ese día.
+                    </p>
                 </div>
             </div>
         </div>
@@ -90,6 +110,10 @@
                     <input type="text" id="reduced_price_cheque_idioma" name="reduced_price_cheque_idioma" value="{{ default_cheque_price }}"
                            placeholder="34"
                            class="w-full px-4 py-2 border border-neutral-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500">
+                    <p class="mt-1 text-xs text-neutral-500">
+                        Cuota mensual completa con Cheque Idioma. En septiembre, abril y junio se ignora y la cifra se
+                        calcula con el mismo ajuste que el resto de la tabla.
+                    </p>
                 </div>
             </div>
         </div>

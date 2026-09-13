@@ -31,6 +31,12 @@ JUNE_DISCOUNT = (Decimal("20.00"), "flat")  # Descuento junio (completar año, N
 FULL_YEAR_BONUS = (Decimal("20.00"), "flat")  # Año completo (NO adultos)
 SIBLING_DISCOUNT = (Decimal("5.00"), "percentage")  # Hermanos (5% cada mes)
 HALF_MONTH_DISCOUNT = (Decimal("50.00"), "percentage")  # Medio mes (septiembre)
+# The day classes start in September, i.e. the day the academy's own reminder
+# email prorates the first month from ("empezamos el 15"). Billing itself
+# prorates each enrollment from its OWN `enrollment_date`; this default only
+# feeds the September payment-reminder email (`PricingService.payment_reminder_special`),
+# and the form can override it for a year that starts on another day.
+SEPTEMBER_CLASSES_START_DAY = 15
 ONE_WEEK_DISCOUNT = (Decimal("75.00"), "percentage")  # Solo 1 semana (primer mes)
 THREE_WEEK_DISCOUNT = (Decimal("25.00"), "percentage")  # Solo 3 semanas
 # v1.13 — returning-student enrollment discount (flat euros off the one-time

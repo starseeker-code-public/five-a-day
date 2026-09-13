@@ -23,6 +23,7 @@ import logging
 import os
 from datetime import date, time, timedelta
 
+from django.conf import settings
 from django.contrib import messages
 from django.core.exceptions import ValidationError
 from django.db import transaction
@@ -33,7 +34,8 @@ from django.template.loader import render_to_string
 from django.utils import timezone
 from django.utils.html import strip_tags
 
-from billing.services.pricing_service import PricingService
+from billing.constants import SEPTEMBER_CLASSES_START_DAY
+from billing.services.pricing_service import REMINDER_SPECIAL_MONTHS, PricingService
 from comms.services.email_functions import (
     cheque_idioma_fee,
     send_all_tax_certificates,
@@ -251,21 +253,58 @@ def _emailable_parent(student):
 # ============================================================================
 
 
-def _preview_or_test(action: str, template_name: str, context: dict, subject: str, *, inline_images=None):
+def _test_send_recipients(request) -> list[str]:
+    """Who a "Enviar prueba" click mails, in order of preference.
+
+    1. `EMAIL_TEST_1` / `EMAIL_TEST_2` — the operator-chosen QA inboxes, when set.
+    2. The logged-in teacher's own address — the person pressing the button is
+       exactly who wants to see the result, and every Teacher login in
+       testing/production IS an email address.
+    3. `settings.SUPPORT_EMAIL` — the academy's support inbox.
+
+    The env vars used to be the ONLY option, and the QA VM's `.env` never
+    carried them, so the button answered "EMAIL_TEST_1/EMAIL_TEST_2 no
+    configurados" on every one of the ten forms — read by the tester as "los
+    correos de prueba no funcionan", which is what they reported. A test send is
+    a diagnostic; it must not itself depend on configuration nobody documents
+    on the VM.
+    """
+    recipients = [r for r in (os.getenv("EMAIL_TEST_1", ""), os.getenv("EMAIL_TEST_2", "")) if r]
+    if recipients:
+        return recipients
+
+    user = getattr(request, "user", None)
+    own_email = (getattr(user, "email", "") or "").strip() if user is not None and user.is_authenticated else ""
+    if own_email:
+        return [own_email]
+
+    support = (getattr(settings, "SUPPORT_EMAIL", None) or "").strip()
+    return [support] if support else []
+
+
+def _preview_or_test(request, action: str, template_name: str, context: dict, subject: str, *, inline_images=None):
     """Handle the `action=preview` / `action=test_send` branch of a mail form.
 
-    Nine views carried a byte-for-byte copy of this: render for `preview`, read
-    `EMAIL_TEST_1`/`EMAIL_TEST_2` for `test_send`, and return one of three fixed
-    JSON shapes. The only real behaviour change is that a raising `send_email`
-    (SMTP down) is now reported as "❌ Error al enviar el email de prueba"
-    instead of 500ing the AJAX call.
+    Nine views carried a byte-for-byte copy of this: render for `preview`, pick
+    the test recipients for `test_send` (see `_test_send_recipients`), and
+    return one of three fixed JSON shapes. A raising `send_email` (SMTP down) is
+    reported as "❌ Error al enviar el email de prueba" instead of 500ing the
+    AJAX call.
     """
     if action == "preview":
         return JsonResponse({"html": render_to_string(f"emails/{template_name}.html", context)})
 
-    recipients = [r for r in (os.getenv("EMAIL_TEST_1", ""), os.getenv("EMAIL_TEST_2", "")) if r]
+    recipients = _test_send_recipients(request)
     if not recipients:
-        return JsonResponse({"success": False, "message": "❌ EMAIL_TEST_1/EMAIL_TEST_2 no configurados"})
+        return JsonResponse(
+            {
+                "success": False,
+                "message": (
+                    "❌ Sin destinatario de prueba: configura EMAIL_TEST_1/EMAIL_TEST_2 o SUPPORT_EMAIL, "
+                    "o inicia sesión con un profesor que tenga email"
+                ),
+            }
+        )
 
     try:
         sent = email_service.send_email(
@@ -397,6 +436,31 @@ def _hhmm(raw) -> str | None:
         return None
 
 
+def _reminder_month_context(month_name: str, raw_start_day, raw_cheque, config) -> dict:
+    """The month-dependent half of the payment-reminder context, built ONCE.
+
+    `PricingService.payment_reminder_special` decides whether `month_name` is a
+    regular month or one of the three special ones (September: half month;
+    June: fin-de-curso discount on every monthly fee; April: the quarterly block
+    that carries it), returns the tariff rows already adjusted, the template to
+    render and the subject suffix. The GET page, the preview / test send and the
+    mass send all come through here, so the three cannot disagree about which
+    email a month gets.
+
+    The operator-typed Cheque Idioma figure is honoured ONLY in a regular month.
+    In a special month it is derived with the same arithmetic as the rest of
+    the table — the form's default is the full-month figure, and a family
+    reading "34 euros" beside a half-month table would transfer the wrong
+    amount.
+    """
+
+    month_number = MESES_ES.index(month_name) + 1 if month_name in MESES_ES else None
+    special = PricingService.payment_reminder_special(config, month_number, september_start_day=raw_start_day)
+    if special["special_case"] is None:
+        special["reduced_price_cheque_idioma"] = _cheque_idioma_text(raw_cheque, config)
+    return special
+
+
 def _cheque_idioma_text(raw, config) -> str:
     """The cheque-idioma figure exactly as the template prints it.
 
@@ -502,6 +566,7 @@ Esta semana haremos manualidades creativas con materiales reciclados.
                 "maximum_age": _max_age,
             }
             return _preview_or_test(
+                request,
                 action,
                 "fun_friday",
                 _ctx,
@@ -700,13 +765,16 @@ def payment_reminder_form(request):
             _iban = request.POST.get("iban_number", os.getenv("ACADEMY_IBAN", ""))
             _iban_holder = request.POST.get("iban_holder", os.getenv("ACADEMY_IBAN_HOLDER", ""))
             _bizum = request.POST.get("telephone_number_bizum", os.getenv("ACADEMY_PHONE", ""))
-            _cheque = _cheque_idioma_text(request.POST.get("reduced_price_cheque_idioma"), config)
+            _special = _reminder_month_context(
+                _month, request.POST.get("september_start_day"), request.POST.get("reduced_price_cheque_idioma"), config
+            )
             try:
                 _sd = date.fromisoformat(_start_str)
                 _ed = date.fromisoformat(_end_str)
             except (ValueError, TypeError):
                 _sd, _ed = default_start, default_end
             _ctx = {
+                **_special,
                 "payment_start_day_name": DIAS_ES[_sd.weekday()],
                 "payment_start_day_number": _sd.day,
                 "payment_end_day_name": DIAS_ES[_ed.weekday()],
@@ -714,12 +782,14 @@ def payment_reminder_form(request):
                 "month": _month,
                 "iban_number": _iban,
                 "iban_holder": _iban_holder,
-                "reduced_price_cheque_idioma": _cheque,
                 "telephone_number_bizum": _bizum,
-                **PricingService.payment_reminder_fees(config),
             }
             return _preview_or_test(
-                action, "payment_reminder", _ctx, f"[TEST] 💰 Recordatorio de Pago - {_month.title()}"
+                request,
+                action,
+                _special["template_name"],
+                _ctx,
+                f"[TEST] 💰 Recordatorio de Pago - {_month.title()}{_special['subject_suffix']}",
             )
 
         payment_start_date_str = request.POST.get("payment_start_date")
@@ -728,7 +798,10 @@ def payment_reminder_form(request):
         iban_number = request.POST.get("iban_number", "")
         iban_holder = request.POST.get("iban_holder", os.getenv("ACADEMY_IBAN_HOLDER", ""))
         telephone_number_bizum = request.POST.get("telephone_number_bizum", "")
-        reduced_price_cheque_idioma = _cheque_idioma_text(request.POST.get("reduced_price_cheque_idioma"), config)
+        special = _reminder_month_context(
+            month, request.POST.get("september_start_day"), request.POST.get("reduced_price_cheque_idioma"), config
+        )
+        reduced_price_cheque_idioma = special["reduced_price_cheque_idioma"]
 
         if not all([payment_start_date_str, payment_end_date_str, iban_number, telephone_number_bizum]):
             messages.error(request, "❌ Todos los campos obligatorios son requeridos")
@@ -744,7 +817,16 @@ def payment_reminder_form(request):
                 messages.warning(request, "⚠️ No hay padres con email para enviar")
                 return redirect("apps")
 
-            fees = PricingService.payment_reminder_fees(config)
+            fee_keys = ("full_time_fee", "part_time_fee", "adult_fee", "quarterly_fee", "sibling_full_time_fee")
+            fees = {key: special[key] for key in fee_keys}
+            # Everything the special template reads beyond the sender's named
+            # arguments (`september_start_day`, `proration_percent`,
+            # `june_discount`, the `standard_*` figures) travels as one dict.
+            extra_context = {
+                key: value
+                for key, value in special.items()
+                if key not in fee_keys and key not in ("template_name", "subject_suffix", "reduced_price_cheque_idioma")
+            }
             jobs = [
                 {
                     "recipients": email_addr,
@@ -757,6 +839,9 @@ def payment_reminder_form(request):
                     "iban_holder": iban_holder,
                     "reduced_price_cheque_idioma": reduced_price_cheque_idioma,
                     "telephone_number_bizum": telephone_number_bizum,
+                    "template_name": special["template_name"],
+                    "subject_suffix": special["subject_suffix"],
+                    "extra_context": extra_context,
                     **fees,
                 }
                 for email_addr in parent_emails
@@ -774,9 +859,14 @@ def payment_reminder_form(request):
     default_iban = os.getenv("ACADEMY_IBAN", "")
     default_bizum = os.getenv("ACADEMY_PHONE", "")
 
+    # The initial preview is for the CURRENT month, so in September / June /
+    # April the page opens on that month's special email rather than the
+    # regular one.
+    initial = _reminder_month_context(current_month, None, None, config)
     email_html = render_to_string(
-        "emails/payment_reminder.html",
+        f"emails/{initial['template_name']}.html",
         {
+            **initial,
             "payment_start_day_name": DIAS_ES[default_start.weekday()],
             "payment_start_day_number": default_start.day,
             "payment_end_day_name": DIAS_ES[default_end.weekday()],
@@ -784,9 +874,7 @@ def payment_reminder_form(request):
             "month": current_month,
             "iban_number": default_iban,
             "iban_holder": os.getenv("ACADEMY_IBAN_HOLDER", ""),
-            "reduced_price_cheque_idioma": cheque_price,
             "telephone_number_bizum": default_bizum,
-            **PricingService.payment_reminder_fees(config),
         },
     )
     return render(
@@ -801,6 +889,8 @@ def payment_reminder_form(request):
             "default_iban": default_iban,
             "default_bizum": default_bizum,
             "default_cheque_price": cheque_price,
+            "september_start_day": SEPTEMBER_CLASSES_START_DAY,
+            "special_months": sorted(REMINDER_SPECIAL_MONTHS),
             "email_html": email_html,
         },
     )
@@ -864,7 +954,9 @@ def vacation_closure_form(request):
                 reopening = closure_end + timedelta(days=3)
             _reason = closure_reason or "Vacaciones"
             _ctx = _closure_context(closure_start, closure_end, reopening, _reason)
-            return _preview_or_test(action, "vacation_closure", _ctx, f"[TEST] 🏖️ Cierre por {_reason} - Five a Day")
+            return _preview_or_test(
+                request, action, "vacation_closure", _ctx, f"[TEST] 🏖️ Cierre por {_reason} - Five a Day"
+            )
 
         if not all(
             [
@@ -945,7 +1037,7 @@ def tax_certificate_form(request):
             _year = _safe_year(request.POST.get("year"), default_year)
             _ctx = {"year": _year, "parent_name": "Nombre del padre"}
             return _preview_or_test(
-                action, "tax_certificate", _ctx, f"[TEST] 📋 Certificado de Renta {_year} - Five a Day"
+                request, action, "tax_certificate", _ctx, f"[TEST] 📋 Certificado de Renta {_year} - Five a Day"
             )
 
         year = _safe_year(request.POST.get("year"), default_year)
@@ -1012,7 +1104,7 @@ def monthly_report_form(request):
                 "total_students": 1,
             }
             return _preview_or_test(
-                action, "monthly_report", _ctx, f"[TEST] 📊 Informe Mensual - {_month.title()} {_year}"
+                request, action, "monthly_report", _ctx, f"[TEST] 📊 Informe Mensual - {_month.title()} {_year}"
             )
 
         month = request.POST.get("month", current_month)
@@ -1126,6 +1218,7 @@ def birthday_form(request):
             _first_birthday = next(iter(birthday_students), None)
             _name = _first_birthday.first_name if _first_birthday else "Alumno Ejemplo"
             return _preview_or_test(
+                request,
                 action,
                 "happy_birthday",
                 {"name": _name},
@@ -1239,7 +1332,7 @@ def receipts_form(request):
                 _template = "receipt_adult"
                 _ctx = {"month": _adm}
                 _subject = f"[TEST] 🧾 Recibo Mensual - {_adm.title()}"
-            return _preview_or_test(action, _template, _ctx, _subject)
+            return _preview_or_test(request, action, _template, _ctx, _subject)
 
         receipt_type = request.POST.get("receipt_type", "quarterly_child")
 
@@ -1365,7 +1458,9 @@ def newsletter_form(request):
                 "newsletter_link": newsletter_link,
                 "message": message_text,
             }
-            return _preview_or_test(action, "newsletter", _ctx, f"[TEST] 📰 Newsletter {group_name} - Five a Day")
+            return _preview_or_test(
+                request, action, "newsletter", _ctx, f"[TEST] 📰 Newsletter {group_name} - Five a Day"
+            )
 
         if not group_name:
             messages.error(request, "❌ Debes seleccionar un grupo")
@@ -1492,6 +1587,7 @@ def enrollment_form(request):
                         # preview over it.
                         pass
                 return _preview_or_test(
+                    request,
                     action,
                     "welcome_student",
                     _ctx,
@@ -1513,7 +1609,9 @@ def enrollment_form(request):
                     pass
             _template = "enrollment_child" if _etype == "child" else "enrollment_adult"
             _ctx = {"student": _student_name, "genero": _gender, "academic_year": _ay, "month": _month}
-            return _preview_or_test(action, _template, _ctx, f"[TEST] 🎉 Confirmación de Matrícula - {_student_name}")
+            return _preview_or_test(
+                request, action, _template, _ctx, f"[TEST] 🎉 Confirmación de Matrícula - {_student_name}"
+            )
 
         student_id = request.POST.get("student_id")
         if not student_id:

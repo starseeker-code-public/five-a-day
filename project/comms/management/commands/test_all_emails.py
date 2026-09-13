@@ -68,6 +68,42 @@ def get_email_apps():
             },
             "description": "Recordatorio de pago (día 1 de cada mes)",
         },
+        # The three special-month reminders. Each extends payment_reminder.html
+        # and takes the SAME base context plus what `payment_reminder_special`
+        # returns for its month — the figures are the generator's own, so the
+        # preview shows exactly the half-month / fin-de-curso amounts a family
+        # would be asked for.
+        *[
+            {
+                "key": f"payment_reminder_{case}",
+                "template": f"payment_reminder_{case}",
+                "subject": f"[TEST] Recordatorio de Pago - {MESES[month_number - 1]}{special['subject_suffix']}",
+                "context": {
+                    "payment_start_day_name": DIAS[today.replace(day=1).weekday()],
+                    "payment_start_day_number": 1,
+                    "payment_end_day_name": DIAS[today.replace(day=5).weekday()],
+                    "payment_end_day_number": 5,
+                    "month": MESES[month_number - 1],
+                    "iban_number": "ES00 0000 0000 0000 0000 0000",
+                    "telephone_number_bizum": "613 481 141",
+                    **special,
+                },
+                "description": description,
+            }
+            for month_number, case, description, special in (
+                (
+                    month_number,
+                    case,
+                    description,
+                    PricingService.payment_reminder_special(month_number=month_number),
+                )
+                for month_number, case, description in (
+                    (9, "september", "Recordatorio de pago de septiembre (medio mes)"),
+                    (4, "april", "Recordatorio de pago de abril (trimestre con descuento fin de curso)"),
+                    (6, "june", "Recordatorio de pago de junio (último mes, descuento fin de curso)"),
+                )
+            )
+        ],
         {
             "key": "vacation_closure",
             "template": "vacation_closure",

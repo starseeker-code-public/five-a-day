@@ -1,0 +1,75 @@
+{% extends 'emails/payment_reminder.html' %}
+
+{% block title %}Recordatorio de pago · Junio (descuento fin de curso) · Five a Day{% endblock %}
+
+{% comment %}
+    June variant of the payment reminder: the last month of the course. Every
+    MONTHLY fee carries the fin-de-curso discount (`june_discount`), which is
+    exactly what `PaymentService.price_breakdown` takes off any period that
+    contains June — the figures here come from that arithmetic
+    (`PricingService.payment_reminder_special`, case "june"). Adults do not get
+    it, so their row is unchanged; a quarterly family already had it in April.
+    Context (on top of the regular reminder's): june_discount, standard_*.
+{% endcomment %}
+
+{% block reminder_notice %}
+<div style="background-color: #dcfce7; border-left: 4px solid #16a34a; padding: 15px; margin: 20px 0; text-align: left;">
+    <p style="color: #15803d; margin: 0 0 6px 0; font-size: 15px;">
+        <strong>🎓 Junio: último mes del curso, con descuento</strong>
+    </p>
+    <p style="color: #1f2430; margin: 0; font-size: 14px; line-height: 1.6;">
+        Por completar el curso, <strong>todas las cuotas mensuales de junio llevan un descuento de {{ june_discount }} euros</strong>.
+        Las cuotas de este mes son las de la tabla de abajo. Los alumnos con pago trimestral ya tuvieron este descuento
+        en el trimestre de abril, así que para ellos no cambia nada.
+    </p>
+</div>
+{% endblock %}
+
+{% block fee_table_title %}💶 Cuotas de junio (con el descuento de fin de curso){% endblock %}
+
+{% block fee_rows %}
+<tr>
+    <td style="padding: 8px 0; border-bottom: 1px solid #d1cbe8;">
+        Cuota 2 sesiones semanales
+    </td>
+    <td style="padding: 8px 0; border-bottom: 1px solid #d1cbe8; text-align: right;">
+        <strong>{{ full_time_fee }} euros</strong><br>
+        <span style="font-size: 12px; color: #4a4a57;">cuota habitual: {{ standard_full_time_fee }} euros</span>
+    </td>
+</tr>
+<tr>
+    <td style="padding: 8px 0; border-bottom: 1px solid #d1cbe8;">
+        Cuota 2 sesiones semanales descuento hermano
+    </td>
+    <td style="padding: 8px 0; border-bottom: 1px solid #d1cbe8; text-align: right;">
+        <strong>{{ sibling_full_time_fee }} euros</strong><br>
+        <span style="font-size: 12px; color: #4a4a57;">cuota habitual: {{ standard_sibling_full_time_fee }} euros</span>
+    </td>
+</tr>
+<tr>
+    <td style="padding: 8px 0; border-bottom: 1px solid #d1cbe8;">
+        Cuota 1 sesión semanal
+    </td>
+    <td style="padding: 8px 0; border-bottom: 1px solid #d1cbe8; text-align: right;">
+        <strong>{{ part_time_fee }} euros</strong><br>
+        <span style="font-size: 12px; color: #4a4a57;">cuota habitual: {{ standard_part_time_fee }} euros</span>
+    </td>
+</tr>
+<tr>
+    <td style="padding: 8px 0;">
+        Cuota adultos <span style="font-size: 12px; color: #4a4a57;">(sin descuento de fin de curso)</span>
+    </td>
+    <td style="padding: 8px 0; text-align: right;">
+        {{ adult_fee }} euros
+    </td>
+</tr>
+{% endblock %}
+
+{% block cheque_box %}
+<div style="background-color: #fee2e2; border-left: 4px solid #EF4444; padding: 15px; margin: 20px 0; text-align: left;">
+    <p style="color: #b91c1c; margin: 0; font-size: 14px; line-height: 1.6;">
+        Si os beneficiáis del Cheque Idioma, la cuota de junio sería de <strong>{{ reduced_price_cheque_idioma }} euros</strong>
+        (cuota habitual: {{ standard_reduced_price_cheque_idioma }} euros) y tenéis que venir a la academia a <strong>firmar</strong> el recibo.
+    </p>
+</div>
+{% endblock %}
