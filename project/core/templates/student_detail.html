@@ -218,8 +218,6 @@
                         <div class="flex items-center gap-2">
                             <span class="material-symbols-outlined text-sm" style="color:#8b5cf6;">event</span>
                             <span class="text-sm text-neutral-700 font-medium">{{ entry.date|date:"d/m/Y" }}</span>
-                            {% with today=entry.date %}
-                            {% endwith %}
                         </div>
                         <button data-ff-remove="{{ entry.date|date:'Y-m-d' }}" title="Eliminar esta fecha de Fun Friday" aria-label="Eliminar esta fecha de Fun Friday"
                             class="text-neutral-400 hover:text-red-500 transition-colors p-1 rounded">

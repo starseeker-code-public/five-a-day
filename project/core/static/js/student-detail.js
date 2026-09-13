@@ -36,7 +36,6 @@ document.querySelectorAll('.modality-toggle-btn').forEach(btn => {
         const studentId = this.dataset.studentId;
         const current = this.dataset.current;
         const newModality = current === 'monthly' ? 'quarterly' : 'monthly';
-        const enrollmentId = this.dataset.enrollmentId;
 
         if (!confirm(`\u00bfCambiar modalidad de pago a ${newModality === 'monthly' ? 'Mensual' : 'Trimestral'}?`)) return;
 
@@ -45,18 +44,15 @@ document.querySelectorAll('.modality-toggle-btn').forEach(btn => {
             body: JSON.stringify({payment_modality: newModality}),
         }).then(data => {
             if (data.success) {
-                // Update the label
-                const label = document.getElementById(`modality-label-${enrollmentId}`);
-                if (label) {
-                    label.textContent = data.payment_modality_display;
-                    label.className = label.className.replace(/bg-\w+-100 text-\w+-800/g, '');
-                    if (newModality === 'monthly') {
-                        label.classList.add('bg-blue-100', 'text-blue-800');
-                    } else {
-                        label.classList.add('bg-green-100', 'text-green-800');
-                    }
-                }
-                this.dataset.current = newModality;
+                // The endpoint SUPERSEDES the enrollment (the current row is
+                // finished, a new one is issued from the effective date) and
+                // re-schedules the payments, so the Matrículas and Pagos tables
+                // both changed server-side. Patching the OLD row's label showed
+                // the new cadence on a row that is now "Finalizada" and hid the
+                // new one until a manual refresh. Report the effective date —
+                // not always today — then reload, like the enroll modal does.
+                if (data.message) alert(data.message);
+                location.reload();
             } else {
                 alert(data.error || 'Error al cambiar modalidad');
             }

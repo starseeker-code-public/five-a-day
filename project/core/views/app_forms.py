@@ -811,6 +811,29 @@ def payment_reminder_form(request):
 # ============================================================================
 
 
+def _closure_context(start: date, end: date, reopening: date, reason: str) -> dict:
+    """The eleven keys `emails/vacation_closure.html` renders, built ONCE.
+
+    The preview, the send loop and the GET sample each carried their own copy of
+    this dict; `month_closure_end` (Navidad 23 dic → 3 ene crosses the year) had
+    to be added to two of the three and was commented in only one. The end
+    date's month is always passed — the template's `|default:month_closure`
+    fallback is for the management command, not for this view.
+    """
+    return {
+        "start_closure_day_name": DIAS_ES[start.weekday()],
+        "start_closure_day_number": start.day,
+        "end_closure_day_name": DIAS_ES[end.weekday()],
+        "end_closure_day_number": end.day,
+        "month_closure": MESES_ES[start.month - 1],
+        "month_closure_end": MESES_ES[end.month - 1],
+        "closure_reason": reason,
+        "reopening_day_name": DIAS_ES[reopening.weekday()],
+        "reopening_day_number": reopening.day,
+        "month_reopening": MESES_ES[reopening.month - 1],
+    }
+
+
 @admin_required
 def vacation_closure_form(request):
     """
@@ -823,47 +846,37 @@ def vacation_closure_form(request):
 
     if request.method == "POST":
         action = request.POST.get("action", "")
+        closure_reason = request.POST.get("closure_reason", "")
+        # Parsed ONCE for both branches. The preview used to fall back to
+        # today/+7/+3 on a bad date while the send errored, so what the admin
+        # previewed could differ from what went out.
+        try:
+            closure_start = date.fromisoformat(request.POST.get("closure_start_date") or "")
+            closure_end = date.fromisoformat(request.POST.get("closure_end_date") or "")
+            reopening = date.fromisoformat(request.POST.get("reopening_date") or "")
+        except ValueError:
+            closure_start = closure_end = reopening = None
+
         if action in ("preview", "test_send"):
-            _cs_str = request.POST.get("closure_start_date", "")
-            _ce_str = request.POST.get("closure_end_date", "")
-            _r_str = request.POST.get("reopening_date", "")
-            _reason = request.POST.get("closure_reason", "Vacaciones")
-            try:
-                _cs = date.fromisoformat(_cs_str)
-                _ce = date.fromisoformat(_ce_str)
-                _ro = date.fromisoformat(_r_str)
-            except (ValueError, TypeError):
-                _cs = date.today()
-                _ce = _cs + timedelta(days=7)
-                _ro = _ce + timedelta(days=3)
-            _ctx = {
-                "start_closure_day_name": DIAS_ES[_cs.weekday()],
-                "start_closure_day_number": _cs.day,
-                "end_closure_day_name": DIAS_ES[_ce.weekday()],
-                "end_closure_day_number": _ce.day,
-                "month_closure": MESES_ES[_cs.month - 1],
-                # end date's month may differ (e.g. Navidad 23 dic → 3 ene)
-                "month_closure_end": MESES_ES[_ce.month - 1],
-                "closure_reason": _reason,
-                "reopening_day_name": DIAS_ES[_ro.weekday()],
-                "reopening_day_number": _ro.day,
-                "month_reopening": MESES_ES[_ro.month - 1],
-            }
+            if closure_start is None:
+                closure_start = date.today()
+                closure_end = closure_start + timedelta(days=7)
+                reopening = closure_end + timedelta(days=3)
+            _reason = closure_reason or "Vacaciones"
+            _ctx = _closure_context(closure_start, closure_end, reopening, _reason)
             return _preview_or_test(action, "vacation_closure", _ctx, f"[TEST] 🏖️ Cierre por {_reason} - Five a Day")
 
-        closure_start_str = request.POST.get("closure_start_date")
-        closure_end_str = request.POST.get("closure_end_date")
-        closure_reason = request.POST.get("closure_reason", "")
-        reopening_str = request.POST.get("reopening_date")
-
-        if not all([closure_start_str, closure_end_str, closure_reason, reopening_str]):
+        if not all(
+            [
+                request.POST.get("closure_start_date"),
+                request.POST.get("closure_end_date"),
+                closure_reason,
+                request.POST.get("reopening_date"),
+            ]
+        ):
             messages.error(request, "❌ Todos los campos obligatorios son requeridos")
         else:
-            try:
-                closure_start = date.fromisoformat(closure_start_str)
-                closure_end = date.fromisoformat(closure_end_str)
-                reopening = date.fromisoformat(reopening_str)
-            except ValueError:
+            if closure_start is None:
                 messages.error(request, "❌ Fecha inválida")
                 return redirect("vacation_closure_form")
 
@@ -871,22 +884,8 @@ def vacation_closure_form(request):
                 messages.warning(request, "⚠️ No hay padres con email para enviar")
                 return redirect("apps")
 
-            jobs = [
-                {
-                    "recipients": email_addr,
-                    "start_closure_day_name": DIAS_ES[closure_start.weekday()],
-                    "start_closure_day_number": closure_start.day,
-                    "end_closure_day_name": DIAS_ES[closure_end.weekday()],
-                    "end_closure_day_number": closure_end.day,
-                    "month_closure": MESES_ES[closure_start.month - 1],
-                    "month_closure_end": MESES_ES[closure_end.month - 1],
-                    "closure_reason": closure_reason,
-                    "reopening_day_name": DIAS_ES[reopening.weekday()],
-                    "reopening_day_number": reopening.day,
-                    "month_reopening": MESES_ES[reopening.month - 1],
-                }
-                for email_addr in parent_emails
-            ]
+            context = _closure_context(closure_start, closure_end, reopening, closure_reason)
+            jobs = [{"recipients": email_addr, **context} for email_addr in parent_emails]
             _mass_send(
                 request,
                 jobs,
@@ -897,20 +896,11 @@ def vacation_closure_form(request):
             )
             return redirect("apps")
 
+    # A fixed sample (a Christmas closure crossing the year), so the GET preview
+    # exercises the two-month case.
     email_html = render_to_string(
         "emails/vacation_closure.html",
-        {
-            "start_closure_day_name": "lunes",
-            "start_closure_day_number": 23,
-            "end_closure_day_name": "viernes",
-            "end_closure_day_number": 3,
-            "month_closure": "diciembre",
-            "month_closure_end": "enero",
-            "closure_reason": "Navidad",
-            "reopening_day_name": "lunes",
-            "reopening_day_number": 8,
-            "month_reopening": "enero",
-        },
+        _closure_context(date(2024, 12, 23), date(2025, 1, 3), date(2025, 1, 8), "Navidad"),
     )
     return render(
         request,

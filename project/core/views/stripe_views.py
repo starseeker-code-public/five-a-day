@@ -45,8 +45,16 @@ def create_checkout_link(request, payment_id: int):
         id=payment_id,
         parent=parent,
     )
+    # Only an OPEN charge (pending, or failed-and-retryable) may be paid online
+    # — `Payment.is_open`, the same predicate the portal renders the button on.
+    # A `completed` one is already paid; a `cancelled` / `refunded` one is dead
+    # and the webhook refuses to resurrect it, so minting a link for one takes
+    # the family's card payment and then leaves the money unrecorded, waiting
+    # on a human to refund it. Refuse it here, before Stripe ever sees it.
     if payment.payment_status == "completed":
         return JsonResponse({"success": False, "error": "already paid"}, status=409)
+    if not payment.is_open:
+        return JsonResponse({"success": False, "error": "payment is no longer payable"}, status=409)
 
     service = get_stripe_service()
     if not service.is_configured():

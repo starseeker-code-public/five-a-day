@@ -178,11 +178,31 @@ class StripeService:
         if not session_id:
             return {"status": "ignored", "reason": "no session id"}
 
+        completion = event_type in ("checkout.session.completed", "checkout.session.async_payment_succeeded")
+
         payment = Payment.objects.filter(stripe_session_id=session_id).first()
         if payment is None:
+            # Every "Pagar online" click mints a NEW session and overwrites
+            # `stripe_session_id`, while the earlier sessions stay open for ~24 h
+            # — so a family that clicked twice and paid the FIRST link arrived
+            # here with a session id no row carries, and the money sat in Stripe
+            # unrecorded: the row stayed pending, the reminder cron chased them,
+            # no receipt went out, and nothing was logged. The session's
+            # `client_reference_id` IS the payment id we put on it at creation,
+            # so it resolves exactly that case.
+            reference = str(session.get("client_reference_id") or "")
+            if reference.isdigit():
+                payment = Payment.objects.filter(pk=int(reference)).first()
+                if payment is not None:
+                    logger.info("Stripe: payment %s matched via client_reference_id (older session)", payment.id)
+        if payment is None:
+            if completion and session.get("payment_status") in (None, "paid", "no_payment_required"):
+                # A PAID session nothing maps to is collected money the database
+                # does not know about. ERROR so production's admin mail fires.
+                logger.error("Stripe: paid checkout session matches no payment — money collected but unrecorded")
             return {"status": "ignored", "reason": "no matching payment"}
 
-        if event_type in ("checkout.session.completed", "checkout.session.async_payment_succeeded"):
+        if completion:
             # Idempotent: Stripe retries webhooks for up to ~3 days after the
             # first 2xx, so a replay must not overwrite the original
             # payment_date or trigger duplicate receipt emails.
@@ -219,13 +239,16 @@ class StripeService:
             # re-billed it — completing this one again double-collects the family.
             # The parent paid a link minted before the cancellation; that needs a
             # human (refund or re-attach), not a silent resurrection.
-            if payment.payment_status in ("cancelled", "refunded"):
+            if payment.payment_status in Payment.DEAD_STATUSES:
                 # Log a literal, not the field: at this point it is provably one
                 # of the two below, but CodeQL traces payment_status back to the
-                # webhook and flags the interpolation as log-injection.
+                # webhook and flags the interpolation as log-injection. ERROR,
+                # not WARNING: the family's card WAS charged and nothing records
+                # it, which is exactly what production's admin mail is for.
                 dead_label = "refunded" if payment.payment_status == "refunded" else "cancelled"
-                logger.warning(
-                    "Stripe: session paid for %s payment %s — NOT resurrecting it; review manually",
+                logger.error(
+                    "Stripe: session paid for %s payment %s — NOT resurrecting it; money collected but unrecorded, "
+                    "refund or re-attach manually",
                     dead_label,
                     payment.id,
                 )
@@ -234,7 +257,18 @@ class StripeService:
             payment.payment_status = "completed"
             payment.payment_date = date.today()
             payment.stripe_payment_intent = session.get("payment_intent", "") or ""
-            payment.save(update_fields=["payment_status", "payment_date", "stripe_payment_intent", "updated_at"])
+            # The session that actually paid, so a receipt-side lookup by session
+            # id finds this row even when it was reconciled via the reference.
+            payment.stripe_session_id = session_id
+            payment.save(
+                update_fields=[
+                    "payment_status",
+                    "payment_date",
+                    "stripe_payment_intent",
+                    "stripe_session_id",
+                    "updated_at",
+                ]
+            )
             logger.info("Stripe: payment %s marked completed via checkout.session.completed", payment.id)
 
             # Receipt email + Drive archive, through the shared dispatcher that

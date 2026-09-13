@@ -1,7 +1,7 @@
 """
 Idempotently provision the EnrollmentType reference table.
 
-Runs on container start for testing and production (see entrypoint.sh). Without it
+Runs on container start in EVERY environment (see entrypoint.sh) and is FATAL there. Without it
 `EnrollmentService._resolve_enrollment_type` raises "EnrollmentType '<name>' not found" and no
 student can be enrolled — the failure mode production shipped with until v1.17.1.
 """

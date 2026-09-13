@@ -4104,7 +4104,6 @@ CSRF_TRUSTED_ORIGINS=             # Comma-separated http(s):// origins for non-l
 # SECURE_HSTS_INCLUDE_SUBDOMAINS=True
 # SECURE_HSTS_PRELOAD=True
 # SECURE_CONTENT_TYPE_NOSNIFF=True
-# SECURE_BROWSER_XSS_FILTER=True
 # X_FRAME_OPTIONS=DENY
 # Reverse proxies in front of the app. The rate limiter reads the client IP this
 # many hops from the RIGHT of X-Forwarded-For (a proxy APPENDS what it saw, so
@@ -4554,7 +4553,6 @@ The table below describes every variable in the [.env template](#env-template) a
 | `SECURE_HSTS_SECONDS` | HSTS max-age | No | `31536000` (1 y) |
 | `SECURE_HSTS_INCLUDE_SUBDOMAINS` / `SECURE_HSTS_PRELOAD` | HSTS scope | No | `True` |
 | `SECURE_CONTENT_TYPE_NOSNIFF` | `X-Content-Type-Options: nosniff` | No | `True` |
-| `SECURE_BROWSER_XSS_FILTER` | Legacy XSS filter header | No | `True` |
 | `X_FRAME_OPTIONS` | Clickjacking protection | No | `DENY` |
 | **Test suite only** (read by `project/settings_test.py`) | | | |
 | `TEST_DB_HOST` | Postgres host for the test database — `make test` sets `db` inside Docker | No | `localhost` |
@@ -5407,7 +5405,6 @@ All settings are environment-controlled and only activate when `DEBUG=False`.
 |--------|---------|-------|--------|
 | `X-Frame-Options` | `X_FRAME_OPTIONS` | `DENY` | Prevents clickjacking — page cannot be embedded in iframes |
 | `X-Content-Type-Options` | `SECURE_CONTENT_TYPE_NOSNIFF` | `True` | Prevents MIME type sniffing attacks |
-| `X-XSS-Protection` | `SECURE_BROWSER_XSS_FILTER` | `True` | Enables browser XSS filter (legacy, supplementary) |
 
 ### Infrastructure & Deployment
 

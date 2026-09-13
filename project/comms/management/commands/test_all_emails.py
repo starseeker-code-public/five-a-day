@@ -14,21 +14,12 @@ from datetime import date, timedelta
 from django.conf import settings
 from django.core.management.base import BaseCommand
 
-DIAS = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
-MESES = [
-    "enero",
-    "febrero",
-    "marzo",
-    "abril",
-    "mayo",
-    "junio",
-    "julio",
-    "agosto",
-    "septiembre",
-    "octubre",
-    "noviembre",
-    "diciembre",
-]
+# `core.constants` is THE Spanish calendar (`send_email.py` in this same app
+# already reads it). A private copy here was a second spelling waiting to
+# drift, on the command whose whole job is to preview what the real senders
+# produce.
+from core.constants import DIAS_ES as DIAS
+from core.constants import MESES_ES as MESES
 
 today = date.today()
 next_friday = today + timedelta(days=(4 - today.weekday()) % 7 or 7)
@@ -87,6 +78,10 @@ def get_email_apps():
                 "end_closure_day_name": "viernes",
                 "end_closure_day_number": 3,
                 "month_closure": "diciembre",
+                # The closure crosses the year: 23 dic → 3 ene. The real sender
+                # always passes this; the preview must too or it renders
+                # "3 de diciembre".
+                "month_closure_end": "enero",
                 "closure_reason": "Navidad",
                 "reopening_day_name": "lunes",
                 "reopening_day_number": 8,

@@ -73,8 +73,8 @@ class Command(BaseCommand):
         # data would only plant unreachable students in the academy's real roll.
         if getattr(settings, "ENVIRONMENT", "development") == "production":
             raise CommandError(
-                "seed_demo_parents esta bloqueado en produccion — el portal de padres "
-                "solo acepta el enlace magico alli. No hay override por diseno."
+                "seed_demo_parents esta bloqueado en produccion: una familia demo con "
+                "contrasena conocida no puede existir en el roll real. No hay override por diseno."
             )
 
         specs = list(iter_demo_parent_specs())

@@ -83,15 +83,6 @@ document.addEventListener('DOMContentLoaded', function () {
     // (window.CSRF_TOKEN / window.apiFetch): one hidden-input-first reader for
     // the whole app instead of a copy per module.
 
-    // Returns sort priority 1(green)→2(yellow✓)→3(yellow✗)→4(grey)
-    function getFFCategory(row) {
-        const t = row.dataset.ffThis === '1', l = row.dataset.ffLast === '1';
-        if (t && !l) return 1;
-        if (t && l)  return 2;
-        if (!t && l) return 3;
-        return 4;
-    }
-
     function updateFFIcon(btn, isThis, isLast) {
         const span = btn.querySelector('.ff-icon');
         const row = btn.closest('tr');

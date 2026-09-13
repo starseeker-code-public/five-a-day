@@ -765,12 +765,17 @@ def test_complete_trigger_is_hidden_on_every_uncompletable_status():
     that was returned. `failed` stays completable — a failed card retried in
     cash is a real workflow.
     """
+    from billing.models import Payment
+
+    # The guard is the MODEL's predicate (v1.29.2), not a status chain typed
+    # into the template: `Payment.is_open` is what quick_complete_payment,
+    # deactivate_payment, the portal's "Pagar online" and create_checkout_link
+    # all read, so the button and the endpoints cannot disagree.
     source = _read(CORE_TEMPLATES / "payments" / "payments_list.html")
-    match = re.search(r"\{%\s*if\s+payment\.payment_status[^%]*%\}", source)
-    assert match, "the complete-trigger guard has gone"
-    guard = match.group(0)
+    assert "{% if payment.is_open %}" in source, "the complete-trigger guard has gone"
     for status in ("completed", "cancelled", "refunded"):
-        assert f"'{status}'" in guard, f"the complete trigger still renders for a {status} payment: {guard}"
+        assert status not in Payment.OPEN_STATUSES, f"a {status} payment must not be collectable"
+    assert "failed" in Payment.OPEN_STATUSES, "a failed card retried in cash is a real workflow"
 
 
 def test_payment_reminder_renders_a_bare_amount_plus_the_word_euros():
