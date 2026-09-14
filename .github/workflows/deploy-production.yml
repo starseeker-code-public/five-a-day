@@ -1450,7 +1450,7 @@ jobs:
 
       - name: Notify success
         if: success()
-        uses: dawidd6/action-send-mail@94de994a9f6fffee200243214e17002e2920bb59  # v18
+        uses: dawidd6/action-send-mail@03a02a49409134de07636216fb379a026c52991e  # v21
         with:
           server_address: smtp.gmail.com
           server_port: 465
@@ -1498,7 +1498,7 @@ jobs:
       # is false for a cancelled job, so this used to go out silent.
       - name: Notify failure or cancellation
         if: failure() || cancelled()
-        uses: dawidd6/action-send-mail@94de994a9f6fffee200243214e17002e2920bb59  # v18
+        uses: dawidd6/action-send-mail@03a02a49409134de07636216fb379a026c52991e  # v21
         with:
           server_address: smtp.gmail.com
           server_port: 465
@@ -1562,7 +1562,7 @@ jobs:
           fi
           echo "alert recipient resolved"
 
-      - uses: dawidd6/action-send-mail@94de994a9f6fffee200243214e17002e2920bb59  # v18
+      - uses: dawidd6/action-send-mail@03a02a49409134de07636216fb379a026c52991e  # v21
         with:
           server_address: smtp.gmail.com
           server_port: 465
