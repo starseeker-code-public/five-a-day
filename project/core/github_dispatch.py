@@ -68,7 +68,7 @@ def notify_github_qa_signoff() -> bool:
             timeout=10.0,
         )
         response.raise_for_status()
-    except Exception:  # noqa: BLE001 — fail-soft by design; the nightly run is the fallback
+    except Exception:  # fail-soft by design; the nightly run is the fallback
         logger.exception(
             "repository_dispatch to GitHub failed — the sign-off flag is set and the "
             "nightly 'Deploy production' re-trigger remains the fallback arming path"

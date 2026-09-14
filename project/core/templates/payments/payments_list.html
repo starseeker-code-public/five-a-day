@@ -215,7 +215,7 @@
                         <span class="text-sm text-neutral-800">{{ payment.get_payment_method_display }}</span>
                     </td>
                     <td class="px-4 py-3 text-center" data-cell="status">
-                        {% include "payments/_status_badge.html" with payment=payment %}
+                        {% include "payments/_status_badge.html" with payment=payment classes="" %}
                     </td>
                     <td class="px-4 py-3 text-center text-sm text-neutral-600 nowrap">
                         {{ payment.due_date|date:"d/m/Y" }}

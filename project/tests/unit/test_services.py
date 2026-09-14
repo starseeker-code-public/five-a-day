@@ -4,6 +4,7 @@ from decimal import Decimal
 
 import pytest
 
+from billing.money import round_money
 from billing.services.enrollment_service import EnrollmentService
 from billing.services.payment_service import PaymentService
 from billing.services.pricing_service import PricingService
@@ -236,22 +237,54 @@ class TestEnrollmentServiceErrors:
 
 
 class TestEnrollmentServiceEdgeCases:
-    def test_create_enrollment_with_sibling_discount(self, db, student, enrollment_type_new_student, site_config):
-        """Exercise the sibling-discount branch of enrollment creation."""
+    """The sibling discount, asserted on the AMOUNT it produces.
+
+    This class previously held a single test that called `create_enrollment`
+    with six keyword arguments the method has never accepted
+    (`enrollment_plan=`, `discount=`, `has_language_cheque=`, …; the real
+    signature is `(student, enrollment_data, is_adult=False)`), wrapped in
+    `except (TypeError, ValueError): pass` with the comment "Signature may not
+    match — still exercises the import path". It therefore asserted nothing at
+    all about the discount it was named for, and could never fail. Surfaced by
+    turning on mypy's `check_untyped_defs`, which reported all six as unexpected
+    keyword arguments.
+    """
+
+    def test_sibling_discount_comes_off_the_monthly_fee(self, db, student, enrollment_type_new_student, site_config):
         from billing.services.enrollment_service import EnrollmentService
 
-        service = EnrollmentService()
-        try:
-            result = service.create_enrollment(
-                student=student,
-                enrollment_plan="monthly_full",
-                discount=0,
-                has_language_cheque=False,
-                is_sibling_discount=True,
-                is_adult=False,
-                custom_amount=None,
-            )
-            assert result is not None
-        except (TypeError, ValueError):
-            # Signature may not match — still exercises the import path
-            pass
+        enrollment = EnrollmentService.create_enrollment(
+            student,
+            {
+                "enrollment_plan": "monthly_full",
+                "has_language_cheque": False,
+                "is_sibling_discount": True,
+                "is_special": False,
+                "manual_amount": None,
+            },
+        )
+
+        expected = round_money(site_config.full_time_monthly_fee * (1 - site_config.sibling_discount / Decimal("100")))
+        assert enrollment.final_amount == expected
+        assert enrollment.discount_percentage == site_config.sibling_discount
+        assert enrollment.enrollment_amount == site_config.full_time_monthly_fee
+
+    def test_an_adult_gets_no_sibling_discount(self, db, adult_student, enrollment_type_adults, site_config):
+        """`_apply_discounts` gates the sibling discount on `not is_adult` — an
+        adult student has no siblings on the roll to discount against."""
+        from billing.services.enrollment_service import EnrollmentService
+
+        enrollment = EnrollmentService.create_enrollment(
+            adult_student,
+            {
+                "enrollment_plan": "monthly_full",
+                "has_language_cheque": False,
+                "is_sibling_discount": True,
+                "is_special": False,
+                "manual_amount": None,
+            },
+            is_adult=True,
+        )
+
+        assert enrollment.discount_percentage == Decimal("0")
+        assert enrollment.final_amount == site_config.adult_group_monthly_fee

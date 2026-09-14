@@ -353,6 +353,16 @@ class QAConfiguration(models.Model):
         default=False,
         verbose_name="Versión lista para producción",
     )
+    # QA's opt-in to exercising the Google Drive receipt archive from the testing
+    # VM. OFF by default and read ONLY on the QA VM: production always archives
+    # and ignores this flag, development never does. When it is on, uploads are
+    # quarantined into a `testing/` subfolder of the month so a QA receipt can
+    # never be mistaken for one the academy filed. See
+    # core.services.drive_service.drive_uploads_allowed().
+    drive_uploads_enabled = models.BooleanField(
+        default=False,
+        verbose_name="Subir recibos a Google Drive (pruebas)",
+    )
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:

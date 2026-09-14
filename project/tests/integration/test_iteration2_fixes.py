@@ -45,18 +45,32 @@ class TestEnrollmentTypeMirrorReDerived:
 
 
 class TestDeadDiscountFieldsNotWritten:
-    """#14 — the five inert discount fields are no longer persisted."""
+    """#14 — the five inert discount fields were never persisted, and as of
+    v1.29.5 the COLUMNS are gone (`billing/0017`).
 
-    def test_old_student_discount_ignored(self, authenticated_client, site_config):
-        before = site_config.old_student_discount
+    The original assertion (post the field, read it back unchanged) can no
+    longer be written, because there is nothing to read back. What still has to
+    hold is the property that made the exclusion matter in the first place: an
+    unknown key in the payload must be IGNORED, not crash the endpoint and not
+    reach the model. `old_student_discount` is the one worth naming — it is
+    visually the twin of the LIVE `returning_student_enrollment_discount`, so a
+    payload carrying it must not touch the price that actually applies.
+    """
+
+    def test_a_removed_discount_field_is_ignored_not_an_error(self, authenticated_client, site_config):
+        live_before = site_config.returning_student_enrollment_discount
+
         response = authenticated_client.post(
             reverse("update_site_config"),
             data='{"old_student_discount": "77.00"}',
             content_type="application/json",
         )
+
         assert response.status_code == 200
+        assert not hasattr(site_config, "old_student_discount"), "column dropped in billing/0017"
         site_config.refresh_from_db()
-        assert site_config.old_student_discount == before  # unchanged
+        # And it did not land on its look-alike.
+        assert site_config.returning_student_enrollment_discount == live_before
 
 
 class TestDriveButtonHidden:

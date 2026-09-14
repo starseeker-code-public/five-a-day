@@ -9,6 +9,18 @@ The base folder is `settings.GOOGLE_DRIVE_RECEIPTS_FOLDER_ID` and the service
 account (reused from the Sheets integration, `drive` scope) must have Editor
 access to it. Every level of the path is find-or-created.
 
+**Only PRODUCTION archives receipts (v1.29.5).** Uploading from anywhere else
+writes into the academy's real, permanent archive, so a QA seed run or a
+developer clicking "marcar cobrado" would file fictional receipts beside the
+ones the academy files with its accountant — indistinguishable after the fact.
+`drive_uploads_allowed()` is THE gate: production always, the QA VM only while
+the `/testing/` toggle is on (`QAConfiguration.drive_uploads_enabled`, off by
+default) and then only into a `testing/` subfolder of the month
+(`archive_subfolder()`), development and the test suite never. Both the
+on-completion task and `backfill_drive_receipts` go through it, because the
+command builds a `DriveReceiptService` directly and would otherwise write real
+paths from the VM.
+
 **This module is best-effort and NEVER raises.** The Drive archive is a
 convenience on top of the real records (the `Payment` row and the emailed
 receipt), so a Drive outage, a mis-shared folder or a bad credential must not
@@ -50,13 +62,68 @@ _UNSET = object()
 #: must fail fast rather than hold a request open.
 _DRIVE_TIMEOUT_SECONDS = 10
 
+#: The extra folder level QA uploads are quarantined into, inside the month:
+#: `<Mes> YY/testing/`. A separate folder rather than a filename prefix because
+#: the academy's accountant opens these folders — a fictional receipt has to be
+#: somewhere they will never scroll past, not merely named differently.
+TESTING_SUBFOLDER = "testing"
+
+
+def _is_production() -> bool:
+    return getattr(settings, "ENVIRONMENT", "") == "production"
+
+
+def drive_uploads_allowed() -> bool:
+    """THE gate on whether this environment may write to the Drive archive.
+
+    Production: always, and without touching the database — a DB blip must never
+    be able to switch the real archive off. The QA VM (``IS_TESTING_ENV``): only
+    while ``QAConfiguration.drive_uploads_enabled`` is on, which is off by
+    default and is the ``/testing/`` dashboard's "Recibos a Drive" toggle.
+    Everywhere else — development, Docker, the test suite: never.
+
+    One predicate, read by ``DriveReceiptService.upload_receipt`` (the true
+    enforcement point), by ``comms.tasks.upload_receipt_to_drive_task`` (so a
+    disallowed environment does not even render the PDF) and by
+    ``backfill_drive_receipts`` (which builds its own service instance and would
+    otherwise walk the whole archive reporting one refusal per payment).
+
+    Fails CLOSED on a database error: the safe direction here is "do not write to
+    the academy's permanent archive", and this module never raises.
+    """
+    if _is_production():
+        return True
+    if not getattr(settings, "IS_TESTING_ENV", False):
+        return False
+
+    from core.models import QAConfiguration
+
+    try:
+        return bool(QAConfiguration.get_config().drive_uploads_enabled)
+    except Exception:  # best-effort archive; fail closed
+        logger.exception("Could not read the QA Drive-upload toggle; refusing the upload")
+        return False
+
+
+def archive_subfolder() -> str:
+    """The month subfolder receipts are filed into: `""` in production,
+    ``TESTING_SUBFOLDER`` anywhere else.
+
+    Only ever consulted once `drive_uploads_allowed()` has said yes, so "not
+    production" here means "the QA VM with the toggle on". Derived from the same
+    `_is_production()` check as the gate, so the two cannot disagree — a QA
+    upload that landed in the real month folder would be indistinguishable from a
+    genuine receipt.
+    """
+    return "" if _is_production() else TESTING_SUBFOLDER
+
 
 @dataclass
 class DriveUploadResult:
     """Outcome of an upload attempt — always safe to return; never raised."""
 
     success: bool
-    status: str  # uploaded | skipped_exists | not_configured | error
+    status: str  # uploaded | skipped_exists | disabled | not_configured | error
     folder_path: str = ""
     file_id: str = ""
     error: str = ""
@@ -239,8 +306,11 @@ class DriveReceiptService:
 
     def _existing_receipt(self, service, folder_id: str, payment_id: int) -> str | None:
         """Return the id of an already-uploaded receipt for this payment in the
-        month folder, or None. Matches on the `<paymentID>_` prefix so a renamed
-        student does not produce a duplicate."""
+        destination folder, or None. Matches on the `<paymentID>_` prefix so a
+        renamed student does not produce a duplicate.
+
+        Scoped to the folder the upload is going into, so the QA sandbox and the
+        real archive each stay idempotent on their own."""
         query = f"'{folder_id}' in parents and trashed = false and name contains '{payment_id}_'"
         response = (
             service.files()
@@ -265,6 +335,10 @@ class DriveReceiptService:
     def upload_receipt(self, payment, pdf_bytes: bytes) -> DriveUploadResult:
         """Upload one receipt PDF, creating the Curso/Recibos/<Mes> path as needed.
 
+        Refuses outright (`status="disabled"`) unless `drive_uploads_allowed()`;
+        on the QA VM with the toggle on it files into the `testing/` sandbox
+        inside the month folder instead of beside the real receipts.
+
         Idempotent (skips if a receipt for this payment id is already in the month
         folder) and NEVER raises — returns a result describing the outcome. The
         distinct failure statuses matter operationally, so each is logged with a
@@ -274,18 +348,30 @@ class DriveReceiptService:
         # receipt NUMBER, so a receipt cannot be numbered for one year and filed
         # under another.
         d = payment.receipt_date
-        folder_path = f"{curso_folder_name(d)}/Recibos/{month_folder_name(d)}"
+        # The path levels, in order, so the reported `folder_path` and the folders
+        # actually created come from ONE list — a QA upload reported against the
+        # real path would be the whole point of the sandbox lost.
+        levels = [curso_folder_name(d), "Recibos", month_folder_name(d)]
+        sandbox = archive_subfolder()
+        if sandbox:
+            levels.append(sandbox)
+        folder_path = "/".join(levels)
+
+        # The environment gate FIRST: outside production this must not touch the
+        # credentials, let alone Drive. See `drive_uploads_allowed`.
+        if not drive_uploads_allowed():
+            return DriveUploadResult(success=False, status="disabled", folder_path=folder_path)
 
         if not self.is_configured():
             return DriveUploadResult(success=False, status="not_configured", folder_path=folder_path)
 
         try:
             service = self._get_service()
-            curso_id = self._find_or_create_folder(service, curso_folder_name(d), self.base_folder_id)
-            recibos_id = self._find_or_create_folder(service, "Recibos", curso_id)
-            month_id = self._find_or_create_folder(service, month_folder_name(d), recibos_id)
+            dest_id = self.base_folder_id
+            for level in levels:
+                dest_id = self._find_or_create_folder(service, level, dest_id)
 
-            existing = self._existing_receipt(service, month_id, payment.id)
+            existing = self._existing_receipt(service, dest_id, payment.id)
             if existing:
                 return DriveUploadResult(
                     success=True, status="skipped_exists", folder_path=folder_path, file_id=existing
@@ -297,7 +383,7 @@ class DriveReceiptService:
             created = (
                 service.files()
                 .create(
-                    body={"name": receipt_filename(payment), "parents": [month_id]},
+                    body={"name": receipt_filename(payment), "parents": [dest_id]},
                     media_body=media,
                     fields="id",
                     supportsAllDrives=True,

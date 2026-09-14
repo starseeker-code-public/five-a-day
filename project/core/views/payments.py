@@ -3,6 +3,7 @@ import json
 import logging
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
+from typing import Any
 
 from django.contrib import messages
 from django.core.exceptions import ValidationError
@@ -49,31 +50,19 @@ def parse_date_value(date_value):
 
 
 def _queue_payment_receipt(payment_id: int) -> None:
-    """Fire the payment-receipt email for a payment just marked completed.
+    """Fire every side effect of a payment just marked completed, on COMMIT.
 
-    Dispatched ON COMMIT, not inline. Production runs
-    `CELERY_TASK_ALWAYS_EAGER=True` (Cloud Run, no worker), so `.delay()` executes
-    the task *here* — it re-reads the payment by id and emails a receipt. Called
-    from inside a `transaction.atomic()` block that later rolls back, that is a
-    receipt for money the database does not record; with a real broker it is a
-    worker reading the row before the write is visible. `transaction.on_commit`
-    runs the callback immediately when there is no open transaction, so callers
-    outside one (the admin bulk action) behave exactly as before.
-
-    Best-effort: a receipt that fails to send must never fail the request that
-    recorded the money. `comms.tasks.dispatch_payment_completed` owns WHICH side
-    effects a completion has (receipt email + Drive archive) so this path and the
-    Stripe webhook cannot drift; this function owns only the on-commit timing,
-    which is the part the two genuinely differ on. Imported lazily to avoid a
-    comms->billing import cycle.
+    A one-line delegate to `comms.tasks.dispatch_payment_completed_on_commit`,
+    which is where the behaviour now lives — `billing/admin.py` is the app's
+    second completion path and used to import THIS private name out of a view
+    module to get its receipts sent (v1.29.5). It survives as a local alias for
+    two reasons: this module calls it from four places and would otherwise
+    repeat the lazy import four times, and the import has to stay lazy to keep
+    the comms->billing cycle closed.
     """
+    from comms.tasks import dispatch_payment_completed_on_commit
 
-    def _dispatch():
-        from comms.tasks import dispatch_payment_completed
-
-        dispatch_payment_completed(int(payment_id))
-
-    transaction.on_commit(_dispatch)
+    dispatch_payment_completed_on_commit(payment_id)
 
 
 def _current_enrollment_for(student):
@@ -273,133 +262,157 @@ def payments_list(request):
     return render(request, "payments/payments_list.html", context)
 
 
+class PaymentCreationError(Exception):
+    """A create-payment input the admin has to fix, with the message to show them.
+
+    Raised by `_resolve_payment_participants` so the resolution step can refuse
+    without owning the response — the view turns it into a flash message and a
+    redirect, exactly as the inline `return redirect(...)` did.
+    """
+
+
+def _resolve_payment_participants(request):
+    """`(student, parent, enrollment)` for a create-payment POST.
+
+    Raises `Http404` for a missing row and `PaymentCreationError` for a
+    relationship the admin has to correct. Adults are the reason this is not a
+    plain lookup: `Payment.parent` is nullable precisely for them, so "no
+    parent" is valid for an adult student and an error for anyone else.
+    """
+    student = get_object_or_404(Student, id=request.POST.get("student_id"))
+    parent_id = request.POST.get("parent_id")
+
+    parent = None
+    if parent_id:
+        parent = get_object_or_404(Parent, id=parent_id)
+        if not student.parents.filter(id=parent_id).exists():
+            raise PaymentCreationError("El padre/tutor seleccionado no está asociado con este estudiante.")
+    elif not student.is_adult:
+        raise PaymentCreationError("Debe seleccionar un padre/tutor para este estudiante.")
+
+    return student, parent, _current_enrollment_for(student)
+
+
+def _payment_from_post(request, student, parent, enrollment) -> Payment:
+    """Build (but do NOT save) the Payment a create-payment POST describes.
+
+    Unsaved on purpose: the caller wraps `full_clean` + `save` + the HistoryLog
+    entry in one transaction, and this step must not be able to commit half of
+    that.
+    """
+    # Choice fields are not validated by Model.objects.create(), so a
+    # crafted or stale form could persist e.g. payment_status="wat",
+    # which then renders raw through get_payment_status_display().
+    payment_type = _validated_choice(request.POST.get("payment_type"), constants.PAYMENT_TYPE_CHOICES, "monthly")
+    payment_method = _validated_choice(request.POST.get("payment_method"), constants.PAYMENT_METHOD_CHOICES, "transfer")
+
+    return Payment(
+        student=student,
+        parent=parent,
+        enrollment=enrollment,
+        payment_type=payment_type,
+        payment_method=payment_method,
+        amount=Decimal(str(request.POST.get("amount", "0"))),
+        currency=request.POST.get("currency", "EUR")[:3],
+        # A manually created payment is ALWAYS born pending — the "Estado"
+        # selector was removed from the form. Recording it as already completed
+        # here skipped the pending->completed transition that
+        # `quick_complete_payment` owns (receipt email, payment_date stamp, the
+        # assert_completable guard), so money could be booked with no receipt
+        # and no audit of when it was collected. Mark it paid from the payments
+        # list instead.
+        payment_status="pending",
+        due_date=parse_date_value(request.POST.get("due_date")),
+        # Pending payments carry no payment_date — it is stamped when the
+        # payment is marked completed. Every income figure filters on
+        # payment_date, so setting it here on a pending row is misleading.
+        payment_date=None,
+        concept=(request.POST.get("concept") or "").strip()[:200],
+        reference_number=(request.POST.get("reference_number", "") or "")[:50],
+        observations=request.POST.get("observations", ""),
+    )
+
+
 @require_http_methods(["GET", "POST"])
 @admin_required
 def create_payment(request):
     """
-    Create new payment
+    Create a new payment.
+
+    Split into resolve / build / commit steps in v1.29.5; this function owns the
+    order, the transaction and the responses. Every failure path answers with a
+    flash message and a redirect, because this endpoint is a form POST, not AJAX.
+
+    That includes `Http404` from the student/parent lookups, which the catch-all
+    swallows into "Error al crear el pago" — unlike `update_payment`, which
+    re-raises it. The asymmetry is deliberate: `update_payment` is an AJAX
+    endpoint whose caller reads the status code, while this is a browser form
+    submit, where a stale student id should return the admin to the list with an
+    explanation rather than a raw 404 page.
     """
+    if request.method != "POST":
+        return render(request, "payments/payment_create.html", {})
 
-    if request.method == "POST":
-        try:
-            # Get form data
-            student_id = request.POST.get("student_id")
-            parent_id = request.POST.get("parent_id")
+    try:
+        student, parent, enrollment = _resolve_payment_participants(request)
+        payment = _payment_from_post(request, student, parent, enrollment)
 
-            # Validate student exists
-            student = get_object_or_404(Student, id=student_id)
-
-            # Parent is optional for adult students (they have no parent/tutor).
-            # For everyone else a parent is required and must be related.
-            parent = None
-            if parent_id:
-                parent = get_object_or_404(Parent, id=parent_id)
-                if not student.parents.filter(id=parent_id).exists():
-                    messages.error(
-                        request,
-                        "El padre/tutor seleccionado no está asociado con este estudiante.",
-                    )
-                    return redirect("payments_list")
-            elif not student.is_adult:
-                messages.error(
-                    request,
-                    "Debe seleccionar un padre/tutor para este estudiante.",
-                )
-                return redirect("payments_list")
-
-            enrollment = _current_enrollment_for(student)
-
-            # Choice fields are not validated by Model.objects.create(), so a
-            # crafted or stale form could persist e.g. payment_status="wat",
-            # which then renders raw through get_payment_status_display().
-            payment_type = _validated_choice(
-                request.POST.get("payment_type"), constants.PAYMENT_TYPE_CHOICES, "monthly"
+        # One transaction for the payment and its history entry. Without it a
+        # HistoryLog failure showed the admin "Error al crear el pago" while the
+        # Payment was already committed — and the obvious response to that
+        # message is to submit the form again, which created a second one.
+        with transaction.atomic():
+            payment.full_clean(exclude=["enrollment"])
+            payment.save()
+            HistoryLog.log(
+                "payment_created",
+                f"Pago creado: {student.full_name} — €{payment.amount} ({payment.get_payment_type_display()})",
+                icon="add_card",
             )
-            payment_method = _validated_choice(
-                request.POST.get("payment_method"), constants.PAYMENT_METHOD_CHOICES, "transfer"
+
+        # No receipt is dispatched here, deliberately. The row is born pending,
+        # so there is no completion to acknowledge; the receipt goes out from
+        # `quick_complete_payment` when the money is actually marked collected.
+        # (The old code carried an `if payment.payment_status == "completed"`
+        # branch at this point, which could not fire — the status is hard-coded
+        # three lines above and neither `clean()` nor `save()` changes it.)
+        messages.success(request, f"Pago creado exitosamente para {student.full_name}.")
+        return redirect("payments_list")
+
+    except PaymentCreationError as e:
+        messages.error(request, str(e))
+        return redirect("payments_list")
+    except ValidationError as e:
+        # ValidationError.messages is Django's written-for-humans text.
+        messages.error(request, " ".join(e.messages))
+        return redirect("payments_list")
+    except InvalidOperation:
+        logger.exception("Invalid amount submitted when creating a payment")
+        messages.error(request, "El importe introducido no es válido.")
+        return redirect("payments_list")
+    except IntegrityError as e:
+        # `full_clean()` above validates the constraint and raises ValidationError
+        # with its own Spanish message, so this branch only catches the RACE: two
+        # requests that both passed validation before either inserted. Matched on
+        # the constraint name so a genuinely different IntegrityError still gets
+        # the generic message rather than a confidently wrong one. Nothing from
+        # the exception is echoed to the client.
+        logger.exception("IntegrityError while creating a payment")
+        if "unique_pending_periodic_payment_per_month" in str(e):
+            messages.error(
+                request,
+                "Ya existe un pago pendiente de ese tipo para ese alumno en ese mes. "
+                "Edita o cancela el pago existente en lugar de crear otro.",
             )
-            # A manually created payment is ALWAYS born pending — the "Estado"
-            # selector was removed from the form. Recording it as already
-            # completed here skipped the pending→completed transition that
-            # `quick_complete_payment` owns (receipt email, payment_date stamp,
-            # the assert_completable guard), so money could be booked with no
-            # receipt and no audit of when it was collected. Mark it paid from
-            # the payments list instead.
-            payment_status = "pending"
-
-            concept = (request.POST.get("concept") or "").strip()[:200]
-
-            # Create payment
-            payment = Payment(
-                student=student,
-                parent=parent,
-                enrollment=enrollment,
-                payment_type=payment_type,
-                payment_method=payment_method,
-                amount=Decimal(str(request.POST.get("amount", "0"))),
-                currency=request.POST.get("currency", "EUR")[:3],
-                payment_status=payment_status,
-                due_date=parse_date_value(request.POST.get("due_date")),
-                # Pending payments carry no payment_date — it is stamped when the
-                # payment is marked completed. Every income figure filters on
-                # payment_date, so setting it here on a pending row is misleading.
-                payment_date=None,
-                concept=concept,
-                reference_number=(request.POST.get("reference_number", "") or "")[:50],
-                observations=request.POST.get("observations", ""),
-            )
-            # One transaction for the payment, its history entry and the receipt
-            # dispatch. Without it a HistoryLog failure showed the admin "Error al
-            # crear el pago" while the Payment was already committed — and the
-            # obvious response to that message is to submit the form again, which
-            # created a second one. `_queue_payment_receipt` defers to COMMIT, so
-            # no receipt is emailed for a payment that rolled back.
-            with transaction.atomic():
-                payment.full_clean(exclude=["enrollment"])
-                payment.save()
-                HistoryLog.log(
-                    "payment_created",
-                    f"Pago creado: {student.full_name} — €{payment.amount} ({payment.get_payment_type_display()})",
-                    icon="add_card",
-                )
-                if payment.payment_status == "completed":
-                    _queue_payment_receipt(payment.id)
-            messages.success(request, f"Pago creado exitosamente para {student.full_name}.")
-            return redirect("payments_list")
-
-        except ValidationError as e:
-            # ValidationError.messages is Django's written-for-humans text.
-            messages.error(request, " ".join(e.messages))
-            return redirect("payments_list")
-        except InvalidOperation:
-            logger.exception("Invalid amount submitted when creating a payment")
-            messages.error(request, "El importe introducido no es válido.")
-            return redirect("payments_list")
-        except IntegrityError as e:
-            # `full_clean()` above validates the constraint and raises ValidationError
-            # with its own Spanish message, so this branch only catches the RACE: two
-            # requests that both passed validation before either inserted. Matched on
-            # the constraint name so a genuinely different IntegrityError still gets
-            # the generic message rather than a confidently wrong one. Nothing from
-            # the exception is echoed to the client.
-            logger.exception("IntegrityError while creating a payment")
-            if "unique_pending_periodic_payment_per_month" in str(e):
-                messages.error(
-                    request,
-                    "Ya existe un pago pendiente de ese tipo para ese alumno en ese mes. "
-                    "Edita o cancela el pago existente en lugar de crear otro.",
-                )
-            else:
-                messages.error(request, "Error al crear el pago. Revisa los datos e inténtalo de nuevo.")
-            return redirect("payments_list")
-        except Exception:
-            # Never echo str(e): on an IntegrityError it leaks the table and
-            # column names, on a DataError the column width.
-            logger.exception("Error creating payment")
+        else:
             messages.error(request, "Error al crear el pago. Revisa los datos e inténtalo de nuevo.")
-            return redirect("payments_list")
-
-    return render(request, "payments/payment_create.html", {})
+        return redirect("payments_list")
+    except Exception:
+        # Never echo str(e): on an IntegrityError it leaks the table and
+        # column names, on a DataError the column width.
+        logger.exception("Error creating payment")
+        messages.error(request, "Error al crear el pago. Revisa los datos e inténtalo de nuevo.")
+        return redirect("payments_list")
 
 
 @admin_required
@@ -477,11 +490,122 @@ def student_payments_pdf(request, student_id):
     return response
 
 
+def _payment_write_error(request, message: str, *, status: int = 400):
+    """One failure shape for the payment write endpoints.
+
+    Every `except` branch in `update_payment` used to re-spell this pair —
+    JsonResponse for an AJAX caller, flash-message-and-redirect for a form post
+    — six times over. Six copies of a two-line contract is where the seventh
+    branch forgets the JSON shape and the frontend silently gets HTML it cannot
+    parse.
+    """
+    if request.content_type == "application/json":
+        return JsonResponse({"success": False, "error": message}, status=status)
+    messages.error(request, message)
+    return redirect("payments_list")
+
+
+def _parse_payment_payload(request):
+    """The submitted payload: a parsed JSON body, or the raw form POST.
+
+    Raises `json.JSONDecodeError` on a malformed body — the caller answers 400,
+    because a bad body is the client's fault, not a server error.
+    """
+    if request.content_type == "application/json":
+        return json.loads(request.body)
+    return request.POST
+
+
+def _assert_receipt_fields_unchanged(payment, data) -> None:
+    """Refuse to restate the amount or the student of a NUMBERED receipt.
+
+    A `YYYY-NNN` receipt is a fiscal document the family already holds and its
+    sequence continues the academy's paper books, so changing either of the two
+    values printed on it would silently make the emailed PDF and the database
+    disagree about the same number.
+    """
+    if payment.receipt_number and any(key in data for key in ("amount", "student_id")):
+        raise ValidationError(
+            f"Este pago tiene recibo emitido (nº {payment.receipt_number}): "
+            "no se puede cambiar el importe ni el alumno."
+        )
+
+
+def _apply_payment_updates(payment, data) -> None:
+    """Mutate `payment` in place from an update payload — every field optional.
+
+    Extracted from `update_payment` in v1.29.5, which was 165 lines and 34
+    branches and had yielded three separate status-transition bugs across two
+    review rounds. The ORDER here is the original order and is load-bearing in
+    one place: the parent/student link is checked after those two fields are
+    assigned and before anything else, so it sees the values being WRITTEN
+    rather than the ones on disk.
+
+    Nothing is saved, and nothing is validated beyond the cross-field rule
+    below; the caller runs `full_clean()`.
+    """
+    if "student_id" in data:
+        student = get_object_or_404(Student, id=data["student_id"])
+        if student.pk != payment.student_id:
+            payment.student = student
+            # Re-point the enrollment WITH the student: left alone, the row
+            # kept hanging off the previous student's enrollment, so it
+            # counted towards that child's debt and the receipt breakdown
+            # re-priced it against the wrong plan.
+            payment.enrollment = _current_enrollment_for(student)
+    if "parent_id" in data:
+        # An empty parent_id clears the link (valid for adult students),
+        # rather than 404-ing on a lookup for "".
+        if data["parent_id"] in (None, "", 0, "0"):
+            payment.parent = None
+        else:
+            payment.parent = get_object_or_404(Parent, id=data["parent_id"])
+
+    # Stricter than Payment.clean() on purpose: the model exempts adults
+    # (who normally have no parent at all), but if a parent IS named on the
+    # payment they must actually be linked to the student — otherwise the
+    # receipt would be issued to someone unrelated.
+    if payment.student_id and payment.parent_id and not payment.student.parents.filter(id=payment.parent_id).exists():
+        raise ValidationError("El padre/tutor seleccionado no está asociado con este estudiante.")
+
+    if "payment_type" in data:
+        payment.payment_type = data["payment_type"]
+    if "payment_method" in data:
+        payment.payment_method = data["payment_method"]
+    if "amount" in data:
+        payment.amount = Decimal(data["amount"])
+    if "currency" in data:
+        payment.currency = data["currency"]
+    if "payment_status" in data:
+        payment.payment_status = data["payment_status"]
+        # Reopening clears the collection date, as the admin's "Marcar como
+        # pendientes" does: every income figure filters on `payment_date`,
+        # and a re-completion later would otherwise book the money into the
+        # OLD month (and file the receipt under it) because `clean()` only
+        # backfills the date when it is empty.
+        if payment.payment_status == "pending" and "payment_date" not in data:
+            payment.payment_date = None
+    if "due_date" in data:
+        payment.due_date = parse_date_value(data["due_date"])
+    if "payment_date" in data:
+        payment.payment_date = parse_date_value(data["payment_date"])
+    if "concept" in data:
+        payment.concept = data["concept"]
+    if "reference_number" in data:
+        payment.reference_number = data["reference_number"]
+    if "observations" in data:
+        payment.observations = data["observations"]
+
+
 @require_http_methods(["POST"])
 @admin_required
 def update_payment(request, payment_id):
     """
-    AJAX endpoint to update existing payment
+    AJAX endpoint to update an existing payment.
+
+    Split into parse / validate / apply helpers in v1.29.5 — see
+    `_apply_payment_updates`. This function now owns only the ORDER of those
+    steps, the save, the one side effect, and the response.
     """
     # Outside the try: Http404 subclasses Exception, so inside it the catch-all
     # converted a plain missing row into a 500 + traceback in the logs.
@@ -489,75 +613,9 @@ def update_payment(request, payment_id):
     try:
         was_completed = payment.payment_status == "completed"
 
-        # Parse data
-        if request.content_type == "application/json":
-            data = json.loads(request.body)
-        else:
-            data = request.POST
-
-        # A numbered receipt is a fiscal document the family already holds.
-        # Restating its amount or its student would silently make the emailed
-        # PDF and the database disagree about the same `YYYY-NNN`.
-        if payment.receipt_number and any(key in data for key in ("amount", "student_id")):
-            raise ValidationError(
-                f"Este pago tiene recibo emitido (nº {payment.receipt_number}): "
-                "no se puede cambiar el importe ni el alumno."
-            )
-
-        # Update fields
-        if "student_id" in data:
-            student = get_object_or_404(Student, id=data["student_id"])
-            if student.pk != payment.student_id:
-                payment.student = student
-                # Re-point the enrollment WITH the student: left alone, the row
-                # kept hanging off the previous student's enrollment, so it
-                # counted towards that child's debt and the receipt breakdown
-                # re-priced it against the wrong plan.
-                payment.enrollment = _current_enrollment_for(student)
-        if "parent_id" in data:
-            # An empty parent_id clears the link (valid for adult students),
-            # rather than 404-ing on a lookup for "".
-            if data["parent_id"] in (None, "", 0, "0"):
-                payment.parent = None
-            else:
-                payment.parent = get_object_or_404(Parent, id=data["parent_id"])
-        # Stricter than Payment.clean() on purpose: the model exempts adults
-        # (who normally have no parent at all), but if a parent IS named on the
-        # payment they must actually be linked to the student — otherwise the
-        # receipt would be issued to someone unrelated.
-        if (
-            payment.student_id
-            and payment.parent_id
-            and not payment.student.parents.filter(id=payment.parent_id).exists()
-        ):
-            raise ValidationError("El padre/tutor seleccionado no está asociado con este estudiante.")
-        if "payment_type" in data:
-            payment.payment_type = data["payment_type"]
-        if "payment_method" in data:
-            payment.payment_method = data["payment_method"]
-        if "amount" in data:
-            payment.amount = Decimal(data["amount"])
-        if "currency" in data:
-            payment.currency = data["currency"]
-        if "payment_status" in data:
-            payment.payment_status = data["payment_status"]
-            # Reopening clears the collection date, as the admin's "Marcar como
-            # pendientes" does: every income figure filters on `payment_date`,
-            # and a re-completion later would otherwise book the money into the
-            # OLD month (and file the receipt under it) because `clean()` only
-            # backfills the date when it is empty.
-            if payment.payment_status == "pending" and "payment_date" not in data:
-                payment.payment_date = None
-        if "due_date" in data:
-            payment.due_date = parse_date_value(data["due_date"])
-        if "payment_date" in data:
-            payment.payment_date = parse_date_value(data["payment_date"])
-        if "concept" in data:
-            payment.concept = data["concept"]
-        if "reference_number" in data:
-            payment.reference_number = data["reference_number"]
-        if "observations" in data:
-            payment.observations = data["observations"]
+        data = _parse_payment_payload(request)
+        _assert_receipt_fields_unchanged(payment, data)
+        _apply_payment_updates(payment, data)
 
         # Model.save() does NOT call clean(), so without this the endpoint could
         # mark a payment "completed" with payment_date=None — and every income
@@ -590,26 +648,20 @@ def update_payment(request, payment_id):
     except json.JSONDecodeError:
         # A malformed body is the CLIENT's fault: answer 400 like
         # `validate_student_parent` does, rather than a logged 500 (which on the
-        # QA VM also mails an error report for a plain bad request).
-        return JsonResponse({"success": False, "error": "Datos de pago inválidos."}, status=400)
+        # QA VM also mails an error report for a plain bad request). Only
+        # reachable when the content type IS json, so the helper always takes
+        # its JSON branch here.
+        return _payment_write_error(request, "Datos de pago inválidos.")
     except InvalidOperation:
         # A Decimal parse failure. Its str() is internal noise ("[<class
         # 'decimal.ConversionSyntax'>]"), useless to the user and the last
         # exception text still reaching a response from this view.
         logger.exception("Invalid amount submitted for payment %d", int(payment_id))
-        error_msg = "El importe introducido no es válido."
-        if request.content_type == "application/json":
-            return JsonResponse({"success": False, "error": error_msg}, status=400)
-        messages.error(request, error_msg)
-        return redirect("payments_list")
+        return _payment_write_error(request, "El importe introducido no es válido.")
     except ValidationError as e:
         # `messages` is Django's user-facing validation text -- written to be
         # shown, unlike a raw exception repr.
-        error_msg = " ".join(e.messages)
-        if request.content_type == "application/json":
-            return JsonResponse({"success": False, "error": error_msg}, status=400)
-        messages.error(request, error_msg)
-        return redirect("payments_list")
+        return _payment_write_error(request, " ".join(e.messages))
     except Http404:
         # The student_id/parent_id lookups above — a missing row is a 404, not a
         # server error to be swallowed by the catch-all.
@@ -629,17 +681,10 @@ def update_payment(request, payment_id):
             )
         else:
             error_msg = "Error al actualizar el pago. Inténtalo de nuevo."
-        if request.content_type == "application/json":
-            return JsonResponse({"success": False, "error": error_msg}, status=400)
-        messages.error(request, error_msg)
-        return redirect("payments_list")
+        return _payment_write_error(request, error_msg)
     except Exception:
         logger.exception("Error updating payment %d", int(payment_id))
-        error_msg = "Error al actualizar el pago. Inténtalo de nuevo."
-        if request.content_type == "application/json":
-            return JsonResponse({"success": False, "error": error_msg}, status=500)
-        messages.error(request, error_msg)
-        return redirect("payments_list")
+        return _payment_write_error(request, "Error al actualizar el pago. Inténtalo de nuevo.", status=500)
 
 
 @require_http_methods(["POST"])
@@ -967,7 +1012,7 @@ def export_database_excel(request):
     from billing.exports import build_database_workbook
 
     wb = build_database_workbook()
-    today = datetime.now().strftime("%Y%m%d")
+    today = timezone.localtime().strftime("%Y%m%d")
     response = HttpResponse(content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
     response["Content-Disposition"] = f'attachment; filename="five_a_day_{today}.xlsx"'
     wb.save(response)
@@ -1024,7 +1069,7 @@ def validate_student_parent(request):
 
         is_valid = student.parents.filter(id=parent_id).exists()
 
-        response_data = {
+        response_data: dict[str, Any] = {
             "valid": is_valid,
             "message": "Valid relationship" if is_valid else "Invalid relationship",
         }

@@ -1,12 +1,27 @@
 import json
 import logging
-from datetime import datetime
 
 from django.conf import settings
 from django.http import JsonResponse
+from django.utils import timezone
 from django.views.decorators.http import require_http_methods
 
 logger = logging.getLogger(__name__)
+
+#: The four categories `support.js` can send (its `categoryMap` values), and the
+#: Spanish label each one gets in the email. The CLIENT used to supply the
+#: display label too, and the raw category went straight into the subject line —
+#: Django refuses newlines in headers so it was never header injection, but an
+#: arbitrary string in the subject of a mail to SUPPORT_EMAIL is a free-text
+#: channel nobody validates. Both now come from here; an unknown key falls back
+#: to `exception`, which is what the widget already sends for "Otro".
+SUPPORT_CATEGORIES = {
+    "frontend": "Interfaz / Problemas visuales",
+    "backend": "Sistema / Errores internos",
+    "database": "Datos / Base de datos",
+    "exception": "Otro",
+}
+_DEFAULT_CATEGORY = "exception"
 
 
 @require_http_methods(["POST"])
@@ -20,8 +35,13 @@ def submit_support_ticket(request):
     try:
         data = json.loads(request.body)
 
-        category = data.get("category", "exception")
-        category_display = data.get("category_display", "otro")
+        # Validated against a known set rather than trusted: the value reaches
+        # an email subject, and the label reaches the body.
+        category = data.get("category", _DEFAULT_CATEGORY)
+        if category not in SUPPORT_CATEGORIES:
+            logger.info("Support ticket with an unrecognised category; filed as %s", _DEFAULT_CATEGORY)
+            category = _DEFAULT_CATEGORY
+        category_display = SUPPORT_CATEGORIES[category]
         message = data.get("message", "").strip()
         current_url = data.get("current_url", "/")
 
@@ -36,7 +56,7 @@ def submit_support_ticket(request):
 
         username = request.session.get("username", "Anónimo")
         version = settings.APP_VERSION
-        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        now = timezone.localtime().strftime("%Y-%m-%d %H:%M:%S")
 
         support_email = getattr(settings, "SUPPORT_EMAIL", None)
 

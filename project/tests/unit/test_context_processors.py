@@ -118,7 +118,7 @@ class TestContextProcessorsUnauthed:
 
         rf = RequestFactory()
         req = rf.get("/")
-        req.session = {}
+        req.session = {}  # type: ignore[assignment]
         # Pick a Tuesday that isn't the 1st, guaranteeing no scheduled apps
         # will fire.
         with patch("core.context_processors.date") as mock_date:
@@ -133,6 +133,6 @@ class TestContextProcessorsUnauthed:
 
         rf = RequestFactory()
         req = rf.get("/")
-        req.session = {"is_authenticated": False}
+        req.session = {"is_authenticated": False}  # type: ignore[assignment]
         ctx = today_notifications(req)
         assert ctx["history_count"] == 0

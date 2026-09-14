@@ -276,7 +276,7 @@
               <td class="px-4 py-4 text-sm text-neutral-600">{{ payment.get_payment_method_display }}</td>
               <td class="px-4 py-4 text-sm text-neutral-700 font-semibold">{{ payment.amount }}€</td>
               <td class="px-4 py-4">
-                {% include "payments/_status_badge.html" with payment=payment %}
+                {% include "payments/_status_badge.html" with payment=payment classes="" %}
               </td>
               <td class="px-4 py-4 text-sm text-neutral-600">{{ payment.due_date|date:"d/m/Y" }}</td>
               <td class="px-4 py-4 text-sm text-neutral-600">{% if payment.payment_date %}{{ payment.payment_date|date:"d/m/Y" }}{% else %}—{% endif %}</td>

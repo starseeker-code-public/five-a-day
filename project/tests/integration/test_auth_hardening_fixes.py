@@ -190,7 +190,7 @@ class TestNonAdminDeterminationFailsClosed:
 
         request = RequestFactory().get("/payments/")
         request.user = User.objects.get(pk=teacher.user_id)
-        request.session = {}
+        request.session = {}  # type: ignore[assignment]
         assert _is_non_admin_teacher(request) is True
 
 
@@ -373,7 +373,7 @@ class TestRecoveryCannotBeUsedToDenyRecovery:
         assert _normalised_body(first) == _normalised_body(second)
 
     def test_a_genuine_second_request_after_the_cooldown_reissues(self, client, parent):
-        from core.views.parent_portal import PORTAL_TEMPORARY_PASSWORD_COOLDOWN
+        from core.services.portal_access_service import PORTAL_TEMPORARY_PASSWORD_COOLDOWN
 
         with patch("comms.services.email_service.EmailService.send_email", return_value=True) as send:
             self._post(client, parent.email)
@@ -393,7 +393,7 @@ class TestRecoveryCannotBeUsedToDenyRecovery:
 
     def test_an_admin_reissue_ignores_the_cooldown(self, client, parent, rf):
         """An admin on the phone with a family must be able to reissue now."""
-        from core.views.parent_portal import send_portal_temporary_password
+        from core.services.portal_access_service import send_portal_temporary_password
 
         request = rf.get("/admin/")
         with patch("comms.services.email_service.EmailService.send_email", return_value=True) as send:
@@ -653,7 +653,7 @@ class TestIsAdminUserFailsClosed:
         from core.context_processors import today_notifications
 
         request = RequestFactory().get("/login/")
-        request.session = {}
+        request.session = {}  # type: ignore[assignment]
         context = today_notifications(request)
 
         assert context["is_admin_user"] is False

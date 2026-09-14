@@ -559,11 +559,17 @@ All prices and discounts are managed through the `/management` view and stored i
 - `part_time_monthly_fee`: 36€ (1 day/week)
 - `part_time_child_monthly_fee`: 32€ (1 day/week, **infantil** — v1.29.4)
 - `adult_group_monthly_fee`: 60€
-- `old_student_discount`: 20€ (flat)
 - `june_discount`: 20€ (flat)
 - `language_cheque_discount`: 20€ (flat, monthly)
 - `quarterly_discount`: 5% (percentage)
 - `sibling_discount`: 5% (percentage, monthly)
+
+Five columns that were seeded here and read by nothing — `old_student_discount`,
+`full_year_bonus`, `half_month_discount`, `one_week_discount`, `three_week_discount` —
+were **dropped in v1.29.5** (`billing/0017`). `update_site_config` had already refused to
+write them; `old_student_discount` in particular is visually the twin of the live
+`returning_student_enrollment_discount`, so a price nothing applied sat in the database
+looking authoritative. Do not reintroduce a discount column without a reader.
 
 ### Academy fiscal details (v1.27.1)
 

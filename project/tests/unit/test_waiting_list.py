@@ -5,7 +5,8 @@ from datetime import date
 import pytest
 
 from core.models import HistoryLog
-from core.views.waiting_list import group_capacity_summary, notify_capacity_freed
+from core.services.capacity_service import notify_capacity_freed
+from core.views.waiting_list import group_capacity_summary
 from students.models import Group, Student
 
 pytestmark = pytest.mark.django_db

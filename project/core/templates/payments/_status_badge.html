@@ -6,12 +6,21 @@
    `get_payment_status_display`, so a renamed status cannot leave a stale word
    behind. Include with:
 
-     {% include "payments/_status_badge.html" with payment=payment %}
+     {% include "payments/_status_badge.html" with payment=payment classes="" %}
      {% include "payments/_status_badge.html" with payment=payment classes="px-3 py-1 text-sm font-medium" show_days=True %}
 
-   `classes` sets the size (defaults to the compact list variant); `show_days`
-   appends "(N días)" to an overdue badge. Keep `status-badge` in the class list:
-   payments.js swaps the cell's contents by that hook after a quick-complete.
+   `classes` sets the size — pass `classes=""` for the compact list default.
+   ALWAYS pass it, even when empty: reading a variable that is not in the
+   context logs a full `VariableDoesNotExist` traceback to `django.template` at
+   DEBUG on EVERY render, so a 50-row payments list wrote 50 tracebacks per page
+   load in development. `{% firstof %}` does NOT avoid that — the log happens
+   inside `Variable._resolve_lookup`, before `ignore_failures` is consulted, so
+   it behaves exactly like the `|default:` filter here. The only thing that
+   silences it is the variable existing.
+
+   `show_days` appends "(N días)" to an overdue badge. Keep `status-badge` in
+   the class list: payments.js swaps the cell's contents by that hook after a
+   quick-complete.
 {% endcomment %}
 {% firstof classes "px-2 py-1 text-xs font-bold" as size_classes %}
 {% with base="status-badge inline-flex items-center rounded-full "|add:size_classes %}

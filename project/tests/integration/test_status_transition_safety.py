@@ -43,7 +43,7 @@ class _CollectingAdmin(PaymentAdmin):
         super().__init__(*args, **kwargs)
         self.messages = []
 
-    def message_user(self, request, message, level=None, **kwargs):
+    def message_user(self, request, message, level=None, **kwargs):  # type: ignore[override]
         self.messages.append(message)
 
 

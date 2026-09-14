@@ -21,6 +21,7 @@ some copies and not others, which is exactly what copy-paste guarantees:
 
 import logging
 import os
+from collections.abc import Callable
 from datetime import date, time, timedelta
 
 from django.conf import settings
@@ -1347,6 +1348,10 @@ def receipts_form(request):
         # these three branches and read after them, so adding a fourth branch
         # raised NameError *after* the emails had already gone out. The branches
         # now only build the batch; `_mass_send` owns the counters and the tally.
+        # One of two callables with different signatures — the jobs built below
+        # match whichever is chosen, so the variable is annotated rather than
+        # inferred from the first branch (which made the other two an error).
+        sender: Callable[..., bool]
         if receipt_type == "quarterly_child":
             month_1 = request.POST.get("month_1", quarter_months[0])
             month_2 = request.POST.get("month_2", quarter_months[1])
@@ -1588,7 +1593,7 @@ def enrollment_form(request):
                             _ctx["parent_name"] = _p.full_name
                         if _s.group:
                             _ctx["group_name"] = _s.group.group_name
-                    except Exception:
+                    except Exception:  # noqa: BLE001 — preview only, see below
                         # Preview/test-send only: a stale student id just means
                         # the placeholder names stay in `_ctx`. Never block the
                         # preview over it.
@@ -1610,7 +1615,7 @@ def enrollment_form(request):
                 try:
                     _s = Student.objects.get(id=_student_id)
                     _student_name = _s.full_name
-                except Exception:
+                except Exception:  # noqa: BLE001 — preview only, see below
                     # Preview/test-send only: fall back to the placeholder
                     # name if the student id no longer resolves.
                     pass

@@ -328,33 +328,6 @@ def group_capacity_summary():
     return summary
 
 
-def notify_capacity_freed(student):
-    """
-    Called after a student is deactivated. Logs a HistoryLog notification when
-    the student's group now has waiting-list candidates that could take the spot.
-
-    Idempotent — the caller is responsible for only invoking this when the
-    student transitions active True → False.
-    """
-    if not student.group_id:
-        return
-    group = student.group
-    # Refresh counts — the student we just deactivated should already be excluded
-    # by `active=True` in `enrolled_count`.
-    waiting_candidates = group.students.filter(active=True, is_waiting=True).count()
-    if not waiting_candidates:
-        return
-
-    HistoryLog.log(
-        "waiting_list_spot_open",
-        (
-            f"Hueco disponible en {group.group_name} — "
-            f"{waiting_candidates} estudiante{'s' if waiting_candidates != 1 else ''} en lista de espera."
-        ),
-        icon="notifications_active",
-    )
-
-
 __all__ = [
     "waiting_list_view",
     "waiting_list_create",
@@ -363,5 +336,4 @@ __all__ = [
     "waiting_entry_from_request",
     "discard_waiting_entry",
     "group_capacity_summary",
-    "notify_capacity_freed",
 ]

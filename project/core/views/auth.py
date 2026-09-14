@@ -414,7 +414,7 @@ def google_oauth_callback(request):
 
     try:
         flow.fetch_token(authorization_response=authorization_response)
-    except Exception:
+    except Exception:  # noqa: BLE001 — google-auth raises a wide, undocumented set; all mean "login failed"
         _oauth_log.exception("OAuth fetch_token failed")
         messages.error(request, "Error al obtener el token de Google. Inténtalo de nuevo.")
         return redirect("login")
@@ -430,7 +430,7 @@ def google_oauth_callback(request):
         user_email = id_info.get("email", "")
         email_verified = bool(id_info.get("email_verified"))
         user_name = id_info.get("given_name", user_email.split("@")[0])
-    except Exception:
+    except Exception:  # noqa: BLE001 — as above: an unverifiable token is a failed login, whatever raised
         _oauth_log.exception("OAuth id_token verification failed")
         messages.error(request, "Error al verificar la identidad de Google.")
         return redirect("login")

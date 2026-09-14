@@ -3,6 +3,7 @@ import logging
 import time
 from datetime import date, timedelta
 from decimal import Decimal
+from typing import Any, cast
 
 import httpx
 from django.core.paginator import Paginator
@@ -53,7 +54,7 @@ def reset_quote_cache() -> None:
     between cases rather than having one test's backoff silently suppress
     another's fetch.
     """
-    global _quotes_retry_after  # noqa: PLW0603
+    global _quotes_retry_after
 
     _quotes.clear()
     _quotes_retry_after = 0.0
@@ -78,7 +79,7 @@ def _fetch_quotes() -> list[tuple[str, str]]:
                 len(items) if isinstance(items, list) else 0,
             )
         return batch
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — a third-party HTTP call; the quote is decoration
         logger.warning("zenquotes API fetch failed: %s: %s", type(e).__name__, e)
         return []
 
@@ -93,7 +94,7 @@ def _get_quote(request):
 
     Every page load sees a different quote — no day-based logic.
     """
-    global _quotes_retry_after  # noqa: PLW0603
+    global _quotes_retry_after
 
     if not _quotes and time.monotonic() >= _quotes_retry_after:
         _quotes[:] = _fetch_quotes()
@@ -115,11 +116,13 @@ def _get_quote(request):
     return _QUOTE_FALLBACK, None, None
 
 
-def home(request):
-    today = date.today()
-    current_month = today.month
-    current_year = today.year
+def _pending_payments_card(current_month: int, current_year: int) -> dict:
+    """The "Pagos pendientes" card: the count, five names, and the full list.
 
+    One query. The per-student grouping is done in Python rather than as a
+    second aggregate because the card needs both the individual amounts and the
+    names, and the rows are already in memory.
+    """
     pending_payments = Payment.objects.filter(
         payment_status="pending",
         due_date__month=current_month,
@@ -128,7 +131,10 @@ def home(request):
 
     pending_count = pending_payments.count()
 
-    pending_by_student = {}
+    # Annotated: each entry holds two strings and a list of Decimals, so an
+    # unannotated literal leaves the values typed `object` and every read of one
+    # (sum, sort key, dict lookup) becomes an error.
+    pending_by_student: dict[int, dict[str, Any]] = {}
     for payment in pending_payments:
         sid = payment.student_id
         if sid not in pending_by_student:
@@ -140,8 +146,6 @@ def home(request):
         pending_by_student[sid]["amounts"].append(payment.amount)
 
     pending_students_list = list(pending_by_student.values())
-    pending_students_display = [v["first_name"] for v in pending_students_list[:5]]
-    has_more_pending = len(pending_students_list) > 5
     all_pending_students = sorted(
         [
             {
@@ -153,25 +157,47 @@ def home(request):
             }
             for v in pending_students_list
         ],
-        key=lambda x: x["display_name"],
+        # `str(...)`: the dict is heterogeneous (str + Decimal), so a checker
+        # types the value as `object`, which is not sortable.
+        key=lambda x: str(x["display_name"]),
     )
 
+    return {
+        "pending_payments_count": pending_count,
+        "pending_students": [v["first_name"] for v in pending_students_list[:5]],
+        "has_more_pending": len(pending_students_list) > 5,
+        "total_pending_students": len(pending_students_list),
+        "all_pending_students": all_pending_students,
+    }
+
+
+def _birthdays_card(today: date) -> dict:
+    """Birthdays this MONTH (the card) and TODAY (the greeting) — two queries.
+
+    Deliberately two: the month list is ordered by day and capped at five for
+    display but its full length is the badge count, while today's list is a
+    separate `[:5]` slice used for a different sentence.
+    """
     birthday_students = list(
-        Student.objects.filter(active=True, birth_date__month=current_month).order_by("birth_date__day")
+        Student.objects.filter(active=True, birth_date__month=today.month).order_by("birth_date__day")
     )
+    today_birthday_students = Student.objects.filter(
+        active=True,
+        birth_date__month=today.month,
+        birth_date__day=today.day,
+    ).order_by("first_name")[:5]
 
-    birthday_count = len(birthday_students)
+    return {
+        "birthday_count": len(birthday_students),
+        "birthdays": [{"name": s.first_name, "day": s.birth_date.day, "age": s.age} for s in birthday_students[:5]],
+        "has_more_birthdays": len(birthday_students) > 5,
+        "today_birthday_names": [s.first_name for s in today_birthday_students],
+    }
 
-    birthdays_display = [
-        {
-            "name": s.first_name,
-            "day": s.birth_date.day,
-            "age": s.age,
-        }
-        for s in birthday_students[:5]
-    ]
-    has_more_birthdays = birthday_count > 5
 
+def _upcoming_events_card(today: date) -> dict:
+    """The scheduled-email sends coming up. No queries — `SCHEDULED_APPS` is a
+    module constant and the cadences are pure date arithmetic."""
     # A rolling 35-day window, not "the rest of this month": the old scan died at
     # the month boundary (from the last Friday of September to the 30th the card
     # showed ZERO upcoming sends while three were pending), and `monthly_day_1`
@@ -208,7 +234,7 @@ def home(request):
                 }
             )
 
-    upcoming_events.sort(key=lambda x: x["date"])
+    upcoming_events.sort(key=lambda x: cast(date, x["date"]))
 
     # A weekly send (Fun Friday) yields one event per remaining Friday, so the card
     # listed the same name four times. Collapse repeats into a single entry showing
@@ -217,18 +243,30 @@ def home(request):
     grouped_events: list[dict] = []
     events_by_name: dict[str, dict] = {}
     for event in upcoming_events:
-        entry = events_by_name.get(event["name"])
+        entry = events_by_name.get(str(event["name"]))
         if entry is None:
             entry = {**event, "dates": [event["date"]], "has_more_dates": False}
-            events_by_name[event["name"]] = entry
+            events_by_name[str(event["name"])] = entry
             grouped_events.append(entry)
         elif len(entry["dates"]) < MAX_EVENT_DATES:
             entry["dates"].append(event["date"])
         else:
             entry["has_more_dates"] = True
-    upcoming_events_count = len(grouped_events)
 
-    _zero = Decimal("0.00")
+    return {
+        "upcoming_events_count": len(grouped_events),
+        "upcoming_events": grouped_events[:5],
+    }
+
+
+def _revenue_card(current_month: int, current_year: int) -> dict:
+    """Expected vs collected for the month, in ONE aggregate.
+
+    Two `Case/When` sums rather than two queries — and they ask genuinely
+    different questions: expected is keyed on `due_date` and counts every LIVE
+    status, collected is keyed on `payment_date` and counts only `completed`.
+    """
+    zero = Decimal("0.00")
     revenue_stats = Payment.objects.aggregate(
         # Excludes cancelled / failed / refunded — see LIVE_PAYMENT_STATUSES.
         expected_revenue=Sum(
@@ -256,53 +294,62 @@ def home(request):
             )
         ),
     )
-    expected_revenue = revenue_stats["expected_revenue"] or _zero
-    monthly_income_total = revenue_stats["monthly_income_total"] or _zero
+    return {
+        "expected_revenue": revenue_stats["expected_revenue"] or zero,
+        "monthly_income_total": revenue_stats["monthly_income_total"] or zero,
+    }
 
-    todos = list(TodoItem.objects.order_by("due_date", "created_at"))
-    overdue_todos_count = sum(1 for t in todos if t.is_overdue)
 
-    today_birthday_students = Student.objects.filter(
-        active=True,
-        birth_date__month=today.month,
-        birth_date__day=today.day,
-    ).order_by("first_name")[:5]
-    today_birthday_names = [s.first_name for s in today_birthday_students]
+def _capacity_card() -> dict:
+    """Waiting-list total and the groups that could take a waiter.
 
-    # Waiting list & group capacity (v1.1)
+    Goes through `group_capacity_summary()`, which answers every group's
+    occupancy in ONE annotated query. Reading `Group.enrolled_count` /
+    `available_spots` / `is_full` per row instead costs four queries per group —
+    that helper exists precisely to stop this page doing that.
+    """
     from core.views.waiting_list import group_capacity_summary
 
     capacity_rows = group_capacity_summary()
-    waiting_count = sum(row["waiting"] for row in capacity_rows)
-    groups_with_openings = [
-        {"name": row["name"], "color": row["color"], "available": row["available"], "waiting": row["waiting"]}
-        for row in capacity_rows
-        if row["has_room_for_waiters"]
-    ]
+    return {
+        "waiting_count": sum(row["waiting"] for row in capacity_rows),
+        "groups_with_openings": [
+            {"name": row["name"], "color": row["color"], "available": row["available"], "waiting": row["waiting"]}
+            for row in capacity_rows
+            if row["has_room_for_waiters"]
+        ],
+    }
 
+
+def home(request):
+    """The dashboard.
+
+    Split into one builder per card in v1.29.5 — it was a single 203-line
+    function assembling a twenty-key context, so "which query feeds which card"
+    could only be answered by reading all of it. Each builder below owns one
+    card and returns exactly the context keys that card renders; this function
+    owns the order, the merge, and the quote cookie.
+
+    Query count is unchanged (the builders are called once each and nothing is
+    re-evaluated) — `tests/integration/test_query_cost_and_idempotency.py`
+    pins it.
+    """
+    today = date.today()
+
+    todos = list(TodoItem.objects.order_by("due_date", "created_at"))
     quote_text, quote_author, new_cookie = _get_quote(request)
 
     context = {
-        "pending_payments_count": pending_count,
-        "pending_students": pending_students_display,
-        "has_more_pending": has_more_pending,
-        "total_pending_students": len(pending_students_list),
-        "all_pending_students": all_pending_students,
-        "birthday_count": birthday_count,
-        "birthdays": birthdays_display,
-        "has_more_birthdays": has_more_birthdays,
-        "upcoming_events_count": upcoming_events_count,
-        "upcoming_events": grouped_events[:5],
-        "expected_revenue": expected_revenue,
-        "monthly_income_total": monthly_income_total,
+        **_pending_payments_card(today.month, today.year),
+        **_birthdays_card(today),
+        **_upcoming_events_card(today),
+        **_revenue_card(today.month, today.year),
+        **_capacity_card(),
         "todos": todos,
-        "overdue_todos_count": overdue_todos_count,
-        "today_birthday_names": today_birthday_names,
+        "overdue_todos_count": sum(1 for t in todos if t.is_overdue),
         "today": today,
         "inspirational_quote": quote_text,
         "inspirational_author": quote_author,
-        "waiting_count": waiting_count,
-        "groups_with_openings": groups_with_openings,
     }
 
     response = render(request, "home.html", context)

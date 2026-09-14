@@ -9,7 +9,6 @@ of it are the individual tickets. Everything here is QA-only
 
 import json
 import logging
-from datetime import datetime
 
 from django.conf import settings
 from django.core.exceptions import ValidationError
@@ -160,7 +159,7 @@ def _email_feature(feature, kind):
             recipient_list=recipients,
             fail_silently=True,
         )
-    except Exception:  # noqa: BLE001 — never block the write on email
+    except Exception:  # never block the write on email
         logger.exception("Error sending the '%s' development notification", kind)
 
 
@@ -369,7 +368,7 @@ def export_features(request):
         for f in features
     ]
 
-    stamp = datetime.now().strftime("%Y%m%d-%H%M")
+    stamp = timezone.localtime().strftime("%Y%m%d-%H%M")
     filename = f"desarrollos-{scope}-{stamp}"
 
     if export_format == "csv":
@@ -389,7 +388,7 @@ def export_features(request):
         return response
 
     payload = {
-        "exported_at": datetime.now().isoformat(),
+        "exported_at": timezone.localtime().isoformat(),
         "app_version": settings.APP_VERSION,
         "environment": settings.ENVIRONMENT,
         "scope": scope,

@@ -3,10 +3,13 @@ Configuración de Celery para Five a Day
 https://docs.celeryq.dev/en/stable/django/first-steps-with-django.html
 """
 
+import logging
 import os
 
 from celery import Celery
 from celery.schedules import crontab
+
+logger = logging.getLogger(__name__)
 
 # Establecer el módulo de configuración de Django
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "project.settings")
@@ -103,5 +106,11 @@ app.conf.timezone = "Europe/Madrid"
 
 @app.task(bind=True, ignore_result=True)
 def debug_task(self):
-    """Tarea de debug para verificar que Celery funciona"""
-    print(f"Request: {self.request!r}")
+    """Tarea de debug para verificar que Celery funciona.
+
+    `logger`, not `print`: production ships worker output to Cloud Logging via
+    the logging config, and a bare `print` bypasses the level filter and the
+    structured format — so the one task whose entire job is to prove the worker
+    is alive was the one task whose output could go missing.
+    """
+    logger.info("debug_task ejecutada: %r", self.request)

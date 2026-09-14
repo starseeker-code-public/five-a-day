@@ -111,7 +111,7 @@ def _claim_slot(scope: str, ip: str, limit: int, window_seconds: int) -> bool | 
         if cache.get(_slot_key(scope, ip, window, 0)) is None:
             return None
         return False
-    except Exception:
+    except Exception:  # noqa: BLE001 — any cache failure fails OPEN; the caller logs it at ERROR
         return None
 
 
