@@ -57,7 +57,7 @@ class SmsService:
         if self._client is not None:
             return self._client
         try:
-            from twilio.rest import Client  # noqa: PLC0415 — lazy import (optional dep)
+            from twilio.rest import Client  # lazy import (optional dep)
         except ImportError as e:
             raise RuntimeError("twilio package is not installed — run `uv add twilio`") from e
         self._client = Client(self.account_sid, self.auth_token)

@@ -821,6 +821,11 @@ TWILIO_FROM_NUMBER = os.getenv("TWILIO_FROM_NUMBER", "")
 # When STRIPE_SECRET_KEY is set the parent portal renders a "Pay now" button
 # that creates a Checkout session. STRIPE_WEBHOOK_SECRET is the signing key
 # for the /api/stripe/webhook/ receiver — required in production.
+# There is deliberately NO `STRIPE_PUBLISHABLE_KEY` (removed v1.29.5). A
+# publishable key exists for Stripe.js / Elements, i.e. for collecting card
+# details in OUR page; this app uses hosted **Checkout** — the server creates a
+# session and the browser is redirected to Stripe's own page — so the key was
+# read into a setting nothing ever rendered. Do not re-add it "for symmetry":
+# an unread secret still has to be provisioned, rotated and audited.
 STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "")
-STRIPE_PUBLISHABLE_KEY = os.getenv("STRIPE_PUBLISHABLE_KEY", "")
 STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")

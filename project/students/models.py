@@ -787,8 +787,11 @@ def _notify_group_spot_freed(sender, instance, created, **kwargs):
     was_active = getattr(instance, "_active_was", None)
     if was_active is not True or instance.active:
         return
-    # Late import to avoid circular imports at app-loading time.
-    from core.views.waiting_list import notify_capacity_freed
+    # `core.services.capacity_service` is a leaf (it imports `core.models` and
+    # nothing else), so this no longer has to dodge an app-loading cycle by
+    # reaching into a view module — see that module's docstring. Kept as a
+    # function-body import purely because signals fire during app loading.
+    from core.services.capacity_service import notify_capacity_freed
 
     notify_capacity_freed(instance)
 

@@ -6,7 +6,7 @@ from unittest.mock import patch
 import pytest
 from django.urls import reverse
 
-from core.views.parent_portal import PORTAL_TEMPORARY_PASSWORD_COOLDOWN
+from core.services.portal_access_service import PORTAL_TEMPORARY_PASSWORD_COOLDOWN
 from students.models import PORTAL_AUTH_PASSWORD, PORTAL_AUTH_TEMPORARY, Parent
 
 pytestmark = pytest.mark.django_db

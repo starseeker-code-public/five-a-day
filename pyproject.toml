@@ -1,6 +1,6 @@
 [project]
 name = "five-a-day"
-version = "1.29.4"
+version = "1.29.5"
 description = "Five a Day management software"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -95,6 +95,26 @@ select = [
     "I",    # isort
     "B",    # flake8-bugbear
     "UP",   # pyupgrade
+    # ON as of v1.29.5. There were already ~57 `# noqa: BLE001` / `# noqa: S608`
+    # directives in the tree, every one of them carrying a written reason — and
+    # every one of them INERT, because neither rule was enabled. Ruff reported
+    # them as unused directives, and the obvious cleanup (`--select RUF100
+    # --fix`) deletes the whole comment, reason included: 57 pieces of intent
+    # documentation traded for a clean lint run.
+    #
+    # Enabling the rules instead makes those directives load-bearing again and
+    # forces the same decision at every NEW blind catch. Turning BLE001 on found
+    # 12 sites with no directive at all, two of which were over-broad: an
+    # `except Exception` around `resolve()` inside both auth gates in
+    # `core/middleware.py`, where any unexpected failure silently became
+    # "unknown URL". Both are now `except Resolver404`.
+    "BLE",  # flake8-blind-except — a bare `except Exception` needs a written reason
+    "S608", # hardcoded SQL expression — the BigQuery cost query builds SQL by hand
+    # ON as of v1.29.5, so the situation above cannot rebuild: an inert directive
+    # is now a lint error the moment it appears. Note ruff's own `--fix` for this
+    # rule deletes the ENTIRE comment, reason and all — when it fires, demote the
+    # line to a plain `# reason` comment by hand instead of running the fixer.
+    "RUF100",  # unused noqa directive
 ]
 ignore = [
     "E501",  # line too long (handled by formatter)
@@ -148,7 +168,18 @@ python_version = "3.12"
 mypy_path = "project"
 plugins = ["mypy_django_plugin.main"]
 ignore_missing_imports = true
-check_untyped_defs = false
+# ON as of v1.29.5. It was `false`, and with 487 of 711 functions carrying no
+# annotation at all that made the whole gate close to a no-op — mypy skipped the
+# body of any function without one, i.e. most of the codebase. Turning it on
+# surfaced 20 real type errors in production code (all fixed) and, more usefully,
+# a TEST that called `EnrollmentService.create_enrollment` with six keyword
+# arguments the method has never had, inside `except (TypeError, ValueError):
+# pass` — a test named for the sibling discount that asserted nothing and could
+# not fail. That is the class of bug this flag earns its keep on, which is also
+# why the `exclude` below does NOT list `tests/`.
+# Next step when someone has the appetite: `strict_optional = true` (73 errors
+# at the time of writing), then re-enable the disabled codes (91).
+check_untyped_defs = true
 disallow_untyped_defs = false
 warn_return_any = false
 warn_unused_configs = true

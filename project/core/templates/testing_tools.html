@@ -65,6 +65,7 @@
      data-seed-url="{% url 'api_seed_database' %}"
      data-backlog-create-url="{% url 'api_create_backlog_task' %}"
      data-toggle-error-url="{% url 'api_toggle_error_email' %}"
+     data-toggle-drive-url="{% url 'api_toggle_drive_uploads' %}"
      data-ready-url="{% url 'api_mark_ready' %}">
 
     <div class="mb-8">
@@ -156,6 +157,43 @@
                         </span>
                         <label class="toggle-switch">
                             <input type="checkbox" id="error-email-toggle" {% if qa_config.error_email_enabled %}checked{% endif %}>
+                            <span class="toggle-slider"></span>
+                        </label>
+                    </div>
+                </div>
+            </div>
+
+            {% comment %}
+              Recibos a Drive — QA's opt-in to exercising the Google Drive receipt
+              archive from this VM. OFF by default and only ever readable here:
+              production always archives and ignores this switch, development
+              never archives at all. While it is on, receipts uploaded from the
+              VM land in the month's "testing" subfolder so they can never be
+              mistaken for one the academy filed.
+            {% endcomment %}
+            <div class="qa-card" style="padding:1.1rem 1.25rem;">
+                <div class="flex items-center justify-between">
+                    <div class="flex items-center gap-3">
+                        <div class="qa-card-icon bg-emerald-100" style="width:2.5rem;height:2.5rem;">
+                            <span class="material-symbols-outlined text-emerald-600">cloud_upload</span>
+                        </div>
+                        <div>
+                            <h2 class="text-sm font-bold text-neutral-800">Recibos a Drive</h2>
+                            <p class="text-xs text-neutral-500">
+                                {% if drive_configured %}
+                                    Sube los recibos a <code>.../&lt;Mes&gt;/{{ drive_testing_subfolder }}</code>
+                                {% else %}
+                                    Drive no configurado en este entorno
+                                {% endif %}
+                            </p>
+                        </div>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <span class="text-xs font-medium text-neutral-500" id="drive-uploads-label">
+                            {{ qa_config.drive_uploads_enabled|yesno:"Activo,Inactivo" }}
+                        </span>
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="drive-uploads-toggle" {% if qa_config.drive_uploads_enabled %}checked{% endif %}>
                             <span class="toggle-slider"></span>
                         </label>
                     </div>
@@ -417,13 +455,16 @@
         return window.apiFetch(url, { method: 'POST', body: JSON.stringify(body) });
     }
 
-    // ── Toggle reporte de errores ───────────────────
-    const toggle = document.getElementById('error-email-toggle');
-    const label = document.getElementById('error-email-label');
-    if (toggle) {
+    // ── Interruptores de QA ─────────────────────────
+    // One handler for both switches: each reverts itself on failure, so a
+    // checkbox can never sit on "Activo" against a flag the server refused.
+    function wireToggle(toggleId, labelId, url) {
+        const toggle = document.getElementById(toggleId);
+        const label = document.getElementById(labelId);
+        if (!toggle || !url) return;
         toggle.addEventListener('change', function() {
             const enabled = this.checked;
-            post(page.dataset.toggleErrorUrl, {enabled})
+            post(url, {enabled})
                 .then(data => {
                     if (data.success) label.textContent = data.enabled ? 'Activo' : 'Inactivo';
                     else { this.checked = !enabled; alert(data.message); }
@@ -431,6 +472,9 @@
                 .catch(err => { this.checked = !enabled; alert(window.apiErrorMessage(err)); });
         });
     }
+
+    wireToggle('error-email-toggle', 'error-email-label', page.dataset.toggleErrorUrl);
+    wireToggle('drive-uploads-toggle', 'drive-uploads-label', page.dataset.toggleDriveUrl);
 
     // ── Datos de prueba ─────────────────────────────
     function seed(reset) {

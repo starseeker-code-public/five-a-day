@@ -359,6 +359,95 @@ class TestApiToggleErrorEmail:
 
 
 # ============================================================================
+# api_toggle_drive_uploads (POST) — QA's opt-in to the Drive receipt archive
+# ============================================================================
+
+
+class TestApiToggleDriveUploads:
+    """The switch that lets the QA VM exercise the Google Drive receipt archive.
+
+    Off by default, QA-only, and reachable nowhere else: production always
+    archives and ignores the flag, development can never turn it on.
+    """
+
+    @QA_SETTINGS
+    def test_drive_uploads_default_to_off(self, qa_client):
+        from core.models import QAConfiguration
+
+        assert QAConfiguration.get_config().drive_uploads_enabled is False
+
+    @QA_SETTINGS
+    def test_the_switch_is_rendered_unchecked(self, qa_client):
+        """The dashboard has to actually carry the control — the gate is useless
+        if QA cannot reach it, and `checked` must reflect the stored flag."""
+        html = qa_client.get(reverse("testing_tools")).content.decode()
+        assert 'id="drive-uploads-toggle"' in html
+        assert reverse("api_toggle_drive_uploads") in html
+        # Off by default → no `checked` attribute on that input.
+        toggle = html.split('id="drive-uploads-toggle"')[1].split(">")[0]
+        assert "checked" not in toggle
+
+    @QA_SETTINGS
+    def test_the_switch_renders_checked_once_enabled(self, qa_client):
+        from core.models import QAConfiguration
+
+        config = QAConfiguration.get_config()
+        config.drive_uploads_enabled = True
+        config.save()
+        html = qa_client.get(reverse("testing_tools")).content.decode()
+        toggle = html.split('id="drive-uploads-toggle"')[1].split(">")[0]
+        assert "checked" in toggle
+
+    @QA_SETTINGS
+    def test_toggling_on_then_off_persists_each_time(self, qa_client):
+        from core.models import QAConfiguration
+
+        response = qa_client.post(
+            reverse("api_toggle_drive_uploads"),
+            data=json.dumps({"enabled": True}),
+            content_type="application/json",
+        )
+        assert response.status_code == 200
+        assert response.json()["enabled"] is True
+        assert QAConfiguration.get_config().drive_uploads_enabled is True
+
+        response = qa_client.post(
+            reverse("api_toggle_drive_uploads"),
+            data=json.dumps({"enabled": False}),
+            content_type="application/json",
+        )
+        assert response.json()["enabled"] is False
+        assert QAConfiguration.get_config().drive_uploads_enabled is False
+
+    @QA_SETTINGS
+    def test_leaves_the_other_qa_flag_alone(self, qa_client):
+        """Both switches write through one helper; the field is chosen by the
+        view, so one must never move the other."""
+        from core.models import QAConfiguration
+
+        config = QAConfiguration.get_config()
+        config.error_email_enabled = True
+        config.save()
+
+        qa_client.post(
+            reverse("api_toggle_drive_uploads"),
+            data=json.dumps({"enabled": True}),
+            content_type="application/json",
+        )
+        config = QAConfiguration.get_config()
+        assert config.error_email_enabled is True
+        assert config.drive_uploads_enabled is True
+
+    def test_404_outside_the_qa_environment(self, authenticated_client):
+        response = authenticated_client.post(
+            reverse("api_toggle_drive_uploads"),
+            data=json.dumps({"enabled": True}),
+            content_type="application/json",
+        )
+        assert response.status_code == 404
+
+
+# ============================================================================
 # api_update_backlog_task — QA verification tick (v1.17.5)
 # ============================================================================
 

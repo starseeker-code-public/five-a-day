@@ -536,7 +536,10 @@ harmless when unset. Add them to the same `gcloud run deploy` invocation:
   # Stripe (v1.11) — STRIPE_WEBHOOK_SECRET is REQUIRED if STRIPE_SECRET_KEY is set,
   # otherwise the webhook skips signature verification entirely
   --set-secrets="STRIPE_SECRET_KEY=STRIPE_SECRET_KEY:latest" \
-  --set-secrets="STRIPE_PUBLISHABLE_KEY=STRIPE_PUBLISHABLE_KEY:latest" \
+  # No STRIPE_PUBLISHABLE_KEY: the setting was removed in v1.29.5. A publishable key
+  # exists for Stripe.js / Elements — collecting card details in OUR page — and this app
+  # uses hosted Checkout, so nothing ever read it. If the secret is still provisioned in
+  # Secret Manager it can be deleted; an unread secret still has to be rotated and audited.
   --set-secrets="STRIPE_WEBHOOK_SECRET=STRIPE_WEBHOOK_SECRET:latest" \
   # Twilio SMS (v1.8) — opt-in parents only
   --set-secrets="TWILIO_ACCOUNT_SID=TWILIO_ACCOUNT_SID:latest" \
@@ -569,6 +572,11 @@ harmless when unset. Add them to the same `gcloud run deploy` invocation:
   # service account (GOOGLE_SHEETS_SERVICE_ACCOUNT_JSON) must have EDITOR access to
   # this folder; it authenticates with the `drive` scope. Best-effort, so a Drive
   # problem never fails payment completion. Unset = feature disabled.
+  # v1.29.5: uploading is PRODUCTION-ONLY on top of this. Setting the folder id on
+  # the testing VM archives nothing until QA turns on "Recibos a Drive" in /testing/
+  # (off by default), and even then receipts go to <Mes> YY/testing/ — never beside
+  # the real ones. Development never uploads at all. Set it on the JOBS as well as
+  # the service: backfill_drive_receipts runs as a job.
   --set-env-vars="GOOGLE_DRIVE_RECEIPTS_FOLDER_ID=<drive-folder-id>" \
   # SMTP socket timeout (v1.28.1). Leave at the 20 s default unless you have a reason:
   # smtplib's OS default is minutes and the mass-mail views send inside the request, so
@@ -662,6 +670,17 @@ gcloud run jobs execute fiveaday-migrate --region=$REGION --wait
 > does not touch them. Executing `fiveaday-migrate` without the `update` above runs the **previous
 > release's** migration set against production, and leaves all seven scheduled jobs executing old
 > code indefinitely. See [Routine deploys](#routine-deploys) for the full loop over all the jobs.
+
+> **v1.29.5 ships a DESTRUCTIVE migration — `billing/0017` needs `ack_destructive`.** It drops the
+> five dead `SiteConfiguration` pricing columns (`old_student_discount`, `full_year_bonus`,
+> `half_month_discount`, `one_week_discount`, `three_week_discount`), which nothing has ever read.
+> `deploy-production.yml`'s pre-mutation gate matches `DeleteModel` / `RemoveField` / `RenameField` /
+> `DROP` / `TRUNCATE` in the pending migration set and refuses to proceed without the
+> `ack_destructive` dispatch input. Reach for **`ack_destructive`, not `force`** — `force` also
+> skips the QA sign-off, the provenance gate and the version compare, and downgrades the inventory
+> gate to a warning, so it lowers every other bar at once to clear one. The gate runs *after* the
+> reviewer approves and *before* anything is written, so a refusal leaves production untouched with
+> nothing to roll back.
 
 > **v1.26.1 — `billing/0010` can legitimately REFUSE to apply.** It adds
 > `unique_pending_periodic_payment_per_month`, and it pre-checks the table first: if production

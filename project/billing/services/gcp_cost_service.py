@@ -207,7 +207,7 @@ def _query_month(year: int, month: int) -> Decimal | None:
     except (InvalidOperation, KeyError, IndexError, ValueError):
         logger.exception("Unexpected BigQuery response shape for the GCP cost query")
         return None
-    except Exception:  # noqa: BLE001 — network/auth/HTTP errors must never break a page
+    except Exception:  # network/auth/HTTP errors must never break a page
         logger.exception("GCP cost query failed")
         return None
 
@@ -220,7 +220,7 @@ def month_cost(year: int, month: int) -> Decimal | None:
     cache_key = f"gcp_cost:{year:04d}-{month:02d}"
     try:
         cached = cache.get(cache_key)
-    except Exception:  # noqa: BLE001 — an unreachable cache must not take the page down
+    except Exception:  # an unreachable cache must not take the page down
         logger.exception("Cache read failed for %s", cache_key)
         cached = None
     if cached == _UNAVAILABLE:
@@ -239,7 +239,7 @@ def month_cost(year: int, month: int) -> Decimal | None:
             cache.set(cache_key, _UNAVAILABLE, _FAILURE_TTL)
         else:
             cache.set(cache_key, str(amount), _CURRENT_MONTH_TTL if is_current else _PAST_MONTH_TTL)
-    except Exception:  # noqa: BLE001
+    except Exception:
         logger.exception("Cache write failed for %s", cache_key)
     return amount
 
@@ -290,7 +290,7 @@ def archive_month(year: int, month: int) -> dict[str, Any]:
     try:
         if not cache.add(lock_key, "1", 5 * 60):
             return {"status": "locked"}
-    except Exception:  # noqa: BLE001 — a dead cache degrades to the .exists() check above
+    except Exception:  # a dead cache degrades to the .exists() check above
         logger.exception("Cache add failed for %s", lock_key)
 
     expense = Expense(

@@ -1,6 +1,6 @@
 ---
 name: update-readme
-description: Use when the user says their work is done and they want the project documentation updated to reflect the staged changes. Despite the name, this skill updates the full documentation set — the top-level README.md, every per-app README, CLAUDE.md, DEPLOYMENT.md, and every file under docs/. Inspects the staged diff, routes changes to the correct docs, applies per-file checklists, and sweeps for stale references across all of them.
+description: Use when the user says their work is done and they want the project documentation updated to reflect the staged changes. Despite the name, this skill updates the full documentation set — the top-level README.md, every per-app README, CLAUDE.md, DEPLOYMENT.md, and every file under docs/. Runs the sync-branches skill FIRST so main, testing and development are level and the version the docs are written against is the real one, then inspects the staged diff, routes changes to the correct docs, applies per-file checklists, and sweeps for stale references across all of them.
 ---
 
 # update-readme
@@ -28,6 +28,40 @@ The user invokes this skill when they have finished a unit of work and want the 
 **`.env.example` does not exist in this repo — do not create it.** The `.env` template lives inline in `README.md` under the heading **`.env template`** (a fenced `bash` code block inside the Development & Docker section). Every time you edit the app's env var surface, update that code block.
 
 Everything under `.venv/`, `.pytest_cache/`, `node_modules/`, `.git/` is **out of scope**. You **may read `.env`** solely to extract variable names and section comments when the user explicitly asks you to refresh the README's `.env template` code block — strip every value before writing anything user-visible. Never read `.env.testing` or any other `.env*`.
+
+---
+
+## Step 0 — Sync every branch with main FIRST
+
+Before reading a single diff, run the **`sync-branches`** skill
+(`.claude/skills/sync-branches/SKILL.md`) end to end.
+
+Documentation is written against a version, and the version lives in files —
+`pyproject.toml`, the README badge, the Recent Versions table, `uv.lock` — that change
+in *every* release and are exactly the files a stale branch disagrees about. Writing
+the docs on a `development` that is behind `main` means writing them against last
+release's numbers, and the mistake only surfaces later as a conflicted release PR.
+Syncing first also puts the user's work in progress fully **staged**, which is precisely
+the input this skill's Step 1 reads.
+
+What that skill does, in short: stashes the work in progress, fast-forwards `main`,
+`testing` and `development` from origin, merges `main` into `testing` and `development`,
+pushes both, returns to `development` and restores the stash staged.
+
+Then, before continuing:
+
+- **It stopped and asked something** → answer it (or relay it to the user) and let it
+  finish. Do **not** start documenting on an unsynced tree.
+- **It reported nothing to do** → fine, carry on to Step 1.
+- **The version moved during the sync** → re-read `pyproject.toml` in Step 1 rather
+  than trusting anything you noted before the sync.
+- **`testing` has commits `development` lacks** → surface it to the user before
+  documenting. Something bypassed the release path and the docs would describe a tree
+  nobody is going to ship.
+
+This is the one sanctioned exception to "never stage files yourself": staging is
+inherent to the stash-and-restore, and the user asked for that behaviour when they
+invoked a skill that begins with it.
 
 ---
 
@@ -494,7 +528,9 @@ After saving all docs, report in under 25 lines:
 ## Guarantees
 
 - **Never commit.** The user may want to amend, combine, or review before committing.
-- **Never stage files** yourself without user confirmation.
+- **Never stage files** yourself without user confirmation — *except* in Step 0, where
+  the `sync-branches` skill stages everything in order to stash it and restores it
+  staged afterwards. That is the whole point of the step, not an incidental side effect.
 - **Never read `.env*` files** — they contain secrets.
 - **Never invent work** — if the staged diff is purely a bug fix with no documentation implications, say "no doc changes needed" and stop.
 - **Never fabricate counts** — run the grep/wc command to get the real test count, view count, etc.

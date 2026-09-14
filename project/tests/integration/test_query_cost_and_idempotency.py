@@ -1201,3 +1201,89 @@ class TestStudentPaymentHistoryOrdering:
             response = authenticated_client.get(reverse("student_detail", args=[student.id]))
             seen.add(tuple(p.concept for p in response.context["payments"]))
         assert len(seen) == 1, f"ordering is not deterministic: {seen}"
+
+
+class TestDashboardQueryCostDoesNotScale:
+    """The dashboard's cost must not grow with the roll.
+
+    `home` was one 203-line function assembling a twenty-key context; v1.29.5
+    split it into one builder per card. An extract-method refactor cannot change
+    behaviour, but it CAN change query cost — re-evaluating a queryset that used
+    to be materialised once, or moving a `.count()` inside a loop, is invisible
+    in the rendered page and invisible on a small dev database.
+
+    Asserted as a property (cost is flat as rows grow), not as a snapshot
+    number: the exact count legitimately moves when a card is added, and a test
+    that has to be edited on every such change stops being read.
+    """
+
+    @pytest.fixture
+    def group(self, teacher):
+        """ONE group for the whole test — `Group.group_name` is unique, so a
+        per-seed-round group would collide on the second call."""
+        return Group.objects.create(group_name="DASH", teacher=teacher, max_students=0, active=True)
+
+    def _seed(self, group, families: int, *, offset: int = 0):
+        """`families` more families, each with a birthday this month and one
+        pending payment due this month, so every card on the page has rows.
+
+        `offset` keeps DNIs and names unique across two rounds of seeding.
+        """
+        due = date.today().replace(day=1)
+        for n in range(offset, offset + families):
+            parent = Parent.objects.create(
+                first_name=f"D{n}",
+                last_name="Q",
+                dni=f"DASH{n:05d}",
+                phone="600",
+                email=f"d{n}@x.test",
+            )
+            kid = Student.objects.create(
+                first_name=f"D{n}",
+                last_name="Q",
+                group=group,
+                active=True,
+                birth_date=date(2015, due.month, 10),
+            )
+            StudentParent.objects.create(student=kid, parent=parent)
+            Payment.objects.create(
+                student=kid,
+                parent=parent,
+                payment_type="other",
+                amount=Decimal("54.00"),
+                due_date=due,
+                concept=f"C{n}",
+                payment_status="pending",
+            )
+
+    def _count(self, client):
+        with CaptureQueriesContext(connection) as captured:
+            response = client.get(reverse("home"))
+        assert response.status_code == 200
+        return len(captured)
+
+    def test_cost_is_flat_between_three_and_thirty_families(self, authenticated_client, group):
+        self._seed(group, 3)
+        small = self._count(authenticated_client)
+
+        self._seed(group, 27, offset=3)
+        large = self._count(authenticated_client)
+
+        assert large == small, (
+            f"dashboard cost scaled with the roll: {small} queries for 3 families, {large} for 30. "
+            "Something in a card builder is querying per row."
+        )
+
+    def test_every_card_is_still_populated(self, authenticated_client, group):
+        """The companion to the count: a page that stopped rendering its cards
+        would also hold a flat query count, and pass the test above."""
+        self._seed(group, 3)
+        context = authenticated_client.get(reverse("home")).context
+
+        assert context["pending_payments_count"] == 3
+        assert len(context["all_pending_students"]) == 3
+        assert context["birthday_count"] == 3
+        assert context["expected_revenue"] == Decimal("162.00")
+        assert context["upcoming_events_count"] >= 1
+        assert "waiting_count" in context
+        assert "todos" in context

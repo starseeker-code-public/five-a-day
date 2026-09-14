@@ -283,7 +283,7 @@ class TestResendPortalInvitationStampsTheGuard:
 
     def test_a_later_sibling_enrolment_does_not_re_invite(self, admin_ui, parent, rf):
         """`send_portal_invitation_once` must still refuse after a resend."""
-        from core.views.parent_portal import send_portal_invitation_once
+        from core.services.portal_access_service import send_portal_invitation_once
 
         self._resend(admin_ui, parent)
         parent.refresh_from_db()

@@ -405,7 +405,7 @@ class TestPaymentBulkActions:
     def test_an_already_completed_payment_keeps_its_original_date(self, rf, completed_payment):
         original = completed_payment.payment_date
 
-        with patch("core.views.payments._queue_payment_receipt") as receipt:
+        with patch("comms.tasks.dispatch_payment_completed_on_commit") as receipt:
             self._admin().mark_as_completed(self._request(rf), Payment.objects.filter(id=completed_payment.id))
 
         completed_payment.refresh_from_db()
@@ -413,7 +413,7 @@ class TestPaymentBulkActions:
         receipt.assert_not_called()
 
     def test_a_pending_payment_is_completed_and_gets_one_receipt(self, rf, pending_payment):
-        with patch("core.views.payments._queue_payment_receipt") as receipt:
+        with patch("comms.tasks.dispatch_payment_completed_on_commit") as receipt:
             self._admin().mark_as_completed(self._request(rf), Payment.objects.filter(id=pending_payment.id))
 
         pending_payment.refresh_from_db()

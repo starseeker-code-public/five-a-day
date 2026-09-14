@@ -15,11 +15,11 @@ Built to centralize student records, automate billing cycles, and streamline par
 ### Project Status
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v1.29.4-brightgreen?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-v1.29.5-brightgreen?style=flat-square" alt="Version">
   &nbsp;|&nbsp;
   <a href="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml?query=branch%3Amain"><img src="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml/badge.svg?branch=main&style=flat-square" alt="CI main"></a>
   &nbsp;|&nbsp;
-  <img src="https://img.shields.io/badge/coverage-95.09%25-brightgreen?style=flat-square" alt="Coverage">
+  <img src="https://img.shields.io/badge/coverage-95.30%25-brightgreen?style=flat-square" alt="Coverage">
   &nbsp;|&nbsp;
   <a href="https://github.com/starseeker-code-public/five-a-day/actions/workflows/scorecard.yml"><img src="https://img.shields.io/badge/OpenSSF%20Scorecard-monitored-blueviolet?style=flat-square" alt="OSSF Scorecard"></a>
   &nbsp;|&nbsp;
@@ -36,9 +36,9 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 | Version | Date | Description |
 |---------|------|-------------|
-| **v1.29.4** | 2026-09-13 | Media jornada infantil, per-teacher student scoping, parent portal off |
+| **v1.29.5** | 2026-09-14 | Overdue payment chasing, production-only Drive archive, real type gate |
+| v1.29.4 | 2026-09-13 | Media jornada infantil, per-teacher student scoping, parent portal off |
 | v1.29.3 | 2026-09-13 | Pickup-authorised persons, cheque idioma line, test send, Sep/Jun/Apr reminders |
-| v1.29.2 | 2026-09-13 | Payment status transition table, shared status badge, review fixes |
 
 ---
 
@@ -140,8 +140,190 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 ## Version History
 
-<details id="v1294" open>
-<summary><strong>v1.29.4 — Media jornada infantil, a teacher sees only their own students, the family portal switched off (current)</strong></summary>
+<details id="v1295" open>
+<summary><strong>v1.29.5 — Overdue debt is chased again, the Drive archive is production-only, the type gate made real (current)</strong></summary>
+
+**The weekly payment reminder chases overdue debt — and reaches adult students**
+
+- `send_payment_reminders` filtered `due_date__gte=today`, so a payment stopped being chased at
+  the exact moment it became a debt: the row still counted as expected revenue on every dashboard
+  and nothing ever asked the family for it again. **The lower bound is gone.** A pending row is
+  re-included every week until it is paid or cancelled, so `payment_status="pending"` is now the
+  only exit condition.
+- The upper bound is **half-open** (`due_date__lt=today + 7d`, not `__lte`). The task runs weekly,
+  so two consecutive inclusive `today..today+7` windows overlapped on exactly one day and a
+  payment falling due on that weekday was reminded **twice**.
+- **Adult students are reminded now.** The loop read `payment.parent.email` and skipped anything
+  with no parent — but `Payment.parent` is nullable *precisely* for adults, who have no guardian,
+  so an adult's pending payment was never chased at all. It falls back to `student.email`, the
+  same way the receipt task resolves a recipient, so the two paths cannot disagree about who a
+  payment's recipient is. No SMS is attempted for a parentless payment (the opt-in lives on
+  `Parent`).
+- `emails/payment_reminder_simple.html` grew an **overdue variant** — light-tint red box, "hay un
+  pago **vencido** … (hace N días)" — because the window now reaches back: "con vencimiento el
+  30/09" read on 15 November is true and tells the family nothing.
+
+**The Google Drive receipt archive is PRODUCTION-ONLY**
+
+- Those folders are the academy's real, permanent archive — the one its accountant opens — and
+  nothing in a receipt PDF says which environment produced it. A QA seed run or a developer
+  clicking "marcar cobrado" filed fictional receipts beside the genuine ones, unrecoverably.
+- **`drive_service.drive_uploads_allowed()` is the one predicate.** Production: always, decided
+  **without touching the database**, so a DB blip can never switch the real archive off. The QA VM
+  (`IS_TESTING_ENV`): only while the new `/testing/` **"Recibos a Drive"** toggle is on
+  (`QAConfiguration.drive_uploads_enabled`, migration `core/0016`, **off by default**), and then
+  only into a `testing/` **subfolder** of the month (`archive_subfolder()`) — a separate folder
+  rather than a filename prefix, because a human scrolling the month must never see a fake receipt
+  at all. Development, Docker and the test suite: never, whatever the flag says. Fails **closed**
+  on a database error.
+- Three readers, deliberately: `DriveReceiptService.upload_receipt` (the true enforcement point,
+  checked *before* `is_configured()` so a disallowed environment does not even parse the
+  credentials), `upload_receipt_to_drive_task` (so it does not render a PDF it will throw away —
+  production runs Celery eager, i.e. inside the "marcar cobrado" request), and
+  `backfill_drive_receipts`, which builds its own service and now refuses up front with a
+  `CommandError` naming the switch: a refusal reported once per payment reads like a Drive outage
+  rather than a switched-off feature.
+- New `api_toggle_drive_uploads` endpoint beside `api_toggle_error_email`; both now go through one
+  `_set_qa_flag` helper whose field name is chosen by the view and never taken from the payload,
+  and the page wires both switches with one handler that reverts itself on failure.
+
+**Five dead pricing columns dropped**
+
+- `old_student_discount`, `full_year_bonus`, `half_month_discount`, `one_week_discount` and
+  `three_week_discount` were seeded in `0001_initial` and read by **no** service, view, task,
+  template, form, admin or JS file. `update_site_config` had already been made to refuse writing
+  them, because `old_student_discount` is visually the twin of the **live**
+  `returning_student_enrollment_discount` — a price sitting in the database looking authoritative
+  and applying to nothing.
+- Migration `billing/0017` is **destructive** (`RemoveField`), so the production deploy's
+  pre-mutation gate will refuse the release without the `ack_destructive` dispatch input — **not**
+  `force`, which would also skip the QA sign-off, the provenance gate and the version compare.
+
+**No model or admin imports from `core/views/` any more**
+
+- Three helpers were living in view modules and being imported *upwards*, against the dependency
+  flow, each forced into a function-body import to dodge an app-loading cycle:
+  - `notify_capacity_freed` → new **`core/services/capacity_service.py`** (its only caller is the
+    `post_save` signal on `students.Student`; `core/views/waiting_list.py`, where it lived, never
+    called it). The module imports `core.models` and nothing else, so it stays a leaf.
+  - `send_portal_temporary_password` / `send_portal_invitation_once` and the
+    `PORTAL_TEMPORARY_PASSWORD_COOLDOWN` → new **`core/services/portal_access_service.py`**. Two
+    of the three callers are not views (`ParentAdmin.resend_portal_invitation` and
+    `ParentCreateView`), so an admin action depended on a view module's internals. Both kill-switch
+    checks moved with them.
+  - `_queue_payment_receipt` → **`comms.tasks.dispatch_payment_completed_on_commit`**, next to the
+    dispatch it defers. `billing/admin.py` was importing that **private** name out of a view module
+    to get its receipts sent — which is exactly how a completion side effect gets added to one of
+    the app's two completion paths and silently missed on the other.
+
+**The type and lint gates are real now**
+
+- **`check_untyped_defs = true`.** It was `false`, and with 487 of 711 functions carrying no
+  annotation mypy skipped most of the codebase's bodies. Turning it on surfaced 20 real type errors
+  in production code and — the reason `tests/` is deliberately **not** excluded — a test calling
+  `EnrollmentService.create_enrollment` with six keyword arguments the method has never had, inside
+  `except (TypeError, ValueError): pass`: named for the sibling discount, asserting nothing, unable
+  to fail.
+- **`BLE001`, `S608` and `RUF100` enabled in Ruff.** There were already ~57 `# noqa: BLE001` /
+  `# noqa: S608` directives in the tree, every one carrying a written reason and every one **inert**
+  because neither rule was on. The obvious cleanup (`--select RUF100 --fix`) deletes the whole
+  comment, reason included — 57 pieces of intent documentation traded for a clean lint run — so the
+  rules were switched on instead, which makes the directives load-bearing and forces the same
+  decision at every new blind catch. That found 12 sites with no directive at all, two of them
+  over-broad.
+
+**Narrowed exception handlers (the two that were hiding something)**
+
+- `SimpleAuthMiddleware`'s two `resolve()` calls caught bare `Exception`, so **inside an auth gate**
+  any unexpected failure silently became "unknown URL" — fail-closed, so nothing broke, but a real
+  URL-resolution bug would have been invisible there forever. Both are `except Resolver404` now.
+- `GoogleSheetsService._get_or_create_worksheet` read *every* failure as "not there yet" — an auth
+  error, a revoked share, a 429 — and answered it by trying to **create** the worksheet, replacing
+  the real cause with whatever `add_worksheet` failed with next. Narrowed to `WorksheetNotFound`.
+- `PaymentAdmin`'s `student_link` / `parent_link` narrowed to `NoReverseMatch` (the one expected
+  failure, which degrades to plain text) and log it; genuine breakage used to become a cell that
+  merely stopped being a link, with nothing anywhere saying why.
+
+**Support tickets: the category is validated, not trusted**
+
+- The client supplied both the category **and** its display label, and the raw category went
+  straight into the subject line of a mail to `SUPPORT_EMAIL`. Django refuses newlines in headers so
+  it was never header injection, but it was a free-text channel nobody validated. Both now come from
+  a server-side `SUPPORT_CATEGORIES` map; an unrecognised key falls back to `exception`, which is
+  what the widget already sends for "Otro".
+
+**Timezone correctness sweep**
+
+- Eight more bare `datetime.now()` calls replaced with `timezone.localtime()` — the QA error email's
+  "Server time", the `/testing/` server-time card, the backlog and Desarrollos CSV/JSON export
+  stamps, the "ready to ship" notification and the database xlsx export filename. The container runs
+  `TZ=Europe/Madrid` so these were only wrong where the value was formatted from an **aware**
+  column, but a stamp that disagrees with the rows beside it is the same class of bug the v1.29.1
+  `backlog_task_json` fix closed.
+- `celery.debug_task` logs through `logger` instead of `print`: production ships worker output to
+  Cloud Logging via the logging config, so the one task whose entire job is to prove the worker is
+  alive was the one task whose output could go missing.
+
+**Refactors — behaviour unchanged, pinned by tests**
+
+- **`create_payment` / `update_payment`** split into resolve → build → apply helpers.
+  `update_payment` was 165 lines and 34 branches and had yielded three separate status-transition
+  bugs across two review rounds; its six `except` branches each re-spelled the same
+  JSON-or-flash-message response, which is where the seventh forgets the JSON shape. One
+  `_payment_write_error` owns that contract now. A dead
+  `if payment.payment_status == "completed"` branch in `create_payment` was removed — the status is
+  hard-coded `pending` three lines above it.
+- **The dashboard** was a single 203-line function assembling a twenty-key context; it is now one
+  builder per card (`_pending_payments_card`, `_birthdays_card`, `_upcoming_events_card`,
+  `_revenue_card`, `_capacity_card`), each returning exactly the keys its card renders. Query count
+  is unchanged and `test_query_cost_and_idempotency.py` now pins it flat between 3 and 30 families.
+- `payments/_status_badge.html` requires `classes=""` to be passed explicitly. Reading a variable
+  absent from the context logs a full `VariableDoesNotExist` traceback to `django.template` at
+  DEBUG on **every** render, so a 50-row payments list wrote 50 tracebacks per page load in
+  development — and `{% firstof %}` does not avoid it, because the log happens inside
+  `Variable._resolve_lookup` before `ignore_failures` is consulted.
+- `_git_info` checks git's **return code** for the branch read instead of trusting empty stdout: a
+  detached HEAD and a git failure were indistinguishable, and the card showed "—" either way.
+
+**Removed: `STRIPE_PUBLISHABLE_KEY`**
+
+- A publishable key exists for Stripe.js / Elements — collecting card details in *our* page. This
+  app uses hosted **Checkout** (the server creates a session and the browser is redirected to
+  Stripe's own page), so the key was read into a setting nothing ever rendered. An unread secret
+  still has to be provisioned, rotated and audited.
+
+**Tooling and documentation**
+
+- New **`sync-branches`** skill: stash → fast-forward `main`/`testing`/`development` → merge `main`
+  down into the other two → push → restore the work staged. It never pushes `main`, never
+  force-pushes, never resets, and resolves its stash by a unique message rather than `stash@{0}`
+  (a `git stash push` on a clean tree exits 0 without creating anything, so a blind pop would
+  restore an unrelated older stash). `update-readme` now runs it as Step 0 — documenting on a
+  `development` that is behind `main` writes last release's version numbers.
+- The auto-generated `testing → main` release PR body was rewritten: how the PR got here (which
+  gates passed), what happens after it merges (tag → arm → human approval → three pre-mutation
+  gates → backup/repoint/migrate/roll/verify), and an 11-item pre-merge checklist covering the
+  destructive-migration acknowledgement, Cloud Run job/schedule inventory and the QA sign-off.
+
+**Testing**
+
+- Suite at **2,391 tests, 95.30 % coverage** (7,381 statements, 347 uncovered, 54 files at 100 %).
+  New `unit/test_v1295_review_fixes.py` covers the reminder changes end to end — an overdue pending
+  row is chased while a completed or cancelled one never is, an adult is reminded at their own
+  address and one with no email is skipped rather than crashing, no SMS is attempted for a
+  parentless payment, and the boundary day of the half-open window belongs to the next run.
+- `integration/test_drive_receipts.py` and `unit/test_drive_service.py` grew the environment gate
+  (an autouse fixture declares `ENVIRONMENT="production"`, because the suite otherwise runs as
+  development and every upload assertion would be testing the refusal);
+  `integration/test_testing_tools.py` covers the new toggle including its 404 outside QA;
+  `integration/test_support_views.py` pins the category allow-list; and
+  `integration/test_query_cost_and_idempotency.py` now holds the dashboard's query cost flat
+  between 3 and 30 families, which is what proves the per-card split moved no query.
+
+</details>
+
+<details id="v1294">
+<summary><strong>v1.29.4 — Media jornada infantil, a teacher sees only their own students, the family portal switched off</strong></summary>
 
 **Media jornada infantil — a third children's price band**
 
@@ -4070,14 +4252,9 @@ erDiagram
         decimal adult_group_monthly_fee
         decimal language_cheque_discount
         decimal quarterly_enrollment_discount
-        decimal old_student_discount
         decimal returning_student_enrollment_discount
         decimal sibling_discount
         decimal june_discount
-        decimal full_year_bonus
-        decimal half_month_discount
-        decimal one_week_discount
-        decimal three_week_discount
         string academy_name
         string academy_cif
         string academy_address
@@ -4219,6 +4396,8 @@ erDiagram
     QAConfiguration {
         int id PK
         bool error_email_enabled
+        bool drive_uploads_enabled
+        bool ready_for_prod
     }
 
     Teacher ||--o{ Group : "teaches"
@@ -4553,7 +4732,6 @@ PARENT_PORTAL_ENABLED=False
 # view skips signature verification and any HTTP client could mark payments
 # as paid. Use test-mode keys in dev/testing (sk_test_… / whsec_…).
 STRIPE_SECRET_KEY=
-STRIPE_PUBLISHABLE_KEY=
 STRIPE_WEBHOOK_SECRET=
 
 # ============================================================================
@@ -4778,7 +4956,6 @@ The table below describes every variable in the [.env template](#env-template) a
 | `PARENT_PORTAL_ENABLED` | Master switch for the families' self-service portal. **Off by default**: while it is off every `/parent/` URL 404s (login and recovery included) and no invitation or recovery email is sent, with `Parent.portal_invite_sent_at` left unstamped so re-enabling still invites each family exactly once. Set to `True` to bring the whole portal back — nothing else changes | No | `False` |
 | **Stripe (v1.11)** — optional, gates the parent-portal "Pagar online" button (only reachable while `PARENT_PORTAL_ENABLED` is on) | | | |
 | `STRIPE_SECRET_KEY` | Stripe Secret Key (`sk_test_…` in dev/testing, `sk_live_…` in prod) | No | — |
-| `STRIPE_PUBLISHABLE_KEY` | Stripe Publishable Key (`pk_…`) — client-side reference only | No | — |
 | `STRIPE_WEBHOOK_SECRET` | Webhook signing secret (`whsec_…`) — **REQUIRED in prod**; when unset the webhook view rejects all events | For prod Stripe | — |
 | **Rate limiting (v1.10)** | | | |
 | `RATELIMIT_ENABLE` | Set to `False` to bypass the login/portal rate limiter (used in tests; leave unset in real envs) | No | `True` |
@@ -4888,9 +5065,12 @@ five-a-day/
 │   │   │                         expenses (v1.5), reports (v1.7), parent_portal (v1.9),
 │   │   │                         stripe_views (v1.11), pwa (v1.12), two_factor (v1.13),
 │   │   │                         features (v1.21.0)
-│   │   ├── services/             4 modules — analytics_service (v1.7),
+│   │   ├── services/             6 modules — analytics_service (v1.7),
 │   │   │                         google_sheets_service (v1.2), two_factor_service (v1.13),
-│   │   │                         drive_service (v1.29.0 — receipt archive)
+│   │   │                         drive_service (v1.29.0 — receipt archive, production-only
+│   │   │                         since v1.29.5), capacity_service + portal_access_service
+│   │   │                         (v1.29.5 — moved out of core/views/ so models and admins
+│   │   │                         stop importing upwards)
 │   │   ├── constants.py          DIAS_ES, MESES_ES, SCHEDULED_APPS
 │   │   ├── middleware.py         SimpleAuthMiddleware + QAErrorEmailMiddleware
 │   │   │                         + NoHtmlCacheMiddleware + SecurityHeadersMiddleware
@@ -4967,7 +5147,7 @@ five-a-day/
 │   │   └── management/commands/  send_email, test_all_emails, plus 4 Beat-task wrappers
 │   │                             (v1.14.2 — birthday, reminders, report, Fun Friday drain)
 │   │
-│   ├── tests/                    pytest suite (2,355 tests, 95.09 % coverage) — unit/ + integration/
+│   ├── tests/                    pytest suite (2,391 tests, 95.30 % coverage) — unit/ + integration/
 │   ├── templates/registration/   Password-reset templates (form, done, confirm, complete + email body)
 │   ├── templates/admin/          Django admin overrides (branded theme)
 │   └── conftest.py               Shared fixtures (models + authenticated_client)
@@ -5034,14 +5214,14 @@ Dashboard, authentication, scheduling, and shared utilities. Owns all views and 
 
 | Component | Details |
 |-----------|---------|
-| **Models** | 9 — TodoItem, HistoryLog (1000-entry cap), FunFridayAttendance, FunFridayScheduledSend, ScheduleSlot, BacklogTask (QA; `verified` is the tester's tick, separate from `status="done"`, v1.20.0; `feature` FK, v1.21.0), Feature (QA epics — no priority, nullable `deadline`, v1.21.0), QAConfiguration (QA), plus AuditLog in `audit_models.py` |
+| **Models** | 9 — TodoItem, HistoryLog (1000-entry cap), FunFridayAttendance, FunFridayScheduledSend, ScheduleSlot, BacklogTask (QA; `verified` is the tester's tick, separate from `status="done"`, v1.20.0; `feature` FK, v1.21.0), Feature (QA epics — no priority, nullable `deadline`, v1.21.0), QAConfiguration (QA — `error_email_enabled`, `ready_for_prod` v1.26.4, `drive_uploads_enabled` v1.29.5), plus AuditLog in `audit_models.py` |
 | **Views** | 23 modules: auth, password_reset, dashboard, students, parents, payments, management, app_forms, schedule, fun_friday_attendance, todos, support, errors, testing_tools, features, waiting_list, sheets, expenses, reports, parent_portal, stripe_views, pwa, two_factor |
-| **Services** | 4 — analytics_service, google_sheets_service, two_factor_service, drive_service (v1.29.0 — receipt archive) |
+| **Services** | 6 — analytics_service, google_sheets_service, two_factor_service, drive_service (v1.29.0 — receipt archive; **production-only** since v1.29.5, gated by the single `drive_uploads_allowed()` predicate), and v1.29.5's `capacity_service` + `portal_access_service`, both moved out of `core/views/` so a model's signal and an admin action stop importing upwards into a view module |
 | **Middleware** | 4 — NoHtmlCacheMiddleware (no-cache on dynamic HTML), QAErrorEmailMiddleware, SimpleAuthMiddleware (session auth public allow-list incl. `/password-reset/` + non-admin teacher URL-name whitelist + the v1.29.4 parent-portal kill switch, which 404s every `/parent/` URL while `PARENT_PORTAL_ENABLED` is off), AuditActorMiddleware |
 | **Templates** | base.html (layout — v1.26.8 renders the global flash-message block and gates the bell / history feed / per-view help on `is_admin_user`), 25 page templates (v1.21.0: `features.html`, `feature_detail.html`) + the shared `qa/_qa_styles.html` partial, 19 email templates + `base_email.html` (v1.28.2: ONE light theme that opts out of client dark-mode, written inline; v1.29.1 factors the shared WhatsApp contact box out of fifteen inline copies into `emails/_contact_box.html`), error pages, plus `templates/registration/` for the password-reset and teacher-activation flows |
 | **Static** | 4 CSS files (app.css, theme.css — which gained the flatpickr dark theme in v1.29.1, admin_custom.css, plus `palette.css` — v1.27.1, the `--primary-*` vars, deliberately separate because only `base.html` loads app.css while theme.css is loaded by three shells) + `vendor-flatpickr-*.css` (v1.28.2); `email.css` was deleted in v1.29.1 (an email template can never use `{% static %}`, so it had no reader). 17 JS behaviour modules (incl. `date-picker.js` — v1.28.2, which exposes `window.setDateValue()` / `window.dateInputElement()` since v1.29.1) + `tailwind-config.js` (v1.27.1 — the shared `tailwind.config`, previously copied inline into three shells and already drifted), `vendor/` (self-hosted Tailwind Play build + flatpickr), images |
 | **Commands** | seed_teachers (Teacher + auth.User from env vars; v1.26.8 optional `USERNAME` login handle), seed_demo_parents (v1.26.8 — the parent-portal demo family, `CommandError` in production), seed_testdata, export_to_sheets, reset_two_factor, cleanup_backlog_tasks, prune_audit_log (v1.15), backup_retention (v1.26.0), purge_sessions (v1.23.0), set_ready_for_prod (v1.26.4; since v1.26.7 `on` also fires the repository_dispatch that arms `Deploy production`) |
-| **URLs** | 54 patterns: dashboard, auth, password reset + **password change** (v1.26.8), schedule, todos, support, QA (backlog + export, Desarrollos board/detail/API/export), PWA, 2FA, parent portal (login, forgot / change password, dashboard, payments, receipt, tax certificate) |
+| **URLs** | 55 patterns (v1.29.5: `api_toggle_drive_uploads`): dashboard, auth, password reset + **password change** (v1.26.8), schedule, todos, support, QA (backlog + export, Desarrollos board/detail/API/export), PWA, 2FA, parent portal (login, forgot / change password, dashboard, payments, receipt, tax certificate) |
 
 See [core/README.md](project/core/README.md) for details.
 
@@ -5318,9 +5498,9 @@ Public flow at `/password-reset/...` that lets a teacher recover access without 
 
 | Metric | Value |
 |--------|-------|
-| **Total tests** | 2,355 |
-| **Test files** | 113 (63 unit + 50 integration) |
-| **Coverage** | 95% (95.09% — 7,333 statements, 360 uncovered) |
+| **Total tests** | 2,391 |
+| **Test files** | 114 (64 unit + 50 integration) |
+| **Coverage** | 95% (95.30% — 7,381 statements, 347 uncovered) |
 | **Coverage thresholds** | **≥ 90%** (target, no warning) / **75-89%** (CI warning, pre-commit still blocks below 75) / **< 75%** (CI fails, pre-commit rejects the commit) |
 | **Runtime** | ~190 seconds (parallel workers via `pytest-xdist -n auto`) |
 | **Database** | PostgreSQL (same as production) — **always use `make test`** |
@@ -5366,7 +5546,7 @@ Within each file, related tests are grouped into classes. Where a large file abs
 
 ### Unit Tests
 
-**63 files, 989 tests.** Direct-call tests — no HTTP stack, no URL resolver, no template rendering.
+**64 files, 1,003 tests.** Direct-call tests — no HTTP stack, no URL resolver, no template rendering.
 
 | File | Count | Coverage |
 | --- | --- | --- |
@@ -5376,11 +5556,11 @@ Within each file, related tests are grouped into classes. Where a large file abs
 | [`unit/test_expenses.py`](project/tests/unit/test_expenses.py) | 49 | `Expense` model + `ExpenseService` (v1.5): per-frequency `clean()` validation, monthly totals aggregation, `materialize_recurring` (monthly, 1st-of-month) and `materialize_recurring_for_date` (weekly `recurring_weekdays` CSV + yearly), idempotency on `generated_from` + exact `expense_date`, and `recurring_day` accepting the whole 1–31 range (29–31 clamp to the month's last day) |
 | [`unit/test_gcp_cost_service.py`](project/tests/unit/test_gcp_cost_service.py) | 30 | `GcpCostService` — real GCP spend from the BigQuery billing export: `month_cost` config gate, per-month caching (success TTLs + brief failure caching so a broken export can't slow every render), the credential chain (dedicated JSON/file → Sheets service account → ADC, malformed values falling through), `_query_month` table-id validation, named-parameter payload, response parsing (quantized, NULL sum ⇒ 0.00, incomplete job / transport error ⇒ None), `archive_month` (creates the `software` row on the month's last day, idempotent, zero/unavailable/unconfigured paths), `previous_month` year rollover, `qa_card_amounts` preferring the archived row, and the `archive_gcp_costs` command wrapper (defaults, backfill args, non-zero exit on an unreachable export) |
 | [`unit/test_bugfix_regressions.py`](project/tests/unit/test_bugfix_regressions.py) | 31 | Regression guards for the v1.15.0 fix pass, each pinning a defect verified broken against the running app: adult-student payments crashing search + CSV export, quarterly discounts (sibling, language cheque, June), completed payments with no `payment_date` vanishing from income, non-idempotent quick-complete rewriting financial history, payments attaching to a finished enrollment, unvalidated choice fields, `str(e)` leaking to the browser, cancelled payments inflating "esperado", query strings that used to 500, negative prices, singleton deletion, and the `enrollment_amount` fallback |
-| [`unit/test_services.py`](project/tests/unit/test_services.py) | 26 | `PricingService` (all fee + discount combos), `EnrollmentService` (all plans, language cheque, sibling, both, minimum-amount floor, adult enrollment, edge cases), `PaymentService` (monthly + quarterly amounts, June bonus, academic month/quarter validation, payment completion), service error paths, and the v1.20.0 `PricingService.calculate_sibling_price` / `payment_reminder_fees()` derivations the payment-reminder email prints |
+| [`unit/test_services.py`](project/tests/unit/test_services.py) | 27 | `PricingService` (all fee + discount combos), `EnrollmentService` (all plans, language cheque, sibling, both, minimum-amount floor, adult enrollment, edge cases), `PaymentService` (monthly + quarterly amounts, June bonus, academic month/quarter validation, payment completion), service error paths, and the v1.20.0 `PricingService.calculate_sibling_price` / `payment_reminder_fees()` derivations the payment-reminder email prints |
 | [`unit/test_tasks.py`](project/tests/unit/test_tasks.py) | 26 | Celery tasks called synchronously with `email_service` mocked: `send_welcome_email_task` (parent + adult-student + missing + failure paths), `send_birthday_email_task`, `send_birthday_emails_task`, `send_payment_reminders`, `send_generic_email_task`, `send_enrollment_confirmation_task` (success + missing + attachments + failure), and the welcome email reporting "Especial" as the payment modality for a `special` matrícula while a standard enrollment keeps its cadence (v1.20.0) |
 | [`unit/test_student_view_internals.py`](project/tests/unit/test_student_view_internals.py) | 7 | `StudentUpdateView` view-object method branches (quarterly, part-time, no enrollment, exception handling) driven through `RequestFactory` to sidestep the missing template. The `handle_student_form` / `update_student` tests were removed in v1.26.0 with the views themselves — both were routed nowhere and superseded by `StudentUpdateView` |
 | [`unit/test_enrollment_type_service.py`](project/tests/unit/test_enrollment_type_service.py) | 25 | `ensure_enrollment_types()` (v1.17.1): the four matrícula categories `_resolve_enrollment_type` asks for, idempotency, label/amount repair, admin-edited fields left alone, matrícula amounts sourced from `SiteConfiguration`, and the empty-table guard. Category resolution independent of the payment plan, returning-student detection, and the `0008` data migration re-pointing enrollments off the retired cadence types |
-| [`unit/test_coverage_boost.py`](project/tests/unit/test_coverage_boost.py) | 25 | Targeted branch fill-in across the fix set: recurring-expense task, Google Sheets service internals, `SmsService._get_client`, rate-limit edge cases, Stripe view edge cases, expense-form bad input, waiting-list branches, parent-portal edge branches |
+| [`unit/test_coverage_boost.py`](project/tests/unit/test_coverage_boost.py) | 26 | Targeted branch fill-in across the fix set: recurring-expense task, Google Sheets service internals, `SmsService._get_client`, rate-limit edge cases, Stripe view edge cases, expense-form bad input, waiting-list branches, parent-portal edge branches |
 | [`unit/test_review_fixes.py`](project/tests/unit/test_review_fixes.py) | 19 | Regression locks for the review-loop fixes, one class per bug so a revert fails loudly: Stripe replay safety + checkout URLs, the portal credential email being queued asynchronously (and the plaintext never crossing the task boundary), rate-limit count methods, waiting-list assign guards, payment-reminder dedup, audit-log PII scrubbing, PWA cache exclusions, report PDF in the service layer |
 | [`unit/test_email_service.py`](project/tests/unit/test_email_service.py) | 18 | `EmailService.send_email`: string + list recipients, CC/BCC, attachments, inline images (existing + missing path), `fail_silently` on and off, exception-raises-when-not-silent, `send_bulk_emails` mixed success/failure, `get_email_config`, Django 6 inline-image API |
 | [`unit/test_rate_limit.py`](project/tests/unit/test_rate_limit.py) | 26 | Cache-backed IP rate limiter (v1.10): window counting, limit enforcement, per-key isolation, disabled path, and `_client_ip` validation through `ipaddress`. Also pins the `TRUSTED_PROXY_COUNT` behaviour — the client IP is read N hops from the RIGHT of `X-Forwarded-For`, so a spoofed prefix cannot rotate the rate-limit bucket |
@@ -5413,6 +5593,7 @@ Within each file, related tests are grouped into classes. Where a large file abs
 | [`unit/test_forms.py`](project/tests/unit/test_forms.py) | 11 | `EnrollmentForm` validation + `create_enrollment()` delegation to `EnrollmentService` (quarterly, monthly full/part, sibling checkbox, adult, below-minimum rejection). v1.28.2: the special-price rules — a bare `manual_amount` no longer counts (the cuota override is gated on `customize_recurring`), a special must customise the matrícula, the cuota, or both, and matrícula-only leaves the cuota standard |
 | [`unit/test_seed_teachers_command.py`](project/tests/unit/test_seed_teachers_command.py) | 11 | `manage.py seed_teachers`: creation, idempotent update, password-persistence rule (no overwrite once a teacher has a usable password), gap-stop iteration, missing-field skip |
 | [`unit/test_new_email_tasks.py`](project/tests/unit/test_new_email_tasks.py) | 12 | The two review-pass email tasks: `send_parent_temporary_password_task` (v1.9, reworked v1.27 — the plaintext is generated inside the task, hashed onto `Parent.temporary_password` and never passed as a task argument) and `send_payment_receipt_email_task` (v1.11) — success, missing-record, and send-failure paths, plus the `reset` branch that swaps the subject copy |
+| [`unit/test_v1295_review_fixes.py`](project/tests/unit/test_v1295_review_fixes.py) | 9 | The v1.29.5 payment-reminder changes, each asserting behaviour that failed before the fix: an **overdue** pending row is still chased (the `due_date__gte=today` lower bound is gone, so a debt stopped being chased at the exact moment it became one) while a completed or cancelled overdue row never is — `payment_status="pending"` is the only exit condition; an **adult** student is reminded at their own address (`Payment.parent` is nullable precisely for them, so reading only `payment.parent.email` meant they were never reminded at all), one with no email is skipped rather than crashing, and no SMS is attempted for a parentless payment; and the window is **half-open** — the boundary day belongs to the next weekly run, because two consecutive inclusive windows overlapped on one day and reminded that weekday's payments twice |
 | [`unit/test_fun_friday_scheduling.py`](project/tests/unit/test_fun_friday_scheduling.py) | 9 | `FunFridayScheduledSend.is_due` semantics + `send_due_fun_friday_emails_task` drain: due rows sent + marked `sent_at`, future rows skipped, idempotent re-run never re-sends, one failing row does not abort the drain (v1.26.0), end-to-end send through the real email backend |
 | [`unit/test_student_forms.py`](project/tests/unit/test_student_forms.py) | 7 | `StudentForm` + `ParentForm` validation: future birth date rejected, DNI minimum length, required fields, both date formats |
 | [`unit/test_pdf_service.py`](project/tests/unit/test_pdf_service.py) | 9 | reportlab PDF service (v1.3): payment receipt, quarterly summary, and tax certificate generation — byte output, academy-info population |
@@ -5430,13 +5611,13 @@ Within each file, related tests are grouped into classes. Where a large file abs
 | [`unit/test_parent_view_internals.py`](project/tests/unit/test_parent_view_internals.py) | 2 | `ParentCreateView` internals called directly through `RequestFactory` — the prefill branch that reads a waiting-list entry from `?from_waiting=<id>`, and the duplicate-DNI reuse path |
 | [`unit/test_testing_tools_helpers.py`](project/tests/unit/test_testing_tools_helpers.py) | 2 | `_git_info` helper: success path + non-zero returncode branch with `subprocess.run` mocked |
 | [`unit/test_audit_pruning.py`](project/tests/unit/test_audit_pruning.py) | 16 | `core.tasks.prune_audit_log` and its Cloud Scheduler command wrapper — the ONLY code path that deletes from `audit_logs`, a table the admin deliberately makes immutable (no add, no change, no delete). It had **zero test references for eight versions** while permanently destroying rows, and `*/admin.py` being coverage-omitted meant nothing else exercised the surrounding rules either. Pins the retention window and its boundary, the floor that refuses a window short enough to erase the course being taught (`--days 0` would have deleted every row, including the entries incriminating whoever ran it), `--dry-run` counting exactly what a real run deletes, and the floor surfacing as a `CommandError` so a Cloud Run Job reports a clean failure instead of a Celery traceback. Rows are backdated with `queryset.update()` because `created_at` is `auto_now_add` |
-| [`unit/test_drive_service.py`](project/tests/unit/test_drive_service.py) | 26 | `core.services.drive_service.DriveReceiptService` (v1.29.0) — the folder-path logic (`Curso YYYY/YYYY+1/Recibos/<Mes> YY/`, whose Curso rolls over in **August**, deliberately NOT the billing academic-year boundary), find-or-create at each level, idempotency by the `<paymentID>_` filename prefix so re-completion and `backfill_drive_receipts` never duplicate, and the **never-raises** guarantee: every failure path returns a `DriveUploadResult` with a status (`uploaded` / `skipped_exists` / `not_configured` / `error`) instead of propagating, because the Drive copy is a convenience on top of the `Payment` row and the emailed receipt — an unshared folder or a bad credential must leave payment completion untouched |
+| [`unit/test_drive_service.py`](project/tests/unit/test_drive_service.py) | 29 | `core.services.drive_service.DriveReceiptService` (v1.29.0) — the folder-path logic (`Curso YYYY/YYYY+1/Recibos/<Mes> YY/`, whose Curso rolls over in **August**, deliberately NOT the billing academic-year boundary), find-or-create at each level, idempotency by the `<paymentID>_` filename prefix so re-completion and `backfill_drive_receipts` never duplicate, and the **never-raises** guarantee: every failure path returns a `DriveUploadResult` with a status (`uploaded` / `skipped_exists` / `disabled` / `not_configured` / `error`) instead of propagating, because the Drive copy is a convenience on top of the `Payment` row and the emailed receipt — an unshared folder or a bad credential must leave payment completion untouched. v1.29.5 pins the **environment gate**: `drive_uploads_allowed()` is true in production without a database read, false in development whatever the flag says, and on the QA VM only while `QAConfiguration.drive_uploads_enabled` is on — in which case `archive_subfolder()` puts the file in the month's `testing/` sandbox and the gate is checked *before* `is_configured()`, so a disallowed environment never parses the credentials. An autouse fixture declares `ENVIRONMENT="production"` for the file, because the suite otherwise runs as development and every upload assertion would be testing the refusal |
 | [`unit/test_part_time_child_modality.py`](project/tests/unit/test_part_time_child_modality.py) | 12 | The **infantil** band (v1.29.4): `part_time_child` present in `SCHEDULE_TYPE_CHOICES` and `monthly_part_child` in `ENROLLMENT_PLAN_CHOICES`, `monthly_fee_for` / `period_base_amount` / `quarterly_price_from_monthly` resolving it off `SiteConfiguration.part_time_child_monthly_fee`, `EnrollmentService._resolve_plan` returning the right `(amount, schedule_type, modality)` for both the standard and the hand-priced case, and every discount (hermano, cheque idioma, junio) layering on top of it exactly as on full time |
 | [`unit/test_deploy_posture_gate.py`](project/tests/unit/test_deploy_posture_gate.py) | 17 | `POSTURE_ENV_KEYS` in `deploy-production.yml` pinned to the production posture guard in `settings.py` (v1.29.4) — the two are one rule written in two languages and cannot be a shared constant, so the test parses the YAML and loads `settings.py` in isolation under a private module name. A key the guard checks but the gate does not compare is how `CACHE_DB` reached production on the service and on none of the 12 jobs; a key the gate demands but the guard ignores (`DJANGO_ALLOWED_HOSTS`) is a false positive that fails a real deploy. Also asserts `PAUSED_OK_SCHEDULES` is empty and that an empty inventory is fatal |
 
 ### Integration Tests
 
-**50 files, 1,366 tests.** Full HTTP stack through Django's test client.
+**50 files, 1,388 tests.** Full HTTP stack through Django's test client.
 
 | File | Count | Coverage |
 | --- | --- | --- |
@@ -5444,14 +5625,14 @@ Within each file, related tests are grouped into classes. Where a large file abs
 | [`integration/test_views.py`](project/tests/integration/test_views.py) | 72 | Cross-cutting top-level HTTP coverage: auth flow, dashboard, `all_info`, student/parent list + detail + create + search, payment list + create + detail + CRUD + stats + CSV + validation, todos + history API, management admin, email form pages (parametrized), enrollment API, error pages (parametrized), schedule, Fun Friday, support, and the `/health/` probe (shallow stays DB-free, deep reports connectivity + migrations, token gating for row counts, 503 on an unreachable DB, exception text never reaching the client) |
 | [`integration/test_admin_views.py`](project/tests/integration/test_admin_views.py) | 67 | Smoke tests for **every registered Django admin view** (v1.20.0): index, changelist, changelist with search + ordering, and the add form for each model, plus the `EnrollmentAdmin` paid / unpaid / overpaid / cancelled-payments-only branches. `*/admin.py` is excluded from coverage, which is exactly how a `format_html()` call with no interpolation arguments shipped and took `/admin/billing/enrollment/` down on Django 6 as soon as one enrollment was fully paid. The contract is "no admin view 500s" |
 | [`integration/test_admin_hardening.py`](project/tests/integration/test_admin_hardening.py) | 58 | What the admin renders and what it refuses to save (v1.26.0). The smoke suite above runs against **empty** tables, so `list_display` callables never execute there; these run against one row of every awkward shape — a payment with no parent, a student with no group, a slot outside the grid. Pins the six things the admin would save or show that the rest of the app forbids: the Teacher form no longer renders the plaintext TOTP seed, a Teacher added here gets a linked `auth.User`, `AuditLog` cannot be deleted, `ScheduleSlot` is validated against `is_valid_slot`, `HistoryLog` cannot be hand-written, and the four required `EnrollmentType` rows cannot be removed. Also covers the payment bulk actions and the Group changelist query count |
-| [`integration/test_query_cost_and_idempotency.py`](project/tests/integration/test_query_cost_and_idempotency.py) | 61 | Query cost and the DB-level billing guarantees (v1.26.1). A correct page and an N+1 page produce identical output, so every fix in this area is one refactor from silently returning — each test seeds enough rows that a per-row query blows an **absolute** budget that must not scale. Covers the waiting-list, management, expenses and enrollment-changelist pages, `financial_summary_year` (48 queries → 3), the backlog dashboard, and both crons (`generate_payments` 64 → 4, `reconcile_payment_schedule` 243 → 6). Pins the two idioms that silently discard a `prefetch_related` — `.filter()` and `.first()` on a prefetched manager — as properties rather than snapshots, and asserts `billed_months_map` agrees with the per-enrollment query it replaces. Then the constraints in both directions: a second **pending** periodic payment for one student in one month is refused, while completed-plus-pending, cancel-then-reissue, non-periodic repeats and two students sharing a month all remain legal. `TestDatabaseConnectionSettings` loads `settings.py` in isolation, because `settings_test.py` replaces `DATABASES` wholesale and neither branch was ever exercised |
+| [`integration/test_query_cost_and_idempotency.py`](project/tests/integration/test_query_cost_and_idempotency.py) | 63 | Query cost and the DB-level billing guarantees (v1.26.1). A correct page and an N+1 page produce identical output, so every fix in this area is one refactor from silently returning — each test seeds enough rows that a per-row query blows an **absolute** budget that must not scale. Covers the home dashboard (v1.29.5, flat between 3 and 30 families — the page was split into one builder per card and the budget is what proves the split moved no query), the waiting-list, management, expenses and enrollment-changelist pages, `financial_summary_year` (48 queries → 3), the backlog dashboard, and both crons (`generate_payments` 64 → 4, `reconcile_payment_schedule` 243 → 6). Pins the two idioms that silently discard a `prefetch_related` — `.filter()` and `.first()` on a prefetched manager — as properties rather than snapshots, and asserts `billed_months_map` agrees with the per-enrollment query it replaces. Then the constraints in both directions: a second **pending** periodic payment for one student in one month is refused, while completed-plus-pending, cancel-then-reissue, non-periodic repeats and two students sharing a month all remain legal. `TestDatabaseConnectionSettings` loads `settings.py` in isolation, because `settings_test.py` replaces `DATABASES` wholesale and neither branch was ever exercised |
 | [`integration/test_status_transition_safety.py`](project/tests/integration/test_status_transition_safety.py) | 14 | Three defects with one shape — a bulk `queryset.update()` used where the row had more to it than the column being written. `update()` skips `full_clean()` (so a collision with `unique_pending_periodic_payment_per_month` surfaces as a raw `IntegrityError` instead of the constraint's Spanish message, and aborts the whole statement so fifty payments fail because one collided), skips `pre_save`/`post_save` (so `core.audit_signals` recorded enrollments being created and nothing at all about them being cancelled) and never bumps `auto_now`, leaving `updated_at` older than the change visible in the row. None is detectable from the resulting row, which is why they are pinned here |
 | [`integration/test_bugfix_security_and_features.py`](project/tests/integration/test_bugfix_security_and_features.py) | 58 | Security regressions + the v1.15.0 feature additions. Security: the three stored-XSS sinks (history feed, student autocomplete, schedule JSON block), rate-limit bypass via a spoofed `X-Forwarded-For`, parent-portal session fixation on **both** ways in (password login and setting a password), the service worker caching `/login/`, schedule-slot validation, and teachers created in the UI being able to activate their account. Features: the short waiting-list form, the waiting-list round trip, the payment-history PDF, month and group filters, backlog export, Fun Friday double-send, newsletter fallback, adult receipts, payment receipt emails, enrollment churn, and Spanish enrollment labels |
 | [`integration/test_payment_views.py`](project/tests/integration/test_payment_views.py) | 40 | All HTTP payment endpoints: list (search, stats), create (+ invalid parent + unexpected exception), detail-view (+ 404), update (JSON + FormData + all error branches), delete (success + exception 500), deactivate (success + exception 400), quick-complete (success + invalid method + broken JSON), get-details (success + exception), search payments/parents (short query + hits), validate student-parent (all branches), export DB to Excel |
 | [`integration/test_v1175_fixes.py`](project/tests/integration/test_v1175_fixes.py) | 35 | Regression locks for the v1.20.0 fix round, one class per reported problem: Spanish choice labels (`get_<field>_display()` for every payment type/status and enrollment status), every email template defining its own `{% block title %}`, unfiltered dates rendering `dd/mm/yyyy` via `FORMAT_MODULE_PATH`, `search_students` carrying the parent (and reporting no parent for an adult), `update_expense` (amount raise, cadence change, already-generated rows untouched, weekly-without-weekdays rejected, unknown category coerced, zero amount rejected), the create-expense date default, the surname-free waiting-list form, `waiting_priority` ordering, and `StudentForm` still requiring a surname |
 | [`integration/test_v1292_review_fixes.py`](project/tests/integration/test_v1292_review_fixes.py) | 30 | v1.29.2 review pass over the payment surface: the **status transition table** from every direction (a plain `save()` refusing to void collected money, `refunded` only from `completed`, refunded money not cancellable either, reopening clearing the collection date, and `update_fields` without the status costing no check), hard-delete refused for completed / receipt-numbered rows in **both** the view and the admin (row permission and bulk action), `create_checkout_link` 409ing on a dead charge, `update_payment` coherence (changing the student re-points the enrollment; a numbered receipt freezes amount and student), malformed JSON answered 400 not 500, and bulk re-enrolment start dates not drifting |
 | [`integration/test_features.py`](project/tests/integration/test_features.py) | 47 | Desarrollos, the QA epic board (v1.21.0). Model: `deadline` null by default, `is_overdue` only when the date passed **and** the epic is not done, `days_left`, the progress counters, Spanish status labels, and `SET_NULL` keeping the tasks when the epic is deleted. Views: both pages render, done epics sort last, the Jira template reaches the board, non-QA users get 404. Endpoints: create (with / without / invalid deadline), update (status, deadline, clearing it with `null`, title + description, and a status-only payload not clobbering the deadline), break-out-a-task (lands in the backlog linked to its epic, priority default, shows up on `/testing/`), and the JSON/CSV export in both scopes. Emails: creation reaches `SUPPORT_EMAIL`, done notifies the admin teachers exactly once, and a task email names its development |
-| [`integration/test_testing_tools.py`](project/tests/integration/test_testing_tools.py) | 42 | QA dashboard `/testing/` gated by `@qa_access_required` (via `override_settings`): dashboard renders + git failure handled, `api_seed_database` (success + reset + command error 500 + non-QA 404, and since v1.27 that it runs `seed_demo_parents` **after** `seed_testdata` — whose `--reset` wipes every Parent — without letting a failure there fail the QA seed), `api_create_backlog_task` (all branches + screenshot attached to the email but never stored + send/swallow), `api_update_backlog_task` (success + invalid status + 404), the v1.20.0 `verified` QA tick (defaults off, toggles on/off, never touches `status` nor fires the done email, `done` still works alongside it) and the unfinished-first ordering shared by the dashboard and the export, `api_toggle_error_email` (on + off + bad JSON), the v1.26.4 QA sign-off gate — `api_mark_ready` opens the production gate only when the email sends (send failure and missing `SUPPORT_EMAIL` keep it closed, non-QA 404), `ready_for_prod` rides `/health/?deep=1` only and only in the testing environment, and `set_ready_for_prod on|off` toggles the flag (unknown state rejected). v1.26.7: the sign-off also fires the `repository_dispatch` that arms `Deploy production` — dispatched only after the email went out, a dispatch failure never fails the sign-off (`deploy_dispatched: false`, HTTP 200), `set_ready_for_prod on` dispatches and `off` never does. The Proyecto card's "Gastos GCP" line renders placeholders when the billing export is unconfigured and the archived previous-month Expense row when one exists |
+| [`integration/test_testing_tools.py`](project/tests/integration/test_testing_tools.py) | 48 | QA dashboard `/testing/` gated by `@qa_access_required` (via `override_settings`): dashboard renders + git failure handled, `api_seed_database` (success + reset + command error 500 + non-QA 404, and since v1.27 that it runs `seed_demo_parents` **after** `seed_testdata` — whose `--reset` wipes every Parent — without letting a failure there fail the QA seed), `api_create_backlog_task` (all branches + screenshot attached to the email but never stored + send/swallow), `api_update_backlog_task` (success + invalid status + 404), the v1.20.0 `verified` QA tick (defaults off, toggles on/off, never touches `status` nor fires the done email, `done` still works alongside it) and the unfinished-first ordering shared by the dashboard and the export, `api_toggle_error_email` (on + off + bad JSON), the v1.29.5 `api_toggle_drive_uploads` switch (off by default, renders unchecked, toggles on and off persistently, leaves the error-email flag alone, 404 outside the QA environment), the v1.26.4 QA sign-off gate — `api_mark_ready` opens the production gate only when the email sends (send failure and missing `SUPPORT_EMAIL` keep it closed, non-QA 404), `ready_for_prod` rides `/health/?deep=1` only and only in the testing environment, and `set_ready_for_prod on|off` toggles the flag (unknown state rejected). v1.26.7: the sign-off also fires the `repository_dispatch` that arms `Deploy production` — dispatched only after the email went out, a dispatch failure never fails the sign-off (`deploy_dispatched: false`, HTTP 200), `set_ready_for_prod on` dispatches and `off` never does. The Proyecto card's "Gastos GCP" line renders placeholders when the billing export is unconfigured and the archived previous-month Expense row when one exists |
 | [`integration/test_waiting_list_views.py`](project/tests/integration/test_waiting_list_views.py) | 29 | Waiting List & Group Capacity views (v1.1): waiting-list page, `assign_from_waiting_list` (capacity checks, and since v1.17.2 a redirect into the normal parent-then-student flow rather than an in-place promotion), `add_to_waiting_list`, student list excludes waiting students, dashboard waiting widget. v1.20.0 adds the short create form (no surname asked for, entry created without one, `waiting_priority` off by default, saved when ticked, flagged in the history line), the priority ordering (`-waiting_priority` first, FIFO within each band) and `StudentForm` still demanding a surname |
 | [`integration/test_student_views.py`](project/tests/integration/test_student_views.py) | 36 | `StudentListView` (search, exclude inactive, context), `StudentDetailView` (parents visible, 404), `StudentCreateView` (form + adult mode + success + full POST + error paths including invalid parent, existing-parent mode, create_sibling flag, email-task swallow), `search_students` JSON endpoint (results + short-query empty), and the v1.20.0 pricing surface: `price_config` exposing `quarterly_gross`, both hand-set prices reaching the payments, the matrícula falling back to the standard fee when left blank, and a special matrícula fee rejected without "Precio especial" ticked. v1.22.0 adds the first-period proration the creation form previews, asserting the context fraction comes from the same `PaymentService` helper the generator bills with. v1.26.0 adds the 500-row list cap. v1.28.2: the special pricing tests now drive `customize_recurring`, plus a matrícula-only special that keeps the standard cuota |
 | [`integration/test_management_views.py`](project/tests/integration/test_management_views.py) | 27 | `gestion_view` + `update_site_config` (all fields + bad JSON), `create_teacher` (success + duplicate + missing field + bad JSON), `create_group` (success + missing fields + duplicate + nonexistent teacher + bad JSON), `api_get_teachers`, `update_enrollment_modality` (success + invalid + no enrollment + student not found), `language_cheque_students` |
@@ -5475,7 +5656,7 @@ Within each file, related tests are grouped into classes. Where a large file abs
 | [`integration/test_pwa_views.py`](project/tests/integration/test_pwa_views.py) | 10 | PWA endpoints (v1.12): `web_manifest` (JSON shape, icons) and `service_worker` (correct content type, cache-first strategy for hashed static) |
 | [`integration/test_sheets_views.py`](project/tests/integration/test_sheets_views.py) | 6 | Google Sheets export view (v1.2): `/api/sheets/export/` success, 503 when unconfigured, and error propagation |
 | [`integration/test_fun_friday_attendance_views.py`](project/tests/integration/test_fun_friday_attendance_views.py) | 6 | `toggle_fun_friday_this_week` (adult rejected + toggle on/off), `add_fun_friday_attendance` (success + invalid), `remove_fun_friday_attendance` (success + invalid) |
-| [`integration/test_support_views.py`](project/tests/integration/test_support_views.py) | 5 | `submit_support_ticket`: success (send_mail called), short message rejected, no support email configured -> 500, bad JSON, unexpected exception |
+| [`integration/test_support_views.py`](project/tests/integration/test_support_views.py) | 8 | `submit_support_ticket`: success (send_mail called), short message rejected, no support email configured -> 500, bad JSON, unexpected exception, and the v1.29.5 server-side category allow-list — a known key keeps its own Spanish label, an unknown one falls back to `exception` instead of reaching the subject line of a mail to `SUPPORT_EMAIL`, and a client-supplied `category_display` is ignored |
 | [`integration/test_reports_view.py`](project/tests/integration/test_reports_view.py) | 4 | Reports dashboard (v1.7): the HTML page renders every analytics block, and the PDF export returns a reportlab document |
 | [`integration/test_receipt_view.py`](project/tests/integration/test_receipt_view.py) | 3 | Payment-receipt PDF endpoint (v1.3): authorised download returns a PDF, unauthorised is rejected, and (v1.29.1) a **pending** payment 404s rather than burning a receipt number on uncollected money |
 | [`integration/test_auth_hardening_fixes.py`](project/tests/integration/test_auth_hardening_fixes.py) | 104 | One regression test per finding of the v1.27.1 authorization review. The load-bearing one: an **offboarded teacher's live session escaped the whitelist** — layer 1 checked only `session["is_authenticated"]`, and the non-admin predicate answered "not a non-admin" for a session whose Teacher row was gone, handing it the *unrestricted* set for up to six hours. Revocation escalated the session. Also pins that `Teacher.active` is consulted **before** the `is_superuser`/`is_staff` hatch (those flags are mirrored from `Teacher.admin`, so a deactivated admin still carries them), `@admin_required`'s response shape mirroring the middleware exactly, `confirm_password` and every other posted secret being redacted in all three body encodings, the recovery endpoint's per-family cooldown and post-response send, the default-deny portal gate, and the production posture guard asserting the cache backend. The two enumeration tests normalise the CSP nonce, the CSRF token and the echoed address out of the body — everything else must match byte for byte |
@@ -5488,7 +5669,7 @@ Within each file, related tests are grouped into classes. Where a large file abs
 | [`integration/test_iteration4_fixes.py`](project/tests/integration/test_iteration4_fixes.py) | 5 | Fourth-pass review fixes |
 | [`integration/test_v1282_qa_fixes.py`](project/tests/integration/test_v1282_qa_fixes.py) | 15 | v1.28.2 + v1.29.1 QA fixes: manual payments born pending, waiting-list removal (delete + 404 on a real student), bulk "antiguo estudiante" re-enrolment (reactivates + returning-student type, and since v1.29.1 routed through `supersede_enrollment` so the closing plan's uninvoiced months are billed before the hand-over), receipt numbering (`2026-633` seed, January restart, idempotent, and never assigned to a payment that is not `completed`), and the **reconstruct-or-say-nothing** discount breakdown — shown only when re-pricing the period reproduces the amount to the cent, so the June stub, a re-download after a price change and a negotiated matrícula fall back to the bare `Importe` line instead of inventing a "Prorrateo" / "Ajuste" / "Descuento antiguo alumno" |
 | [`integration/test_qa_pickup_receipts_and_reminders.py`](project/tests/integration/test_qa_pickup_receipts_and_reminders.py) | 38 | v1.29.3 QA fixes: the receipt's **Cheque idioma line is whole cheques** (−20,00 € on a prorated September month, `(3 meses)` −60,00 € on a quarter, cheque before proration in the line order, and the total unchanged to the cent by the reordering); the **"Enviar prueba" recipient fallback** (`EMAIL_TEST_*` → the logged-in teacher's address → `SUPPORT_EMAIL` → a refusal naming all three, threaded through every form); `Student.pickup_authorized` on the form, the create view, the children-only create page, the ficha, the update view and the admin fieldsets; and the **September / June / April reminder emails** — `payment_reminder_special` figures equal the generator's own for each month, the start-day override and its validation, the previews' wording and figures, the mass send picking the special template and subject, and `test_all_emails` previewing the three variants. v1.29.4 adds `SEPTEMBER_CLASSES_START_DAY = 16` billing exactly half of a 30-day September, the Cheque Idioma box being **absent** from the September and June variants (present in April and in the ordinary template), and the media-jornada-infantil sub-line appearing in all four |
-| [`integration/test_drive_receipts.py`](project/tests/integration/test_drive_receipts.py) | 8 | The dispatch half of the Drive archive (v1.29.0) — `_queue_payment_receipt` and the Stripe webhook queue the upload in their **own** `try/except`, separate from the receipt email, so neither can take the other down; the task is a no-op unless `GOOGLE_DRIVE_RECEIPTS_FOLDER_ID` is set; and it is NOT a Beat task, so nothing expects a Cloud Scheduler entry for it |
+| [`integration/test_drive_receipts.py`](project/tests/integration/test_drive_receipts.py) | 19 | The dispatch half of the Drive archive (v1.29.0) — `_queue_payment_receipt` and the Stripe webhook queue the upload in their **own** `try/except`, separate from the receipt email, so neither can take the other down; the task is a no-op unless `GOOGLE_DRIVE_RECEIPTS_FOLDER_ID` is set; and it is NOT a Beat task, so nothing expects a Cloud Scheduler entry for it. v1.29.5 adds the environment gate end to end: the task short-circuits on `drive_uploads_allowed()` before it loads the payment or renders the PDF (production runs eager, so that work would happen inside the "marcar cobrado" request), `backfill_drive_receipts` raises `CommandError` naming the `/testing/` switch rather than reporting one refusal per payment, and the QA path reports the `testing/` sandbox in its own output |
 | [`integration/test_parent_portal_disabled.py`](project/tests/integration/test_parent_portal_disabled.py) | 10 | The parent-portal **kill switch** (v1.29.4). `settings_test` turns `PARENT_PORTAL_ENABLED` **on** so the rest of the suite keeps proving the feature works; this is the one module that overrides it back off, via an autouse fixture (a module-level `override_settings` in `pytestmark` is not a Mark and fails at collection). Asserts every `/parent/` URL 404s including the public login and recovery pages, that none of the three senders queues an access email, and that `Parent.portal_invite_sent_at` is **not** stamped — so re-enabling the portal later still invites every family exactly once |
 
 ### Coverage Report
@@ -5496,9 +5677,9 @@ Within each file, related tests are grouped into classes. Where a large file abs
 | File | Stmts | Miss | Cover | Missing lines |
 | --- | --- | --- | --- | --- |
 | `billing/forms.py` | 55 | 2 | 96% | 142, 187 |
-| `billing/models.py` | 373 | 27 | 93% | 73-74, 852, 903, 929, 1032-1033, 1060-1061, 1084, 1270, 1272-1300, 1315, 1317, 1329-1330, 1338 |
+| `billing/models.py` | 368 | 27 | 93% | 73-74, 812, 863, 889, 992-993, 1020-1021, 1044, 1230, 1232-1260, 1275, 1277, 1289-1290, 1298 |
 | `billing/services/enrollment_service.py` | 155 | 8 | 95% | 175, 278-280, 340, 473, 477, 514 |
-| `billing/services/expense_service.py` | 56 | 6 | 89% | 99-105, 152-154 |
+| `billing/services/expense_service.py` | 62 | 6 | 90% | 116-122, 169-171 |
 | `billing/services/gcp_cost_service.py` | 148 | 14 | 91% | 170-171, 208-209, 223-225, 231-232, 242-243, 292-294 |
 | `billing/services/payment_service.py` | 239 | 16 | 93% | 395, 427, 511, 589-597, 625-633, 686, 719, 736-743 |
 | `billing/services/pdf_service.py` | 210 | 5 | 98% | 155, 322, 333, 377, 382 |
@@ -5506,35 +5687,36 @@ Within each file, related tests are grouped into classes. Where a large file abs
 | `comms/services/email_functions.py` | 94 | 6 | 94% | 557, 582-586, 596-597 |
 | `comms/services/email_service.py` | 81 | 5 | 94% | 184-185, 222-224 |
 | `comms/services/sms_service.py` | 50 | 3 | 94% | 58, 63-64 |
-| `comms/tasks.py` | 317 | 16 | 95% | 522, 612-613, 672, 707-711, 716, 891-893, 913-917, 921-922, 957 |
+| `comms/tasks.py` | 327 | 16 | 95% | 552, 671-672, 731, 777-781, 786, 961-963, 983-987, 991-992, 1027 |
 | `core/audit_signals.py` | 103 | 9 | 91% | 116, 122, 138, 149-150, 155, 192, 210, 243 |
 | `core/context_processors.py` | 43 | 1 | 98% | 72 |
 | `core/date_utils.py` | 6 | 1 | 83% | 23 |
 | `core/decorators.py` | 34 | 2 | 94% | 63-64 |
-| `core/middleware.py` | 200 | 13 | 94% | 151, 200, 211-216, 273, 279, 436, 448, 491, 564-565, 605-606 |
-| `core/models.py` | 178 | 2 | 99% | 336, 369 |
-| `core/services/drive_service.py` | 140 | 4 | 97% | 323-324, 350-352 |
-| `core/services/google_sheets_service.py` | 100 | 9 | 91% | 75-77, 113-119 |
+| `core/middleware.py` | 201 | 13 | 94% | 152, 201, 212-217, 274, 280, 437, 449, 492, 565-571, 611-613 |
+| `core/models.py` | 179 | 2 | 99% | 336, 379 |
+| `core/services/capacity_service.py` | 11 | 1 | 91% | 30 |
+| `core/services/drive_service.py` | 162 | 4 | 98% | 409-410, 436-438 |
+| `core/services/google_sheets_service.py` | 101 | 9 | 91% | 75-77, 116-122 |
+| `core/services/portal_access_service.py` | 37 | 1 | 97% | 98 |
 | `core/transactions.py` | 23 | 2 | 91% | 67, 72 |
-| `core/views/app_forms.py` | 577 | 32 | 94% | 247, 317-322, 410-411, 500, 591-593, 605-608, 614-615, 753-754, 774-775, 812-814, 1062, 1251, 1266-1270, 1398, 1591-1595, 1613-1616 |
+| `core/views/app_forms.py` | 578 | 32 | 94% | 248, 318-323, 411-412, 501, 592-594, 606-609, 615-616, 754-755, 775-776, 813-815, 1063, 1252, 1267-1271, 1403, 1596-1600, 1618-1621 |
 | `core/views/auth.py` | 200 | 11 | 94% | 66, 69-71, 254, 271, 319, 338, 383, 466-467 |
-| `core/views/dashboard.py` | 148 | 5 | 97% | 133-140, 184 |
+| `core/views/dashboard.py` | 145 | 1 | 99% | 210 |
 | `core/views/expenses.py` | 135 | 11 | 92% | 30-31, 160, 183-184, 217-219, 252-254 |
-| `core/views/features.py` | 174 | 20 | 89% | 139, 163-164, 214-218, 276-282, 329-333 |
-| `core/views/management.py` | 153 | 5 | 97% | 346, 383, 417-419 |
-| `core/views/parent_portal.py` | 224 | 6 | 97% | 112, 262, 503, 621, 676, 697 |
+| `core/views/features.py` | 173 | 20 | 88% | 138, 162-163, 213-217, 275-281, 328-332 |
+| `core/views/management.py` | 153 | 5 | 97% | 349, 386, 420-422 |
+| `core/views/parent_portal.py` | 196 | 5 | 97% | 108, 395, 513, 568, 589 |
 | `core/views/parents.py` | 60 | 1 | 98% | 51 |
 | `core/views/password_reset.py` | 74 | 2 | 97% | 141, 143 |
-| `core/views/payments.py` | 380 | 31 | 92% | 303-308, 366, 372-373, 385-394, 521, 575-576, 603-604, 616, 624-635, 641-642, 789-791, 1055 |
+| `core/views/payments.py` | 376 | 22 | 94% | 290-291, 387-388, 400-409, 560, 633-634, 668, 676-684, 834-836, 1100 |
 | `core/views/schedule.py` | 68 | 1 | 99% | 111 |
 | `core/views/students.py` | 445 | 41 | 91% | 303-305, 440-445, 593, 617, 642, 644, 655, 664, 669, 700, 712, 738, 771-777, 786, 970, 997-1000, 1075-1076, 1090-1092, 1108-1110, 1120-1121, 1145-1146, 1164-1166, 1171, 1173 |
-| `core/views/testing_tools.py` | 231 | 20 | 91% | 72-73, 77-79, 234, 298, 305, 307, 325-327, 436-440, 453, 471-472 |
+| `core/views/testing_tools.py` | 237 | 20 | 92% | 72-73, 77-79, 250, 314, 321, 323, 341-343, 452-456, 469, 487-488 |
 | `core/views/two_factor.py` | 94 | 8 | 91% | 39, 50-51, 189-191, 196-197 |
-| `core/views/waiting_list.py` | 117 | 1 | 99% | 340 |
 | `students/forms.py` | 101 | 2 | 98% | 321-322 |
 | `students/models.py` | 336 | 9 | 97% | 159-160, 484, 568-569, 774-777 |
 
-**53 files** have 100% coverage (skipped above). Total coverage: **95.09%** across 7,333 statements. Coverage is **very good**. Coverage is enforced at three levels: pre-commit hook (≥ 75%), CI hard floor (≥ 75%), and CI warning (< 90%).
+**54 files** have 100% coverage (skipped above). Total coverage: **95.30%** across 7,381 statements. Coverage is **very good**. Coverage is enforced at three levels: pre-commit hook (≥ 75%), CI hard floor (≥ 75%), and CI warning (< 90%).
 
 ---
 
@@ -5577,6 +5759,8 @@ All migrations were regenerated from scratch during the v1.0.0 multi-app split.
 | `billing` | `0013_siteconfiguration_academy_fields` | The five `academy_*` fiscal fields (`academy_name` / `_cif` / `_address` / `_phone` / `_website`). `pdf_service` had always read them via `getattr` and they had never existed, so **the CIF was blank on every tax certificate the academy ever issued** (v1.28.1) | `billing.0012` |
 | `billing` | `0014_payment_receipt_number_and_more` | `Payment.receipt_number` (stable `YYYY-NNN`, assigned on first receipt issue) + partial `unique_receipt_number` constraint, and `SiteConfiguration.receipt_offset` / `receipt_offset_year` — the 2026-starts-at-633 paper-sequence seed (v1.28.2) | `billing.0013` |
 | `billing` | `0015_alter_payment_unique_receipt_number` | `AlterConstraint` — the Spanish `violation_error_message` on `unique_receipt_number` had been added in v1.29.x without its migration; metadata only, no schema change, but `makemigrations --check` was red (v1.29.3) | `billing.0014`, `students.0018` |
+| `billing` | `0016_siteconfiguration_part_time_child_monthly_fee_and_more` | `SiteConfiguration.part_time_child_monthly_fee` (seed 32 €) + the `part_time_child` schedule type and `monthly_part_child` plan — "media jornada infantil" is a price **band**, not a discount, so every discount layers on top of it unchanged (v1.29.4) | `billing.0015` |
+| `billing` | `0017_drop_dead_pricing_columns` | **Destructive** — drops `old_student_discount`, `full_year_bonus`, `half_month_discount`, `one_week_discount` and `three_week_discount` from `SiteConfiguration`. All five were seeded in `0001_initial` and read by no service, view, task, template, form, admin or JS file; `update_site_config` had already refused to write them, because `old_student_discount` is visually the twin of the **live** `returning_student_enrollment_discount`. The production deploy's pre-mutation gate matches `RemoveField`, so this release needs the `ack_destructive` dispatch input — not `force` (v1.29.5) | `billing.0016` |
 | `core` | `0001_initial` | TodoItem, HistoryLog, FunFridayAttendance, ScheduleSlot | `students.0001` |
 | `core` | `0002` | UniqueConstraint for FunFridayAttendance and ScheduleSlot | `core.0001`, `students.0002` |
 | `core` | `0003_qa_backlog_and_config` | QA backlog model and config fields | `core.0002` |
@@ -5592,6 +5776,7 @@ All migrations were regenerated from scratch during the v1.0.0 multi-app split.
 | `core` | `0013_remove_auditlog_audit_logs_actor_i_0badd2_idx` | Drops the redundant single-column `AuditLog.actor` index (v1.27.0) | `core.0012` |
 | `core` | `0014_alter_auditlog_action_alter_backlogtask_priority_and_more` | Spanish choice **labels** on `AuditLog.action` and `BacklogTask.priority` / `status` — keys unchanged, so no data moves (v1.28.1) | `core.0013` |
 | `core` | `0015_historylog_modality_changed_action` | Adds `modality_changed` to `HistoryLog.action`, so a payment-cadence switch leaves a trace (v1.28.1) | `core.0014` |
+| `core` | `0016_qaconfiguration_drive_uploads_enabled` | `QAConfiguration.drive_uploads_enabled` — QA's opt-in to exercising the Google Drive receipt archive from the testing VM. **Off by default**, read only under `IS_TESTING_ENV`, and while it is on uploads go to the month's `testing/` subfolder (v1.29.5) | `core.0015` |
 | `comms` | — | (no models) | — |
 
 ```bash
@@ -5852,6 +6037,11 @@ Here is a quick checklist of things to try. If anything does not work, take note
 - **Testing Tools** (the blue "info" icon at the bottom of the sidebar) — This is your QA control panel:
   - **Project Info** — shows the current software version, last commit, server status, and (v1.26.5) the **Gastos GCP** line: the project's real Google Cloud spend, previous month | current month ("—" until the billing export is configured)
   - **Error Reporting toggle** — turn this ON so every server error is automatically emailed to the development team with full details
+  - **Recibos a Drive toggle** (v1.29.5) — **off by default**, and off is the normal state. Turn it on only when you are
+    specifically testing the Google Drive receipt archive: while it is on, receipts generated from this VM are uploaded
+    into a `testing/` subfolder of the month (never beside the academy's real receipts), and the card tells you whether
+    Drive is configured on this environment at all. Production always archives and ignores this switch; a developer's
+    machine never archives, whatever it says
   - **Database Seeding** — click to populate the database with test data, or wipe and start fresh
   - **QA Backlog** — report bugs and suggestions directly from this page; each new task is emailed to the development team.
     Unfinished tickets are listed first (a done one used to hold its slot among live work and, with the list capped at 50,
@@ -5911,7 +6101,7 @@ The testing environment mirrors production:
 | `seed_testdata` command | Populates the database with realistic fake data |
 | `seed_teachers` command | Idempotently creates Teacher rows + linked `auth.User` accounts from `TEACHER_SEED_*` env vars; runs automatically on container start |
 | `HTTPS.md` | Full guide for HTTPS setup with Docker (Nginx + self-signed cert) and GCP Cloud Run |
-| `/testing/` | In-app QA dashboard with project info, seeding, backlog, and error reporting toggle |
+| `/testing/` | In-app QA dashboard with project info, seeding, backlog, the error-reporting toggle and (v1.29.5) the **Recibos a Drive** toggle |
 | `core/decorators.py` | `qa_access_required` decorator — reusable access gate for QA-only views |
 
 #### Access control for `/testing/`
@@ -5932,7 +6122,7 @@ This means:
 - In **development** (`DEBUG=True`): the page doesn't exist, no sidebar icon.
 - In **production** (`DJANGO_ENV=production`): the page doesn't exist, no sidebar icon.
 - In **testing** with a **non-Teacher session**: the page doesn't exist, no sidebar icon.
-- In **testing** logged in as a **non-admin Teacher**: the page doesn't exist, no sidebar icon — they must not reach the dev tools (DB seed/reset, error-email toggle, git internals).
+- In **testing** logged in as a **non-admin Teacher**: the page doesn't exist, no sidebar icon — they must not reach the dev tools (DB seed/reset, error-email and Drive-upload toggles, git internals).
 - In **testing** logged in as an **admin Teacher**: full access, sidebar icon visible.
 
 Access is granted to the seeded **admin** Teacher accounts (`TEACHER_SEED_<N>_ADMIN=True`) — no dedicated QA user is needed. Because the QA URLs are admin-only they are deliberately **not** in `NON_ADMIN_ALLOWED_URL_NAMES` (`core/middleware.py`); admins bypass that whitelist anyway.
@@ -6196,7 +6386,7 @@ make up                        # Start Docker (PostgreSQL + Redis + Django + Cel
 1. Work on `development` (or a short-lived branch off `development`)
 2. Make changes following the conventions below
 3. Run `make pc-run` — Ruff + mypy + bandit all pass, offers to auto-bump the patch version on success, and auto-stages `uv.lock` if regenerated
-4. Run `make test` — all 2,355 tests must pass (PostgreSQL via Docker, parallel, with coverage)
+4. Run `make test` — all 2,391 tests must pass (PostgreSQL via Docker, parallel, with coverage)
 5. `git commit` with a message like `v1.14.7 — Short description` (version first, em dash — matches every other release commit in the project)
 6. `git push origin development`
 7. CI runs automatically on your push (see [CI/CD](#cicd--github-actions))
@@ -6209,8 +6399,8 @@ Pre-commit hooks run **Ruff** (lint + format), **mypy** (type checking), and **b
 | Tool | Purpose | Command |
 |------|---------|---------|
 | **UV** | Dependency management | `uv sync`, `uv add`, `uv lock` |
-| **Ruff** | Lint + format | `make lint`, `make format` |
-| **mypy** | Type checking | `make mypy` |
+| **Ruff** | Lint + format. v1.29.5 enables `BLE` (a blind `except Exception` needs a written reason), `S608` and `RUF100` — the tree already carried ~57 `# noqa: BLE001` / `# noqa: S608` directives, every one with a reason and every one **inert** because neither rule was on. Do **not** clear those with `--select RUF100 --fix`: the fixer deletes the whole comment, reason included | `make lint`, `make format` |
+| **mypy** | Type checking. v1.29.5 turns on `check_untyped_defs` — with it off mypy skipped the body of any unannotated function, i.e. most of the codebase (487 of 711). `tests/` is deliberately **in** scope: the flag's best find was a test calling a service with six keyword arguments it has never had, inside `except (TypeError, ValueError): pass` | `make mypy` |
 | **bandit** | Security linting | `make bandit` |
 | **pip-audit** | Dependency CVE scanning | `make audit` |
 | **pytest-xdist** | Parallel test execution | Built into `make test` (`-n auto`) |

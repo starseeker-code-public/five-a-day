@@ -12,6 +12,7 @@ from core.views import (
     api_create_feature_task,
     api_mark_ready,
     api_seed_database,
+    api_toggle_drive_uploads,
     api_toggle_error_email,
     api_update_backlog_task,
     api_update_feature,
@@ -154,6 +155,7 @@ urlpatterns = [
     ),
     path("api/testing/features/export/", export_features, name="export_features"),
     path("api/testing/error-email/toggle/", api_toggle_error_email, name="api_toggle_error_email"),
+    path("api/testing/drive-uploads/toggle/", api_toggle_drive_uploads, name="api_toggle_drive_uploads"),
     path("api/testing/ready/", api_mark_ready, name="api_mark_ready"),
     # Error test pages
     path("400/", test_error_400, name="test_error_400"),

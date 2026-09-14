@@ -31,13 +31,8 @@ class TestUpdateSiteConfig:
             "adult_group_monthly_fee": "62",
             "language_cheque_discount": "8",
             "quarterly_enrollment_discount": "6",
-            "old_student_discount": "5",
             "june_discount": "50",
-            "full_year_bonus": "25",
             "sibling_discount": "20",
-            "half_month_discount": "50",
-            "one_week_discount": "80",
-            "three_week_discount": "30",
         }
         response = authenticated_client.post(
             reverse("update_site_config"),

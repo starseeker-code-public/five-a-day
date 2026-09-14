@@ -1,4 +1,5 @@
 import csv
+import logging
 from datetime import date
 from decimal import Decimal
 
@@ -9,7 +10,7 @@ from django.db import IntegrityError, transaction
 from django.db.models import Count, DecimalField, Q, Sum, Value
 from django.db.models.functions import Coalesce
 from django.http import HttpResponse
-from django.urls import reverse
+from django.urls import NoReverseMatch, reverse
 from django.utils import timezone
 from django.utils.html import format_html
 
@@ -24,6 +25,8 @@ from billing.models import (
     SiteConfiguration,
 )
 from core.utils import csv_safe_row
+
+logger = logging.getLogger(__name__)
 
 
 @admin.register(EnrollmentType)
@@ -138,13 +141,22 @@ class PaymentAdmin(admin.ModelAdmin):
         )
 
     def student_link(self, obj):
+        """The student's name, linked to their admin change page.
+
+        `NoReverseMatch` is the ONE expected failure — the target model may not
+        be registered in this admin site — and it degrades to plain text on
+        purpose. It used to be a bare `except Exception`, which also swallowed
+        genuine breakage (a renamed field, a `None` in `args`) into a cell that
+        merely stopped being a link, with nothing anywhere to say why.
+        """
         if obj.student:
             try:
                 app_label = obj.student._meta.app_label
                 model_name = obj.student._meta.model_name
                 url = reverse(f"admin:{app_label}_{model_name}_change", args=[obj.student.id])
                 return format_html('<a href="{}">{}</a>', url, obj.student.full_name)
-            except Exception:
+            except NoReverseMatch:
+                logger.warning("Admin link unavailable for student %d — model not registered", obj.student_id)
                 return obj.student.full_name
         return "-"
 
@@ -152,13 +164,16 @@ class PaymentAdmin(admin.ModelAdmin):
     student_link.admin_order_field = "student__last_name"
 
     def parent_link(self, obj):
+        """The titular's name, linked to their admin change page. See
+        `student_link` for why this narrowed to `NoReverseMatch`."""
         if obj.parent:
             try:
                 app_label = obj.parent._meta.app_label
                 model_name = obj.parent._meta.model_name
                 url = reverse(f"admin:{app_label}_{model_name}_change", args=[obj.parent.id])
                 return format_html('<a href="{}">{}</a>', url, obj.parent.full_name)
-            except Exception:
+            except NoReverseMatch:
+                logger.warning("Admin link unavailable for parent %d — model not registered", obj.parent_id)
                 return obj.parent.full_name
 
         return "-"
@@ -208,12 +223,15 @@ class PaymentAdmin(admin.ModelAdmin):
           historical money into the current month in every income report — the
           same regression `quick_complete_payment` short-circuits on;
         * it sent no receipt, so cash and transfer payments completed from the
-          admin were silently unacknowledged (see `_queue_payment_receipt`).
+          admin were silently unacknowledged.
 
-        Imported lazily: `core.views.payments` pulls in billing models, so a
-        module-level import here would close the loop at load time.
+        Imported lazily to keep the comms->billing direction open at load time.
+        Until v1.29.5 this reached into `core.views.payments` for a PRIVATE
+        `_queue_payment_receipt`: an admin action depending on a view module's
+        internals, and the reason a completion side effect could be added to one
+        of the app's two completion paths and silently missed on the other.
         """
-        from core.views.payments import _queue_payment_receipt
+        from comms.tasks import dispatch_payment_completed_on_commit
 
         # ONLY pending rows. `exclude("completed")` also caught `cancelled`,
         # `failed` and `refunded` — so this action resurrected them, dated them
@@ -227,7 +245,7 @@ class PaymentAdmin(admin.ModelAdmin):
             payment.payment_status = "completed"
             payment.payment_date = today
             payment.save(update_fields=["payment_status", "payment_date", "updated_at"])
-            _queue_payment_receipt(payment.id)
+            dispatch_payment_completed_on_commit(payment.id)
 
         skipped = queryset.count() - len(pending)
         message = f"{len(pending)} pagos marcados como completados."

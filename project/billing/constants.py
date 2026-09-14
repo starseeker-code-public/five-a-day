@@ -33,11 +33,8 @@ ADULT_GROUP_MONTHLY_FEE = Decimal("60.00")  # Grupo adultos (1 clase/semana)
 
 LANGUAGE_CHEQUE_DISCOUNT = (Decimal("20.00"), "flat")  # Cheque idioma
 QUARTERLY_ENROLLMENT_DISCOUNT = (Decimal("5.00"), "percentage")  # Matrícula trimestral (5%)
-OLD_STUDENT_DISCOUNT = (Decimal("20.00"), "flat")  # Alumno antiguo (-20€)
 JUNE_DISCOUNT = (Decimal("20.00"), "flat")  # Descuento junio (completar año, NO adultos)
-FULL_YEAR_BONUS = (Decimal("20.00"), "flat")  # Año completo (NO adultos)
 SIBLING_DISCOUNT = (Decimal("5.00"), "percentage")  # Hermanos (5% cada mes)
-HALF_MONTH_DISCOUNT = (Decimal("50.00"), "percentage")  # Medio mes (septiembre)
 # The day classes start in September, i.e. the day the academy's own reminder
 # email prorates the first month from ("empezamos el 16"). Billing itself
 # prorates each enrollment from its OWN `enrollment_date`; this default only
@@ -50,8 +47,6 @@ HALF_MONTH_DISCOUNT = (Decimal("50.00"), "percentage")  # Medio mes (septiembre)
 # billed 16/30 = 53 %, so the email's own explanatory text and its figures
 # disagreed with each other on the academy's most-read parent email.
 SEPTEMBER_CLASSES_START_DAY = 16
-ONE_WEEK_DISCOUNT = (Decimal("75.00"), "percentage")  # Solo 1 semana (primer mes)
-THREE_WEEK_DISCOUNT = (Decimal("25.00"), "percentage")  # Solo 3 semanas
 # v1.13 — returning-student enrollment discount (flat euros off the one-time
 # matrícula charge). Applied automatically by EnrollmentService when the
 # student has at least one prior Enrollment for a different academic year.

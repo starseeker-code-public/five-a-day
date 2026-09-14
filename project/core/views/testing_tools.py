@@ -8,7 +8,7 @@ import logging
 import os
 import subprocess
 import sys
-from datetime import datetime
+from typing import Any
 
 import django
 from django.conf import settings
@@ -69,7 +69,7 @@ def _looks_like_image(upload) -> bool:
         upload.seek(0)
         head = upload.read(32)
         upload.seek(0)
-    except Exception:
+    except Exception:  # noqa: BLE001 — an unreadable upload is simply not an image
         return False
 
     if head.startswith(_IMAGE_MAGIC):
@@ -96,13 +96,21 @@ def _git_info():
         if result.returncode != 0:
             return {}
         lines = result.stdout.strip().split("\n")
-        branch = subprocess.run(
+        # Return code checked rather than trusting `.stdout`: a detached HEAD or
+        # a git failure returns an empty stdout that is indistinguishable from a
+        # successful read of a branch with no name, and the card would show "—"
+        # either way with no way to tell which. `check=False` is explicit — the
+        # commit read above already returned {} on a non-zero exit, so by here we
+        # know git works; only the branch itself can be absent.
+        branch_result = subprocess.run(
             ["git", "-c", "safe.directory=*", "branch", "--show-current"],
             capture_output=True,
             text=True,
             timeout=3,
+            check=False,
             cwd=settings.BASE_DIR.parent,
-        ).stdout.strip()
+        )
+        branch = branch_result.stdout.strip() if branch_result.returncode == 0 else ""
         return {
             "branch": branch or "—",
             "commit_id_full": lines[0] if len(lines) > 0 else "—",
@@ -111,7 +119,7 @@ def _git_info():
             "commit_author": lines[3] if len(lines) > 3 else "—",
             "commit_date": lines[4] if len(lines) > 4 else "—",
         }
-    except Exception:
+    except Exception:  # noqa: BLE001 — no git in the image, no repo, a timeout: the card just goes empty
         return {}
 
 
@@ -120,6 +128,7 @@ def testing_tools_view(request):
     """Render the QA testing tools page."""
     # Lazy import — keeps the billing→core direction out of module load order.
     from billing.services.gcp_cost_service import qa_card_amounts
+    from core.services.drive_service import TESTING_SUBFOLDER, DriveReceiptService
 
     git = _git_info()
     qa_config = QAConfiguration.get_config()
@@ -132,6 +141,12 @@ def testing_tools_view(request):
         # when the export isn't configured/reachable — rendered as "—".
         "gcp_costs": qa_card_amounts(),
         "qa_config": qa_config,
+        # Whether Drive COULD archive from here (folder id + service-account
+        # credentials), which is a different question from whether QA has
+        # switched the archive on — the toggle is useless without it, and saying
+        # so on the card is the difference between "off" and "misconfigured".
+        "drive_configured": DriveReceiptService().is_configured(),
+        "drive_testing_subfolder": TESTING_SUBFOLDER,
         "tasks": tasks,
         "app_version": settings.APP_VERSION,
         "environment": settings.ENVIRONMENT,
@@ -139,7 +154,7 @@ def testing_tools_view(request):
         "database_name": settings.DATABASES["default"].get("NAME", "—"),
         "python_version": sys.version.split()[0],
         "django_version": django.get_version(),
-        "server_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "server_time": timezone.localtime().strftime("%Y-%m-%d %H:%M:%S"),
         "timezone": settings.TIME_ZONE,
     }
     return render(request, "testing_tools.html", context)
@@ -158,12 +173,13 @@ def api_seed_database(request):
         reset = data.get("reset", False)
 
         out = StringIO()
-        args = ["seed_testdata"]
-        kwargs = {"stdout": out}
+        # Annotated: the dict holds a StringIO and (conditionally) a bool, and an
+        # unannotated literal is inferred `dict[str, StringIO]`.
+        kwargs: dict[str, Any] = {"stdout": out}
         if reset:
             kwargs["reset"] = True
 
-        call_command(*args, **kwargs)
+        call_command("seed_testdata", **kwargs)
 
         # The demo family is part of "seed the QA database": without it there
         # is no way to open /parent/login/ on the VM, because the real flow
@@ -172,7 +188,7 @@ def api_seed_database(request):
         # Student) cannot delete the family we just made.
         try:
             call_command("seed_demo_parents", stdout=out)
-        except Exception:  # noqa: BLE001 — the QA dataset is the point; the demo parent is a bonus
+        except Exception:  # the QA dataset is the point; the demo parent is a bonus
             logger.exception("seed_demo_parents failed during the QA seed")
             out.write(os.linesep + "⚠️  seed_demo_parents ha fallado — revisa los logs." + os.linesep)
 
@@ -262,7 +278,7 @@ def email_backlog_task_created(task, screenshot=None, context_line=""):
             screenshot.seek(0)
             email.attach(safe_name, screenshot.read(), screenshot.content_type)
         email.send(fail_silently=True)
-    except Exception:  # noqa: BLE001 — never block task creation on email failure
+    except Exception:  # never block task creation on email failure
         logger.exception("Error sending the backlog-task notification")
 
 
@@ -362,7 +378,7 @@ def export_backlog_tasks(request):
         for t in tasks
     ]
 
-    stamp = datetime.now().strftime("%Y%m%d-%H%M")
+    stamp = timezone.localtime().strftime("%Y%m%d-%H%M")
     filename = f"backlog-{scope}-{stamp}"
 
     if export_format == "csv":
@@ -382,7 +398,7 @@ def export_backlog_tasks(request):
         return response
 
     payload = {
-        "exported_at": datetime.now().isoformat(),
+        "exported_at": timezone.localtime().isoformat(),
         "app_version": settings.APP_VERSION,
         "environment": settings.ENVIRONMENT,
         "scope": scope,
@@ -472,23 +488,47 @@ def _email_task_done(task):
         pass
 
 
-@qa_access_required
-@require_http_methods(["POST"])
-def api_toggle_error_email(request):
-    """Toggle the QA error email reporting on/off."""
+def _set_qa_flag(request, field: str):
+    """Write one boolean on the QAConfiguration singleton from an AJAX toggle.
+
+    Shared by the two switches on /testing/ so they cannot answer differently —
+    the field name is chosen by the view, never taken from the payload, which
+    would turn a toggle into a write primitive over the whole model.
+    """
     try:
         data = json.loads(request.body)
-        enabled = data.get("enabled", False)
         config = QAConfiguration.get_config()
-        config.error_email_enabled = bool(enabled)
+        setattr(config, field, bool(data.get("enabled", False)))
         config.save()
-        return JsonResponse({"success": True, "enabled": config.error_email_enabled})
+        return JsonResponse({"success": True, "enabled": getattr(config, field)})
     except Exception:
-        logger.exception("Error toggling QA error-email setting")
+        logger.exception("Error toggling QA setting %s", field)
         return JsonResponse(
             {"success": False, "message": "No se pudo guardar la preferencia."},
             status=500,
         )
+
+
+@qa_access_required
+@require_http_methods(["POST"])
+def api_toggle_error_email(request):
+    """Toggle the QA error email reporting on/off."""
+    return _set_qa_flag(request, "error_email_enabled")
+
+
+@qa_access_required
+@require_http_methods(["POST"])
+def api_toggle_drive_uploads(request):
+    """Toggle whether the QA VM archives receipts to Google Drive.
+
+    QA-only and off by default. Production ignores this flag entirely (it always
+    archives) and development can never turn it on — `IS_TESTING_ENV` gates both
+    this endpoint, through `qa_access_required`, and the reader
+    `core.services.drive_service.drive_uploads_allowed`. While it is on, uploads
+    from here land in the month's `testing/` subfolder, never beside the real
+    receipts.
+    """
+    return _set_qa_flag(request, "drive_uploads_enabled")
 
 
 @qa_access_required
@@ -509,7 +549,7 @@ def api_mark_ready(request):
     user = getattr(request, "user", None)
     user_email = getattr(user, "email", "") or request.session.get("username", "desconocido")
     git = _git_info()
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    now = timezone.localtime().strftime("%Y-%m-%d %H:%M:%S")
 
     subject = f"[READY TO SHIP] v{settings.APP_VERSION} — {user_email}"
     body = (
@@ -543,7 +583,7 @@ def api_mark_ready(request):
             recipient_list=[support_email],
             fail_silently=False,
         )
-    except Exception:  # noqa: BLE001 — surface a send failure to the UI, details to the log
+    except Exception:  # surface a send failure to the UI, details to the log
         logger.exception("Error sending the 'ready to ship' notification")
         return JsonResponse(
             {"success": False, "message": "Error al enviar el aviso. Revisa los logs."},
