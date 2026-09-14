@@ -462,6 +462,7 @@ gcloud run deploy fiveaday \
   --set-env-vars="DATABASE_URL=postgres://fiveaday_user:PASSWORD@/fiveaday_db?host=/cloudsql/$PROJECT_ID:$REGION:fiveaday-db" \
   --set-env-vars="CELERY_TASK_ALWAYS_EAGER=True" \
   --set-env-vars="CACHE_DB=True" \
+  --set-env-vars="GOOGLE_CLOUD_PROJECT=$PROJECT_ID" \
   --set-env-vars="RUN_MIGRATIONS_ON_START=false" \
   --set-env-vars="GOOGLE_REDIRECT_URI=https://fiveaday-332600671945.europe-southwest1.run.app/auth/google/callback/" \
   --set-env-vars="TEACHER_SEED_1_ADMIN=True" \
@@ -475,6 +476,24 @@ gcloud run deploy fiveaday \
   --set-secrets="TEACHER_SEED_1_EMAIL=TEACHER_SEED_1_EMAIL:latest" \
   --set-secrets="TEACHER_SEED_1_PASSWORD=TEACHER_SEED_1_PASSWORD:latest"
 ```
+
+> **`GOOGLE_CLOUD_PROJECT` is what links a log line to its request.** The production log format
+> is JSON (`core.logging_utils.CloudLoggingFormatter`), and Cloud Logging only nests an app entry
+> under the Cloud Run *request* log when the trace field carries the fully-qualified
+> `projects/<id>/traces/<hex>` form — a bare trace id is silently dropped. Cloud Run does NOT set
+> this variable for you (App Engine did, which is where the assumption comes from). Without it
+> nothing breaks and every entry still carries its own `request_id`; what you lose is the
+> one-expandable-group-per-request view. Set it on the service AND on all 12 jobs, by MERGE:
+>
+> ```bash
+> PROJECT=five-a-day-evolution; REGION=europe-southwest1
+> gcloud run services update fiveaday --project=$PROJECT --region=$REGION \
+>   --update-env-vars="GOOGLE_CLOUD_PROJECT=$PROJECT"
+> for JOB in $(gcloud run jobs list --project=$PROJECT --region=$REGION --format="value(metadata.name)"); do
+>   gcloud run jobs update "$JOB" --project=$PROJECT --region=$REGION \
+>     --update-env-vars="GOOGLE_CLOUD_PROJECT=$PROJECT"
+> done
+> ```
 
 > **`RUN_MIGRATIONS_ON_START=false` is mandatory on production, not a preference.** `entrypoint.sh`
 > defaults it to **true**, so without it the container runs `migrate` on every cold start — which

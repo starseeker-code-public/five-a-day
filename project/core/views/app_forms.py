@@ -49,6 +49,7 @@ from comms.services.email_functions import (
 from comms.services.email_service import email_service
 from core.constants import DIAS_ES, MESES_ES
 from core.decorators import admin_required
+from core.log_safe import safe_log
 from core.models import HistoryLog
 from core.utils import MAX_QUERY_YEAR, MIN_QUERY_YEAR, safe_int
 from students.models import Group, Parent, Student
@@ -1593,11 +1594,13 @@ def enrollment_form(request):
                             _ctx["parent_name"] = _p.full_name
                         if _s.group:
                             _ctx["group_name"] = _s.group.group_name
-                    except Exception:  # noqa: BLE001 — preview only, see below
+                    except (Student.DoesNotExist, ValueError, TypeError):
                         # Preview/test-send only: a stale student id just means
                         # the placeholder names stay in `_ctx`. Never block the
-                        # preview over it.
-                        pass
+                        # preview over it — but record it, or an operator seeing
+                        # "Alumno Ejemplo" in a preview has no way to tell that
+                        # the id they picked no longer resolves.
+                        logger.warning("Vista previa: no se pudo resolver student_id=%s", safe_log(_student_id))
                 return _preview_or_test(
                     request,
                     action,
@@ -1615,10 +1618,10 @@ def enrollment_form(request):
                 try:
                     _s = Student.objects.get(id=_student_id)
                     _student_name = _s.full_name
-                except Exception:  # noqa: BLE001 — preview only, see below
-                    # Preview/test-send only: fall back to the placeholder
-                    # name if the student id no longer resolves.
-                    pass
+                except (Student.DoesNotExist, ValueError, TypeError):
+                    # Preview/test-send only: fall back to the placeholder name,
+                    # and log why the operator is looking at one.
+                    logger.warning("Vista previa: no se pudo resolver student_id=%s", safe_log(_student_id))
             _template = "enrollment_child" if _etype == "child" else "enrollment_adult"
             _ctx = {"student": _student_name, "genero": _gender, "academic_year": _ay, "month": _month}
             return _preview_or_test(

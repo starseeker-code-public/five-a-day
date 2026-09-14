@@ -3,6 +3,7 @@ from django.contrib import admin, messages
 from django.db.models import Count, Q
 from django.utils import timezone
 
+from core.admin_purge import PurgeWithHistoryMixin
 from students.forms import (
     PORTAL_EMAIL_COLLISION_ERROR,
     PORTAL_EMAIL_COLLISION_WARNING,
@@ -165,7 +166,13 @@ class StudentAdminForm(GroupCapacityMixin, forms.ModelForm):
 
 
 @admin.register(Student)
-class StudentAdmin(admin.ModelAdmin):
+class StudentAdmin(PurgeWithHistoryMixin, admin.ModelAdmin):
+    # Both FKs are PROTECT, so a student entered by mistake cannot be removed
+    # until their money is. Payments first: `Payment.enrollment` protects the
+    # enrollment in turn.
+    purge_accessors = ("payments", "enrollments")
+    actions = ["purge_with_history"]
+
     form = StudentAdminForm
     list_display = ["first_name", "last_name", "group", "active", "is_adult", "is_waiting", "waiting_priority"]
     list_filter = ["group", "active", "is_adult", "is_waiting", "waiting_priority", "gdpr_signed"]
@@ -267,7 +274,12 @@ class ParentAdminForm(forms.ModelForm):
 
 
 @admin.register(Parent)
-class ParentAdmin(admin.ModelAdmin):
+class ParentAdmin(PurgeWithHistoryMixin, admin.ModelAdmin):
+    # `Payment.parent` is PROTECT. The `StudentParent` links cascade on their
+    # own, and the children stay — a family record going does not mean the
+    # student stops studying here.
+    purge_accessors = ("payments",)
+
     form = ParentAdminForm
     list_display = ["first_name", "last_name", "dni", "phone", "email", "sms_opt_in", "portal_status"]
     list_filter = ["sms_opt_in"]
@@ -285,7 +297,7 @@ class ParentAdmin(admin.ModelAdmin):
         "temporary_password_issued_at",
         "portal_credential_changed_at",
     ]
-    actions = ["revoke_portal_access", "resend_portal_invitation"]
+    actions = ["revoke_portal_access", "resend_portal_invitation", "purge_with_history"]
 
     # Legends in Spanish, like every other user-facing string in the UI.
     fieldsets = (

@@ -91,6 +91,15 @@ are pinned by `tests/integration/test_students_periphery_fixes.py`, alongside th
   path. `save_model` calls `ensure_user()`, so a Teacher added here can actually log in and
   be activated via `/password-reset/`; the `login_account` column flags rows that predate
   this and still have no linked `auth.User`.
+- `StudentAdmin` and `ParentAdmin` gain **`purge_with_history`** (v1.29.7,
+  `core.admin_purge.PurgeWithHistoryMixin`) — the named, superuser-only action that clears the
+  `PROTECT`ing rows before deleting: payments then enrollments for a student, payments for a
+  parent, with the `StudentParent` links and Fun Friday rows cascading and the *other* side of
+  the relationship left standing. Until then a record entered by mistake could not be removed
+  from `/admin/` at all: `PROTECT` and `PaymentAdmin`'s fiscal guard both surfaced as Django's
+  «su cuenta no tiene permisos», which reads as a broken account rather than a rule. It is a
+  separate action on purpose — the ordinary Delete button keeps refusing, so the protection
+  still covers the accidental click it was written for.
 - `StudentAdmin` with `StudentParentInline` — fieldsets for personal, school, contact,
   health and status info. The contact fieldset (`is_adult`, `email`, `phone`) and the
   waiting-list contact (`waiting_contact_name`, `waiting_contact_phone`) were added in

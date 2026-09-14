@@ -373,6 +373,10 @@ INSTALLED_APPS = [  # https://www.djangoproject.com/
 ]
 
 MIDDLEWARE = [
+    # FIRST on purpose: it binds the correlation id every other log record in
+    # the request is stamped with, so anything logged by the middleware below
+    # it — including SecurityMiddleware's SSL redirect — is joinable.
+    "core.middleware.RequestLogMiddleware",
     "django.middleware.security.SecurityMiddleware",
     "whitenoise.middleware.WhiteNoiseMiddleware",  # Debe ir después de SecurityMiddleware
     "core.middleware.NoHtmlCacheMiddleware",  # no-cache on dynamic HTML (fresh asset hashes)
@@ -609,27 +613,60 @@ if LOG_LEVEL not in ("CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG"):
 
 _LOG_HANDLERS = ["console", "mail_admins"] if _ERROR_MAIL_ENABLED else ["console"]
 
+# Cloud Run reads a JSON line's `severity` field; a plain-text line gets its
+# severity from the STREAM it arrived on, which made every INFO written to
+# stderr show up in Cloud Logging as an error and rendered the console's
+# severity filter useless. JSON in production, readable text everywhere else
+# (the QA VM and dev are read with `docker compose logs`, by a person).
+# `LOG_FORMAT=json|text` overrides either way.
+LOG_FORMAT = (os.getenv("LOG_FORMAT") or ("json" if ENVIRONMENT == "production" else "text")).strip().lower()
+if LOG_FORMAT not in ("json", "text"):
+    LOG_FORMAT = "text"
+
+# A request slower than this is logged at WARNING by RequestLogMiddleware.
+# 3 s is well past anything this app does on purpose and well short of the
+# Cloud Run request timeout, so it catches a degrading query before it becomes
+# an outage rather than after.
+try:
+    SLOW_REQUEST_LOG_MS = int(os.getenv("SLOW_REQUEST_LOG_MS", "3000"))
+except ValueError:
+    SLOW_REQUEST_LOG_MS = 3000
+
 LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,
     "formatters": {
+        # Logger name and line number, because `{module}` alone cannot tell two
+        # modules apart that log the same sentence — and the correlation id,
+        # prefixed by the formatter only when there is one.
         "verbose": {
-            "format": "{levelname} {asctime} {module} {message}",
+            "()": "core.logging_utils.HumanFormatter",
+            "format": "{levelname} {asctime} {name}:{lineno} {message}",
             "style": "{",
         },
         "simple": {
             "format": "{levelname} {message}",
             "style": "{",
         },
+        "json": {"()": "core.logging_utils.CloudLoggingFormatter"},
     },
     "filters": {
         "require_debug_false": {"()": "django.utils.log.RequireDebugFalse"},
         "throttle_error_alerts": {"()": "core.rate_limit.ErrorAlertThrottleFilter"},
+        # Stamps `request_id` on EVERY record, ours and Django's alike. Attached
+        # per handler rather than per logger because a logger's filters do not
+        # run for records that merely propagate up to its handlers.
+        "request_context": {"()": "core.logging_utils.RequestContextFilter"},
     },
     "handlers": {
         "console": {
             "class": "logging.StreamHandler",
-            "formatter": "verbose",
+            # stdout, not the StreamHandler default of stderr: on Cloud Run
+            # stderr means ERROR for anything the JSON formatter does not label,
+            # and Gunicorn already owns stderr for its own error log.
+            "stream": "ext://sys.stdout",
+            "formatter": "json" if LOG_FORMAT == "json" else "verbose",
+            "filters": ["request_context"],
         },
         # Only reachable when _ERROR_MAIL_ENABLED put it in _LOG_HANDLERS; the
         # entry itself is harmless (dictConfig instantiates it either way, and
@@ -637,7 +674,13 @@ LOGGING = {
         "mail_admins": {
             "level": "ERROR",
             "class": "django.utils.log.AdminEmailHandler",
-            "filters": ["require_debug_false", "throttle_error_alerts"],
+            "filters": ["require_debug_false", "throttle_error_alerts", "request_context"],
+            # The alert body is `self.format(record)` + the traceback, so the
+            # formatter is what puts the correlation id in the mail. Without it
+            # two alerts from one incident cannot be tied together in an inbox —
+            # which is exactly how a welcome-email failure arrived as three
+            # unrelated-looking reports.
+            "formatter": "verbose",
             # `include_html` would attach the full technical 500 page. The body
             # already carries the traceback and the redacted POST via
             # DEFAULT_EXCEPTION_REPORTER_FILTER; the HTML version adds every
@@ -657,6 +700,16 @@ LOGGING = {
         "django": {
             "handlers": _LOG_HANDLERS,
             "level": os.getenv("DJANGO_LOG_LEVEL", LOG_LEVEL),
+            "propagate": False,
+        },
+        # The autoreloader emits one DEBUG line PER WATCHED FILE, hundreds per
+        # scan, which under `LOG_LEVEL=DEBUG` (the dev default) buries every
+        # record that matters: 592 of the last 600 lines in a dev container were
+        # this and nothing else was readable. Pinned at INFO rather than dropped,
+        # so "Watching for file changes" survives.
+        "django.utils.autoreload": {
+            "handlers": _LOG_HANDLERS,
+            "level": "INFO",
             "propagate": False,
         },
         # Where every `logger.exception(...)` in core/views lives.
