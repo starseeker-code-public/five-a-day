@@ -154,9 +154,45 @@ env:
   # while the release carrying its management command is still rolling out).
   # Listed here they warn; anything else PAUSED is an error, because a silently
   # paused schedule is indistinguishable from the prune_audit_log gap.
-  PAUSED_OK_SCHEDULES: >-
-    sched-fiveaday-purge-sessions
-    sched-fiveaday-archive-gcp-costs
+  #
+  # Deliberately EMPTY. purge-sessions and archive-gcp-costs sat here while
+  # v1.23.0 and v1.26.0 rolled out; both shipped, both schedules are ENABLED and
+  # firing, and the entries stopped describing reality. An exemption is only
+  # safe while it is still TRUE: left behind, these two turned into dead
+  # tolerance, so the schedules this gate would have waved through were exactly
+  # the two most likely to hide a silent pause — the prune_audit_log shape the
+  # gate exists to catch. Re-add a name ONLY while its schedule is genuinely
+  # paused, and remove it in the same release that resumes it.
+  PAUSED_OK_SCHEDULES: ''
+
+  # Env keys a Cloud Run JOB must carry with the SAME value as the service.
+  # A job has its OWN env set and `gcloud run services update` never touches it,
+  # so the service can be correct while all 12 jobs are not — and this workflow
+  # repoints every job at the new image BEFORE it migrates. These keys drive the
+  # production posture guard in project/settings.py, which raises at IMPORT
+  # time, so a job missing one does not fail its task: it fails to start at all.
+  # Only keys whose value must be IDENTICAL. Two posture inputs are deliberately
+  # NOT here and are asserted by their own rule below, because equality is the
+  # wrong question for them: the cache, where the guard accepts either CACHE_DB
+  # or CACHE_URL (naming one would break a future move to Redis), and
+  # DJANGO_ALLOWED_HOSTS, which legitimately DIFFERS — the service carries the
+  # alternate run.app domain and 127.0.0.1 for its probes, a job serves no HTTP
+  # and carries neither. The guard only asks that '*' is absent, so that is what
+  # gets asserted. Demanding equality there fails every deploy on a difference
+  # that is correct.
+  # SESSION_COOKIE_HTTPONLY and SECURE_HSTS_SECONDS are listed even though
+  # NEITHER the service nor the jobs set them today: the comparison skips any
+  # key the service leaves unset (both sides then take the same settings.py
+  # default), so listing them costs nothing now and catches the day somebody
+  # sets one on the service and not on the twelve jobs.
+  POSTURE_ENV_KEYS: >-
+    DJANGO_ENV
+    DJANGO_DEBUG
+    SESSION_COOKIE_SECURE
+    CSRF_COOKIE_SECURE
+    SESSION_COOKIE_HTTPONLY
+    SECURE_SSL_REDIRECT
+    SECURE_HSTS_SECONDS
 
 jobs:
   # ============================================================
@@ -870,15 +906,76 @@ jobs:
             done <<< "$SCHED"
           fi
 
+          # ---- Cloud Run job env parity ------------------------------------
+          # "The job exists" is not "the job can start". v1.29.3 was the first
+          # release whose image carries the production posture guard, and none
+          # of the 12 jobs had ever been given CACHE_DB: the inventory above
+          # passed 12/12, the deploy repointed every job at the new image, and
+          # then `migrate` died at settings import with "CACHE_URL or CACHE_DB
+          # must be set in production". EVERY scheduled task would have failed
+          # the same way — silently, since a Cloud Scheduler trigger reports
+          # nothing — had migrate not happened to run first and trip the
+          # rollback.
+          #
+          # The expected value is read from the SERVICE rather than written
+          # here, so it cannot drift from what production actually runs, and so
+          # that repairing the service repairs the check in the same motion.
+          #
+          # Pre-mutation, like the rest of this gate: a mismatch stops the
+          # deploy before the backup, the build and the job repoint.
+          echo "=== Cloud Run job env parity ($GCP_REGION) ==="
+          SVC_ENV=$(gcloud run services describe "$SERVICE" --project="$GCP_PROJECT" --region="$GCP_REGION" \
+            --format=json | jq -r '.spec.template.spec.containers[0].env // []
+              | map(select(.value != null)) | .[] | "\(.name)=\(.value)"')
+
+          for J in $EXPECTED_JOBS; do
+            JOB_ENV=$(gcloud run jobs describe "$J" --project="$GCP_PROJECT" --region="$GCP_REGION" \
+              --format=json 2>/dev/null | jq -r '.spec.template.spec.template.spec.containers[0].env // []
+                | map(select(.value != null)) | .[] | "\(.name)=\(.value)"')
+            if [ -z "$JOB_ENV" ]; then
+              echo "::error::Could not read the env of Cloud Run job '$J'. Treat that as a failed query, never as 'the job has no env'."
+              FAILED=1
+              continue
+            fi
+
+            for K in $POSTURE_ENV_KEYS; do
+              # sub() strips only the FIRST '=', so a value containing one survives.
+              WANT=$(printf '%s\n' "$SVC_ENV" | awk -v k="$K" 'index($0, k "=") == 1 { sub(/^[^=]*=/, ""); print; exit }')
+              GOT=$(printf '%s\n'  "$JOB_ENV" | awk -v k="$K" 'index($0, k "=") == 1 { sub(/^[^=]*=/, ""); print; exit }')
+              # Only assert keys the service itself sets: an unset key on both
+              # sides is a settings.py default, not drift.
+              [ -n "$WANT" ] || continue
+              if [ "$GOT" != "$WANT" ]; then
+                echo "::error::Cloud Run job '$J' has $K='${GOT:-<unset>}' but the service has '$WANT'. A job runs the same image and the same settings.py, so a posture var that is missing or different there makes the job fail at IMPORT on this release — a scheduled task that stops running without reporting anything."
+                FAILED=1
+              fi
+            done
+
+            if ! printf '%s\n' "$JOB_ENV" | grep -qE '^(CACHE_DB|CACHE_URL)=.+'; then
+              echo "::error::Cloud Run job '$J' sets neither CACHE_DB nor CACHE_URL. settings.py refuses to start under DJANGO_ENV=production without one (a per-process LocMemCache multiplies every rate limit by workers x instances), so this job cannot run this image at all."
+              FAILED=1
+            fi
+
+            # Asserted as the GUARD asks it, not as equality: the service
+            # carries extra hosts (the alternate run.app domain, 127.0.0.1 for
+            # its probes) that a job has no use for, so the lists differ
+            # correctly and comparing them would fail every deploy.
+            HOSTS=$(printf '%s\n' "$JOB_ENV" | awk 'index($0, "DJANGO_ALLOWED_HOSTS=") == 1 { sub(/^[^=]*=/, ""); print; exit }')
+            case "${HOSTS:-<unset>}" in
+              '<unset>'|'') echo "::error::Cloud Run job '$J' has no DJANGO_ALLOWED_HOSTS. Django refuses every request host with an empty list, and settings.py asserts the var in production."; FAILED=1 ;;
+              *'*'*)        echo "::error::Cloud Run job '$J' has '*' in DJANGO_ALLOWED_HOSTS. settings.py refuses to start in production with a wildcard host."; FAILED=1 ;;
+            esac
+          done
+
           if [ "$FAILED" -ne 0 ]; then
             if [ "$FORCE" = "true" ]; then
               echo "::warning::force=true — inventory mismatches above are NOT blocking this deploy. Fix them straight after."
             else
-              echo "::error::Scheduled-work inventory does not match this release. Nothing has been changed in production. Fix the inventory, or update EXPECTED_JOBS / EXPECTED_SCHEDULES / PAUSED_OK_SCHEDULES in .github/workflows/deploy-production.yml as part of the change that alters it."
+              echo "::error::Scheduled-work inventory does not match this release. Nothing has been changed in production. Fix the inventory, or update EXPECTED_JOBS / EXPECTED_SCHEDULES / PAUSED_OK_SCHEDULES / POSTURE_ENV_KEYS in .github/workflows/deploy-production.yml as part of the change that alters it."
               exit 1
             fi
           else
-            echo "Inventory matches: ${#FOUND_JOBS[@]} jobs, all expected schedules ENABLED (or explicitly allowed to be paused)."
+            echo "Inventory matches: ${#FOUND_JOBS[@]} jobs (env in parity with the service), all expected schedules ENABLED (or explicitly allowed to be paused)."
           fi
 
       - name: Resolve the deployed image and the authoritative migration list

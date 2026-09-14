@@ -338,6 +338,23 @@ base = part_time_monthly_fee (36€)
 - june_discount if June and completing year (-20€)
 ```
 
+**Monthly (children, 1 day/week — infantil, v1.29.4):**
+```
+base = part_time_child_monthly_fee (32€)
+- sibling_discount if applicable (-5%)
+- language_cheque_discount if applicable (-20€)
+× proration_fraction if this is the prorated first month
+- june_discount if June and completing year (-20€)
+```
+
+> `part_time_child` is the **same one-session-a-week timetable as `part_time`**, at the reduced rate
+> the academy charges the youngest children. It is modelled as a `schedule_type` — a price BAND —
+> and not as a discount, precisely so that every discount above layers on top of it exactly as it
+> does on the other bands, and so an admin can move the figure from `/management/` like any other
+> fee. The enrollment plan that selects it is `monthly_part_child`. It is deliberately **not**
+> validated against `Student.is_adult`: an adult resolves to `adult_group` before the plan is read
+> at all, and the academy picks this band by hand in a handful of cases a year.
+
 **Quarterly (children):**
 ```
 base = 3 × monthly_fee × 0.95
@@ -381,7 +398,7 @@ name. These are the **only** copies:
 | `round_money(value)` | Floor at €0.01, quantize **HALF_UP**. THE one money rounding in billing. |
 | `quarterly_price_from_monthly(monthly_fee, config)` | Three months of `monthly_fee` minus the configured quarterly percentage. Parameterised by the fee, because the advertised price is always full-time while `Enrollment.save()` and `EnrollmentService` must apply it to whatever base `schedule_type` selected. |
 | `period_base_amount(config, schedule_type, payment_modality)` | Standard price of **one** billing period — a month, or a quarter on a quarterly plan. This is the figure `Enrollment.final_amount` holds. |
-| `monthly_fee_for(schedule_type, config)` | The schedule → fee mapping (`full_time` / `part_time` / `adult_group`, defaulting to full-time). Since v1.29.1 both `PaymentService._get_base_monthly_fee` and `PricingService.get_monthly_fee` delegate here; they were hand-rolled copies, so a schedule type added to one map priced correctly on the ficha and fell back to full-time on the invoice. |
+| `monthly_fee_for(schedule_type, config)` | The schedule → fee mapping (`full_time` / `part_time` / `part_time_child` / `adult_group`, defaulting to full-time). Since v1.29.1 both `PaymentService._get_base_monthly_fee` and `PricingService.get_monthly_fee` delegate here; they were hand-rolled copies, so a schedule type added to one map priced correctly on the ficha and fell back to full-time on the invoice. |
 
 `PaymentService._round_money` and `EnrollmentService._apply_discounts` delegate to `round_money`;
 `Enrollment.save()`'s price fallback and `EnrollmentService.replicate_enrollment` both go through
@@ -509,8 +526,8 @@ that families transfer from, so three months need their own wording — and thei
 
 | Month | Template | What changes |
 |-------|----------|--------------|
-| September | `emails/payment_reminder_september.html` | **Medio mes.** Every monthly row is the standard fee prorated from the day classes start (`SEPTEMBER_CLASSES_START_DAY` = 15, overridable from the form) with `PaymentService.proration_fraction` — the same fraction a 15-September enrollment is billed with — shown beside the full-month figure. The quarterly row is the full quarter. |
-| June | `emails/payment_reminder_june.html` | **Último mes.** Every monthly row carries `june_discount` (adults excluded, as in billing). The quarterly row is unchanged: a quarterly family saw the discount in April. |
+| September | `emails/payment_reminder_september.html` | **Medio mes.** Every monthly row is the standard fee prorated from the day classes start (`SEPTEMBER_CLASSES_START_DAY` = **16** since v1.29.4, overridable from the form) with `PaymentService.proration_fraction` — the same fraction a 16-September enrollment is billed with — shown beside the full-month figure. The quarterly row is the full quarter. **No Cheque Idioma box** (v1.29.4). |
+| June | `emails/payment_reminder_june.html` | **Último mes.** Every monthly row carries `june_discount` (adults excluded, as in billing). The quarterly row is unchanged: a quarterly family saw the discount in April. **No Cheque Idioma box** (v1.29.4). |
 | April | `emails/payment_reminder_april.html` | The quarterly row is the April–June block, which contains June and therefore carries the discount. Monthly rows are unchanged. |
 
 `PricingService.payment_reminder_special(config, month)` is the one source — template name, subject
@@ -520,6 +537,15 @@ The wording says "medio mes" because that is how the academy explains September;
 the billed one, because a family transferring the emailed figure must not come up short against the
 payment the app is waiting for. Nothing about billing itself changes: the proration rule and the
 quarter anchoring above are untouched.
+
+**v1.29.4 — two corrections to the above.** `SEPTEMBER_CLASSES_START_DAY` is **16, not 15**:
+September has 30 days and `proration_fraction` counts the joining day, so the 16th bills 15/30 —
+exactly the half month the academy tells families about, where the 15th billed 16/30 = 53 % and the
+email's own explanatory text disagreed with its figures. And **September and June carry no Cheque
+Idioma box at all**: the cheque is a fixed amount per month, the academy applies it in neither the
+first (half) month nor the last of the course, and a box quoting a figure nobody is charged is worse
+than no box. April and every ordinary month keep it. Every tariff table also gained the
+media-jornada-infantil figure as a sub-line of the part-time row.
 
 ---
 
@@ -531,6 +557,7 @@ All prices and discounts are managed through the `/management` view and stored i
 - `adult_enrollment_fee`: 20€
 - `full_time_monthly_fee`: 54€ (2 days/week)
 - `part_time_monthly_fee`: 36€ (1 day/week)
+- `part_time_child_monthly_fee`: 32€ (1 day/week, **infantil** — v1.29.4)
 - `adult_group_monthly_fee`: 60€
 - `old_student_discount`: 20€ (flat)
 - `june_discount`: 20€ (flat)

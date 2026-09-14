@@ -114,8 +114,16 @@ def save_schedule_slot(request):
         return JsonResponse({"success": False, "error": "No se pudo guardar el horario."}, status=400)
 
 
+@admin_required
 def fun_friday_view(request):
-    """Vista de Fun Friday con lista de estudiantes.
+    """Vista de Fun Friday con lista de estudiantes. ADMIN ONLY.
+
+    Admin-only since the non-admin teacher permissions were tightened: the page
+    lists every child on the roll — not just the ones a given teacher teaches —
+    and deciding who comes on a Friday is the academy's call. Teachers keep the
+    read-only view of their OWN students' attendance on `students.html` and on
+    each ficha. Both controls are in place, as everywhere else: this decorator
+    and the absence of `fun_friday_view` from `NON_ADMIN_ALLOWED_URL_NAMES`.
 
     Only children who are actually studying THIS academic year belong here:
     `active=True` alone let waiting-list entries (no enrollment, taken over the

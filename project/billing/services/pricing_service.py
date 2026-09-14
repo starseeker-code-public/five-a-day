@@ -181,8 +181,9 @@ class PricingService:
             special_case            None | "september" | "june" | "april"
             template_name           the `emails/<name>.html` to render
             subject_suffix          appended to the reminder subject
-            full_time_fee, part_time_fee, adult_fee, quarterly_fee,
-            sibling_full_time_fee   this month's figures (display strings)
+            full_time_fee, part_time_fee, part_time_child_fee, adult_fee,
+            quarterly_fee, sibling_full_time_fee
+                                    this month's figures (display strings)
             reduced_price_cheque_idioma   this month's Cheque Idioma figure
             standard_<each of the above>  the regular figures
             september_start_day, proration_percent   (September only)
@@ -241,6 +242,9 @@ class PricingService:
                     "proration_percent": int((fraction * 100).quantize(Decimal("1"), rounding=ROUND_HALF_UP)),
                     "full_time_fee": _euros(price(config, months=[9], fraction=fraction)),
                     "part_time_fee": _euros(price(config, months=[9], schedule_type="part_time", fraction=fraction)),
+                    "part_time_child_fee": _euros(
+                        price(config, months=[9], schedule_type="part_time_child", fraction=fraction)
+                    ),
                     "adult_fee": _euros(price(config, months=[9], schedule_type="adult_group", fraction=fraction)),
                     "sibling_full_time_fee": _euros(price(config, months=[9], fraction=fraction, sibling=True)),
                     "reduced_price_cheque_idioma": _euros(price(config, months=[9], fraction=fraction, cheque=True)),
@@ -251,6 +255,7 @@ class PricingService:
                 {
                     "full_time_fee": _euros(price(config, months=[6])),
                     "part_time_fee": _euros(price(config, months=[6], schedule_type="part_time")),
+                    "part_time_child_fee": _euros(price(config, months=[6], schedule_type="part_time_child")),
                     "adult_fee": _euros(price(config, months=[6], schedule_type="adult_group")),
                     "sibling_full_time_fee": _euros(price(config, months=[6], sibling=True)),
                     "reduced_price_cheque_idioma": _euros(price(config, months=[6], cheque=True)),
@@ -288,6 +293,13 @@ class PricingService:
         return {
             "full_time_fee": _euros(config.full_time_monthly_fee),
             "part_time_fee": _euros(config.part_time_monthly_fee),
+            # Media jornada infantil — the same one-session-a-week timetable at
+            # the reduced band for the youngest children. It rides WITH the
+            # part-time row rather than as a row of its own: it is the same
+            # class, and a sixth line in a five-line table reads like a sixth
+            # product. The templates print it as a sub-line under "Cuota 1
+            # sesión semanal".
+            "part_time_child_fee": _euros(config.part_time_child_monthly_fee),
             "adult_fee": _euros(config.adult_group_monthly_fee),
             "quarterly_fee": _euros(PricingService.calculate_quarterly_price(config)),
             "sibling_full_time_fee": _euros(PricingService.calculate_sibling_price(config)),

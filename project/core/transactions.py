@@ -1,4 +1,4 @@
-from django.db.models import Prefetch
+from django.db.models import Prefetch, Q
 
 from billing.models import Enrollment, Payment, relevant_academic_years
 from students.models import Student
@@ -30,6 +30,47 @@ def students_on_the_roll(*, children_only=False):
     # `.distinct()` because the enrollment join multiplies a student by their
     # enrollments — two in the overlap window is normal, not a data problem.
     return queryset.distinct()
+
+
+def visible_students_for(request, queryset=None):
+    """Scope a `Student` queryset to the students the REQUESTING session may see.
+
+    A non-admin teacher sees only **their own** students — the ones in the
+    groups they teach (`Group.teacher`). Admins are unrestricted and get the
+    queryset back untouched.
+
+    THE one place that rule is written, because it has to hold on every surface
+    that lists or opens a student: the roll (`StudentListView`), the ficha
+    (`StudentDetailView` — where an unscoped view means a teacher can read any
+    family's phone number and address by typing an id), and the autocomplete
+    (`search_students`). Spelling it out per view is how the three would drift,
+    and the drift is silent: it is invisible to admin testing, because admins
+    take the early return.
+
+    Two deliberate edges:
+
+    * **Waiting-list placeholders stay visible.** A waiting entry is nobody's
+      student yet — it is taken over the phone, usually with no group, and
+      managing that queue IS in this role's whitelist
+      (`waiting_list` / `waiting_list_create`). Scoping them out would let a
+      teacher create an entry and then get a 404 opening the ficha they just
+      made, from a link the waiting-list page itself renders.
+    * **A restricted session with no Teacher row sees nothing.** That shape is a
+      bare `auth.User` with no linked Teacher (`_is_non_admin_teacher` already
+      restricts it by default-deny); "no groups" is the honest answer, and
+      failing closed matches how every other control here behaves.
+    """
+    from core.decorators import _request_teacher
+    from core.middleware import _is_non_admin_teacher
+
+    if queryset is None:
+        queryset = students_on_the_roll()
+    if not _is_non_admin_teacher(request):
+        return queryset
+    teacher = _request_teacher(request)
+    if teacher is None:
+        return queryset.none()
+    return queryset.filter(Q(group__teacher=teacher) | Q(is_waiting=True))
 
 
 def get_active_students():

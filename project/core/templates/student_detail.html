@@ -220,10 +220,12 @@
                             <span class="material-symbols-outlined text-sm" style="color:#8b5cf6;">event</span>
                             <span class="text-sm text-neutral-700 font-medium">{{ entry.date|date:"d/m/Y" }}</span>
                         </div>
+                        {% if is_admin_user %}
                         <button data-ff-remove="{{ entry.date|date:'Y-m-d' }}" title="Eliminar esta fecha de Fun Friday" aria-label="Eliminar esta fecha de Fun Friday"
                             class="text-neutral-400 hover:text-red-500 transition-colors p-1 rounded">
                             <span class="material-symbols-outlined text-sm">delete</span>
                         </button>
+                        {% endif %}
                     </div>
                     {% endfor %}
                 </div>
@@ -231,7 +233,14 @@
                 <p class="text-sm text-neutral-400" id="ff-empty-msg">Sin fechas registradas.</p>
                 {% endif %}
             </div>
+            {% comment %}
+                Read-only for a non-admin teacher: the dates stay visible (a
+                teacher needs to know who is coming), but add/remove are gone
+                because `add_fun_friday_attendance` /
+                `remove_fun_friday_attendance` are admin-only and would 403.
+            {% endcomment %}
             <!-- Add date form -->
+            {% if is_admin_user %}
             <div class="shrink-0">
                 <p class="text-xs font-medium text-neutral-500 mb-2">Añadir fecha</p>
                 <div class="flex items-center gap-2">
@@ -244,6 +253,7 @@
                     </button>
                 </div>
             </div>
+            {% endif %}
         </div>
     </div>
 

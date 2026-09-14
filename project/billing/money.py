@@ -25,6 +25,7 @@ MONEY_QUANTUM = Decimal("0.01")
 _SCHEDULE_FEE_ATTR = {
     "full_time": "full_time_monthly_fee",
     "part_time": "part_time_monthly_fee",
+    "part_time_child": "part_time_child_monthly_fee",
     "adult_group": "adult_group_monthly_fee",
 }
 

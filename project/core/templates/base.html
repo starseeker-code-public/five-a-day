@@ -164,7 +164,17 @@
                         <span class="material-symbols-outlined mx-auto sidebar-icon">apps</span>
                         <span class="hidden sidebar-text">Aplicaciones</span>
                     </a>
-                    {% else %}
+                    {% comment %}
+                        Fun Friday moved INSIDE the admin branch. It used to be the
+                        non-admin half of this if/else — the one page a teacher had
+                        that an admin did not — but the page lists every child on the
+                        roll and setting the Friday list is the academy's call, so
+                        `fun_friday_view` and its three attendance endpoints are now
+                        admin-only (both at the view and by their absence from
+                        NON_ADMIN_ALLOWED_URL_NAMES). Teachers keep the READ on their
+                        own students: the Fun Friday column of the students list and
+                        the dates on each ficha.
+                    {% endcomment %}
                     <a aria-label="Fun Friday" href="{% url 'fun_friday_view' %}" class="sidebar-link w-full flex items-center gap-3 px-2 py-3 rounded-md {% if request.resolver_match.url_name == 'fun_friday_view' %}active-sidebar-link bg-primary-200 text-primary-700{% else %}text-neutral-600{% endif %} font-medium hover:bg-primary-100 hover:text-primary-700 transition-all duration-200">
                         <span class="material-symbols-outlined mx-auto sidebar-icon">celebration</span>
                         <span class="hidden sidebar-text">Fun Friday</span>

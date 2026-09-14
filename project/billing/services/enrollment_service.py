@@ -37,7 +37,7 @@ class EnrollmentService:
         Args:
             student: Student instance
             enrollment_data: dict with keys:
-                - enrollment_plan: 'monthly_full' | 'monthly_part' | 'quarterly'
+                - enrollment_plan: 'monthly_full' | 'monthly_part' | 'monthly_part_child' | 'quarterly'
                 - has_language_cheque: bool
                 - is_sibling_discount: bool
                 - is_special: bool
@@ -471,12 +471,17 @@ class EnrollmentService:
         if is_special and manual_amount:
             if plan == "monthly_part":
                 return manual_amount, "part_time", "monthly"
+            elif plan == "monthly_part_child":
+                return manual_amount, "part_time_child", "monthly"
             elif plan == "quarterly":
                 return manual_amount, "full_time", "quarterly"
             return manual_amount, "full_time", "monthly"
 
         if plan == "monthly_part":
             return config.part_time_monthly_fee, "part_time", "monthly"
+        elif plan == "monthly_part_child":
+            # Media jornada infantil: the `part_time` timetable at its own band.
+            return config.part_time_child_monthly_fee, "part_time_child", "monthly"
         elif plan == "quarterly":
             # Shared derivation, not a fourth copy of "three months minus the
             # quarterly percentage" — see `quarterly_price_from_monthly`.

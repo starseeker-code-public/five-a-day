@@ -53,7 +53,9 @@
     </td>
     <td style="padding: 8px 0; border-bottom: 1px solid #d1cbe8; text-align: right;">
         <strong>{{ part_time_fee }} euros</strong><br>
-        <span style="font-size: 12px; color: #4a4a57;">mes completo: {{ standard_part_time_fee }} euros</span>
+        <span style="font-size: 12px; color: #4a4a57;">mes completo: {{ standard_part_time_fee }} euros</span><br>
+        <span style="font-size: 12px; color: #4a4a57;">infantil: {{ part_time_child_fee }} euros
+        (mes completo: {{ standard_part_time_child_fee }} euros)</span>
     </td>
 </tr>
 <tr>
@@ -75,11 +77,11 @@
 </tr>
 {% endblock %}
 
-{% block cheque_box %}
-<div style="background-color: #fee2e2; border-left: 4px solid #EF4444; padding: 15px; margin: 20px 0; text-align: left;">
-    <p style="color: #b91c1c; margin: 0; font-size: 14px; line-height: 1.6;">
-        Si os beneficiáis del Cheque Idioma, la cuota de septiembre sería de <strong>{{ reduced_price_cheque_idioma }} euros</strong>
-        (mes completo: {{ standard_reduced_price_cheque_idioma }} euros) y tenéis que venir a la academia a <strong>firmar</strong> el recibo.
-    </p>
-</div>
-{% endblock %}
+{% comment %}
+    No Cheque Idioma box in September. The cheque is a fixed amount per month
+    and the academy does not apply it in the first (half) month of the course,
+    so quoting a cheque-idioma figure here would name a price nobody is
+    charged — the box is deliberately EMPTY, not merely unstyled. June does the
+    same for the last month. Every other month keeps the base template's box.
+{% endcomment %}
+{% block cheque_box %}{% endblock %}

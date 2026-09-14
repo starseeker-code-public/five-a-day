@@ -241,6 +241,7 @@ def send_payment_reminder_email(
     iban_holder: str = "",
     full_time_fee: str | int | None = None,
     part_time_fee: str | int | None = None,
+    part_time_child_fee: str | int | None = None,
     adult_fee: str | int | None = None,
     quarterly_fee: str | int | None = None,
     sibling_full_time_fee: str | int | None = None,
@@ -268,6 +269,9 @@ def send_payment_reminder_email(
         iban_holder: Titular de la cuenta bancaria
         full_time_fee: Cuota 2 sesiones semanales
         part_time_fee: Cuota 1 sesion semanal
+        part_time_child_fee: Cuota 1 sesion semanal, banda infantil (se
+            imprime como sub-linea de la fila de media jornada, no como fila
+            propia: es la misma clase a otro precio)
         adult_fee: Cuota adultos
         quarterly_fee: Cuota trimestral (3 mensualidades - descuento trimestral)
         sibling_full_time_fee: Cuota 2 sesiones con descuento hermano
@@ -281,9 +285,9 @@ def send_payment_reminder_email(
             (`september_start_day`, `proration_percent`, `june_discount`,
             `standard_*`).
 
-    Las cinco tarifas se calculan desde SiteConfiguration cuando la llamada no
-    las pasa (PricingService.payment_reminder_fees), para que ningun emisor
-    mande la tabla de tarifas en blanco.
+    Las tarifas se calculan desde SiteConfiguration cuando la llamada no las
+    pasa (PricingService.payment_reminder_fees), para que ningun emisor mande la
+    tabla de tarifas en blanco.
 
     Returns:
         True si se envio correctamente
@@ -291,13 +295,14 @@ def send_payment_reminder_email(
     fees = {
         "full_time_fee": full_time_fee,
         "part_time_fee": part_time_fee,
+        "part_time_child_fee": part_time_child_fee,
         "adult_fee": adult_fee,
         "quarterly_fee": quarterly_fee,
         "sibling_full_time_fee": sibling_full_time_fee,
     }
     if any(value is None for value in fees.values()):
         # Only hit SiteConfiguration when the caller left a gap — the batch
-        # senders pass all five and loop over every parent.
+        # senders pass every figure and loop over every parent.
         from billing.services.pricing_service import PricingService
 
         defaults = PricingService.payment_reminder_fees()

@@ -441,8 +441,26 @@ class TestChequeIdiomaUnit:
         # 54,00 full-time fee − 20,00 language-cheque discount, formatted like
         # every other row of the tarifas table.
         assert page.context["default_cheque_price"] == "34"
-        assert "34 euros" in page.context["email_html"]
         assert "€ euros" not in page.context["email_html"]
+
+        # The RENDERED figure is asserted against an explicit regular month, not
+        # against the GET page's preview: that one defaults to the current month,
+        # and September and June deliberately carry no Cheque Idioma box at all
+        # (the cheque is not applied in the first or last month of the course).
+        # Reading it off "today" made this assertion pass or fail by calendar.
+        html = authenticated_client.post(
+            reverse("payment_reminder_form"),
+            {
+                "action": "preview",
+                "payment_start_date": "2026-10-01",
+                "payment_end_date": "2026-10-05",
+                "month": "octubre",
+                "iban_number": "ES1234",
+                "telephone_number_bizum": "600000000",
+            },
+        ).json()["html"]
+        assert "34 euros" in html
+        assert "€ euros" not in html
 
     def test_an_operator_typed_symbol_is_stripped(self, authenticated_client, student_with_parent):
         from django.core import mail

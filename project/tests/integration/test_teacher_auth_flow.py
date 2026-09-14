@@ -89,13 +89,16 @@ class TestNonAdminTeacherMiddleware:
     """Verify the non-admin whitelist blocks admin-only routes."""
 
     @pytest.fixture
-    def non_admin_client(self, client):
-        teacher = _make_teacher(email="na@fiveaday.test", password="pw", admin=False)
+    def non_admin_teacher(self, db):
+        return _make_teacher(email="na@fiveaday.test", password="pw", admin=False)
+
+    @pytest.fixture
+    def non_admin_client(self, client, non_admin_teacher):
         # Simulate a fully-logged-in non-admin teacher
-        client.force_login(teacher.user)
+        client.force_login(non_admin_teacher.user)
         session = client.session
         session["is_authenticated"] = True
-        session["username"] = teacher.first_name
+        session["username"] = non_admin_teacher.first_name
         session.save()
         return client
 
@@ -148,16 +151,77 @@ class TestNonAdminTeacherMiddleware:
         # is_admin_user flag should be False in context
         assert response.context["is_admin_user"] is False
 
-    def test_non_admin_can_access_fun_friday(self, non_admin_client):
+    def test_non_admin_blocked_from_fun_friday(self, non_admin_client):
+        """Fun Friday is admin-only: the page lists the WHOLE roll, and choosing
+        who comes on a Friday is the academy's call, not a teacher's."""
         response = non_admin_client.get("/fun-friday/")
-        assert response.status_code == 200
+        assert response.status_code == 302
+        assert response.url == reverse("home")
+
+    @pytest.mark.parametrize(
+        "url_name",
+        ["toggle_fun_friday_this_week", "add_fun_friday_attendance", "remove_fun_friday_attendance"],
+    )
+    def test_non_admin_blocked_from_fun_friday_writes(self, non_admin_client, student, url_name):
+        """All three attendance endpoints too — the read stays, the write does not."""
+        response = non_admin_client.post(reverse(url_name, args=[student.id]))
+        # They live under /api/, so the refusal is a 403 JSON body rather than a
+        # redirect (same shape whichever of the two layers stops it).
+        assert response.status_code == 403
 
     def test_non_admin_can_access_students_list(self, non_admin_client):
         response = non_admin_client.get("/students/")
         assert response.status_code == 200
 
-    def test_non_admin_can_open_a_student_detail(self, non_admin_client, student):
-        """The ficha is the ONLY student page a non-admin teacher may reach."""
+    def test_non_admin_can_open_the_ficha_of_their_own_student(
+        self, non_admin_client, non_admin_teacher, group, student
+    ):
+        """The ficha is the ONLY student page a non-admin teacher may reach — and
+        only for students in the groups THEY teach."""
+        group.teacher = non_admin_teacher
+        group.save(update_fields=["teacher"])
+        response = non_admin_client.get(reverse("student_detail", args=[student.id]))
+        assert response.status_code == 200
+
+    def test_non_admin_cannot_open_another_teachers_student(self, non_admin_client, student):
+        """`student` belongs to the `teacher` fixture's group, not to this one.
+
+        Without the scoping this is a full ficha — name, school, allergies,
+        guardians, addresses, phone numbers — for any id typed into the URL.
+        """
+        response = non_admin_client.get(reverse("student_detail", args=[student.id]))
+        assert response.status_code == 404
+
+    def test_the_roll_shows_only_their_own_students(
+        self, non_admin_client, non_admin_teacher, group, student, active_enrollment
+    ):
+        page = non_admin_client.get("/students/")
+        assert list(page.context["students"]) == []
+
+        group.teacher = non_admin_teacher
+        group.save(update_fields=["teacher"])
+        page = non_admin_client.get("/students/")
+        assert [s.id for s in page.context["students"]] == [student.id]
+
+    def test_an_admin_sees_every_student(self, admin_client, student, active_enrollment):
+        page = admin_client.get("/students/")
+        assert [s.id for s in page.context["students"]] == [student.id]
+
+    def test_search_is_scoped_too(self, non_admin_client, non_admin_teacher, group, student):
+        results = non_admin_client.get(reverse("search_students"), {"q": student.first_name}).json()["results"]
+        assert results == []
+
+        group.teacher = non_admin_teacher
+        group.save(update_fields=["teacher"])
+        results = non_admin_client.get(reverse("search_students"), {"q": student.first_name}).json()["results"]
+        assert [r["id"] for r in results] == [student.id]
+
+    def test_a_waiting_list_entry_stays_visible(self, non_admin_client, student):
+        """Waiting entries are nobody's students yet, and managing that queue IS
+        in this role's whitelist — the waiting-list page links to each ficha."""
+        student.is_waiting = True
+        student.group = None
+        student.save(update_fields=["is_waiting", "group"])
         response = non_admin_client.get(reverse("student_detail", args=[student.id]))
         assert response.status_code == 200
 

@@ -234,6 +234,18 @@ class SiteConfiguration(models.Model):
         validators=[MinValueValidator(Decimal("0.01"))],
         verbose_name="Mensualidad media jornada",
     )
+    # Same one-class-a-week timetable as `part_time_monthly_fee`, at the reduced
+    # band the academy charges the youngest children. A separate price rather
+    # than a discount, so every discount (hermano, cheque idioma, junio) layers
+    # on top of it exactly as it does on the other bands — and so an admin can
+    # move it from /management/ like the rest.
+    part_time_child_monthly_fee = models.DecimalField(
+        max_digits=8,
+        decimal_places=2,
+        default=Decimal("32.00"),
+        validators=[MinValueValidator(Decimal("0.01"))],
+        verbose_name="Mensualidad infantil",
+    )
     adult_group_monthly_fee = models.DecimalField(
         max_digits=8,
         decimal_places=2,
@@ -434,6 +446,7 @@ class SiteConfiguration(models.Model):
                 "adult_enrollment_fee": constants.ADULT_ENROLLMENT_FEE,
                 "full_time_monthly_fee": constants.FULL_TIME_MONTHLY_FEE,
                 "part_time_monthly_fee": constants.PART_TIME_MONTHLY_FEE,
+                "part_time_child_monthly_fee": constants.PART_TIME_CHILD_MONTHLY_FEE,
                 "adult_group_monthly_fee": constants.ADULT_GROUP_MONTHLY_FEE,
                 "language_cheque_discount": constants.LANGUAGE_CHEQUE_DISCOUNT[0],
                 "quarterly_enrollment_discount": constants.QUARTERLY_ENROLLMENT_DISCOUNT[0],

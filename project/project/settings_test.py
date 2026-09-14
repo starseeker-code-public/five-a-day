@@ -46,6 +46,14 @@ STORAGES = {
     },
 }
 
+# The parent portal is DISABLED in every real environment (see
+# settings.PARENT_PORTAL_ENABLED), but the suite keeps exercising it: the
+# feature is switched off, not withdrawn, and the day somebody flips that flag
+# back on they need the ~90 tests that prove it still works. So the portal's own
+# tests run against the portal ENABLED, and `tests/integration/test_parent_portal_disabled.py`
+# is the one place that overrides it back to False to prove the switch bites.
+PARENT_PORTAL_ENABLED = True
+
 # Disable password validators for faster tests
 AUTH_PASSWORD_VALIDATORS = []
 

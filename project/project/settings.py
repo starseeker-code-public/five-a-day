@@ -144,6 +144,33 @@ ENVIRONMENT = os.getenv("DJANGO_ENV", "development")
 # dashboard is then visible to logged-in ADMIN Teachers (see core.decorators).
 IS_TESTING_ENV = ENVIRONMENT == "testing" and not DEBUG
 
+# ============================================================================
+# PARENT PORTAL — DISABLED (2026-09-13)
+# ============================================================================
+# The families' self-service portal (/parent/...) is TURNED OFF: no access
+# email is sent and no portal page can be reached. The feature is intact and
+# fully tested — only this switch stands in front of it.
+#
+# TO RE-ENABLE IT: set this to True (or `PARENT_PORTAL_ENABLED=True` in the
+# environment). Nothing else has to change. There are exactly THREE places that
+# read the flag, each marked with the comment "PARENT PORTAL KILL SWITCH":
+#   * core.middleware.SimpleAuthMiddleware._portal_gate  — every /parent/ URL
+#     404s while it is off, so the pages are unreachable even by direct link.
+#   * core.views.parent_portal.send_portal_temporary_password /
+#     send_portal_invitation_once — no invitation or recovery mail is queued,
+#     and `Parent.portal_invite_sent_at` is NOT stamped, so re-enabling later
+#     still invites every family exactly once.
+#   * students.admin.ParentAdmin.resend_portal_invitation — same reason: that
+#     action stamps the once-only guard BEFORE it sends, so it has to stop
+#     before the stamp rather than rely on the sender refusing.
+#
+# Deliberately NOT done by deleting the URLs: the portal templates and the
+# `reverse("parent_portal_login")` call inside the mailer would raise
+# NoReverseMatch, which turns a switch into a refactor. Nothing outside the
+# portal's own templates links to it, so 404ing the prefix is invisible to the
+# rest of the app.
+PARENT_PORTAL_ENABLED = os.getenv("PARENT_PORTAL_ENABLED", "False").lower() == "true"
+
 # Shared secret for the /health/?deep=1 data fingerprint. /health/ is public, so
 # row counts are only returned when the caller presents this token in the
 # X-Probe-Token header. Unset (the default) means the deep probe still reports

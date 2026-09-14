@@ -123,6 +123,13 @@
                                    disabled>
                         </div>
                         <div>
+                            <label class="block text-sm font-medium text-neutral-600 mb-1">Media Jornada Infantil (€)</label>
+                            <input type="number" step="0.01" name="part_time_child_monthly_fee"
+                                value="{{ config.part_time_child_monthly_fee|unlocalize }}"
+                                   class="config-input w-full px-4 py-2 border border-neutral-300 rounded-md bg-neutral-100 cursor-not-allowed"
+                                   disabled>
+                        </div>
+                        <div>
                             <label class="block text-sm font-medium text-neutral-600 mb-1">Grupo Adultos (€)</label>
                             <input type="number" step="0.01" name="adult_group_monthly_fee" 
                                 value="{{ config.adult_group_monthly_fee|unlocalize }}" 
