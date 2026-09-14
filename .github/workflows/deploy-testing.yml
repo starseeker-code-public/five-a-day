@@ -78,6 +78,10 @@ jobs:
       target_version: ${{ steps.target.outputs.version }}
       live_version: ${{ steps.live.outputs.version }}
       reason: ${{ steps.compare.outputs.reason }}
+      # Rendered HTML block for the deploy-success email, empty when this
+      # release drops no schema. Computed HERE because the deploy job never
+      # checks the repo out — everything it does happens over SSH on the VM.
+      destructive_html: ${{ steps.destructive.outputs.destructive_html }}
 
     steps:
       - name: Gate on the 01:00-06:00 Europe/Madrid window
@@ -123,6 +127,10 @@ jobs:
         if: steps.gate.outputs.proceed == 'true'
         with:
           ref: testing
+          # Full history + tags: the destructive-migration step below diffs
+          # against the PREVIOUSLY DEPLOYED version's staging tag, which a
+          # shallow clone cannot resolve.
+          fetch-depth: 0
 
       - name: Target version (pyproject.toml on testing)
         id: target
@@ -214,6 +222,54 @@ jobs:
             echo "should_deploy=true" >> "$GITHUB_OUTPUT"
             echo "reason=$LIVE -> $TARGET" >> "$GITHUB_OUTPUT"
             echo "**Deploying** — \`$LIVE\` → \`$TARGET\`." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      # QA needs to know that the build about to land on the VM drops schema —
+      # both because the testing database is about to take it irreversibly, and
+      # because the production deploy of the same version will then demand
+      # `ack_destructive`. Detection is scripts/detect_destructive_migrations.py,
+      # shared with auto-merge and both production gates so the four surfaces
+      # cannot disagree about what "destructive" means.
+      - name: Flag destructive migrations in this deploy
+        id: destructive
+        if: steps.compare.outputs.should_deploy == 'true'
+        env:
+          # The range is "what this deploy adds to the VM": from the staging tag
+          # of the version currently live there, to what we are about to deploy.
+          # Never interpolated into the script body — a version string reaches
+          # the shell only through the environment.
+          LIVE: ${{ steps.live.outputs.version }}
+          TARGET: ${{ steps.target.outputs.version }}
+        run: |
+          # No live version (unreachable VM) or no tag for it (a VM that has
+          # never been deployed, or a hand-rolled release) means we cannot bound
+          # the range. Say nothing rather than guess: this email is ADVISORY, and
+          # the production gate still enforces on the real migration set.
+          # This workflow file runs from `main` but the checkout is `testing`,
+          # so the script can legitimately be absent on an older testing branch.
+          # Skip rather than fail: this report is advisory, and breaking the
+          # nightly VM deploy over it would be a far worse trade. Production's
+          # gate is NOT defensive this way — there a missing script must fail.
+          if [ ! -f scripts/detect_destructive_migrations.py ]; then
+            echo "Detector not present on this branch yet — skipping the destructive-migration report."
+            exit 0
+          fi
+
+          if [ -z "$LIVE" ] || ! git rev-parse -q --verify "refs/tags/testing-v$LIVE" > /dev/null; then
+            echo "No staging tag for the live version (${LIVE:-unreachable}) — skipping the destructive-migration report."
+            exit 0
+          fi
+
+          set +e
+          python scripts/detect_destructive_migrations.py \
+            --range "testing-v$LIVE..HEAD" --github-output --format text
+          STATUS=$?
+          set -e
+          # 0 = clean, 1 = found (both are information). 2 = the detector itself
+          # failed, and an advisory step must not then report the release clean.
+          if [ "$STATUS" -ge 2 ]; then
+            echo "::error::The destructive-migration detector failed ($STATUS) for testing-v$LIVE..HEAD."
+            exit 1
           fi
 
   # ============================================================
@@ -497,6 +553,7 @@ jobs:
                 (antes <strong>v${{ needs.check.outputs.live_version || 'desconocida' }}</strong>)
                 en el <strong>entorno de pruebas</strong>. Ya podéis probarla.
               </p>
+              ${{ needs.check.outputs.destructive_html }}
               <p style="text-align:center; margin:24px 0;">
                 <a href="${{ env.TEST_URL }}"
                    style="padding:12px 28px; background:#6d28d9; color:#fff; text-decoration:none; border-radius:8px; font-weight:600; font-size:15px;">

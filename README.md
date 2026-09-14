@@ -15,7 +15,7 @@ Built to centralize student records, automate billing cycles, and streamline par
 ### Project Status
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v1.29.5-brightgreen?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-v1.29.6-brightgreen?style=flat-square" alt="Version">
   &nbsp;|&nbsp;
   <a href="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml?query=branch%3Amain"><img src="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml/badge.svg?branch=main&style=flat-square" alt="CI main"></a>
   &nbsp;|&nbsp;
@@ -36,9 +36,9 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 | Version | Date | Description |
 |---------|------|-------------|
-| **v1.29.5** | 2026-09-14 | Overdue payment chasing, production-only Drive archive, real type gate |
+| **v1.29.6** | 2026-09-14 | Destructive migrations announced everywhere, one shared detector |
+| v1.29.5 | 2026-09-14 | Overdue payment chasing, production-only Drive archive, real type gate |
 | v1.29.4 | 2026-09-13 | Media jornada infantil, per-teacher student scoping, parent portal off |
-| v1.29.3 | 2026-09-13 | Pickup-authorised persons, cheque idioma line, test send, Sep/Jun/Apr reminders |
 
 ---
 
@@ -140,8 +140,68 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 ## Version History
 
-<details id="v1295" open>
-<summary><strong>v1.29.5 — Overdue debt is chased again, the Drive archive is production-only, the type gate made real (current)</strong></summary>
+<details id="v1296" open>
+<summary><strong>v1.29.6 — A release that drops schema says so, everywhere it matters (current)</strong></summary>
+
+**The problem: nothing announced a destructive migration until it was too late**
+
+- v1.29.5 shipped five `RemoveField`s in `billing/0017`. The release PR, the merge email and the
+  testing-deploy email all looked like any other release. The fact surfaced only when the
+  production deploy job refused at its `ack_destructive` gate — **after a human had already
+  clicked Approve**. An approval was spent to discover something the pipeline already knew.
+- The cause was where the rule lived: an inline `grep -E` inside `deploy-production.yml`, written
+  out **twice in that one file** (preflight and gate) and nowhere else. Four other surfaces had no
+  way to ask the question.
+
+**One definition, five readers — `scripts/detect_destructive_migrations.py`**
+
+- Detects `DeleteModel` / `RemoveField` / `RenameField` / `RenameModel` and raw `DROP TABLE|COLUMN`
+  / `TRUNCATE` inside `RunSQL`. Stdlib only, like `check_version_coherence.py`, so it runs on a
+  bare CI runner and in a checkout with no virtualenv.
+- Copying the regex into three more files would have been the pattern this codebase keeps paying
+  for — `may_use_qa_tools`, `csv_safe`, `monthly_fee_for` were each one rule spelled twice that
+  drifted. Both copies inside `deploy-production.yml` now call the script as well.
+- **Exit status is a report, not a verdict:** `0` clean, `1` found, `2` the detector itself failed.
+  Every caller treats `2` as "assume the worst" — "no output" and "nothing found" are otherwise the
+  same thing, which is the failure mode that makes a silent miss possible.
+- Raw SQL is matched **case-insensitively**. The shell original was not, so a
+  `RunSQL("drop table …")` walked straight past the production gate. Widening it can only flag
+  *more* releases, which is the safe direction to be wrong in.
+- The `files` output format is the only one that prints nothing when clean — shells test it with
+  `[ -n "$X" ]`, so a friendly "nothing found" line there would mark every clean release
+  destructive.
+
+**Where it now shows up**
+
+- **`Deploy production` preflight — new Gate 3.** `ack_destructive` is a `workflow_dispatch` input,
+  so a run armed by QA's sign-off or the release-PR merge can never pass the gate. Preflight now
+  refuses to **arm** such a run instead of offering an Approve button that cannot succeed, with
+  instructions to re-dispatch. It follows the same soft/strict trigger split as every other gate,
+  and correctly does **not** accept `force` in place of `ack_destructive`.
+- **`auto-merge.yml`** — a `> [!WARNING]` block at the very top of the release PR body, plus the
+  merge notification email.
+- **`deploy-testing.yml`** — the deploy-success email, so QA sees it before signing off. Detection
+  runs in the `check` job (the deploy job never checks the repo out) and **skips** when the script
+  is absent: this workflow runs main's file against a testing checkout, and advisory reporting must
+  never break the nightly VM deploy. Production's gate is deliberately not defensive that way.
+- **`Deploy production` success email** — past tense via `--applied` ("estas columnas ya NO
+  existen… la copia de seguridad permite recuperarlas"). The same block is mailed before a release
+  ships and after it has, and "will require `ack_destructive`" read on a deploy-succeeded email is
+  confusing at exactly the moment somebody is deciding whether to worry.
+- **The `update-readme` skill** — Step 1 scans `--staged`; Step 6 reports it *first*, above the
+  file list.
+
+**Testing**
+
+- `tests/unit/test_detect_destructive_migrations.py` (35 cases) pins every property above: each
+  destructive operation, the case-insensitive SQL, additive operations staying clean, missing paths
+  being skipped rather than fatal, all four render formats, HTML escaping, the three exit codes,
+  the run-unique `$GITHUB_OUTPUT` delimiter, and the applied/forward-looking wording split.
+
+</details>
+
+<details id="v1295">
+<summary><strong>v1.29.5 — Overdue debt is chased again, the Drive archive is production-only, the type gate made real</strong></summary>
 
 **The weekly payment reminder chases overdue debt — and reaches adult students**
 
@@ -5147,7 +5207,7 @@ five-a-day/
 │   │   └── management/commands/  send_email, test_all_emails, plus 4 Beat-task wrappers
 │   │                             (v1.14.2 — birthday, reminders, report, Fun Friday drain)
 │   │
-│   ├── tests/                    pytest suite (2,391 tests, 95.30 % coverage) — unit/ + integration/
+│   ├── tests/                    pytest suite (2,426 tests, 95.30 % coverage) — unit/ + integration/
 │   ├── templates/registration/   Password-reset templates (form, done, confirm, complete + email body)
 │   ├── templates/admin/          Django admin overrides (branded theme)
 │   └── conftest.py               Shared fixtures (models + authenticated_client)
@@ -5186,6 +5246,8 @@ five-a-day/
 ├── scripts/                      Dev helpers, backup_retention.sh (Cloud SQL tiers),
 │                                 setup_cicd.sh (deploy credentials — see DEPLOYMENT.md §4),
 │                                 check_version_coherence.py (pre-commit version guard),
+│                                 detect_destructive_migrations.py (the ONE definition of
+│                                 "destructive", read by 5 surfaces — v1.29.6),
 │                                 docker_smoke_test.py (`make smoke` — dev only, see below)
 ├── backups/                      DB dumps from `make backup` (gitignored)
 │
@@ -5498,8 +5560,8 @@ Public flow at `/password-reset/...` that lets a teacher recover access without 
 
 | Metric | Value |
 |--------|-------|
-| **Total tests** | 2,391 |
-| **Test files** | 114 (64 unit + 50 integration) |
+| **Total tests** | 2,426 |
+| **Test files** | 115 (65 unit + 50 integration) |
 | **Coverage** | 95% (95.30% — 7,381 statements, 347 uncovered) |
 | **Coverage thresholds** | **≥ 90%** (target, no warning) / **75-89%** (CI warning, pre-commit still blocks below 75) / **< 75%** (CI fails, pre-commit rejects the commit) |
 | **Runtime** | ~190 seconds (parallel workers via `pytest-xdist -n auto`) |
@@ -5546,7 +5608,7 @@ Within each file, related tests are grouped into classes. Where a large file abs
 
 ### Unit Tests
 
-**64 files, 1,003 tests.** Direct-call tests — no HTTP stack, no URL resolver, no template rendering.
+**65 files, 1,038 tests.** Direct-call tests — no HTTP stack, no URL resolver, no template rendering.
 
 | File | Count | Coverage |
 | --- | --- | --- |
@@ -5611,6 +5673,7 @@ Within each file, related tests are grouped into classes. Where a large file abs
 | [`unit/test_parent_view_internals.py`](project/tests/unit/test_parent_view_internals.py) | 2 | `ParentCreateView` internals called directly through `RequestFactory` — the prefill branch that reads a waiting-list entry from `?from_waiting=<id>`, and the duplicate-DNI reuse path |
 | [`unit/test_testing_tools_helpers.py`](project/tests/unit/test_testing_tools_helpers.py) | 2 | `_git_info` helper: success path + non-zero returncode branch with `subprocess.run` mocked |
 | [`unit/test_audit_pruning.py`](project/tests/unit/test_audit_pruning.py) | 16 | `core.tasks.prune_audit_log` and its Cloud Scheduler command wrapper — the ONLY code path that deletes from `audit_logs`, a table the admin deliberately makes immutable (no add, no change, no delete). It had **zero test references for eight versions** while permanently destroying rows, and `*/admin.py` being coverage-omitted meant nothing else exercised the surrounding rules either. Pins the retention window and its boundary, the floor that refuses a window short enough to erase the course being taught (`--days 0` would have deleted every row, including the entries incriminating whoever ran it), `--dry-run` counting exactly what a real run deletes, and the floor surfacing as a `CommandError` so a Cloud Run Job reports a clean failure instead of a Celery traceback. Rows are backdated with `queryset.update()` because `created_at` is `auto_now_add` |
+| [`unit/test_detect_destructive_migrations.py`](project/tests/unit/test_detect_destructive_migrations.py) | 35 | `scripts/detect_destructive_migrations.py` (v1.29.6), the ONE definition of "destructive" read by five surfaces — the production preflight's Gate 3, the production deploy gate that enforces `ack_destructive`, the release PR body and merge email, the testing-deploy email and the `update-readme` skill. Each Django operation (`DeleteModel` / `RemoveField` / `RenameField` / `RenameModel`) and raw `DROP TABLE|COLUMN` / `TRUNCATE`, matched **case-insensitively** because the shell original was not and a `RunSQL("drop table …")` walked straight past the gate; additive operations staying clean; a missing path being skipped rather than fatal (`git diff --name-only` lists deleted files too). All four render formats, with the rule that **every one is empty when clean** — the workflows branch on `[ -n "$X" ]` — and that `files` alone prints nothing at all, since a friendly "nothing found" line there would mark every clean release destructive. HTML escaping of file content that reaches an inbox unparsed. The three exit codes (`0` clean / `1` found / **`2` the detector itself failed**, which every caller must treat as "assume the worst", because "no output" and "nothing found" are otherwise the same thing). The run-unique `$GITHUB_OUTPUT` delimiter, since the blocks carry text read out of migration files and a fixed delimiter is forgeable. And the tense split: `--applied` for the post-deploy mail, forward-looking wording everywhere else |
 | [`unit/test_drive_service.py`](project/tests/unit/test_drive_service.py) | 29 | `core.services.drive_service.DriveReceiptService` (v1.29.0) — the folder-path logic (`Curso YYYY/YYYY+1/Recibos/<Mes> YY/`, whose Curso rolls over in **August**, deliberately NOT the billing academic-year boundary), find-or-create at each level, idempotency by the `<paymentID>_` filename prefix so re-completion and `backfill_drive_receipts` never duplicate, and the **never-raises** guarantee: every failure path returns a `DriveUploadResult` with a status (`uploaded` / `skipped_exists` / `disabled` / `not_configured` / `error`) instead of propagating, because the Drive copy is a convenience on top of the `Payment` row and the emailed receipt — an unshared folder or a bad credential must leave payment completion untouched. v1.29.5 pins the **environment gate**: `drive_uploads_allowed()` is true in production without a database read, false in development whatever the flag says, and on the QA VM only while `QAConfiguration.drive_uploads_enabled` is on — in which case `archive_subfolder()` puts the file in the month's `testing/` sandbox and the gate is checked *before* `is_configured()`, so a disallowed environment never parses the credentials. An autouse fixture declares `ENVIRONMENT="production"` for the file, because the suite otherwise runs as development and every upload assertion would be testing the refusal |
 | [`unit/test_part_time_child_modality.py`](project/tests/unit/test_part_time_child_modality.py) | 12 | The **infantil** band (v1.29.4): `part_time_child` present in `SCHEDULE_TYPE_CHOICES` and `monthly_part_child` in `ENROLLMENT_PLAN_CHOICES`, `monthly_fee_for` / `period_base_amount` / `quarterly_price_from_monthly` resolving it off `SiteConfiguration.part_time_child_monthly_fee`, `EnrollmentService._resolve_plan` returning the right `(amount, schedule_type, modality)` for both the standard and the hand-priced case, and every discount (hermano, cheque idioma, junio) layering on top of it exactly as on full time |
 | [`unit/test_deploy_posture_gate.py`](project/tests/unit/test_deploy_posture_gate.py) | 17 | `POSTURE_ENV_KEYS` in `deploy-production.yml` pinned to the production posture guard in `settings.py` (v1.29.4) — the two are one rule written in two languages and cannot be a shared constant, so the test parses the YAML and loads `settings.py` in isolation under a private module name. A key the guard checks but the gate does not compare is how `CACHE_DB` reached production on the service and on none of the 12 jobs; a key the gate demands but the guard ignores (`DJANGO_ALLOWED_HOSTS`) is a false positive that fails a real deploy. Also asserts `PAUSED_OK_SCHEDULES` is empty and that an empty inventory is fatal |
@@ -6262,7 +6325,7 @@ Feature branches off `development` are welcome for non-trivial work, but the exp
 | **CI** | [`ci.yml`](.github/workflows/ci.yml) | Push to `development`/`testing`/`main`; PRs to `development`/`testing`/`main` | Six jobs — **Lint** (Ruff + Bandit + pip-audit + Hadolint), **Type check** (mypy), **Tests** (pytest + PostgreSQL 16 + coverage artifact), **Docker build** (validates Dockerfile), **Trivy** (filesystem CVE scan → Security tab), **Docker publish** (GHCR push + image scan, on `main`/`testing` only). Since v1.27.1 it carries a least-privilege top-level `permissions` block (it was the only workflow without one, so jobs running arbitrary branch code had the repo-default token scope), every job has a `timeout-minutes`, and the **image** scan now GATES on HIGH/CRITICAL: a second Trivy pass writes JSON and a separate step fails the job, so a missing or unparseable report reads as a failed scan rather than a clean one. The escape hatch is [`.github/trivyignore`](.github/trivyignore), applied to the gate only so an ignored CVE still appears in the Security tab |
 | **Auto-merge** | [`auto-merge.yml`](.github/workflows/auto-merge.yml) | Hourly cron + manual dispatch | Merges `development` → `testing` when conditions pass, creates PR to `main`, emails owners |
 | **Deploy testing** | [`deploy-testing.yml`](.github/workflows/deploy-testing.yml) | Daily, 01:00-05:59 Europe/Madrid window (three cron ticks) + manual dispatch | Compares `/health/` on the VM against `pyproject.toml` on `origin/testing`; deploys only when they differ. Gates the DB volume, resets `ready_for_prod` to false (locking the new version for production until QA signs it off), diffs row counts, then emails the result |
-| **Deploy production** | [`deploy-production.yml`](.github/workflows/deploy-production.yml) | QA's sign-off (`repository_dispatch: qa-ready-for-prod`, fired by the `/testing/` button) + the release PR merge (`push` to `main`) — both exit green and quiet while the other condition is pending — + `Deploy testing` finishing without issues (`workflow_run`, the strict watchdog) + manual dispatch | Two-phase: preflight exits green when production already serves `main`'s version, otherwise **requires release provenance** (the `testing-vX.Y.Z` tag must be an ancestor of `main`) and **testing's QA sign-off** (`/health/?deep=1` healthy + same version + `ready_for_prod=true`), waits for CI to go green and lists the migrations; then **blocks on the `production` environment's required reviewer**. On approval: verified backup → repoint every Cloud Run job → migrate → roll out → verify. The post-deploy verify asserts the served **version**, that `/health/` still reports `environment: production` (v1.28.1 — a dropped or mistyped `DJANGO_ENV` silently switches **off** the `settings.py` posture guard or flips **on** `IS_TESTING_ENV`, exposing `/testing/` and the QA error-body emails on live data, and the version compare passes either way), and the Cloud SQL attachment. A failure after the first write **auto-rolls the code back** (jobs + service to the previous image; the database is never reverted). v1.27.1 adds four **pre-mutation** gates, all placed before the first write so a mismatch stops the deploy with production untouched and nothing to roll back: `RUN_MIGRATIONS_ON_START` must be `false` on the service (otherwise a cold start self-migrates, bypassing this ordering and its backup); the enumerated Cloud Run **jobs and Cloud Scheduler entries** must match the expected sets (an empty list is fatal, never read as "nothing scheduled" — Scheduler lives in `europe-west1`, and querying the service's region returns nothing silently; a deliberately PAUSED schedule must be listed in `PAUSED_OK_SCHEDULES`); and a **destructive migration** (`DeleteModel`/`RemoveField`/`RenameField`/`DROP`/`TRUNCATE`) is surfaced in the approval summary and refuses to proceed without the `ack_destructive` dispatch input. The rollback now also fires on **cancellation**, and its job-repoint loop has the same count guard as the forward loop — an empty list previously produced "Los 0 jobs vuelven a apuntar…" in a success-toned email while every job stayed on the failed image |
+| **Deploy production** | [`deploy-production.yml`](.github/workflows/deploy-production.yml) | QA's sign-off (`repository_dispatch: qa-ready-for-prod`, fired by the `/testing/` button) + the release PR merge (`push` to `main`) — both exit green and quiet while the other condition is pending — + `Deploy testing` finishing without issues (`workflow_run`, the strict watchdog) + manual dispatch | Two-phase: preflight exits green when production already serves `main`'s version, otherwise **requires release provenance** (the `testing-vX.Y.Z` tag must be an ancestor of `main`) and **testing's QA sign-off** (`/health/?deep=1` healthy + same version + `ready_for_prod=true`), waits for CI to go green and lists the migrations; then **blocks on the `production` environment's required reviewer**. On approval: verified backup → repoint every Cloud Run job → migrate → roll out → verify. The post-deploy verify asserts the served **version**, that `/health/` still reports `environment: production` (v1.28.1 — a dropped or mistyped `DJANGO_ENV` silently switches **off** the `settings.py` posture guard or flips **on** `IS_TESTING_ENV`, exposing `/testing/` and the QA error-body emails on live data, and the version compare passes either way), and the Cloud SQL attachment. A failure after the first write **auto-rolls the code back** (jobs + service to the previous image; the database is never reverted). v1.27.1 adds four **pre-mutation** gates, all placed before the first write so a mismatch stops the deploy with production untouched and nothing to roll back: `RUN_MIGRATIONS_ON_START` must be `false` on the service (otherwise a cold start self-migrates, bypassing this ordering and its backup); the enumerated Cloud Run **jobs and Cloud Scheduler entries** must match the expected sets (an empty list is fatal, never read as "nothing scheduled" — Scheduler lives in `europe-west1`, and querying the service's region returns nothing silently; a deliberately PAUSED schedule must be listed in `PAUSED_OK_SCHEDULES`); and a **destructive migration** (`DeleteModel`/`RemoveField`/`RenameField`/`DROP`/`TRUNCATE`) is surfaced in the approval summary and refuses to proceed without the `ack_destructive` dispatch input. v1.29.6 adds **Gate 3 in the preflight**: since `ack_destructive` is a `workflow_dispatch` input, a destructive release armed by QA's sign-off or the PR merge could never pass that gate, yet still offered an Approve button — preflight now refuses to **arm** it and says how to re-dispatch, so the fact is learned before the click rather than by spending an approval on it. Detection for both gates (and for the release PR body, the merge email and the testing-deploy email) is the shared `scripts/detect_destructive_migrations.py`. The rollback now also fires on **cancellation**, and its job-repoint loop has the same count guard as the forward loop — an empty list previously produced "Los 0 jobs vuelven a apuntar…" in a success-toned email while every job stayed on the failed image |
 | **Rollback production** | [`rollback-production.yml`](.github/workflows/rollback-production.yml) | Manual dispatch only | Rolls the service **and** every Cloud Run job back to a previous image tag (empty input = previous image; or an explicit git short SHA), behind the same `production` approval gate and concurrency group as a deploy. Code only — restoring the database stays a manual decision |
 | **CodeQL** | [`codeql.yml`](.github/workflows/codeql.yml) | Push to `main`/`testing`/`development`; PRs to `main`; Monday 04:30 UTC | Python static security analysis (OWASP Top 10, Django-specific queries) |
 | **Notify production** | [`notify-production.yml`](.github/workflows/notify-production.yml) | Push to `main` | Emails `hellofiveaday@gmail.com` with commit info and `gcloud` deploy instructions |
@@ -6386,7 +6449,7 @@ make up                        # Start Docker (PostgreSQL + Redis + Django + Cel
 1. Work on `development` (or a short-lived branch off `development`)
 2. Make changes following the conventions below
 3. Run `make pc-run` — Ruff + mypy + bandit all pass, offers to auto-bump the patch version on success, and auto-stages `uv.lock` if regenerated
-4. Run `make test` — all 2,391 tests must pass (PostgreSQL via Docker, parallel, with coverage)
+4. Run `make test` — all 2,426 tests must pass (PostgreSQL via Docker, parallel, with coverage)
 5. `git commit` with a message like `v1.14.7 — Short description` (version first, em dash — matches every other release commit in the project)
 6. `git push origin development`
 7. CI runs automatically on your push (see [CI/CD](#cicd--github-actions))

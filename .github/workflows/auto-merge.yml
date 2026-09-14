@@ -329,6 +329,32 @@ jobs:
               </table>
             </div>
 
+      # Runs on the MERGED testing tree, so it sees exactly the migration set
+      # the release PR will carry into main. Detection lives in
+      # scripts/detect_destructive_migrations.py — the same script the
+      # production preflight, the production gate, the testing deploy email and
+      # the update-readme skill call, so none of them can disagree about what
+      # "destructive" means. Advisory here: it never blocks the merge, it only
+      # makes the release say so out loud. Before this, a release carrying a
+      # RemoveField looked exactly like any other until a human had already
+      # approved a production deploy that could not pass the gate (v1.29.5).
+      - name: Flag destructive migrations in this release
+        id: destructive
+        if: steps.merge.conclusion == 'success'
+        run: |
+          # Exit 1 means "found", which is information, not failure. Only exit 2
+          # (an internal error) should stop us — and then we must not claim the
+          # release is clean, so re-raise it.
+          set +e
+          python scripts/detect_destructive_migrations.py \
+            --range "origin/main..HEAD" --github-output --format text
+          STATUS=$?
+          set -e
+          if [ "$STATUS" -ge 2 ]; then
+            echo "::error::The destructive-migration detector failed ($STATUS). Refusing to report this release as clean."
+            exit 1
+          fi
+
       - name: Tag the testing merge commit with the staging tag
         id: tag
         if: steps.merge.conclusion == 'success'
@@ -377,6 +403,10 @@ jobs:
           OLD_VERSION: ${{ steps.conditions.outputs.old_version }}
           NEW_VERSION: ${{ steps.conditions.outputs.new_version }}
           STAGING_TAG: ${{ steps.tag.outputs.tag }}
+          # Rendered markdown, empty string when the release drops no schema.
+          # Via env like every other value here: it is built from text read out
+          # of migration files, and this step holds an authenticated octokit.
+          DESTRUCTIVE_MD: ${{ steps.destructive.outputs.destructive_markdown }}
         with:
           script: |
             // Skip if a PR already exists
@@ -399,6 +429,10 @@ jobs:
             const oldVersion = process.env.OLD_VERSION;
             const newVersion = process.env.NEW_VERSION;
             const stagingTag = process.env.STAGING_TAG;
+            // Empty unless this release drops or renames schema. Placed at the
+            // very top of the body: the approver has to scroll past it, not go
+            // looking for it in the checklist.
+            const destructive = (process.env.DESTRUCTIVE_MD || '').trim();
 
             const pr = await github.rest.pulls.create({
               owner: context.repo.owner,
@@ -407,6 +441,7 @@ jobs:
               body: [
                 '## Automated merge: `testing` → `main`',
                 '',
+                ...(destructive ? [destructive, ''] : []),
                 'Opened automatically by the `Auto-merge development → testing` workflow once',
                 '`development` had been merged into `testing`. It promotes that tested state to',
                 '`main`, which is what production deploys from.',
@@ -503,6 +538,7 @@ jobs:
           html_body: |
             <div style="font-family: sans-serif; color:#1f2937; max-width:640px;">
               <h2 style="color:#6d28d9;">🚀 v${{ steps.conditions.outputs.new_version }} fusionada en la rama testing</h2>
+              ${{ steps.destructive.outputs.destructive_html }}
               <table cellpadding="6" style="border-collapse:collapse; font-family:sans-serif; font-size:13px;">
                 <tr><td><strong>Situación</strong></td><td>fusionada en la <em>rama</em> <code>testing</code> — la VM la desplegará en el próximo ciclo nocturno (01:00–06:00 Madrid; el email de despliegue confirmará); PR de release hacia <code>main</code> abierta</td></tr>
                 <tr><td><strong>Versión</strong></td><td><code>${{ steps.conditions.outputs.old_version }}</code> → <code>${{ steps.conditions.outputs.new_version }}</code></td></tr>

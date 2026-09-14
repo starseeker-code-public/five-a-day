@@ -671,16 +671,38 @@ gcloud run jobs execute fiveaday-migrate --region=$REGION --wait
 > release's** migration set against production, and leaves all seven scheduled jobs executing old
 > code indefinitely. See [Routine deploys](#routine-deploys) for the full loop over all the jobs.
 
-> **v1.29.5 ships a DESTRUCTIVE migration — `billing/0017` needs `ack_destructive`.** It drops the
-> five dead `SiteConfiguration` pricing columns (`old_student_discount`, `full_year_bonus`,
-> `half_month_discount`, `one_week_discount`, `three_week_discount`), which nothing has ever read.
-> `deploy-production.yml`'s pre-mutation gate matches `DeleteModel` / `RemoveField` / `RenameField` /
-> `DROP` / `TRUNCATE` in the pending migration set and refuses to proceed without the
+> **Deploying a release that DROPS SCHEMA — use `ack_destructive`, never `force`.**
+> `deploy-production.yml` matches `DeleteModel` / `RemoveField` / `RenameField` / `RenameModel` /
+> `DROP` / `TRUNCATE` in the pending migration set (detection is the shared
+> `scripts/detect_destructive_migrations.py`) and refuses to proceed without the
 > `ack_destructive` dispatch input. Reach for **`ack_destructive`, not `force`** — `force` also
 > skips the QA sign-off, the provenance gate and the version compare, and downgrades the inventory
-> gate to a warning, so it lowers every other bar at once to clear one. The gate runs *after* the
-> reviewer approves and *before* anything is written, so a refusal leaves production untouched with
-> nothing to roll back.
+> gate to a warning, so it lowers every other bar at once to clear one. The deploy-job gate runs
+> *after* the reviewer approves and *before* anything is written, so a refusal leaves production
+> untouched with nothing to roll back.
+>
+> Since **v1.29.6** the preflight's **Gate 3** catches it earlier still: `ack_destructive` is a
+> `workflow_dispatch` input, so a destructive release armed by QA's sign-off or the release-PR
+> merge can never pass the deploy-job gate — preflight now refuses to **arm** it rather than
+> offering an Approve button that cannot succeed. Dispatch it by hand instead:
+> *Actions → Deploy production → Run workflow* on `main`, tick **ack_destructive**, leave
+> **force** unticked.
+>
+> **What you are acknowledging.** Migrations run BEFORE the service rolls, so the **currently
+> deployed** code runs against the **new** schema for the whole rollout window. That is harmless
+> for an additive change and is an **outage** when the old code still selects a column the release
+> drops — Django names every column explicitly in its `SELECT`s, so a model that still declares a
+> dropped field raises `ProgrammingError` on every query against that table. Check before ticking;
+> if the old code does still read it, split the change (ship the code that stops using the column
+> first, drop it in the next release).
+>
+> *Worked example — v1.29.5 (deployed 2026-09-14).* `billing/0017` dropped the five dead
+> `SiteConfiguration` pricing columns (`old_student_discount`, `full_year_bonus`,
+> `half_month_discount`, `one_week_discount`, `three_week_discount`), which nothing had ever read.
+> v1.29.4's model still *declared* all five, so the rollout window really was an outage window for
+> any page touching `SiteConfiguration` — measured at **under a minute** (migrate finished 11:42,
+> the new revision was serving by 11:43). It was accepted deliberately rather than split, because
+> the parent portal is switched off and the blast radius was the academy's own staff.
 
 > **v1.26.1 — `billing/0010` can legitimately REFUSE to apply.** It adds
 > `unique_pending_periodic_payment_per_month`, and it pre-checks the table first: if production
