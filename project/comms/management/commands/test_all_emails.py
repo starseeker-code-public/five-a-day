@@ -304,7 +304,7 @@ class Command(BaseCommand):
                 else:
                     failed += 1
                     self.stdout.write(self.style.ERROR("FAIL"))
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 — QA sweep: one bad template must not abort the rest
                 failed += 1
                 self.stdout.write(self.style.ERROR(f"ERROR: {e}"))
             if i < len(apps) and delay > 0:

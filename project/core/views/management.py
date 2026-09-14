@@ -69,13 +69,14 @@ def update_site_config(request):
         if "adult_group_monthly_fee" in data:
             config.adult_group_monthly_fee = Decimal(str(data["adult_group_monthly_fee"]))
 
-        # Only the discount fields the pricing code actually READS. The five
-        # dropped here (old_student_discount, full_year_bonus, half_month_discount,
-        # one_week_discount, three_week_discount) are not rendered by the form and
-        # are consumed by no service/view/task — accepting them let a crafted
-        # payload persist a value nothing would ever apply, and old_student_discount
-        # is visually the twin of the LIVE returning_student_enrollment_discount.
-        # The columns remain (a later migration can drop them); nothing writes them.
+        # Only the discount fields the pricing code actually READS. Five others
+        # (old_student_discount, full_year_bonus, half_month_discount,
+        # one_week_discount, three_week_discount) were seeded but consumed by no
+        # service/view/task, and accepting them let a crafted payload persist a
+        # value nothing would ever apply — old_student_discount being visually the
+        # twin of the LIVE returning_student_enrollment_discount. Their COLUMNS
+        # are gone as of v1.29.5 (billing/0017), so an unknown key in the payload
+        # is now simply ignored by this allow-list, as any unknown key is.
         for field in [
             "language_cheque_discount",
             "quarterly_enrollment_discount",
@@ -101,7 +102,9 @@ def update_site_config(request):
             if field in data:
                 # Truncated to the column width rather than left to raise: these
                 # are free text and a 400 on a long address is unhelpful.
-                max_length = SiteConfiguration._meta.get_field(field).max_length
+                # `get_field` is typed as returning a reverse relation too, which
+                # has no `max_length`; these are all concrete CharFields.
+                max_length = getattr(SiteConfiguration._meta.get_field(field), "max_length", None)
                 setattr(config, field, str(data[field] or "").strip()[:max_length])
 
         # Model.save() skips validators, so a negative fee (or a percentage over

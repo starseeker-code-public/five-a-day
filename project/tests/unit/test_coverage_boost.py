@@ -47,7 +47,7 @@ class TestMaterializeRecurringExpensesTask:
 
 
 class TestGoogleSheetsServiceInternals:
-    def test_get_or_create_worksheet_uses_existing(self):
+    def test_an_existing_worksheet_is_reused(self):
         """Covers the WorksheetNotFound-catch branch by hitting the try side."""
         from core.services.google_sheets_service import GoogleSheetsService
 
@@ -60,12 +60,21 @@ class TestGoogleSheetsServiceInternals:
         ws = svc._get_or_create_worksheet("Students", cols=10)
         assert ws is existing_ws
 
-    def test_get_or_create_worksheet_creates_when_missing(self):
+    def test_a_missing_worksheet_is_created(self):
+        """The REAL `WorksheetNotFound`, not a look-alike.
+
+        This used to raise `RuntimeError("WorksheetNotFound")` — an exception
+        with the right words in its message and the wrong type — and it passed,
+        because the catch was a bare `except Exception`. It was therefore
+        asserting the defect: that ANY failure is read as "not there yet".
+        """
+        from gspread.exceptions import WorksheetNotFound
+
         from core.services.google_sheets_service import GoogleSheetsService
 
         svc = GoogleSheetsService(spreadsheet_id="abc")
         fake_sheet = MagicMock()
-        fake_sheet.worksheet.side_effect = RuntimeError("WorksheetNotFound")
+        fake_sheet.worksheet.side_effect = WorksheetNotFound("Students")
         new_ws = MagicMock(name="new")
         fake_sheet.add_worksheet.return_value = new_ws
         svc._sheet = fake_sheet
@@ -73,6 +82,25 @@ class TestGoogleSheetsServiceInternals:
         ws = svc._get_or_create_worksheet("Students", cols=10)
         assert ws is new_ws
         fake_sheet.add_worksheet.assert_called_once()
+
+    def test_a_real_failure_is_not_mistaken_for_a_missing_worksheet(self):
+        """An auth error, a revoked share or a 429 must PROPAGATE.
+
+        Swallowing them answered every failure by trying to CREATE the
+        worksheet, so the real cause was replaced by whatever `add_worksheet`
+        failed with next — and a permissions problem surfaced as a confusing
+        write error instead of a permissions problem.
+        """
+        from core.services.google_sheets_service import GoogleSheetsService
+
+        svc = GoogleSheetsService(spreadsheet_id="abc")
+        fake_sheet = MagicMock()
+        fake_sheet.worksheet.side_effect = RuntimeError("403 permission denied")
+        svc._sheet = fake_sheet
+
+        with pytest.raises(RuntimeError, match="permission denied"):
+            svc._get_or_create_worksheet("Students", cols=10)
+        fake_sheet.add_worksheet.assert_not_called()
 
     def test_get_sheet_raises_when_unconfigured(self):
         """Covers the two RuntimeErrors in _get_sheet."""

@@ -7,7 +7,7 @@ from django.utils.decorators import method_decorator
 from django.views.generic import CreateView
 
 from core.decorators import admin_required
-from core.views.parent_portal import send_portal_invitation_once
+from core.services.portal_access_service import send_portal_invitation_once
 from students.forms import PORTAL_EMAIL_COLLISION_WARNING, ParentForm
 from students.models import Parent
 

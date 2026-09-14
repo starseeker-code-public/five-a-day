@@ -11,7 +11,8 @@ from django.contrib import messages
 from django.contrib.auth import SESSION_KEY as DJANGO_AUTH_SESSION_KEY
 from django.core.mail import send_mail
 from django.shortcuts import redirect
-from django.urls import resolve, reverse
+from django.urls import Resolver404, resolve, reverse
+from django.utils import timezone
 from django.views.debug import SafeExceptionReporterFilter
 
 logger = logging.getLogger(__name__)
@@ -208,7 +209,7 @@ class QAErrorEmailMiddleware:
             body_preview = ""
             try:
                 body_preview = self._redact_body(request.body[:500].decode("utf-8", errors="replace"))
-            except Exception:
+            except Exception:  # noqa: BLE001 — see below; must never raise while handling an exception
                 # Best-effort only. `request.body` raises if the stream was
                 # already consumed (file uploads, streaming parsers); the error
                 # report is still worth sending without the body preview, and
@@ -225,7 +226,7 @@ class QAErrorEmailMiddleware:
                 f"Version:     {settings.APP_VERSION}\n"
                 f"Environment: {settings.ENVIRONMENT}\n"
                 f"Debug:       {settings.DEBUG}\n"
-                f"Server time: {__import__('datetime').datetime.now():%Y-%m-%d %H:%M:%S}\n\n"
+                f"Server time: {timezone.localtime():%Y-%m-%d %H:%M:%S}\n\n"
                 f"REQUEST BODY (first 500 chars):\n"
                 f"{body_preview or '(empty)'}\n\n"
                 f"TRACEBACK:\n"
@@ -561,7 +562,12 @@ class SimpleAuthMiddleware:
 
         try:
             url_name = resolve(path).url_name
-        except Exception:
+        except Resolver404:
+            # The only thing `resolve()` raises for an unmatched path. It was a
+            # bare `except Exception`, which inside an AUTH GATE meant any other
+            # failure silently became "unknown URL" — fail-closed, so nothing
+            # broke, but a real bug in URL resolution would have been invisible
+            # here forever.
             url_name = None
 
         if url_name in self.PORTAL_PUBLIC_URL_NAMES:
@@ -602,7 +608,8 @@ class SimpleAuthMiddleware:
         if not is_public and _is_non_admin_teacher(request):
             try:
                 url_name = resolve(path).url_name
-            except Exception:
+            except Resolver404:
+                # See the portal gate above — narrowed for the same reason.
                 url_name = None
 
             if url_name not in NON_ADMIN_ALLOWED_URL_NAMES:

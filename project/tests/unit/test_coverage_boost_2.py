@@ -75,7 +75,7 @@ class TestContextProcessorsExceptionBranches:
         from core.context_processors import today_notifications
 
         req = RequestFactory().get("/")
-        req.session = {}
+        req.session = {}  # type: ignore[assignment]
         with patch("core.context_processors.TodoItem.objects") as mock_mgr:
             mock_mgr.filter.side_effect = RuntimeError("db down")
             ctx = today_notifications(req)
@@ -88,7 +88,7 @@ class TestContextProcessorsExceptionBranches:
         from core.context_processors import today_notifications
 
         req = RequestFactory().get("/")
-        req.session = {}
+        req.session = {}  # type: ignore[assignment]
         with patch("core.context_processors.HistoryLog.objects") as mock_mgr:
             mock_mgr.count.side_effect = RuntimeError("db down")
             ctx = today_notifications(req)

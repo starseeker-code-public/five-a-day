@@ -71,7 +71,7 @@ class Command(BaseCommand):
         # Ordered prefetch: this picks the TITULAR for any payment created below,
         # and the `.first()` it replaced sorted by pk — see generate_payments.py.
         parents_in_pk_order = Prefetch("student__parents", queryset=Parent.objects.order_by("id"))
-        enrollments = list(enrollments.prefetch_related(parents_in_pk_order))
+        enrollment_rows = list(enrollments.prefetch_related(parents_in_pk_order))
 
         # Every enrollment's periodic payments in ONE query, grouped by enrollment.
         # The loop used to run its own `Payment.objects.filter(...)` per enrollment —
@@ -80,7 +80,7 @@ class Command(BaseCommand):
         # months: `stale` compares status and reports the concept and amount.
         by_enrollment: dict[int, list[Payment]] = {}
         for payment in Payment.objects.filter(
-            enrollment_id__in=[e.pk for e in enrollments],
+            enrollment_id__in=[e.pk for e in enrollment_rows],
             payment_type__in=PERIODIC_PAYMENT_TYPES,
         ):
             by_enrollment.setdefault(payment.enrollment_id, []).append(payment)
@@ -91,7 +91,7 @@ class Command(BaseCommand):
         # unguarded write added later cannot quietly persist from a "dry" run,
         # which is the mode operators reach for first.
         with transaction.atomic() if not apply_changes else contextlib.nullcontext():
-            for enrollment in enrollments:
+            for enrollment in enrollment_rows:
                 student = enrollment.student
                 if not student.active:
                     continue

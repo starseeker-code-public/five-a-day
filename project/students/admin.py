@@ -366,7 +366,7 @@ class ParentAdmin(admin.ModelAdmin):
     def resend_portal_invitation(self, request, queryset):
         from django.conf import settings
 
-        from core.views.parent_portal import send_portal_temporary_password
+        from core.services.portal_access_service import send_portal_temporary_password
 
         # PARENT PORTAL KILL SWITCH — see settings.PARENT_PORTAL_ENABLED.
         # Bail out BEFORE the `portal_invite_sent_at` stamp below: the sender

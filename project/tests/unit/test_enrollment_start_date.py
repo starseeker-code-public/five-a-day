@@ -57,7 +57,7 @@ class TestStartDateWindow:
     def test_mistyped_past_year_rejected(self):
         form = EnrollmentForm({"enrollment_plan": "monthly_full", "start_date": "2019-09-01"})
         assert not form.is_valid()
-        assert "curso actual" in " ".join(form.errors["start_date"])
+        assert "curso actual" in " ".join(form.errors["start_date"])  # type: ignore[arg-type]
 
     def test_far_future_year_rejected(self):
         form = EnrollmentForm({"enrollment_plan": "monthly_full", "start_date": "2039-09-01"})

@@ -85,7 +85,10 @@ class TestNoAccessEmailIsSent:
         assert not any("portal" in message.subject.lower() for message in mail.outbox)
 
     def test_the_sender_refuses_and_never_raises(self, rf, parent):
-        from core.views.parent_portal import send_portal_invitation_once, send_portal_temporary_password
+        from core.services.portal_access_service import (
+            send_portal_invitation_once,
+            send_portal_temporary_password,
+        )
 
         request = rf.get("/")
         assert send_portal_temporary_password(request, parent, reset=True) is False

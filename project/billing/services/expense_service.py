@@ -13,6 +13,7 @@ import calendar
 import logging
 from datetime import date
 from decimal import Decimal
+from typing import TypedDict
 
 from django.db import IntegrityError, transaction
 from django.db.models import DecimalField, Sum, Value
@@ -23,7 +24,23 @@ from billing.models import Expense, Payment
 logger = logging.getLogger(__name__)
 
 
-def monthly_totals(month: int, year: int) -> dict[str, Decimal | dict[str, Decimal]]:
+class MonthlyTotals(TypedDict):
+    """The shape `monthly_totals` returns.
+
+    A `dict[str, Decimal | dict[str, Decimal]]` said the three money keys and the
+    breakdown were interchangeable, so `totals["by_category"]["rent"]` was not
+    indexable to a type checker and `totals["income"] - x` was not subtractable —
+    every caller had to be trusted rather than checked. A TypedDict names each
+    key once, here, where the dict is built.
+    """
+
+    income: Decimal
+    expenses: Decimal
+    net: Decimal
+    by_category: dict[str, Decimal]
+
+
+def monthly_totals(month: int, year: int) -> MonthlyTotals:
     """
     Return the month's income (completed payments), total expenses, net
     profit, and a per-category expense breakdown. Used by the dashboard

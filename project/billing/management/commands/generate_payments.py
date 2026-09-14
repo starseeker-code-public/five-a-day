@@ -80,8 +80,8 @@ class Command(BaseCommand):
         # exactly 1 each, so ~2,000 round trips per run at the roll this academy is
         # sized for. `enrollments` is materialised first so the map covers precisely
         # the rows the loop will visit.
-        enrollments = list(enrollments)
-        billed = PaymentService.billed_months_map({e.student_id for e in enrollments})
+        enrollment_rows = list(enrollments)
+        billed = PaymentService.billed_months_map({e.student_id for e in enrollment_rows})
 
         created_count = 0
         skipped_count = 0
@@ -92,7 +92,7 @@ class Command(BaseCommand):
         # month/quarter and back-fills anything a missed run left behind.
         as_of = date(year, month, calendar.monthrange(year, month)[1])
 
-        for enrollment in enrollments:
+        for enrollment in enrollment_rows:
             student = enrollment.student
             if not student.active:
                 continue

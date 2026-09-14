@@ -1,4 +1,5 @@
 import logging
+from typing import Any
 
 from django.conf import settings
 from django.http import JsonResponse
@@ -58,7 +59,9 @@ def _database_probe(request):
     from django.db import connection
     from django.db.migrations.executor import MigrationExecutor
 
-    probe = {"connected": False}
+    # Annotated: the payload carries a bool, two ints, a name and a counts dict,
+    # and an unannotated literal makes it `dict[str, bool]` to a type checker.
+    probe: dict[str, Any] = {"connected": False}
 
     try:
         with connection.cursor() as cursor:

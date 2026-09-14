@@ -392,8 +392,12 @@ def send_monthly_report_task(self, recipient_email: str | None = None):
 @shared_task(name="comms.tasks.send_payment_reminders", bind=True)
 def send_payment_reminders(self):
     """
-    Weekly task: Send payment reminders to parents with pending payments.
-    Looks for pending payments due within the next 7 days.
+    Weekly task: Send payment reminders for pending payments.
+
+    Covers every pending payment due before `today + 7 days` — which since
+    v1.29.5 includes rows ALREADY OVERDUE (they were excluded, so a debt stopped
+    being chased exactly when it started mattering) and adult students, who have
+    no `Parent` row and were therefore never reminded at all.
 
     v1.8: also queues an SMS to every parent that has opted in
     (`parent.sms_opt_in=True`) — SMS is a *supplement* to email, not a
@@ -411,14 +415,28 @@ def send_payment_reminders(self):
     # midnight built a window whose lower bound was the day AFTER its upper
     # bound's reference and silently reminded nobody.
     today = timezone.localdate()
-    due_date_limit = today + timedelta(days=7)
+
+    # HALF-OPEN upper bound, and NO lower bound (v1.29.5).
+    #
+    # `due_date__lt`, not `__lte`: the task runs weekly, so two consecutive runs
+    # of an inclusive `today..today+7` window overlapped on exactly one day and a
+    # payment falling due on that weekday was reminded TWICE. `[today, today+7)`
+    # is seven distinct days and the next run picks up exactly where this one
+    # stopped — no overlap, no gap.
+    #
+    # The `due_date__gte=today` lower bound is gone: it meant a debt stopped
+    # being chased the moment it became overdue, which is precisely when chasing
+    # it matters. An overdue row is now re-included every week until it is paid
+    # or cancelled — that is what a debt chase IS, and `payment_status="pending"`
+    # is the only exit condition (completing or cancelling the row ends it).
+    due_before = today + timedelta(days=7)
 
     # `list()` once: this was `.exists()`, then `.count()`, then the loop below —
     # three executions of the same query for one pass over the rows.
     pending_payments = list(
-        Payment.objects.filter(
-            payment_status="pending", due_date__lte=due_date_limit, due_date__gte=today
-        ).select_related("student", "parent")
+        Payment.objects.filter(payment_status="pending", due_date__lt=due_before)
+        .select_related("student", "parent")
+        .order_by("due_date", "id")
     )
 
     if not pending_payments:
@@ -435,10 +453,17 @@ def send_payment_reminders(self):
     sms_parent_ids: set[int] = set()
     sms_payload: list[int] = []
     for payment in pending_payments:
-        if payment.parent and payment.parent.email:
+        # An ADULT student has no parent — that is valid everywhere else in the
+        # app (`Payment.parent` is nullable precisely for them), and reading only
+        # `payment.parent.email` meant they were never reminded of anything. Same
+        # fallback the receipt task uses, so the two paths cannot disagree about
+        # who a payment's recipient is.
+        recipient = payment.parent.email if payment.parent else payment.student.email
+        if recipient:
+            days_overdue = payment.days_overdue
             emails_data.append(
                 {
-                    "recipient": payment.parent.email,
+                    "recipient": recipient,
                     "subject": f"Recordatorio de Pago - {payment.student.full_name}",
                     "context": {
                         "student_name": payment.student.full_name,
@@ -446,6 +471,11 @@ def send_payment_reminders(self):
                         # format via {{ amount|floatformat:2 }}.
                         "amount": str(payment.amount),
                         "due_date": payment.due_date.strftime("%d/%m/%Y"),
+                        # The window now reaches back over overdue rows, so the
+                        # mail has to say so — "con vencimiento el 30/09" read on
+                        # 15 November is true and useless.
+                        "is_overdue": days_overdue > 0,
+                        "days_overdue": days_overdue,
                     },
                 }
             )
@@ -584,6 +614,35 @@ def send_parent_temporary_password_task(self, parent_id: int, login_url: str = "
     return {"status": "success" if success else "failed", "recipient": parent.email}
 
 
+def dispatch_payment_completed_on_commit(payment_id: int) -> None:
+    """`dispatch_payment_completed`, deferred to COMMIT.
+
+    Production runs ``CELERY_TASK_ALWAYS_EAGER=True`` (Cloud Run, no worker), so
+    ``.delay()`` executes the task *here* — it re-reads the payment by id and
+    emails a receipt. Called from inside a ``transaction.atomic()`` block that
+    later rolls back, that is a receipt for money the database does not record;
+    with a real broker it is a worker reading the row before the write is
+    visible. ``transaction.on_commit`` runs the callback immediately when there
+    is no open transaction, so callers outside one behave exactly as before.
+
+    It lives HERE, next to the dispatch it defers, rather than in
+    ``core/views/payments.py`` where it started life as ``_queue_payment_receipt``:
+    ``billing/admin.py`` is the second completion path in the app and had to
+    reach into a view module for a private helper to get its receipts sent.
+    A completion side effect is not a view concern.
+
+    Consequence for tests: under the plain ``django_db`` fixture on_commit
+    callbacks never fire, so anything asserting ``mail.outbox`` needs
+    ``django_capture_on_commit_callbacks(execute=True)``.
+    """
+    from django.db import transaction
+
+    def _dispatch():
+        dispatch_payment_completed(int(payment_id))
+
+    transaction.on_commit(_dispatch)
+
+
 def dispatch_payment_completed(payment_id: int) -> None:
     """Fire every side effect of a payment becoming COMPLETED: receipt + archive.
 
@@ -598,18 +657,18 @@ def dispatch_payment_completed(payment_id: int) -> None:
     runs ``CELERY_TASK_ALWAYS_EAGER`` — the "queue" is this call stack, inside
     the request that recorded the money.
 
-    Callers inside a transaction must wrap this in ``transaction.on_commit``
-    (see ``core.views.payments._queue_payment_receipt``): eager execution re-reads
-    the payment by id, which a not-yet-committed write is invisible to.
+    Callers inside a transaction must go through
+    ``dispatch_payment_completed_on_commit`` above: eager execution re-reads the
+    payment by id, which a not-yet-committed write is invisible to.
     """
     try:
         send_payment_receipt_email_task.delay(int(payment_id))
-    except Exception:  # noqa: BLE001 — receipt is nice-to-have
+    except Exception:  # receipt is nice-to-have
         logger.exception("Failed to enqueue payment receipt for payment %d", int(payment_id))
 
     try:
         upload_receipt_to_drive_task.delay(int(payment_id))
-    except Exception:  # noqa: BLE001 — Drive archive is nice-to-have
+    except Exception:  # Drive archive is nice-to-have
         logger.exception("Failed to enqueue Drive receipt upload for payment %d", int(payment_id))
 
 
@@ -652,7 +711,7 @@ def send_payment_receipt_email_task(self, payment_id: int):
 
     try:
         pdf_bytes = generate_payment_receipt(payment)
-    except Exception:  # noqa: BLE001 — log and surface, retries will handle transients
+    except Exception:  # log and surface, retries will handle transients
         logger.exception("Failed to render PDF for payment %s", payment_id)
         raise
 
@@ -677,6 +736,10 @@ def send_payment_receipt_email_task(self, payment_id: int):
 def upload_receipt_to_drive_task(self, payment_id: int):
     """Best-effort: archive a completed payment's receipt PDF to Google Drive.
 
+    A no-op outside production unless the QA VM's `/testing/` toggle is on, in
+    which case the receipt is filed into the month's `testing/` sandbox — see
+    `core.services.drive_service.drive_uploads_allowed`.
+
     Deliberately NOT auto-retrying and NOT raising: the Drive archive is a
     convenience on top of the `Payment` row and the emailed receipt, so a Drive
     problem must never fail the payment flow or spawn a retry storm (production
@@ -686,7 +749,14 @@ def upload_receipt_to_drive_task(self, payment_id: int):
     """
     from billing.models import Payment
     from billing.services.pdf_service import generate_payment_receipt
+    from core.services.drive_service import drive_uploads_allowed
     from core.services.drive_service import get_service as get_drive_service
+
+    # Same gate the service enforces, asked here too so a disallowed environment
+    # never even loads the payment or renders its PDF (production runs eager, so
+    # that work happens inside the "marcar cobrado" request).
+    if not drive_uploads_allowed():
+        return {"status": "disabled", "payment_id": payment_id}
 
     drive = get_drive_service()
     if not drive.is_configured():
@@ -910,7 +980,7 @@ def _send_fun_friday_batch(
                     connection=connection,
                 ):
                     sent += 1
-            except Exception:  # noqa: BLE001 — one bad recipient must not abort the batch
+            except Exception:  # one bad recipient must not abort the batch
                 # Opaque index, not the address: recipient emails are family PII
                 # and Cloud Logging retention outlives the app's own controls
                 # (this file's own rule — see the module docstring on args).

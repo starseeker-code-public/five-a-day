@@ -88,8 +88,11 @@ class GoogleSheetsService:
 
     def __init__(self, spreadsheet_id: str | None = None):
         self.spreadsheet_id = spreadsheet_id or getattr(settings, "GOOGLE_SHEETS_SPREADSHEET_ID", "")
-        self._client = None
-        self._sheet = None
+        # `Any`, not the concrete gspread types: this module is import-light on
+        # purpose (gspread is imported inside `_get_sheet`), so naming the types
+        # here would drag the dependency into every import of the module.
+        self._client: Any = None
+        self._sheet: Any = None
 
     # ── Configuration checks ─────────────────────────────────────────────────
 
@@ -119,10 +122,19 @@ class GoogleSheetsService:
         return self._sheet
 
     def _get_or_create_worksheet(self, name: str, cols: int):
+        """The worksheet called `name`, created if it does not exist yet.
+
+        Narrowed to `WorksheetNotFound` (v1.29.5). A bare `except Exception`
+        here read every failure as "not there yet" — an auth error, a revoked
+        share, a 429 — and answered it by trying to CREATE the worksheet, so the
+        real cause was replaced by whatever `add_worksheet` failed with next.
+        """
+        from gspread.exceptions import WorksheetNotFound
+
         sheet = self._get_sheet()
         try:
             ws = sheet.worksheet(name)
-        except Exception:  # gspread.exceptions.WorksheetNotFound
+        except WorksheetNotFound:
             ws = sheet.add_worksheet(title=name, rows=100, cols=cols)
         return ws
 
@@ -184,7 +196,7 @@ class GoogleSheetsService:
             # a live formula — the Sheets equivalent of csv_safe/xlsx_safe_append.
             ws.update(rows, "A1", raw=True)
             return ExportResult(success=True, worksheet=worksheet_name, rows_written=len(rows) - 1)
-        except Exception:  # noqa: BLE001 — never re-raise; caller wants a result object
+        except Exception:  # never re-raise; caller wants a result object
             # Fixed message, not str(e): the exception text (a gspread APIError
             # embeds the full Google API error JSON) reaches the client verbatim
             # via export_to_sheets — the project-wide "never return str(e)" rule.
@@ -243,7 +255,7 @@ class GoogleSheetsService:
             # raw=True: see export_students — formula-injection guard, pinned.
             ws.update(rows, "A1", raw=True)
             return ExportResult(success=True, worksheet=worksheet_name, rows_written=len(rows) - 1)
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.exception("export_payments failed")
             return ExportResult(success=False, worksheet=worksheet_name, error="No se pudo exportar a Google Sheets.")
 

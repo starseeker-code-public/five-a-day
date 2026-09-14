@@ -16,7 +16,7 @@ class TestQAErrorEmailMiddleware:
     def _make_request(self, path="/"):
         rf = RequestFactory()
         req = rf.get(path)
-        req.session = {"username": "qa_user"}
+        req.session = {"username": "qa_user"}  # type: ignore[assignment]
         return req
 
     def test_call_passes_through(self):

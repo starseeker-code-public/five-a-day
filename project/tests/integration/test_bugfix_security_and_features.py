@@ -805,7 +805,7 @@ class TestEnrollmentTypeLabelsAreSpanish:
         send_welcome_email_task(
             parent_id=parent.id, student_id=student_with_parent.id, enrollment_id=active_enrollment.id
         )
-        body = mail.outbox[0].alternatives[0][0]
+        body = mail.outbox[0].alternatives[0][0]  # type: ignore[union-attr]
         assert "Forma de pago" in body
         assert "Mensual" in body
 

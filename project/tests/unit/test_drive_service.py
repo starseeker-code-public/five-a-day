@@ -2,6 +2,11 @@
 
 The Drive client is mocked — these assert the folder-path logic, idempotency,
 and the guarantee that the service NEVER raises whatever Drive does.
+
+Since v1.29.5 the archive is production-only, so every test that expects an
+upload has to say it is production (the `_production` autouse fixture below).
+`override_settings` cannot decorate a plain pytest class — only a
+`SimpleTestCase` — hence a fixture rather than a class decorator.
 """
 
 from datetime import date
@@ -69,7 +74,33 @@ class TestReceiptFilename:
         assert "\\" not in receipt_filename(p)
 
 
+class TestEnvironmentGate:
+    """`drive_uploads_allowed()` / `archive_subfolder()` — the pair every caller
+    reads. No database: outside the QA VM the answer is decided by the
+    environment alone, so a dev box cannot reach the toggle even in principle."""
+
+    def test_production_is_allowed_with_no_sandbox_level(self, settings):
+        settings.ENVIRONMENT = "production"
+        assert drive_service.drive_uploads_allowed() is True
+        assert drive_service.archive_subfolder() == ""
+
+    def test_development_is_refused(self, settings):
+        settings.ENVIRONMENT = "development"
+        settings.IS_TESTING_ENV = False
+        assert drive_service.drive_uploads_allowed() is False
+
+    def test_outside_production_the_sandbox_level_is_testing(self, settings):
+        settings.ENVIRONMENT = "testing"
+        assert drive_service.archive_subfolder() == drive_service.TESTING_SUBFOLDER
+
+
 class TestUploadReceipt:
+    @pytest.fixture(autouse=True)
+    def _production(self, settings):
+        """These assert what an upload DOES; the environment gate has its own
+        class above. Without this every one of them would return "disabled"."""
+        settings.ENVIRONMENT = "production"
+
     def _svc(self):
         # Configured: base folder + a (patched) credential.
         return DriveReceiptService(base_folder_id="BASE")

@@ -12,13 +12,18 @@ whose receipt is already in its month folder — so it is safe to re-run.
 
 Best-effort per payment: one failure is reported and the run continues, so a
 single un-renderable payment or a transient Drive blip does not abort the rest.
+
+Subject to the same environment gate as the on-completion upload: production
+always, the QA VM only while `/testing/`'s "Recibos a Drive" toggle is on (and
+then into the month's `testing/` sandbox), development never. It refuses up
+front rather than reporting a refusal per payment.
 """
 
 from django.core.management.base import BaseCommand, CommandError
 
 from billing.models import Payment
 from billing.services.pdf_service import generate_payment_receipt
-from core.services.drive_service import DriveReceiptService
+from core.services.drive_service import DriveReceiptService, archive_subfolder, drive_uploads_allowed
 
 
 class Command(BaseCommand):
@@ -33,6 +38,17 @@ class Command(BaseCommand):
         apply_changes = options["apply"]
         academic_year = options.get("academic_year")
         limit = options.get("limit")
+
+        # The environment gate, asked once up front. The service refuses every
+        # payment individually too, but walking the whole archive to report one
+        # refusal per row reads like a Drive outage rather than a switched-off
+        # feature — and on the QA VM this is the message that says which switch.
+        if not drive_uploads_allowed():
+            raise CommandError(
+                "Google Drive uploads are switched off for this environment. Production always archives; "
+                "on the testing VM turn on 'Recibos a Drive' in /testing/ first (uploads then land in the "
+                "month's 'testing' subfolder). Development never archives."
+            )
 
         # One service instance for the whole run so the folder-id cache is shared
         # across every payment (one lookup per Curso/Recibos/month, not per file).
@@ -61,7 +77,9 @@ class Command(BaseCommand):
 
         total = payments.count()
         mode = "APPLY" if apply_changes else "DRY RUN"
-        self.stdout.write(f"[{mode}] {total} completed payment(s) to archive.")
+        sandbox = archive_subfolder()
+        destination = f" into the '{sandbox}' sandbox subfolder" if sandbox else ""
+        self.stdout.write(f"[{mode}] {total} completed payment(s) to archive{destination}.")
 
         if not apply_changes:
             # Nothing to iterate for: the count IS the answer. Walking the rows to

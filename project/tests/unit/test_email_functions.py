@@ -67,7 +67,7 @@ class TestFunFridayEmail:
         result = send_fun_friday_email(
             recipients=["parent1@test.com", "parent2@test.com"],
             day_name="viernes",
-            day_number="17",
+            day_number=17,
             month="abril",
             start_time="15:00",
             end_time="16:30",
@@ -84,7 +84,7 @@ class TestFunFridayEmail:
         result = send_fun_friday_email(
             recipients=["parent@test.com"],
             day_name="viernes",
-            day_number="17",
+            day_number=17,
             month="abril",
             start_time="15:00",
             end_time="16:30",
@@ -103,13 +103,13 @@ class TestVacationClosure:
         result = send_vacation_closure_email(
             recipients=["parent@test.com"],
             start_closure_day_name="lunes",
-            start_closure_day_number="22",
+            start_closure_day_number=22,
             end_closure_day_name="viernes",
-            end_closure_day_number="2",
+            end_closure_day_number=2,
             month_closure="diciembre",
             closure_reason="Navidad",
             reopening_day_name="lunes",
-            reopening_day_number="7",
+            reopening_day_number=7,
             month_reopening="enero",
         )
         assert result is True
@@ -123,9 +123,9 @@ class TestPaymentReminderFull:
         result = send_payment_reminder_email(
             recipients=["parent@test.com"],
             payment_start_day_name="lunes",
-            payment_start_day_number="1",
+            payment_start_day_number=1,
             payment_end_day_name="viernes",
-            payment_end_day_number="5",
+            payment_end_day_number=5,
             month="mayo",
             iban_number="ES1234567890",
             reduced_price_cheque_idioma="34.00",

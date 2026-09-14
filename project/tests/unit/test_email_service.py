@@ -73,10 +73,10 @@ class TestSendEmail:
         )
         msg = mail.outbox[0]
         # EmailMultiAlternatives stores HTML in alternatives
-        assert len(msg.alternatives) == 1
-        content, mimetype = msg.alternatives[0]
+        assert len(msg.alternatives) == 1  # type: ignore[union-attr]
+        content, mimetype = msg.alternatives[0]  # type: ignore[union-attr]
         assert mimetype == "text/html"
-        assert "Test" in content or "birthday" in content.lower() or len(content) > 0
+        assert "Test" in content or "birthday" in content.lower() or len(content) > 0  # type: ignore[arg-type,union-attr]
 
     def test_default_context_values(self, svc):
         svc.send_email(

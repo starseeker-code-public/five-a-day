@@ -12,11 +12,26 @@
         Hola,
     </p>
 
+    {% if is_overdue %}
+    {% comment %}
+       The reminder window reaches back over already-overdue rows since v1.29.5,
+       so the copy has to distinguish them: "con vencimiento el 30/09" read on 15
+       November is true and tells the family nothing. Light-tint red on dark
+       text, like every other accent box here — this email is deliberately a
+       single LIGHT theme (see base_email.html).
+    {% endcomment %}
+    <div style="background-color: #fee2e2; border-left: 4px solid #dc2626; padding: 15px; margin: 20px 0; text-align: left;">
+        <p style="color: #991b1b; margin: 0; font-size: 14px;">
+            Este es un recordatorio automático: hay un pago <strong>vencido</strong> para <strong>{{ student_name }}</strong> por importe de <strong>{{ amount }} €</strong>. Venció el <strong>{{ due_date }}</strong>{% if days_overdue %} (hace {{ days_overdue }} día{{ days_overdue|pluralize:"s" }}){% endif %}.
+        </p>
+    </div>
+    {% else %}
     <div style="background-color: #fef3c7; border-left: 4px solid #F59E0B; padding: 15px; margin: 20px 0; text-align: left;">
         <p style="color: #b45309; margin: 0; font-size: 14px;">
             Este es un recordatorio automático: tenéis un pago pendiente para <strong>{{ student_name }}</strong> por importe de <strong>{{ amount }} €</strong>, con vencimiento el <strong>{{ due_date }}</strong>.
         </p>
     </div>
+    {% endif %}
 
     <p style="font-size: 16px; color: #4a4a57; line-height: 1.6; margin-bottom: 20px;">
         Si ya habéis realizado el pago, ignorad este mensaje.

@@ -477,7 +477,7 @@ class TestChequeIdiomaUnit:
             },
         )
         assert response.status_code == 302
-        body = mail.outbox[0].alternatives[0][0]
+        body = mail.outbox[0].alternatives[0][0]  # type: ignore[union-attr]
         assert "34 euros" in body
         assert "34€ euros" not in body
 
@@ -495,7 +495,7 @@ class TestChequeIdiomaUnit:
                 "reduced_price_cheque_idioma": "",
             },
         )
-        body = mail.outbox[0].alternatives[0][0]
+        body = mail.outbox[0].alternatives[0][0]  # type: ignore[union-attr]
         # Never the old hard-coded "34€" literal on the POST path.
         assert "34 euros" in body
 
