@@ -15,7 +15,7 @@ Built to centralize student records, automate billing cycles, and streamline par
 ### Project Status
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v1.29.7-brightgreen?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-v1.29.8-brightgreen?style=flat-square" alt="Version">
   &nbsp;|&nbsp;
   <a href="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml?query=branch%3Amain"><img src="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml/badge.svg?branch=main&style=flat-square" alt="CI main"></a>
   &nbsp;|&nbsp;
@@ -36,9 +36,9 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 | Version | Date | Description |
 |---------|------|-------------|
-| **v1.29.7** | 2026-09-14 | Deliberate record deletion, correlated structured logging |
+| **v1.29.8** | 2026-09-15 | App branding aligned to "Five a Day Evolution" |
+| v1.29.7 | 2026-09-14 | Deliberate record deletion, correlated structured logging |
 | v1.29.6 | 2026-09-14 | Destructive migrations announced everywhere, one shared detector |
-| v1.29.5 | 2026-09-14 | Overdue payment chasing, production-only Drive archive, real type gate |
 
 ---
 
@@ -140,8 +140,48 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 ## Version History
 
-<details id="v1297" open>
-<summary><strong>v1.29.7 — Removing a record is possible again, and the logs can finally say what failed (current)</strong></summary>
+<details id="v1298" open>
+<summary><strong>v1.29.8 — One brand name, spelled the same way everywhere (current)</strong></summary>
+
+**The problem: the documentation and the application disagreed about the product's name**
+
+- `README.md` has said **Five a Day Evolution** since the title was set. The application said
+  **eVolution** — a lowercase `e` — in every place a human actually reads it: the `/admin/` site
+  header, the sidebar subtitle under the logo, both login shells, the `<meta name="description">`,
+  the Open Graph and Twitter card titles, the JSON-LD `WebApplication` name, and the footer banner
+  of every support ticket mailed to `SUPPORT_EMAIL`.
+- The split was invisible from either side. Nobody reading the docs sees the app, and nobody using
+  the app reads the README — so the two spellings coexisted through nine releases while the version
+  history above described a product by a name it never printed.
+
+**Where it was corrected**
+
+- **Application chrome** — `admin.site.site_header`, `admin/base_site.html`, `admin/login.html`,
+  the `base.html` sidebar subtitle, and the header comments of `theme.css` and `admin_custom.css`.
+- **Every metadata surface, in both shells** — `base.html` and the standalone `login.html` each
+  carry their own full set (description, `og:site_name`, `og:title`, `twitter:title`, JSON-LD
+  `name`), because `login.html` deliberately does not extend `base.html`. Five of the sixteen
+  edits are that duplication.
+- **Outbound mail** — the HTML bodies of `emails/password_reset.html` and
+  `emails/teacher_activation.html`, plus all four `registration/*.txt` files. The two
+  `*_subject.txt` files matter most: a subject line is the only part of an activation mail a
+  teacher sees before deciding it is genuine.
+- **Support tickets** — the ASCII banner in `core/views/support.py`.
+
+**Nothing else moved**
+
+- Sixteen files, twenty-five lines, every one of them a string literal. No model, migration, env
+  var, URL, service or Make target changed; `scripts/detect_destructive_migrations.py --staged`
+  reports clean and the test count and coverage are untouched.
+- `git grep` for the old spelling over `project/` and the `Makefile` now returns nothing — which
+  is the check worth re-running after any future rename, since the brand string is written out
+  per file rather than read from a setting. (Scoped to the application tree on purpose: this
+  section and `CLAUDE.md` both name the old spelling in prose, so an unscoped grep never clears.)
+
+</details>
+
+<details id="v1297">
+<summary><strong>v1.29.7 — Removing a record is possible again, and the logs can finally say what failed</strong></summary>
 
 **The problem: «su cuenta no tiene permisos» was a rule wearing the wrong words**
 
