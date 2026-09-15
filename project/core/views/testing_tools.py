@@ -484,8 +484,11 @@ def _email_task_done(task):
             recipient_list=recipients,
             fail_silently=True,
         )
-    except Exception:  # noqa: BLE001 — never block the status update on email
-        pass
+    except Exception:
+        # Never block the status update on email — but say so. A silent `pass`
+        # made "no llego el aviso" unanswerable: nothing recorded whether the
+        # send was attempted, refused or never reached.
+        logger.exception("No se pudo enviar el aviso de tarea QA (task_id=%d)", int(task.pk))
 
 
 def _set_qa_flag(request, field: str):

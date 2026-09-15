@@ -473,7 +473,7 @@ def send_tax_certificate_email(parent, year: int, connection=None) -> bool:
         try:
             parent = Parent.objects.get(id=parent)
         except Parent.DoesNotExist:
-            logger.error(f"Parent con ID {parent} no encontrado")
+            logger.error("Certificado fiscal: parent_id=%d no existe", int(parent))
             return False
 
     # Verificar que el padre tiene pagos en ese ano
