@@ -1,6 +1,6 @@
 {% autoescape off %}Hola{% if user.first_name %} {{ user.first_name }}{% endif %},
 
-Se ha creado tu cuenta de profesor/a en Five a Day eVolution.
+Se ha creado tu cuenta de profesor/a en Five a Day Evolution.
 
 Para elegir tu contraseña y activar el acceso, abre este enlace en tu navegador:
 

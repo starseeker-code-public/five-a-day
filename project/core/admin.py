@@ -15,7 +15,7 @@ from .models import (
     TodoItem,
 )
 
-admin.site.site_header = "Five a Day eVolution"
+admin.site.site_header = "Five a Day Evolution"
 admin.site.site_title = "Five a Day · Admin"
 admin.site.index_title = "Panel de administración"
 

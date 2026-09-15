@@ -163,25 +163,31 @@ class EmailService:
                     email.attach(filename, content, mimetype)
 
             # Enviar email. `send()` devuelve el nº de mensajes ACEPTADOS por el
-            # backend; con fail_silently=True un fallo total de SMTP devuelve 0
-            # sin lanzar. Descartar ese valor y devolver True siempre hacía que
+            # backend; un fallo de SMTP que el backend se trague devuelve 0 sin
+            # lanzar. Descartar ese valor y devolver True siempre hacía que
             # toda la app informara de un envío correcto durante una caída de
             # correo (contadores "0 fallidos", tickets de HistoryLog, el portal
             # diciendo a una familia que revise un buzón al que no llegó nada).
             #
-            # `fail_silently` goes to send() ONLY when this message is opening
-            # its own connection. Django refuses both at once —
-            # "fail_silently cannot be used with a connection. Pass
-            # fail_silently to get_connection() instead." — and that TypeError
-            # was raised for EVERY message of EVERY mass send the moment the
-            # shared-connection batching landed: the exception was swallowed by
-            # the except below, so each send merely "returned False" and the
-            # operator got a tally of failures with no idea why. When a batch
-            # supplies the connection, IT owns the policy (see
-            # `open_connection`), which is why the batch helper wraps the open.
-            sent = email.send() if connection is not None else email.send(fail_silently=fail_silently)
+            # `fail_silently` NUNCA baja a Django: es politica de ESTE metodo y
+            # se aplica en el `except` de abajo. Pasarlo a `send()` lo instala en
+            # el backend, que se traga el motivo dentro de Django (`open()`
+            # captura OSError, `_send()` captura SMTPException) y deja un cero
+            # pelado sin traza ni causa. Tambien evita el RemovedInDjango70Warning
+            # del argumento, deprecado en Django 6.1.
+            sent = email.send()
             if not sent:
-                logger.error("Email '%s' NO se envió (backend aceptó 0 mensajes)", safe_log(template_name))
+                # Cero aceptados SIN excepcion: destinatarios vacios, o una
+                # conexion compartida construida con fail_silently.
+                logger.error(
+                    "Email '%s' NO se envio: 0 aceptados por el backend y sin excepcion "
+                    "(destinatarios=%d, cc=%d, bcc=%d, conexion_compartida=%s)",
+                    safe_log(template_name),
+                    len(recipients),
+                    len(cc or []),
+                    len(bcc or []),
+                    connection is not None,
+                )
                 return False
 
             logger.info("Email '%s' enviado a %s destinatario(s)", safe_log(template_name), len(recipients))
@@ -257,7 +263,25 @@ class EmailService:
                 with contextlib.suppress(Exception):
                     connection.close()
 
-        logger.info(f"Envio masivo completado: {results['sent']} enviados, {results['failed']} fallidos")
+        # A partial mass send used to leave nothing but a count: 130 payment
+        # reminders were lost to a dead socket and the only trace was
+        # "130 fallidos". The per-message cause now lands in `send_email`, and
+        # this line is ERROR when anything failed so the batch itself surfaces
+        # (and, in production, alerts) instead of scrolling past at INFO.
+        level = logging.ERROR if results["failed"] else logging.INFO
+        logger.log(
+            level,
+            "Envio masivo '%s': %d enviados, %d fallidos de %d",
+            safe_log(template_name),
+            results["sent"],
+            results["failed"],
+            len(emails_data),
+            extra={
+                "email_template": safe_log(template_name),
+                "sent": results["sent"],
+                "failed": results["failed"],
+            },
+        )
         return results
 
 

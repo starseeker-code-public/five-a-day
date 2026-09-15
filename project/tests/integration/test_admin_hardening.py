@@ -432,6 +432,90 @@ class TestPaymentBulkActions:
         assert completed_payment.payment_date is None
 
 
+class TestRecordsCanBeRemovedDeliberately:
+    """The ordinary Delete button refuses a fiscal payment, and PROTECT refuses
+    a student who has one — both correct, and together they left an admin with
+    a record created by mistake no route but a database shell. `/admin/` said
+    «su cuenta no tiene permisos», which reads as a broken account, not a rule.
+    `purge_with_history` is the named, confirmed way through."""
+
+    def _purge(self, client, model, pks, confirm):
+        payload = {"action": "purge_with_history", "_selected_action": [str(pk) for pk in pks]}
+        if confirm:
+            payload["purge_confirmed"] = "1"
+        url = reverse(f"admin:{model._meta.app_label}_{model._meta.model_name}_changelist")
+        return client.post(url, payload)
+
+    def test_the_confirmation_page_deletes_nothing(self, admin_client_, rich):
+        response = self._purge(admin_client_, Student, [rich["student"].pk], confirm=False)
+
+        assert response.status_code == 200
+        assert "eliminar definitivamente" in response.content.decode().lower()
+        assert Student.objects.filter(pk=rich["student"].pk).exists()
+        assert Payment.objects.filter(student=rich["student"]).count() == 5
+
+    def test_confirming_removes_the_student_with_their_money(self, admin_client_, rich):
+        student = rich["student"]
+
+        self._purge(admin_client_, Student, [student.pk], confirm=True)
+
+        assert not Student.objects.filter(pk=student.pk).exists()
+        assert not Payment.objects.filter(student_id=student.pk).exists()
+        assert not Enrollment.objects.filter(student_id=student.pk).exists()
+        # CASCADE takes these; the guardian is a separate record and stays.
+        assert not StudentParent.objects.filter(student_id=student.pk).exists()
+        assert not FunFridayAttendance.objects.filter(student_id=student.pk).exists()
+        assert Parent.objects.filter(pk=rich["parent"].pk).exists()
+
+    def test_a_receipt_numbered_payment_survives_delete_and_yields_to_the_purge(self, admin_client_, rich):
+        """`has_delete_permission` keeps refusing the accidental click — the
+        guard is what stops a hole in the `YYYY-NNN` sequence — while the named
+        action goes through."""
+        payment = Payment.objects.filter(student=rich["student"], payment_status="completed").first()
+        payment.receipt_number = "2026-633"
+        payment.save(update_fields=["receipt_number"])
+
+        admin_client_.post(
+            reverse("admin:billing_payment_changelist"),
+            {"action": "delete_selected", "_selected_action": [str(payment.pk)], "index": "0", "post": "yes"},
+        )
+        assert Payment.objects.filter(pk=payment.pk).exists()
+
+        self._purge(admin_client_, Payment, [payment.pk], confirm=True)
+        assert not Payment.objects.filter(pk=payment.pk).exists()
+
+    def test_a_parent_keeps_their_children(self, admin_client_, rich):
+        self._purge(admin_client_, Parent, [rich["parent"].pk], confirm=True)
+
+        assert not Parent.objects.filter(pk=rich["parent"].pk).exists()
+        assert Student.objects.filter(pk=rich["student"].pk).exists()
+
+    @pytest.mark.parametrize(
+        "model", [Student, Parent, Payment, Enrollment], ids=["student", "parent", "payment", "enrollment"]
+    )
+    def test_a_non_superuser_is_not_offered_the_action(self, rf, model):
+        request = rf.get("/")
+        request.user = User.objects.create_user(f"staff-{model._meta.model_name}", "s@example.com", "unused")
+        request.user.is_staff = True
+
+        assert "purge_with_history" not in admin.site._registry[model].get_actions(request)
+
+    def test_the_action_refuses_a_non_superuser_on_its_own(self, rf, rich):
+        """`get_actions` already hides it, so this branch is unreachable over
+        HTTP — it is what keeps the rule true if a future ModelAdmin lists the
+        action without the filter, or calls it directly."""
+        request = rf.post("/admin/")
+        request.user = User.objects.create_user("staff-direct", "s@example.com", "unused")
+        request._messages = _SilentMessages()
+
+        response = admin.site._registry[Student].purge_with_history(
+            request, Student.objects.filter(pk=rich["student"].pk)
+        )
+
+        assert response is None
+        assert Student.objects.filter(pk=rich["student"].pk).exists()
+
+
 class _SilentMessages:
     """Minimal messages backend so `message_user` works on a bare RequestFactory."""
 

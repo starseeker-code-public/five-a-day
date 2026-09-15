@@ -4,6 +4,7 @@ Middleware — authentication, QA error reporting, and teacher view whitelisting
 
 import logging
 import secrets
+import time
 import traceback
 
 from django.conf import settings
@@ -15,7 +16,145 @@ from django.urls import Resolver404, resolve, reverse
 from django.utils import timezone
 from django.views.debug import SafeExceptionReporterFilter
 
+from core.logging_utils import (
+    new_request_id,
+    reset_request_id,
+    reset_trace_id,
+    sanitize_request_id,
+    sanitize_trace_id,
+    set_request_id,
+    set_trace_id,
+)
+
 logger = logging.getLogger(__name__)
+
+
+class RequestLogMiddleware:
+    """Give every request an id, then say how it ended and how long it took.
+
+    THE ID. One failure writes several records from several modules, and with
+    nothing in common they can only be joined by comparing clocks — which is
+    what a production welcome-email failure cost: three alert mails, one
+    incident, no way to prove it. Every record logged while this middleware is
+    on the stack carries the same `request_id` (see
+    `core.logging_utils.RequestContextFilter`), the alert email carries it too,
+    and it is echoed in the `X-Request-ID` response header so a user reporting
+    a problem can quote the exact request to look up.
+
+    An inbound id is honoured so a correlation survives the proxy hop, but only
+    after `sanitize_request_id` — the header is client-controlled, and a value
+    with a newline in it forges log records. `X-Cloud-Trace-Context` is
+    preferred when present because Cloud Run sets it on the way in, which is
+    what lets Cloud Logging nest our entries under ITS request log.
+
+    THE LINE. Deliberately quiet, and levelled so the noise is proportionate:
+
+    * 5xx -> ERROR, but only when Django did not already log the exception.
+      `django.request` logs an unhandled 500 at ERROR with the traceback, and
+      that is what mails the admins; a second ERROR here would mean two alerts
+      per incident from two throttle buckets, so an already-reported 500 falls
+      through to the INFO rung below — still carrying the timing and the id,
+      just not alerting twice. A 5xx RETURNED by a view rather than raised is
+      logged at ERROR, because nothing else logs it at all.
+    * slow -> WARNING past `settings.SLOW_REQUEST_LOG_MS`. A request that took
+      nine seconds and succeeded is invisible in every other log we have.
+    * 4xx -> INFO. Visible when you go looking, never an alert.
+    * everything else -> DEBUG, i.e. nothing in production, where the level is
+      INFO. A per-request line for every static asset would cost real money in
+      Cloud Logging and bury the entries that matter.
+
+    The URL NAME is logged, never `request.path`: the path is attacker-
+    controlled free text (CodeQL `py/log-injection`) and groups badly, while
+    the resolved name is a fixed vocabulary that aggregates.
+    """
+
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        trace_id = self._incoming_trace(request)
+        request_id = self._incoming_id(request, trace_id)
+        token = set_request_id(request_id)
+        trace_token = set_trace_id(trace_id)
+        request.request_id = request_id
+        started = time.monotonic()
+        try:
+            response = self.get_response(request)
+            elapsed_ms = int((time.monotonic() - started) * 1000)
+            response["X-Request-ID"] = request_id
+            # Logged INSIDE the try, while the id is still bound: the filter
+            # that stamps records reads the context variable, so a completion
+            # line emitted after the reset would be the one record in the
+            # request that carries no correlation id.
+            self._log(request, response, elapsed_ms, request_id)
+            return response
+        finally:
+            # A `finally`, because Gunicorn reuses threads: an id left bound
+            # leaks onto whatever that worker serves next.
+            reset_trace_id(trace_token)
+            reset_request_id(token)
+
+    @staticmethod
+    def _incoming_trace(request) -> str:
+        """Cloud Run's trace id for this request, or "" when there isn't one.
+
+        This is what `logging.googleapis.com/trace` is built from, which is what
+        makes Cloud Logging show our entries INSIDE the request they belong to
+        rather than as a parallel stream. Only Google's front end can supply it,
+        so a missing or malformed header yields "" and the entry is simply not
+        nested — never a fabricated trace, which would file our records under
+        somebody else's request.
+        """
+        # Format is "<trace-id>/<span-id>;o=1"; only the trace id is ours.
+        header = request.META.get("HTTP_X_CLOUD_TRACE_CONTEXT", "")
+        return sanitize_trace_id(header.split("/", 1)[0]) if header else ""
+
+    @staticmethod
+    def _incoming_id(request, trace_id: str = "") -> str:
+        """Prefer Cloud Run's trace id, then a client id, else mint one.
+
+        Reusing the trace as the correlation id is deliberate: one string then
+        finds the request in Cloud Logging AND every record the app wrote for
+        it, instead of forcing a two-step lookup.
+        """
+        if trace_id:
+            return trace_id
+        supplied = request.META.get("HTTP_X_REQUEST_ID", "")
+        return sanitize_request_id(supplied) if supplied else new_request_id()
+
+    @staticmethod
+    def _log(request, response, elapsed_ms: int, request_id: str) -> None:
+        status = getattr(response, "status_code", 0)
+        match = getattr(request, "resolver_match", None)
+        # A fixed vocabulary, never the raw path. "unresolved" is the honest
+        # answer for a 404 that matched no pattern.
+        url_name = (match.url_name if match and match.url_name else None) or "unresolved"
+        slow_ms = getattr(settings, "SLOW_REQUEST_LOG_MS", 3000)
+
+        if status >= 500 and not getattr(request, "_fad_exception_logged", False):
+            level = logging.ERROR
+        elif elapsed_ms >= slow_ms:
+            level = logging.WARNING
+        elif status >= 400:
+            level = logging.INFO
+        else:
+            level = logging.DEBUG
+
+        logger.log(
+            level,
+            "%s %s -> %d in %dms",
+            request.method,
+            url_name,
+            status,
+            elapsed_ms,
+            extra={
+                "http_method": request.method,
+                "url_name": url_name,
+                "status": status,
+                "duration_ms": elapsed_ms,
+                "request_id": request_id,
+            },
+        )
 
 
 class QAErrorEmailMiddleware:
@@ -226,6 +365,9 @@ class QAErrorEmailMiddleware:
                 f"Version:     {settings.APP_VERSION}\n"
                 f"Environment: {settings.ENVIRONMENT}\n"
                 f"Debug:       {settings.DEBUG}\n"
+                # The one string that finds every log record this request wrote.
+                # Without it the report and the logs can only be joined by clock.
+                f"Request ID:  {getattr(request, 'request_id', '(unknown)')}\n"
                 f"Server time: {timezone.localtime():%Y-%m-%d %H:%M:%S}\n\n"
                 f"REQUEST BODY (first 500 chars):\n"
                 f"{body_preview or '(empty)'}\n\n"

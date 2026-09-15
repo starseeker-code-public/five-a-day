@@ -50,18 +50,30 @@ documented dependency flow.
 Generic email sending service with HTML template rendering and inline images.
 
 - `send_email(template_name, recipients, subject, context, ..., connection=None, fail_silently=...)` — renders a Django template and sends via SMTP
-- `send_bulk_emails(template_name, emails_data, ...)` — sends multiple emails with the same template. v1.29.0: opens ONE shared SMTP session for the whole batch (guarded — an unreachable server degrades to per-message sends rather than raising, preserving the results-dict contract its caller `send_payment_reminders` relies on) instead of one TCP+TLS+AUTH handshake per recipient. **v1.29.1 drops that shared session on ANY failure** and lets the rest of the batch open their own: Django's SMTP backend never reopens a connection it still holds, so one mid-batch disconnect — Gmail drops idle sockets, and enforces a per-session message cap — turned every remaining send into a guaranteed failure, and 130 payment reminders were lost to a socket that died after the 20th. A wasted reconnect after a genuine per-recipient failure (a bad address) costs one handshake; guessing wrong the other way costs the whole run
+- `send_bulk_emails(template_name, emails_data, ...)` — sends multiple emails with the same template. v1.29.7 logs the batch result at **ERROR when any message failed** (INFO otherwise), with the template, the sent/failed split and the batch size, so a partial run alerts instead of scrolling past. v1.29.0: opens ONE shared SMTP session for the whole batch (guarded — an unreachable server degrades to per-message sends rather than raising, preserving the results-dict contract its caller `send_payment_reminders` relies on) instead of one TCP+TLS+AUTH handshake per recipient. **v1.29.1 drops that shared session on ANY failure** and lets the rest of the batch open their own: Django's SMTP backend never reopens a connection it still holds, so one mid-batch disconnect — Gmail drops idle sockets, and enforces a per-session message cap — turned every remaining send into a guaranteed failure, and 130 payment reminders were lost to a socket that died after the 20th. A wasted reconnect after a genuine per-recipient failure (a bad address) costs one handshake; guessing wrong the other way costs the whole run
 - `open_connection()` — a single reusable SMTP connection for a batch of sends (see below)
 - `email_service` — singleton instance used throughout the project
 
-> **`fail_silently` and `connection` are mutually exclusive — and getting that wrong broke EVERY
-> mass send** (v1.27.1). Django refuses both at once (*"fail_silently cannot be used with a
-> connection. Pass fail_silently to get_connection() instead."*), so `send_email` passes
-> `fail_silently` to `send()` **only when it is opening its own connection**; when a batch supplies
-> the connection, the batch owns the policy. Without that branch the `TypeError` was raised for
-> every message of every mass send the moment shared-connection batching landed — and it was
-> swallowed by the surrounding `except`, so each send merely "returned False" and the operator got a
-> tally of failures with no explanation anywhere.
+> **`fail_silently` NEVER reaches Django — it is this method's policy, applied in its own
+> `except`** (v1.29.7). It used to be passed down to `send()`, which installs it on the *backend*,
+> where Django swallows the reason internally (`open()` catches `OSError`, `_send()` catches
+> `SMTPException`) and hands back a bare zero with no traceback and no cause — the single biggest
+> reason a failed send could not be explained after the fact. Keeping the policy up here also
+> dissolves the v1.27.1 bug below by construction and retires the `RemovedInDjango70Warning` on the
+> argument, deprecated in Django 6.1.
+>
+> A zero-accepted send with **no exception** is now its own ERROR naming the recipient / cc / bcc
+> counts and whether a shared connection was in play — the two things that actually produce it
+> (empty recipients, or a shared connection built with `fail_silently`). And `send_bulk_emails`
+> logs at **ERROR rather than INFO whenever anything failed**, so a partial batch surfaces (and, in
+> production, alerts) instead of scrolling past: 130 payment reminders were once lost to a dead
+> socket and the only trace left was the words "130 fallidos".
+>
+> *Historical (v1.27.1, now moot):* Django refuses `fail_silently` and `connection` at once
+> (*"fail_silently cannot be used with a connection. Pass fail_silently to get_connection()
+> instead."*). When shared-connection batching landed, that `TypeError` was raised for every
+> message of every mass send and swallowed by the surrounding `except`, so each send merely
+> "returned False" and the operator got a tally of failures with no explanation anywhere.
 >
 > **`open_connection()` fails LOUDLY on purpose.** `with connection:` calls `open()` with
 > `fail_silently=False`, so a TCP/TLS/AUTH failure propagates — in a request path that is a 500

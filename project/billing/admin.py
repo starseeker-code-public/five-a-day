@@ -24,6 +24,7 @@ from billing.models import (
     Payment,
     SiteConfiguration,
 )
+from core.admin_purge import PurgeWithHistoryMixin
 from core.utils import csv_safe_row
 
 logger = logging.getLogger(__name__)
@@ -67,7 +68,11 @@ class EnrollmentTypeAdmin(admin.ModelAdmin):
 
 # Payments and enrollments
 @admin.register(Payment)
-class PaymentAdmin(admin.ModelAdmin):
+class PaymentAdmin(PurgeWithHistoryMixin, admin.ModelAdmin):
+    # Nothing points at Payment, so there is no dependent to clear first — the
+    # action exists here only to get PAST `has_delete_permission`, which is the
+    # whole point: a fiscal row goes when an admin says so by name, not when
+    # they click the Delete button next to it.
     list_display = [
         "id",
         "student_link",
@@ -131,6 +136,7 @@ class PaymentAdmin(admin.ModelAdmin):
         "soft_delete_payments",
         "restore_payments",
         "export_to_csv",
+        "purge_with_history",
     ]
 
     def get_queryset(self, request):
@@ -513,7 +519,12 @@ class SiteConfigurationAdmin(admin.ModelAdmin):
 
 
 @admin.register(Enrollment)
-class EnrollmentAdmin(admin.ModelAdmin):
+class EnrollmentAdmin(PurgeWithHistoryMixin, admin.ModelAdmin):
+    # `Payment.enrollment` is PROTECT, so an enrollment created by mistake can
+    # only go once the periods it billed do.
+    purge_accessors = ("payments",)
+    actions = ["purge_with_history"]
+
     list_display = [
         "student",
         "enrollment_type",
