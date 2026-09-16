@@ -78,7 +78,18 @@ git log HEAD --format='%s%n%b' -1   # full current commit message (if any)
 grep '^version' pyproject.toml  # current version from pyproject
 grep 'APP_VERSION' project/project/settings.py | head -1   # fallback default
 git remote -v                   # owner/repo for CI badges
+
+# Does this release drop schema? Exit 0 = clean, 1 = destructive, 2 = detector
+# broke (never read that as clean). Run it ALWAYS, not only when the staged
+# diff obviously touches migrations.
+python scripts/detect_destructive_migrations.py --staged --format text
 ```
+
+**If that reports destructive operations, you must surface it** — see Step 6.
+This is the same script the release PR body, the testing-deploy email and both
+production gates use, so what you report here is exactly what will block the
+deploy later. v1.29.5 shipped five `RemoveField`s and nothing said so until a
+human had already approved a production deploy the gate then refused.
 
 If the working tree has **unstaged** changes that look relevant, ask the user whether to include them. Never stage files yourself without confirmation.
 
@@ -512,7 +523,25 @@ Any hit outside `.venv/` → fix.
 
 ## Step 6 — Report back
 
-After saving all docs, report in under 25 lines:
+After saving all docs, report in under 25 lines.
+
+**If Step 1's destructive-migration scan exited 1, the FIRST thing in the report
+is a warning block** — above the file list, not buried in it. The developer is
+about to ship this, and the cost of them learning it later is a wasted
+production approval (the deploy arms, a human clicks Approve, and Gate 3 or the
+deploy gate refuses). State:
+
+- which migration files drop or rename schema, with the operations found
+- that the production deploy must be started from *Actions → Deploy production →
+  Run workflow* with **`ack_destructive`** ticked — and **not** `force`, which
+  also skips the QA sign-off, the provenance gate and the version compare
+- that migrations run BEFORE the service rolls, so the **currently deployed**
+  code runs against the new schema for the whole rollout window. Ask explicitly
+  whether that old code still reads what is being removed: if it does, the
+  window is an outage and the change should be split (ship the code that stops
+  using the column first, drop it in the next release)
+
+Then the usual report:
 
 - **Files updated** — list each file with a one-sentence summary of what changed
 - **Versions moved** — which versions entered/exited the Recent Versions table

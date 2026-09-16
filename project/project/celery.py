@@ -5,6 +5,7 @@ https://docs.celeryq.dev/en/stable/django/first-steps-with-django.html
 
 import logging
 import os
+from contextvars import Token
 
 from celery import Celery
 from celery.schedules import crontab
@@ -102,6 +103,74 @@ app.conf.beat_schedule = {
 }
 
 app.conf.timezone = "Europe/Madrid"
+
+
+# ============================================================================
+# TASK LOG CONTEXT + FAILURE REPORTING
+# ============================================================================
+# Two gaps these close.
+#
+# 1. A task's log records had nothing tying them to each other or to the
+#    request that queued them. Production runs CELERY_TASK_ALWAYS_EAGER, so a
+#    task usually IS part of a request — hence: inherit the request's id when
+#    there is one, and fall back to the task id only for work that has no
+#    request behind it (Beat, a Cloud Run Job, a management command). Inheriting
+#    is the point; overwriting would split one incident in two again.
+#
+# 2. Nothing logged a task failure in a uniform place. Every task invented its
+#    own reporting, so "did the nightly job actually work?" could only be
+#    answered task by task — and a task that died before reaching its own
+#    handler answered it nowhere.
+_TASK_ID_TOKENS: dict[str, Token[str]] = {}
+
+
+def _bind_task_log_context(task_id=None, **kwargs):
+    from core.logging_utils import get_request_id, sanitize_request_id, set_request_id
+
+    if get_request_id() or not task_id:
+        return
+    _TASK_ID_TOKENS[task_id] = set_request_id(sanitize_request_id(task_id))
+
+
+def _unbind_task_log_context(task_id=None, **kwargs):
+    from core.logging_utils import reset_request_id
+
+    token = _TASK_ID_TOKENS.pop(task_id, None)
+    if token is not None:
+        reset_request_id(token)
+
+
+def _log_task_failure(task_id=None, exception=None, sender=None, einfo=None, **kwargs):
+    """One ERROR per terminal task failure, naming the task and the cause.
+
+    Not the arguments: they carry recipient addresses and ids (see the note in
+    `comms.tasks`). The task name plus the correlation id is enough to find the
+    task's own records, which have the domain context.
+
+    `Retry` never reaches here — Celery signals a retry separately — so this
+    fires once, when the task has actually given up.
+    """
+    from comms.log_safe import safe_log
+
+    logger.error(
+        "Celery task '%s' failed: %s: %s",
+        safe_log(getattr(sender, "name", "unknown")),
+        type(exception).__name__ if exception else "unknown",
+        safe_log(exception),
+        exc_info=exception if exception is not None else False,
+        extra={"celery_task": safe_log(getattr(sender, "name", "unknown")), "celery_task_id": safe_log(task_id)},
+    )
+
+
+def _connect_task_signals():
+    from celery.signals import task_failure, task_postrun, task_prerun
+
+    task_prerun.connect(_bind_task_log_context, dispatch_uid="project.celery.bind_log_context")
+    task_postrun.connect(_unbind_task_log_context, dispatch_uid="project.celery.unbind_log_context")
+    task_failure.connect(_log_task_failure, dispatch_uid="project.celery.log_task_failure")
+
+
+_connect_task_signals()
 
 
 @app.task(bind=True, ignore_result=True)

@@ -258,7 +258,7 @@ def send_birthday_emails_task(self):
         logger.info("No hay cumpleanos hoy")
         return {"status": "success", "birthdays_found": 0}
 
-    logger.info(f"Encontrados {len(birthday_students)} cumpleanos hoy")
+    logger.info("Encontrados %d cumpleanos hoy", len(birthday_students))
 
     # One task per student, dispatched through `_dispatch` so a single bad address
     # cannot stop the rest. A bare `.delay()` here aborted the whole loop under

@@ -572,23 +572,91 @@ jobs:
           # it. This makes the approver see it before clicking Approve, and the
           # deploy job refuses to proceed without an explicit acknowledgement.
           #
-          # Detected: DeleteModel, RemoveField, RenameField, RenameModel,
-          # RemoveConstraint/RemoveIndex on a name old code may still use, and
-          # raw DROP/TRUNCATE inside RunSQL. NOT detected (and worth a human
-          # look anyway): an AlterField that narrows a column, e.g. null=True →
-          # null=False, or a shortened max_length.
-          DESTRUCTIVE=''
-          for f in $FILES; do
-            [ -f "$f" ] || continue
-            if grep -nE 'DeleteModel|RemoveField|RenameField|RenameModel|DROP[[:space:]]+(TABLE|COLUMN)|TRUNCATE' "$f" > /dev/null; then
-              DESTRUCTIVE="$DESTRUCTIVE $f"
-              echo "--- destructive operations in $f ---"
-              grep -nE 'DeleteModel|RemoveField|RenameField|RenameModel|DROP[[:space:]]+(TABLE|COLUMN)|TRUNCATE' "$f"
+          # Detection is scripts/detect_destructive_migrations.py — ONE
+          # definition shared with the deploy-job gate below, auto-merge and the
+          # testing deploy. It was an inline grep here and another inline copy
+          # in the gate: two spellings of one rule, which is the shape of bug
+          # this codebase keeps paying for. NOT detected by either (and worth a
+          # human look anyway): an AlterField that narrows a column, e.g.
+          # null=True → null=False, or a shortened max_length.
+          #
+          # Exit 1 means "found" — information, not failure. Exit 2 is the
+          # detector itself failing, and must never be read as "clean".
+          set +e
+          python scripts/detect_destructive_migrations.py $FILES --github-output --format text
+          SCAN=$?
+          set -e
+          if [ "$SCAN" -ge 2 ]; then
+            echo "::error::The destructive-migration detector failed ($SCAN). Refusing to report this release as clean."
+            exit 1
+          fi
+
+      # Gate 3 — a destructive release can ONLY be deployed by a manual
+      # dispatch carrying ack_destructive, because `inputs` is populated for no
+      # other trigger. Arming one anyway offered an Approve button that could
+      # not possibly succeed: v1.29.5 armed off QA's sign-off, a human approved
+      # it, and the deploy job then refused at the gate — an approval spent to
+      # discover a fact preflight already knew. Refusing to arm turns that into
+      # a message BEFORE the click. Nothing is weakened: the deploy-job gate is
+      # untouched and still enforces.
+      - name: 'Gate 3: a destructive release needs a manual ack_destructive dispatch'
+        id: ackgate
+        if: steps.qagate.outputs.proceed == 'true'
+        env:
+          STRICT: ${{ steps.mode.outputs.strict }}
+          DESTRUCTIVE: ${{ steps.migrations.outputs.destructive }}
+          DESTRUCTIVE_FILES: ${{ steps.migrations.outputs.destructive_files }}
+          EVENT_NAME: ${{ github.event_name }}
+          ACK: ${{ inputs.ack_destructive }}
+        run: |
+          if [ "$DESTRUCTIVE" != "true" ]; then
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
+            echo "No destructive operations — nothing to acknowledge."
+            exit 0
+          fi
+
+          if [ "$ACK" = "true" ]; then
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
+            echo "::warning::Destructive release acknowledged at dispatch (ack_destructive=true):$DESTRUCTIVE_FILES"
+            exit 0
+          fi
+
+          {
+            echo "## 🛑 Not armed — this release drops schema"
+            echo ""
+            for f in $DESTRUCTIVE_FILES; do echo "- \`$f\`"; done
+            echo ""
+            if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+              echo "This run WAS dispatched manually, but **ack_destructive** was not ticked."
+              echo "\`force\` does not stand in for it and never has: \`force\` waives the QA"
+              echo "sign-off, the provenance gate and the version compare, none of which have"
+              echo "anything to do with dropping a column."
+            else
+              echo "\`ack_destructive\` is a **workflow_dispatch input**, so it cannot be set by"
+              echo "the \`$EVENT_NAME\` trigger that started this run. Approving it would spend an"
+              echo "approval on a deploy the gate refuses anyway."
             fi
-          done
-          DESTRUCTIVE=$(printf '%s' "$DESTRUCTIVE" | sed 's/^ *//')
-          echo "destructive=$DESTRUCTIVE" >> "$GITHUB_OUTPUT"
-          echo "destructive migrations: ${DESTRUCTIVE:-none}"
+            echo ""
+            echo "**To ship:** *Actions → Deploy production → Run workflow* on \`main\`, tick"
+            echo "**ack_destructive**, leave **force** unticked. That dispatch keeps every other"
+            echo "gate — provenance, QA sign-off, CI, inventory."
+            echo ""
+            echo "Before you do, confirm the removal is backward compatible: the CURRENT"
+            echo "production code runs against the NEW schema for the whole rollout window."
+            echo "If it still selects what this drops, that window is an outage — split the"
+            echo "change instead (ship the code that stops using it first)."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          echo "proceed=false" >> "$GITHUB_OUTPUT"
+
+          # Same soft/strict split as every other gate: the day-time triggers
+          # report and exit green (this is a state to act on, not a fault),
+          # while the nightly watchdog and a manual dispatch fail loudly.
+          if [ "$STRICT" = "true" ]; then
+            echo "::error::This release contains destructive migrations ($DESTRUCTIVE_FILES) and was not dispatched with ack_destructive. Re-run from Actions → Deploy production → Run workflow with ack_destructive ticked (NOT force)."
+            exit 1
+          fi
+          echo "Not armed — needs a manual dispatch with ack_destructive. Exiting green ($EVENT_NAME is a soft trigger)."
 
       - name: Arm
         id: compare
@@ -605,11 +673,15 @@ jobs:
         # injection sink: it is a list of git paths, and a path may legally
         # contain a single quote, which breaks out of the shell literal.
         env:
-          PROCEED: ${{ steps.qagate.outputs.proceed }}
+          # The LAST gate in the chain — Gate 3 (ack_destructive), not Gate 2.
+          # Each gate is skipped unless its predecessor emitted proceed=true and
+          # a skipped step's output is empty, so reading the last one is what
+          # makes "every gate passed" a single check.
+          PROCEED: ${{ steps.ackgate.outputs.proceed }}
           NEW: ${{ steps.versions.outputs.new_version }}
           LIVE: ${{ steps.versions.outputs.live_version }}
           FILES: ${{ steps.migrations.outputs.files }}
-          DESTRUCTIVE: ${{ steps.migrations.outputs.destructive }}
+          DESTRUCTIVE: ${{ steps.migrations.outputs.destructive_files }}
           SHORT_SHA: ${{ steps.versions.outputs.short_sha }}
         run: |
           if [ "$PROCEED" != "true" ]; then
@@ -639,7 +711,7 @@ jobs:
               echo "A verified Cloud SQL backup is taken first and the deploy aborts if it is not \`SUCCESSFUL\`."
               if [ -n "$DESTRUCTIVE" ]; then
                 echo ""
-                echo "#### 🛑 DESTRUCTIVE operations detected"
+                echo "#### 🛑 DESTRUCTIVE operations — acknowledged at dispatch"
                 echo ""
                 for f in $DESTRUCTIVE; do echo "- \`$f\`"; done
                 echo ""
@@ -648,10 +720,11 @@ jobs:
                 echo "window — if it still reads what this removes, it breaks for real users during"
                 echo "that window (this is how \`students/0015\` shipped)."
                 echo ""
-                echo "The deploy job will **refuse to run** unless it is started from"
-                echo "*Actions → Deploy production → Run workflow* with **ack_destructive** checked."
-                echo "That dispatch is a STRICT trigger: every other gate (provenance, QA sign-off,"
-                echo "CI) still applies, and \`force\` is NOT needed and should not be used."
+                echo "This run reached the approval step only because it was dispatched with"
+                echo "**ack_destructive** (Gate 3 refuses to arm otherwise). Approving now authorises"
+                echo "applying these to the live database. If you are not certain the currently"
+                echo "deployed code no longer reads what they remove, **do not approve** — split the"
+                echo "change and ship the code first."
               fi
             else
               echo "### No schema migrations detected"
@@ -1030,19 +1103,38 @@ jobs:
       # required and must not be used for this.
       # ----------------------------------------------------------
       - name: 'Destructive migrations require ack_destructive'
+        # id + --github-output so the deploy-success email can state what this
+        # release removed. A deploy mail saying only "v1.29.6 desplegada" is the
+        # same silence this whole change is about: the one message everyone
+        # actually reads should say when schema was dropped.
+        id: destructive
         env:
           MIGRATIONS: ${{ steps.diff.outputs.migrations }}
           ACK: ${{ inputs.ack_destructive }}
         run: |
-          DESTRUCTIVE=''
-          for f in $MIGRATIONS; do
-            [ -f "$f" ] || continue
-            if grep -nE 'DeleteModel|RemoveField|RenameField|RenameModel|DROP[[:space:]]+(TABLE|COLUMN)|TRUNCATE' "$f" > /dev/null; then
-              DESTRUCTIVE="$DESTRUCTIVE $f"
-              echo "--- $f ---"
-              grep -nE 'DeleteModel|RemoveField|RenameField|RenameModel|DROP[[:space:]]+(TABLE|COLUMN)|TRUNCATE' "$f"
-            fi
-          done
+          # Detection via scripts/detect_destructive_migrations.py, the same
+          # script the preflight, auto-merge and the testing deploy call — this
+          # was a second inline copy of the preflight's grep, i.e. one rule
+          # spelled twice. POLICY stays here: this step is the enforcement
+          # point, and it is the authoritative one because $MIGRATIONS is
+          # derived from the image tag Cloud Run actually runs.
+          #
+          # Exit 1 = found, 0 = clean, 2 = the detector failed. A detector
+          # failure MUST NOT read as "nothing destructive", so it aborts —
+          # before any write to production (the backup step is next).
+          set +e
+          DESTRUCTIVE=$(python scripts/detect_destructive_migrations.py $MIGRATIONS --format files --github-output --applied)
+          STATUS=$?
+          set -e
+          if [ "$STATUS" -ge 2 ]; then
+            echo "::error::The destructive-migration detector failed. Refusing to deploy: a detector failure is indistinguishable from 'nothing destructive', and this step is the last thing between here and a write to production."
+            exit 1
+          fi
+          # Print the annotated report (file + line + operation) only when there
+          # is one, so a clean release does not pad the log.
+          if [ -n "$DESTRUCTIVE" ]; then
+            python scripts/detect_destructive_migrations.py $MIGRATIONS --format text
+          fi
 
           if [ -z "$DESTRUCTIVE" ]; then
             echo "No destructive operations in this migration set (${MIGRATIONS:-none})."
@@ -1450,7 +1542,7 @@ jobs:
 
       - name: Notify success
         if: success()
-        uses: dawidd6/action-send-mail@94de994a9f6fffee200243214e17002e2920bb59  # v18
+        uses: dawidd6/action-send-mail@03a02a49409134de07636216fb379a026c52991e  # v21
         with:
           server_address: smtp.gmail.com
           server_port: 465
@@ -1473,6 +1565,7 @@ jobs:
               <p style="font-size:14px; color:#374151; line-height:1.6;">
                 <em>${{ steps.commit.outputs.subject }}</em>
               </p>
+              ${{ steps.destructive.outputs.destructive_html }}
               <p style="text-align:center; margin:24px 0;">
                 <a href="${{ env.PROD_URL }}"
                    style="padding:12px 28px; background:#6d28d9; color:#fff; text-decoration:none; border-radius:8px; font-weight:600; font-size:15px;">
@@ -1498,7 +1591,7 @@ jobs:
       # is false for a cancelled job, so this used to go out silent.
       - name: Notify failure or cancellation
         if: failure() || cancelled()
-        uses: dawidd6/action-send-mail@94de994a9f6fffee200243214e17002e2920bb59  # v18
+        uses: dawidd6/action-send-mail@03a02a49409134de07636216fb379a026c52991e  # v21
         with:
           server_address: smtp.gmail.com
           server_port: 465
@@ -1562,7 +1655,7 @@ jobs:
           fi
           echo "alert recipient resolved"
 
-      - uses: dawidd6/action-send-mail@94de994a9f6fffee200243214e17002e2920bb59  # v18
+      - uses: dawidd6/action-send-mail@03a02a49409134de07636216fb379a026c52991e  # v21
         with:
           server_address: smtp.gmail.com
           server_port: 465

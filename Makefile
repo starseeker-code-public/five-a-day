@@ -1,5 +1,5 @@
 # ============================================================================
-# MAKEFILE - Five a Day eVolution
+# MAKEFILE - Five a Day Evolution
 # ============================================================================
 # Docker and Django shortcuts. Run `make` or `make help` for usage.
 
