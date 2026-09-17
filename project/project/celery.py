@@ -9,6 +9,10 @@ from contextvars import Token
 
 from celery import Celery
 from celery.schedules import crontab
+from celery.signals import task_failure, task_postrun, task_prerun
+
+from comms.log_safe import safe_log
+from core.logging_utils import get_request_id, reset_request_id, sanitize_request_id, set_request_id
 
 logger = logging.getLogger(__name__)
 
@@ -75,7 +79,7 @@ app.conf.beat_schedule = {
     # Fun Friday announcements — drain due FunFridayScheduledSend rows daily at
     # 14:30 (rows are scheduled for Monday 14:30, so this fires them on time)
     "send-due-fun-friday-emails": {
-        "task": "comms.tasks.send_due_fun_friday_emails_task",
+        "task": "core.tasks.send_due_fun_friday_emails_task",
         "schedule": crontab(hour=14, minute=30),
         "options": {"queue": "emails"},
     },
@@ -125,16 +129,12 @@ _TASK_ID_TOKENS: dict[str, Token[str]] = {}
 
 
 def _bind_task_log_context(task_id=None, **kwargs):
-    from core.logging_utils import get_request_id, sanitize_request_id, set_request_id
-
     if get_request_id() or not task_id:
         return
     _TASK_ID_TOKENS[task_id] = set_request_id(sanitize_request_id(task_id))
 
 
 def _unbind_task_log_context(task_id=None, **kwargs):
-    from core.logging_utils import reset_request_id
-
     token = _TASK_ID_TOKENS.pop(task_id, None)
     if token is not None:
         reset_request_id(token)
@@ -150,7 +150,6 @@ def _log_task_failure(task_id=None, exception=None, sender=None, einfo=None, **k
     `Retry` never reaches here — Celery signals a retry separately — so this
     fires once, when the task has actually given up.
     """
-    from comms.log_safe import safe_log
 
     logger.error(
         "Celery task '%s' failed: %s: %s",
@@ -163,8 +162,6 @@ def _log_task_failure(task_id=None, exception=None, sender=None, einfo=None, **k
 
 
 def _connect_task_signals():
-    from celery.signals import task_failure, task_postrun, task_prerun
-
     task_prerun.connect(_bind_task_log_context, dispatch_uid="project.celery.bind_log_context")
     task_postrun.connect(_unbind_task_log_context, dispatch_uid="project.celery.unbind_log_context")
     task_failure.connect(_log_task_failure, dispatch_uid="project.celery.log_task_failure")

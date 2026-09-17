@@ -3,6 +3,9 @@ from decimal import Decimal
 
 from django import forms
 
+from billing.models import relevant_academic_years
+from billing.services.enrollment_service import EnrollmentService
+
 # Unified enrollment plan choices
 ENROLLMENT_PLAN_CHOICES = [
     ("monthly_full", "Mensual (2 días/semana)"),
@@ -151,7 +154,6 @@ class EnrollmentForm(forms.Form):
         # a mistyped year filed the enrollment under an old `academic_year`,
         # which dropped the student out of the list views AND back-filled a
         # year of already-overdue payments that the reminder cron then chased.
-        from billing.models import relevant_academic_years
 
         years = relevant_academic_years()
         # From 1 July before the earliest relevant course (a July/August start
@@ -213,7 +215,6 @@ class EnrollmentForm(forms.Form):
         re-enrol form shared by several students, carried one student's
         effective date into the next student's request.
         """
-        from billing.services.enrollment_service import EnrollmentService
 
         enrollment_data = {
             "enrollment_plan": self.cleaned_data.get("enrollment_plan", "monthly_full"),

@@ -1,4 +1,11 @@
-"""Regression tests for the v1.29.2 whole-tree review.
+"""What may happen to a Payment after it exists -- and what may not.
+
+One transition table governs every status change; collected money cannot be
+voided, a receipt-numbered row cannot be hard-deleted, and only an open charge
+can be paid online. The buttons in the UI read the same predicates the
+endpoints enforce, so the two cannot disagree.
+
+From the v1.29.2 whole-tree review.
 
 Each class pins one defect the review found:
 
@@ -13,6 +20,7 @@ Each class pins one defect the review found:
 """
 
 import json
+import re
 from datetime import date
 from decimal import Decimal
 from unittest.mock import patch
@@ -130,8 +138,6 @@ class TestCollectedMoneyCannotBeVoided:
     def test_payments_list_hides_the_cancel_button_on_collected_rows(
         self, authenticated_client, completed_payment, pending_payment
     ):
-        import re
-
         response = authenticated_client.get(reverse("payments_list"), {"year": 2025})
         html = response.content.decode()
         # Every "Cancelar pago" button, by the payment it acts on.
@@ -341,7 +347,7 @@ class TestStripeReconciliation:
                 }
             },
         }
-        with patch("comms.tasks.dispatch_payment_completed"):
+        with patch("billing.services.stripe_service.dispatch_payment_completed"):
             result = StripeService().apply_webhook_event(event)
         assert result["status"] == "completed"
         pending_payment.refresh_from_db()

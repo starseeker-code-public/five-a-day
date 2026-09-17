@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from django.test import override_settings
+from django.urls import reverse
 
 from billing.services.stripe_service import StripeError, StripeService, get_stripe_service
 
@@ -183,8 +184,6 @@ class TestSignatureIsComputedOverRawBytes:
         assert StripeService().verify_webhook_signature(payload, self._sign(payload, int(time.time()))) is True
 
     def test_the_endpoint_answers_400_instead_of_500(self, client):
-        from django.urls import reverse
-
         response = client.post(
             reverse("stripe_webhook"),
             data=NOT_UTF8,

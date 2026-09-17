@@ -1,9 +1,20 @@
-"""Regression tests for the iteration-2 review fixes (dead code, dedup, i18n, infra)."""
+"""Spanish choice labels, the EnrollmentType mirror, and fields nothing writes.
+
+Choice labels reach the family through `get_<field>_display()`, so an English
+one lands in the middle of a Spanish UI. The rest is dead weight: discount
+columns no write path sets, and a Drive button that must stay hidden.
+
+From the iteration-2 review."""
 
 from decimal import Decimal
 
 import pytest
 from django.urls import reverse
+
+from billing.constants import ENROLLMENT_TYPE_CHOICES
+from billing.models import EnrollmentType
+from core.audit_models import AuditLog
+from core.models import BacklogTask
 
 pytestmark = pytest.mark.django_db
 
@@ -12,19 +23,13 @@ class TestSpanishChoiceLabels:
     """#79 — choice labels rendered by get_*_display() are Spanish."""
 
     def test_backlog_task_labels(self):
-        from core.models import BacklogTask
-
         assert dict(BacklogTask.PRIORITY_CHOICES)["high"] == "Alta"
         assert dict(BacklogTask.STATUS_CHOICES)["in_progress"] == "En progreso"
 
     def test_audit_action_labels(self):
-        from core.audit_models import AuditLog
-
         assert dict(AuditLog.ACTION_CHOICES)["create"] == "Creación"
 
     def test_enrollment_type_labels(self):
-        from billing.constants import ENROLLMENT_TYPE_CHOICES
-
         assert dict(ENROLLMENT_TYPE_CHOICES)["new_student"] == "Nuevo estudiante"
 
 
@@ -32,8 +37,6 @@ class TestEnrollmentTypeMirrorReDerived:
     """#77 — a price edit re-derives the EnrollmentType.base_amount_* mirror."""
 
     def test_config_update_refreshes_mirror(self, authenticated_client, site_config, enrollment_type_new_student):
-        from billing.models import EnrollmentType
-
         response = authenticated_client.post(
             reverse("update_site_config"),
             data='{"children_enrollment_fee": "99.00"}',

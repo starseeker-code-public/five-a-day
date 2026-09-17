@@ -29,8 +29,12 @@ from django.urls import reverse
 from billing.constants import SEPTEMBER_CLASSES_START_DAY
 from billing.models import Enrollment, Payment
 from billing.services.payment_service import PaymentService
+from billing.services.pdf_service import _receipt_breakdown_rows
 from billing.services.pricing_service import PricingService, _euros
+from comms.management.commands.test_all_emails import get_email_apps
 from core.constants import MESES_ES
+from students.admin import StudentAdmin
+from students.forms import StudentForm
 from students.models import Student
 
 pytestmark = pytest.mark.django_db
@@ -91,8 +95,6 @@ class TestChequeIdiomaLineIsWholeCheques:
     """
 
     def test_prorated_september_shows_minus_twenty(self, student_with_parent, enrollment_type_new_student, site_config):
-        from billing.services.pdf_service import _receipt_breakdown_rows
-
         enrollment = _cheque_enrollment(student_with_parent, enrollment_type_new_student, start=date(2026, 9, 15))
         period = PaymentService.billing_periods(enrollment)[0]
         assert period["fraction"] == Decimal(16) / Decimal(30), "sanity: 15 Sep on a 30-day month is 16/30"
@@ -127,7 +129,6 @@ class TestChequeIdiomaLineIsWholeCheques:
 
     def test_a_full_quarter_shows_three_cheques(self, student_with_parent, enrollment_type_new_student, site_config):
         """A quarter spans three months, so it carries three cheques — labelled as such."""
-        from billing.services.pdf_service import _receipt_breakdown_rows
 
         enrollment = _cheque_enrollment(
             student_with_parent, enrollment_type_new_student, start=date(2026, 9, 1), modality="quarterly"
@@ -257,8 +258,6 @@ class TestPickupAuthorized:
     PEOPLE = "Abuela Carmen García — 11111111H\nTío Luis García (sin DNI)"
 
     def test_form_accepts_it(self, group):
-        from students.forms import StudentForm
-
         form = StudentForm(
             data={
                 "first_name": "Lucía",
@@ -272,8 +271,6 @@ class TestPickupAuthorized:
         assert form.cleaned_data["pickup_authorized"] == self.PEOPLE
 
     def test_it_is_optional(self, group):
-        from students.forms import StudentForm
-
         form = StudentForm(data={"first_name": "Lucía", "last_name": "Pérez", "group": group.id})
         assert form.is_valid(), form.errors
 
@@ -331,8 +328,6 @@ class TestPickupAuthorized:
         assert student_with_parent.pickup_authorized == self.PEOPLE
 
     def test_admin_can_reach_it(self):
-        from students.admin import StudentAdmin
-
         fields = [f for _, opts in StudentAdmin.fieldsets for f in opts["fields"]]
         assert "pickup_authorized" in fields
 
@@ -571,8 +566,6 @@ class TestReminderFormUsesTheSpecialEmails:
         assert f'value="{SEPTEMBER_CLASSES_START_DAY}"' in page
 
     def test_test_all_emails_previews_the_three_variants(self, site_config):
-        from comms.management.commands.test_all_emails import get_email_apps
-
         keys = {app["key"]: app for app in get_email_apps()}
         for case in ("september", "june", "april"):
             app = keys[f"payment_reminder_{case}"]

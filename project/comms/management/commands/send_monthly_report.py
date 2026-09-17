@@ -11,6 +11,8 @@ Usage:
 
 from django.core.management.base import BaseCommand
 
+from comms.tasks import send_monthly_report_task
+
 
 class Command(BaseCommand):
     help = "Email the monthly financial report (defaults to settings.SUPPORT_EMAIL)"
@@ -24,7 +26,5 @@ class Command(BaseCommand):
         )
 
     def handle(self, *args, **options):
-        from comms.tasks import send_monthly_report_task
-
         result = send_monthly_report_task.apply(kwargs={"recipient_email": options["recipient"]}).get()
         self.stdout.write(self.style.SUCCESS(f"Monthly report: {result}"))

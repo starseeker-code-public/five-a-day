@@ -19,6 +19,7 @@ from billing.models import (
     current_academic_year,
     enrollment_academic_year,
 )
+from billing.services.payment_service import PaymentService
 from billing.services.pricing_service import (
     period_base_amount,
     quarterly_price_from_monthly,
@@ -225,7 +226,6 @@ class EnrollmentService:
         replacement's prorated first period vanish. The handover is now always a
         month boundary the closing rows sit before, so there is nothing to keep.
         """
-        from billing.services.payment_service import PaymentService
 
         requested_start = requested_start or date.today()
         effective_start = PaymentService.transition_start_date(student, requested_start, closing=current)
@@ -327,7 +327,6 @@ class EnrollmentService:
         `payment_type`). The reverse — a collected quarter, then monthly — back-
         filled three paid months.
         """
-        from billing.services.payment_service import PaymentService
 
         if parent is None and not student.is_adult:
             parent = student.parents.order_by("id").first()

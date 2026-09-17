@@ -17,6 +17,7 @@ from django.core import mail
 from django.test import override_settings
 from django.urls import reverse
 
+import core.views.password_reset as pr
 from students.models import Teacher
 
 User = get_user_model()
@@ -94,7 +95,6 @@ class TestCreateTeacherSendsActivationEmail:
     def test_teacher_survives_a_failing_mail_send(self, authenticated_client, monkeypatch):
         """The Teacher row is committed before the send, so a dead SMTP hop
         must not lose the account — it degrades to the manual reset flow."""
-        import core.views.password_reset as pr
 
         def boom(*args, **kwargs):
             raise OSError("smtp down")

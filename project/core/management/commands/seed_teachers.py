@@ -28,6 +28,7 @@ the password on subsequent runs (unless the user still has no usable password).
 
 import os
 
+from django.contrib.auth import get_user_model
 from django.core.management.base import BaseCommand
 from django.db import transaction
 
@@ -118,7 +119,6 @@ class Command(BaseCommand):
                     # error in the env file, not a reason to abort the boot:
                     # `seed_teachers` runs from entrypoint.sh and the teacher
                     # can still log in with their email.
-                    from django.contrib.auth import get_user_model
 
                     clash = get_user_model().objects.filter(username=login_username).exclude(pk=user.pk).exists()
                     if clash:

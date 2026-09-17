@@ -276,13 +276,13 @@ class TestQaCardAmounts:
 @pytest.mark.django_db
 class TestArchiveGcpCostsCommand:
     def test_defaults_to_previous_month(self):
-        with patch.object(svc, "archive_month", return_value={"status": "unconfigured"}) as archive:
+        with patch("billing.tasks.archive_month", return_value={"status": "unconfigured"}) as archive:
             call_command("archive_gcp_costs")
         year, month = svc.previous_month()
         archive.assert_called_once_with(year, month)
 
     def test_explicit_month_and_year(self):
-        with patch.object(svc, "archive_month", return_value={"status": "exists", "expense_id": 1}) as archive:
+        with patch("billing.tasks.archive_month", return_value={"status": "exists", "expense_id": 1}) as archive:
             call_command("archive_gcp_costs", month=8, year=2026)
         archive.assert_called_once_with(2026, 8)
 
@@ -293,7 +293,7 @@ class TestArchiveGcpCostsCommand:
     def test_unavailable_backend_fails_the_run(self):
         """Cloud Run Jobs retry on failure — an unreachable export must exit non-zero."""
         with (
-            patch.object(svc, "archive_month", return_value={"status": "unavailable"}),
+            patch("billing.tasks.archive_month", return_value={"status": "unavailable"}),
             pytest.raises(CommandError),
         ):
             call_command("archive_gcp_costs")

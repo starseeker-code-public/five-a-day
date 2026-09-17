@@ -1,4 +1,12 @@
-"""Regression tests for the iteration-1 full-codebase review fixes.
+"""Which academic year an enrollment is stamped with, and the billing and access
+rules that hang off it.
+
+Academic-year stamping is the spine (a wrong year is never billed at all); the
+rest are the write-path guards found with it — a fully discounted matricula, a
+cadence change, a parentless adult, an unpaid Stripe session, `Teacher.active`
+mirroring, group counts and the group cap.
+
+From the iteration-1 full-codebase review.
 
 Each test names the fix it pins so a later refactor cannot silently undo it.
 Explicit money dates use the ELAPSED 2020-2021 course (every period has started)
@@ -7,13 +15,20 @@ so amounts/counts hold on any run date — same rationale as test_payment_schedu
 
 from datetime import date
 from decimal import Decimal
+from unittest import mock
+from unittest.mock import patch
 
 import pytest
+from django.contrib.auth import get_user_model
 from django.urls import reverse
 
 from billing.models import Enrollment, Payment, enrollment_academic_year
 from billing.services.enrollment_service import EnrollmentService
 from billing.services.payment_service import PaymentService
+from billing.services.stripe_service import StripeService
+from students.admin import GroupAdmin
+from students.forms import StudentForm
+from students.models import Student, Teacher
 
 pytestmark = pytest.mark.django_db
 
@@ -81,11 +96,9 @@ class TestZeroMatriculaSkipped:
             enrollment_date=date(2019, 9, 1),
         )
 
-        from unittest import mock
-
         # Anchor the window so the elapsed start date passes validation.
         with mock.patch(
-            "billing.models.relevant_academic_years",
+            "billing.forms.relevant_academic_years",
             lambda reference_date=None: ["2020-2021", "2026-2027"],
         ):
             response = authenticated_client.post(
@@ -186,7 +199,6 @@ class TestStripeUnpaidGuard:
     def test_unpaid_session_does_not_complete(self, pending_payment):
         pending_payment.stripe_session_id = "cs_sepa"
         pending_payment.save()
-        from billing.services.stripe_service import StripeService
 
         event = {
             "type": "checkout.session.completed",
@@ -200,9 +212,6 @@ class TestStripeUnpaidGuard:
     def test_async_payment_succeeded_completes(self, pending_payment):
         pending_payment.stripe_session_id = "cs_sepa2"
         pending_payment.save()
-        from unittest.mock import patch
-
-        from billing.services.stripe_service import StripeService
 
         event = {
             "type": "checkout.session.async_payment_succeeded",
@@ -218,7 +227,6 @@ class TestStripeUnpaidGuard:
         pending_payment.stripe_session_id = "cs_dead"
         pending_payment.payment_status = "cancelled"
         pending_payment.save()
-        from billing.services.stripe_service import StripeService
 
         event = {
             "type": "checkout.session.completed",
@@ -234,8 +242,6 @@ class TestTeacherActiveMirrored:
     """#15 — deactivating a Teacher disables the linked auth.User login."""
 
     def test_deactivating_teacher_disables_user(self, db):
-        from students.models import Teacher
-
         teacher = Teacher.objects.create(first_name="Ana", last_name="X", email="ana.mirror@x.test", active=True)
         user = teacher.ensure_user(password="whatever-123456")
         assert user.is_active is True
@@ -246,10 +252,6 @@ class TestTeacherActiveMirrored:
         assert user.is_active is False
 
     def test_deleting_teacher_deactivates_orphaned_user(self, db):
-        from django.contrib.auth import get_user_model
-
-        from students.models import Teacher
-
         teacher = Teacher.objects.create(first_name="Bob", last_name="Y", email="bob.orphan@x.test", active=True)
         user = teacher.ensure_user(password="whatever-123456")
         uid = user.pk
@@ -261,9 +263,6 @@ class TestGroupAdminCountsExcludeWaiting:
     """#50 — GroupAdmin's enrolled count ignores waiting-list students."""
 
     def test_waiting_students_not_counted(self, group, enrollment_type_new_student, site_config):
-        from students.admin import GroupAdmin
-        from students.models import Student
-
         Student.objects.create(first_name="Enrolled", last_name="A", group=group, active=True, is_waiting=False)
         Student.objects.create(first_name="Waiting", last_name="B", group=group, active=True, is_waiting=True)
 
@@ -290,9 +289,6 @@ class TestGroupCapEnforcedOnWrite:
     """#76 — Group.max_students is enforced by StudentForm, not just a redirect."""
 
     def test_full_group_rejected_by_form(self, group, teacher):
-        from students.forms import StudentForm
-        from students.models import Student
-
         group.max_students = 1
         group.save()
         Student.objects.create(first_name="Full", last_name="A", group=group, active=True, is_waiting=False)

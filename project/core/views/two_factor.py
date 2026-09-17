@@ -20,9 +20,14 @@ verify step whenever the authenticated user's Teacher record has
 
 from __future__ import annotations
 
+import base64
+import io
 from functools import wraps
 
+import pyotp
+import qrcode
 from django.contrib import messages
+from django.contrib.auth import get_user_model
 from django.shortcuts import redirect, render
 from django.views.decorators.http import require_http_methods
 
@@ -97,11 +102,6 @@ def _payload_from_existing(teacher) -> tfs.EnrolmentPayload:
     """Rebuild the enrolment payload from a Teacher that already has a
     staged secret. Backup codes are NOT shown again — they were displayed
     when originally generated."""
-    import base64
-    import io
-
-    import pyotp
-    import qrcode
 
     totp = pyotp.TOTP(teacher.two_factor_secret)
     provisioning_uri = totp.provisioning_uri(name=teacher.email, issuer_name=tfs._issuer_name())
@@ -130,6 +130,20 @@ def two_factor_manage(request, teacher):
     if request.method == "POST":
         action = request.POST.get("action", "")
         if action == "rotate":
+            # Re-authenticate the SECOND FACTOR before re-issuing it, exactly as
+            # `disable` does below. Rotating is at least as sensitive: `disable`
+            # takes the second factor away — loud, and the account still needs a
+            # password — while `rotate` hands the caller eight long-lived codes
+            # that each bypass the second factor from then on, and leaves 2FA
+            # looking enabled. An attacker holding a session cookie wants rotate,
+            # not disable, which is why the gate was needed here first.
+            code = (request.POST.get("code") or "").strip()
+            if not code or not tfs.verify_code(teacher, code):
+                messages.error(
+                    request,
+                    "❌ Introduce un código actual de tu app (o un código de respaldo) para regenerar los códigos.",
+                )
+                return redirect("two_factor_manage")
             new_codes = tfs.rotate_backup_codes(teacher)
             messages.success(request, "✅ Códigos de respaldo regenerados. Guárdalos ahora.")
         elif action == "disable":
@@ -176,12 +190,15 @@ def two_factor_verify(request):
     that key is NOT yet logged in (see `SimpleAuthMiddleware` for the
     `is_authenticated` gate).
     """
+    # Lazy: core.views.auth imports this module at top level (for
+    # _PENDING_USER_SESSION_KEY), so a module-level import back into auth
+    # would be a circular import at Django URL-conf load.
+    from core.views.auth import _finalize_session_login
+
     pending_user_id = request.session.get(_PENDING_USER_SESSION_KEY)
     if not pending_user_id:
         # Nothing to verify — bounce back to the login form.
         return redirect("login")
-
-    from django.contrib.auth import get_user_model
 
     User = get_user_model()
     try:
@@ -200,7 +217,6 @@ def two_factor_verify(request):
         code = (request.POST.get("code") or "").strip()
         if tfs.verify_code(teacher, code):
             # Promote the pending pre-auth session into a real logged-in one.
-            from core.views.auth import _finalize_session_login
 
             display = getattr(user, "first_name", "") or user.get_username()
             # The Google credential hand-off that used to live here is gone

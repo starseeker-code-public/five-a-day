@@ -7,6 +7,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 from django.urls import reverse
 
+import core.views.dashboard as dash
+
 pytestmark = pytest.mark.django_db
 
 
@@ -14,7 +16,6 @@ pytestmark = pytest.mark.django_db
 def _clear_quote_cache():
     """Reset the module-level _quotes list between tests so each test starts
     with an empty cache and predictable API-call behavior."""
-    import core.views.dashboard as dash
 
     dash._quotes.clear()
     yield
@@ -24,7 +25,6 @@ def _clear_quote_cache():
 class TestDashboardQuote:
     def test_home_cache_hit_no_api_call(self, authenticated_client):
         """When _quotes is pre-filled, no API call is made."""
-        import core.views.dashboard as dash
 
         dash._quotes[:] = [("Cached quote", "Cached Author")]
         with patch("core.views.dashboard.httpx.get") as mock_get:
@@ -44,7 +44,6 @@ class TestDashboardQuote:
 
     def test_home_sets_cookie_on_cache_hit(self, authenticated_client):
         """After serving a quote, the response sets a last_quote cookie."""
-        import core.views.dashboard as dash
 
         dash._quotes[:] = [("Be brave", "Author X")]
         response = authenticated_client.get(reverse("home"))
@@ -90,7 +89,6 @@ class TestDashboardQuote:
 
     def test_home_rotates_on_each_load(self, authenticated_client):
         """Each page load pops a different quote from the cache."""
-        import core.views.dashboard as dash
 
         dash._quotes[:] = [("Q1", "A1"), ("Q2", "A2"), ("Q3", "A3")]
 

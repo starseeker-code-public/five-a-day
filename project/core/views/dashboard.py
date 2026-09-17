@@ -15,6 +15,8 @@ from billing.models import Payment
 from core.constants import SCHEDULED_APPS
 from core.decorators import admin_required
 from core.models import TodoItem
+from core.transactions import get_active_students, get_all_payments_unrestricted
+from core.views.waiting_list import group_capacity_summary
 from students.models import Group, Student
 
 # Dates shown per recurring scheduled email on the home card (Fun Friday repeats weekly).
@@ -308,7 +310,6 @@ def _capacity_card() -> dict:
     `available_spots` / `is_full` per row instead costs four queries per group —
     that helper exists precisely to stop this page doing that.
     """
-    from core.views.waiting_list import group_capacity_summary
 
     capacity_rows = group_capacity_summary()
     return {
@@ -366,8 +367,6 @@ def home(request):
 
 @admin_required
 def all_info(request):
-    from core.transactions import get_active_students, get_all_payments_unrestricted
-
     DB_PAGE_SIZE = 20
 
     # ── Students sorting ──

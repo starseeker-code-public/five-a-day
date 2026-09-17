@@ -83,6 +83,12 @@ git remote -v                   # owner/repo for CI badges
 # broke (never read that as clean). Run it ALWAYS, not only when the staged
 # diff obviously touches migrations.
 python scripts/detect_destructive_migrations.py --staged --format text
+
+# Does this release add an import that is NOT at module top level? Same exit
+# contract: 0 = clean, 1 = found, 2 = the detector broke (assume the worst).
+# Run it ALWAYS. Reported in Step 6 so a human rules on each one BEFORE it
+# ships — see the import rule in CLAUDE.md's "Code Organization".
+python scripts/detect_non_top_level_imports.py --staged --format text
 ```
 
 **If that reports destructive operations, you must surface it** — see Step 6.
@@ -551,6 +557,35 @@ Then the usual report:
 - **Anything you noticed but did NOT change** — sections that look stale but weren't in scope (surface these for the user to decide)
 - **Files NOT touched and why** — if only `docs/CELERY.md` was in scope for the staged diff, say so explicitly
 - **A commit messagge with a super brief description of all changes** - e.g. "Created inspirational quote generator, cleaned legacy render config files and prepared everything for googl e cloud migration and updated versioning and precommit make commands"
+
+**Finally, if Step 1's non-top-level-import scan exited 1, close the report with
+a `Non-top-level imports` section** — LAST, after the commit message, because it
+is a question for the developer rather than a summary of work done. This is a
+judgement call the tooling deliberately does not make: list every hit and, for
+each, write **one sentence saying whether you think it is justified and why**, so
+the developer can rule on it. Do not quietly accept them, and do not "fix" them
+here — the release is already staged.
+
+Report each as `file:line` + the import + the shape the detector matched
+(`import-guard`, `type-checking`, `sole-statement`, `deferred`) + your verdict.
+The shape is a hint, not an answer: `deferred` is the category that is nearly
+always an accident, but a `try/except ImportError` around a package that IS a
+declared dependency is just as wrong. The reasons that genuinely justify one are
+listed in CLAUDE.md's import rule — a real import cycle, `AppConfig.ready()`
+app-registry timing, an optional or undeclared dependency, the import being the
+conditional itself, `TYPE_CHECKING`, or a MEASURED import cost. If a hit matches
+none of those, say so plainly and recommend hoisting it.
+
+Two things to flag explicitly when you see them, because both are silent:
+
+- **an existing hit with no comment explaining why it is deferred** — the rule is
+  that the reason lives at the import, so a bare one is indistinguishable from an
+  accident and will be "fixed" by someone eventually
+- **a new deferred import whose symbol is `mock.patch`ed anywhere in the tree** —
+  grep for it. Hoisting it later breaks that patch, and hoisting it *now* means
+  the patch target must move to the using module in the same change
+
+If the scan exited 0, say so in one line — it is a positive result worth stating.
 
 ---
 

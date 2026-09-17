@@ -1,4 +1,12 @@
-"""Regression tests for the v1.15 bug-fix pass.
+"""What a payment is worth, and what the write paths refuse to store.
+
+Amounts: quarterly discounts, the enrollment-amount fallback, and cancelled
+rows never counting as expected revenue. Validation: `save()` does not call
+`clean()`, so every path taking raw input has to ask for it -- which is how a
+completed payment with no `payment_date` and a negative fee both reached the
+database.
+
+From the v1.15 bug-fix pass.
 
 Every test here pins a behaviour that was *verified broken* against the running
 app before it was fixed. They are grouped by the defect they guard, and each
@@ -10,13 +18,18 @@ bugs was live, which is the reason they assert on behaviour (what the user
 sees, what lands in the DB, what gets emailed) rather than on lines executed.
 """
 
+import json
 from datetime import date
 from decimal import Decimal
 
 import pytest
 from django.test import Client
 
-from billing.models import Enrollment, Payment
+from billing import constants
+from billing.models import Enrollment, Payment, SiteConfiguration
+from billing.services.expense_service import monthly_totals
+from billing.services.payment_service import PaymentService
+from core.services.analytics_service import collection_rate
 
 pytestmark = pytest.mark.django_db
 
@@ -106,8 +119,6 @@ class TestQuarterlyAmountAppliesDiscounts:
     def test_plain_quarterly_is_three_months_minus_the_quarterly_percentage(
         self, student, enrollment_type_returning_student, site_config
     ):
-        from billing.services.payment_service import PaymentService
-
         e = self._enrollment(student, enrollment_type_returning_student)
         expected = site_config.full_time_monthly_fee * 3
         expected -= expected * (site_config.quarterly_enrollment_discount / Decimal("100"))
@@ -116,8 +127,6 @@ class TestQuarterlyAmountAppliesDiscounts:
     def test_sibling_discount_lowers_the_quarterly_amount(
         self, student, enrollment_type_returning_student, site_config
     ):
-        from billing.services.payment_service import PaymentService
-
         plain = PaymentService.calculate_quarterly_amount(
             self._enrollment(student, enrollment_type_returning_student), site_config, 10
         )
@@ -129,7 +138,6 @@ class TestQuarterlyAmountAppliesDiscounts:
 
     def test_language_cheque_is_applied_three_times(self, student, enrollment_type_returning_student, site_config):
         """A quarter covers three months, so it carries three cheques."""
-        from billing.services.payment_service import PaymentService
 
         plain = PaymentService.calculate_quarterly_amount(
             self._enrollment(student, enrollment_type_returning_student), site_config, 10
@@ -144,7 +152,6 @@ class TestQuarterlyAmountAppliesDiscounts:
         """Q3 (due April) covers April-June, so it picks up the June discount
         that calculate_monthly_amount applies to month 6. `quarter_due_month`
         was an unused parameter before this."""
-        from billing.services.payment_service import PaymentService
 
         e = self._enrollment(student, enrollment_type_returning_student)
         q1 = PaymentService.calculate_quarterly_amount(e, site_config, 10)
@@ -154,7 +161,6 @@ class TestQuarterlyAmountAppliesDiscounts:
     def test_adult_group_keeps_the_flat_rate(self, student, enrollment_type_returning_student, site_config):
         """Adults pay a flat rate — no sibling/cheque/June discounts, matching
         calculate_monthly_amount's early return."""
-        from billing.services.payment_service import PaymentService
 
         e = self._enrollment(student, enrollment_type_returning_student, sibling=True, cheque=True)
         e.schedule_type = "adult_group"
@@ -177,10 +183,6 @@ class TestCompletedPaymentAlwaysHasADate:
     """
 
     def test_marking_completed_backfills_the_payment_date(self, student_with_parent, parent, active_enrollment):
-        import json
-
-        from billing.services.expense_service import monthly_totals
-
         payment = Payment.objects.create(
             student=student_with_parent,
             parent=parent,
@@ -212,8 +214,6 @@ class TestQuickCompleteIsIdempotent:
     """
 
     def test_second_completion_does_not_rewrite_the_date(self, student_with_parent, parent, active_enrollment):
-        import json
-
         original = date(2025, 9, 5)
         payment = Payment.objects.create(
             student=student_with_parent,
@@ -293,8 +293,6 @@ class TestPaymentChoiceValidation:
     """
 
     def test_invalid_choices_fall_back_to_defaults(self, student_with_parent, parent):
-        from billing import constants
-
         _client().post(
             "/payments/create/",
             data={
@@ -376,8 +374,6 @@ class TestCancelledPaymentsAreNotExpectedRevenue:
         return payment
 
     def test_collection_rate_excludes_it(self, cancelled):
-        from core.services.analytics_service import collection_rate
-
         today = date.today()
         assert collection_rate(today.month, today.year)["expected"] == Decimal("0.00")
 
@@ -390,7 +386,6 @@ class TestCancelledPaymentsAreNotExpectedRevenue:
 
     def test_all_three_views_agree(self, cancelled):
         """The whole point: one definition of "esperado", not three."""
-        from core.services.analytics_service import collection_rate
 
         today = date.today()
         assert (
@@ -425,8 +420,6 @@ class TestHandEditedQueryStringsDoNotCrash:
         assert _client().get(url).status_code < 500
 
     def test_over_long_todo_is_rejected_not_crashed(self):
-        import json
-
         response = _client().post(
             "/api/todos/create/",
             data=json.dumps({"text": "x" * 600, "due_date": "2026-12-31"}),
@@ -442,10 +435,6 @@ class TestSiteConfigRejectsInvalidPrices:
     """
 
     def test_negative_fee_is_rejected(self, site_config):
-        import json
-
-        from billing.models import SiteConfiguration
-
         response = _client().post(
             "/api/config/update/",
             data=json.dumps({"full_time_monthly_fee": "-50.00"}),
@@ -455,10 +444,6 @@ class TestSiteConfigRejectsInvalidPrices:
         assert SiteConfiguration.get_config().full_time_monthly_fee > 0
 
     def test_valid_change_still_works(self, site_config):
-        import json
-
-        from billing.models import SiteConfiguration
-
         response = _client().post(
             "/api/config/update/",
             data=json.dumps({"full_time_monthly_fee": "58.00"}),
@@ -474,8 +459,6 @@ class TestSingletonsResistDeletion:
     """
 
     def test_instance_delete_returns_djangos_tuple(self, site_config):
-        from billing.models import SiteConfiguration
-
         # Call outside the assert: under `python -O` asserts are stripped, and
         # with them the delete() that this test exists to exercise.
         result = site_config.delete()
@@ -484,8 +467,6 @@ class TestSingletonsResistDeletion:
         assert SiteConfiguration.objects.count() == 1
 
     def test_queryset_delete_is_blocked(self, site_config):
-        from billing.models import SiteConfiguration
-
         SiteConfiguration.objects.all().delete()
         assert SiteConfiguration.objects.count() == 1
 

@@ -5,6 +5,7 @@ from decimal import Decimal
 from unittest.mock import patch
 
 import pytest
+from reportlab.platypus import Table as RealTable
 
 from billing.models import Payment
 from billing.services.pdf_service import (
@@ -36,10 +37,6 @@ class TestGeneratePaymentReceipt:
         assert _looks_like_pdf(pdf)
 
     def test_handles_missing_parent(self, adult_student, active_enrollment):
-        from decimal import Decimal
-
-        from billing.models import Payment
-
         p = Payment.objects.create(
             student=adult_student,
             parent=None,
@@ -102,8 +99,6 @@ class TestTableCellsAreNotDoubleEscaped:
         )
 
     def test_an_ampersand_reaches_the_table_verbatim(self, student, parent, active_enrollment):
-        from reportlab.platypus import Table as RealTable
-
         payment = self._payment(student, parent, active_enrollment, "Clases extra & material")
         captured = []
 

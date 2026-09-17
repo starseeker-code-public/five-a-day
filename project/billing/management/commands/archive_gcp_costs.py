@@ -13,6 +13,8 @@ Usage:
 
 from django.core.management.base import BaseCommand, CommandError
 
+from billing.tasks import archive_gcp_costs_task
+
 
 class Command(BaseCommand):
     help = "Archive a finished month's Google Cloud spend as a 'software' expense (previous month by default)"
@@ -22,8 +24,6 @@ class Command(BaseCommand):
         parser.add_argument("--year", type=int, default=None, help="Year to archive. Needs --month.")
 
     def handle(self, *args, **options):
-        from billing.tasks import archive_gcp_costs_task
-
         month, year = options["month"], options["year"]
         if (month is None) != (year is None):
             raise CommandError("--month and --year must be given together (or neither).")

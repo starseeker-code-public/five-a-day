@@ -38,7 +38,10 @@ from datetime import date
 
 from django.conf import settings
 
+from core.constants import MESES_ES
 from core.log_safe import safe_log
+from core.models import QAConfiguration
+from core.services.google_sheets_service import _load_service_account_info
 
 logger = logging.getLogger(__name__)
 
@@ -83,7 +86,7 @@ def drive_uploads_allowed() -> bool:
     Everywhere else — development, Docker, the test suite: never.
 
     One predicate, read by ``DriveReceiptService.upload_receipt`` (the true
-    enforcement point), by ``comms.tasks.upload_receipt_to_drive_task`` (so a
+    enforcement point), by ``core.tasks.upload_receipt_to_drive_task`` (so a
     disallowed environment does not even render the PDF) and by
     ``backfill_drive_receipts`` (which builds its own service instance and would
     otherwise walk the whole archive reporting one refusal per payment).
@@ -95,8 +98,6 @@ def drive_uploads_allowed() -> bool:
         return True
     if not getattr(settings, "IS_TESTING_ENV", False):
         return False
-
-    from core.models import QAConfiguration
 
     try:
         return bool(QAConfiguration.get_config().drive_uploads_enabled)
@@ -159,7 +160,6 @@ def month_folder_name(d: date) -> str:
     differently-spelled folder beside the real one — find-or-create succeeds
     either way and nothing would error.
     """
-    from core.constants import MESES_ES
 
     return f"{MESES_ES[d.month - 1].capitalize()} {d:%y}"
 
@@ -213,6 +213,35 @@ class DriveReceiptService:
     # ── Drive client ─────────────────────────────────────────────────────────
 
     def _get_service(self):
+        # Deliberately lazy. googleapiclient / google-auth-oauthlib /
+        # google-auth-httplib2 / httplib2 are TRANSITIVE deps (via django-gsheets),
+        # not declared in pyproject.toml — at module level a shift in that tree
+        # turns a degraded Google feature into an app that cannot boot. It also
+        # keeps ~300 ms of Google stack off every cold start for a path most
+        # requests never take.
+        # Deliberately lazy. googleapiclient / google-auth-oauthlib /
+        # google-auth-httplib2 / httplib2 are TRANSITIVE deps (via django-gsheets),
+        # not declared in pyproject.toml — at module level a shift in that tree
+        # turns a degraded Google feature into an app that cannot boot. It also
+        # keeps ~300 ms of Google stack off every cold start for a path most
+        # requests never take.
+        # Deliberately lazy. googleapiclient / google-auth-oauthlib /
+        # google-auth-httplib2 / httplib2 are TRANSITIVE deps (via django-gsheets),
+        # not declared in pyproject.toml — at module level a shift in that tree
+        # turns a degraded Google feature into an app that cannot boot. It also
+        # keeps ~300 ms of Google stack off every cold start for a path most
+        # requests never take.
+        # Deliberately lazy. googleapiclient / google-auth-oauthlib /
+        # google-auth-httplib2 / httplib2 are TRANSITIVE deps (via django-gsheets),
+        # not declared in pyproject.toml — at module level a shift in that tree
+        # turns a degraded Google feature into an app that cannot boot. It also
+        # keeps ~300 ms of Google stack off every cold start for a path most
+        # requests never take.
+        import google_auth_httplib2
+        import httplib2
+        from google.oauth2.service_account import Credentials
+        from googleapiclient.discovery import build
+
         if self._service is not None:
             return self._service
         info = self._credential_info()
@@ -220,16 +249,12 @@ class DriveReceiptService:
             raise RuntimeError("Google service account credentials are not configured.")
         # Late imports: the google-api-client stack is heavy and only needed when
         # an upload actually runs.
-        from google.oauth2.service_account import Credentials
-        from googleapiclient.discovery import build
 
         creds = Credentials.from_service_account_info(info, scopes=_DRIVE_SCOPES)
 
         # An explicit transport, purely to bound the socket — see
         # `_DRIVE_TIMEOUT_SECONDS`. Without it a stalled Drive connection holds
         # the request open forever.
-        import google_auth_httplib2
-        import httplib2
 
         http = google_auth_httplib2.AuthorizedHttp(creds, http=httplib2.Http(timeout=_DRIVE_TIMEOUT_SECONDS))
         # cache_discovery=False: the default file cache warns under non-writable
@@ -344,6 +369,14 @@ class DriveReceiptService:
         distinct failure statuses matter operationally, so each is logged with a
         message aimed at the actual cause (sharing vs. wrong id vs. transient).
         """
+        # Deliberately lazy. googleapiclient / google-auth-oauthlib /
+        # google-auth-httplib2 / httplib2 are TRANSITIVE deps (via django-gsheets),
+        # not declared in pyproject.toml — at module level a shift in that tree
+        # turns a degraded Google feature into an app that cannot boot. It also
+        # keeps ~300 ms of Google stack off every cold start for a path most
+        # requests never take.
+        from googleapiclient.http import MediaInMemoryUpload
+
         # `Payment.receipt_date` — the same property that picks the YEAR of the
         # receipt NUMBER, so a receipt cannot be numbered for one year and filed
         # under another.
@@ -377,8 +410,6 @@ class DriveReceiptService:
                     success=True, status="skipped_exists", folder_path=folder_path, file_id=existing
                 )
 
-            from googleapiclient.http import MediaInMemoryUpload
-
             media = MediaInMemoryUpload(pdf_bytes, mimetype="application/pdf", resumable=False)
             created = (
                 service.files()
@@ -404,6 +435,13 @@ class DriveReceiptService:
 def _describe_error(exc: Exception) -> str:
     """A short, cause-oriented message for the log — no raw exception text to the
     client, and the common Drive failures named so an operator knows what to fix."""
+    # NOT a top-level import: here the import IS the condition. The `except`
+    # binds `HttpError = ()` so the isinstance() below is simply False when
+    # googleapiclient is unavailable — this module's contract is that a Drive
+    # problem never raises into the payment flow, and an error FORMATTER is the
+    # last place that should be able to fail. Hoisting it would also leave an
+    # empty `try:` block. The module's other googleapiclient imports are at the
+    # top; only this fallback pair has to stay.
     try:
         from googleapiclient.errors import HttpError
     except Exception:  # noqa: BLE001
@@ -433,7 +471,6 @@ def _describe_error(exc: Exception) -> str:
 def _service_account_info():
     """Reuse the Sheets integration's credential loader — same service account,
     one place that knows how to read the JSON/file setting."""
-    from core.services.google_sheets_service import _load_service_account_info
 
     return _load_service_account_info()
 

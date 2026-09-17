@@ -1,14 +1,25 @@
-"""Regression locks for the v1.17.5 round of fixes.
+"""Everything the user reads in Spanish, plus the expense edit path.
+
+Two halves. Localisation: choice labels, email `<title>`s and d/m/Y dates --
+each one text a parent or an admin actually sees. Expenses: `update_expense`
+did not exist, so changing the rent meant deleting the template and orphaning
+every row generated from it; both write paths must now validate.
+
+From the v1.17.5 round.
 
 One class per reported problem so a revert fails loudly and names the symptom.
 """
 
 from datetime import date
 from decimal import Decimal
+from pathlib import Path
 
 import pytest
+from django.conf import settings
+from django.template import Context, Template
 from django.urls import reverse
 
+from billing import constants
 from billing.models import Expense
 
 pytestmark = pytest.mark.django_db
@@ -38,8 +49,6 @@ class TestSpanishChoiceLabels:
         ],
     )
     def test_every_payment_type_is_translated(self, key, label):
-        from billing import constants
-
         assert dict(constants.PAYMENT_TYPE_CHOICES)[key] == label
 
 
@@ -65,10 +74,6 @@ class TestEmailTemplatesHaveARealTitle:
 
     @pytest.mark.parametrize("name", TEMPLATES)
     def test_template_defines_its_own_title(self, name):
-        from pathlib import Path
-
-        from django.conf import settings
-
         source = Path(settings.BASE_DIR, "core", "templates", "emails", f"{name}.html").read_text(encoding="utf-8")
         assert "{% block title %}" in source, f"{name} falls back to the generic title"
 
@@ -78,20 +83,14 @@ class TestDatesAreDayMonthYear:
     rendered as "31 de agosto de 2026"."""
 
     def test_a_bare_date_renders_dd_mm_yyyy(self):
-        from django.template import Context, Template
-
         rendered = Template("{{ d }}").render(Context({"d": date(2026, 8, 31)}))
         assert rendered == "31/08/2026"
 
     def test_short_date_format_agrees(self):
-        from django.template import Context, Template
-
         rendered = Template('{{ d|date:"SHORT_DATE_FORMAT" }}').render(Context({"d": date(2026, 8, 31)}))
         assert rendered == "31/08/2026"
 
     def test_format_module_path_is_configured(self):
-        from django.conf import settings
-
         # Without this the DATE_FORMAT settings are silently inert.
         assert settings.FORMAT_MODULE_PATH == "project.formats"
 

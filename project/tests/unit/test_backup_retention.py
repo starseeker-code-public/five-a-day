@@ -7,6 +7,7 @@ double-create on a retried run, prune each class to its keep-count newest-first,
 and touch nothing without --apply.
 """
 
+import datetime
 from io import StringIO
 from unittest.mock import patch
 
@@ -60,7 +61,6 @@ def _backup(bid, desc, when, status="SUCCESSFUL", btype="ON_DEMAND"):
 
 def _run(fake, day, *args):
     """Run the command on a pinned calendar day with the fake client."""
-    import datetime
 
     out = StringIO()
     with (

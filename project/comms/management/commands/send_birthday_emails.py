@@ -10,12 +10,12 @@ Usage:
 
 from django.core.management.base import BaseCommand
 
+from comms.tasks import send_birthday_emails_task
+
 
 class Command(BaseCommand):
     help = "Send birthday emails to every active student whose birthday is today"
 
     def handle(self, *args, **options):
-        from comms.tasks import send_birthday_emails_task
-
         result = send_birthday_emails_task.apply().get()
         self.stdout.write(self.style.SUCCESS(f"Birthday emails: {result}"))

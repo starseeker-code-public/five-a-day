@@ -107,8 +107,19 @@ class TestSend:
             with patch.object(svc, "_get_client", side_effect=RuntimeError("boom")):
                 with caplog.at_level(logging.WARNING):
                     svc.send("+34600111222" + BREAK + "WARNING forged", "hi")
+        # Assert the records EXIST before asserting a property of each one: a
+        # `for` over an empty list passes, so if the service ever stopped
+        # logging at WARNING this test would go on reporting success while
+        # proving nothing. That is the whole failure mode it guards against.
+        assert caplog.records, "nothing was logged, so the sanitisation was never exercised"
         for record in caplog.records:
-            assert len(record.getMessage().splitlines()) == 1
+            message = record.getMessage()
+            # ONE line is the whole property: `safe_log` strips CR/LF so the
+            # value cannot forge a SECOND log record. The injected text itself
+            # deliberately survives inline — it is visibly part of one record
+            # there, and dropping it would lose the phone number the operator
+            # needs to act on.
+            assert len(message.splitlines()) == 1, f"a newline survived into the log: {message!r}"
 
 
 class TestSendToParent:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from django.conf import settings
 from django.http import HttpResponse, JsonResponse
 from django.views.decorators.cache import cache_control
 from django.views.decorators.http import require_http_methods
@@ -142,7 +143,6 @@ self.addEventListener("fetch", (event) => {
 def service_worker(request):
     """Serve /sw.js. Cached client-side for 1 hour; the version key inside the
     file itself invalidates the client cache on each deploy."""
-    from django.conf import settings
 
     version = getattr(settings, "APP_VERSION", "1.0")
     body = _SW_TEMPLATE % {

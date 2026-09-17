@@ -4,8 +4,12 @@ from datetime import date, timedelta
 
 import pytest
 from django.urls import reverse
+from django.utils import timezone
 
-from students.models import Student
+from billing.models import Payment
+from core.models import HistoryLog
+from students.forms import StudentForm
+from students.models import Group, Student
 
 pytestmark = pytest.mark.django_db
 
@@ -41,8 +45,6 @@ class TestWaitingListView:
         assert student.id not in ids
 
     def test_group_filter(self, authenticated_client, waiting_student, group, teacher):
-        from students.models import Group
-
         other_group = Group.objects.create(group_name="Other Group", color="#f00", teacher=teacher, active=True)
         other_waiter = Student.objects.create(
             first_name="Waiter2",
@@ -76,8 +78,6 @@ class TestAssignFromWaitingList:
         assert response.url == f"{reverse('parent_create')}?from_waiting={waiting_student.id}"
 
     def test_does_not_promote_or_enroll(self, authenticated_client, waiting_student, site_config):
-        from billing.models import Payment
-
         authenticated_client.get(reverse("assign_from_waiting_list", args=[waiting_student.id]))
         waiting_student.refresh_from_db()
         assert waiting_student.is_waiting is True
@@ -164,9 +164,6 @@ class TestWaitingEntryIsDiscardedOnEnrollment:
         """A student moved *back* onto the list keeps PROTECTed payments, so the
         placeholder is archived rather than deleted — the enrollment must still
         go through."""
-        from datetime import date
-
-        from billing.models import Payment
 
         Payment.objects.create(
             student=waiting_student,
@@ -262,8 +259,6 @@ class TestWaitingListCreateForm:
         assert Student.objects.get(first_name="Lucia").waiting_priority is True
 
     def test_history_entry_marks_a_priority_signup(self, authenticated_client):
-        from core.models import HistoryLog
-
         self._post(authenticated_client, waiting_priority="on")
 
         assert HistoryLog.objects.filter(action="waiting_list_added", message__contains="(prioritario)").exists()
@@ -271,8 +266,6 @@ class TestWaitingListCreateForm:
 
 class TestWaitingListPriorityOrdering:
     def test_priority_entries_come_first(self, authenticated_client, group):
-        from django.utils import timezone
-
         older = Student.objects.create(first_name="Primero", group=group, active=True, is_waiting=True)
         priority = Student.objects.create(
             first_name="Urgente", group=group, active=True, is_waiting=True, waiting_priority=True
@@ -287,8 +280,6 @@ class TestWaitingListPriorityOrdering:
         assert order.index(priority.id) < order.index(older.id)
 
     def test_fifo_is_kept_within_each_band(self, authenticated_client, group):
-        from django.utils import timezone
-
         first = Student.objects.create(
             first_name="Prio1", group=group, active=True, is_waiting=True, waiting_priority=True
         )
@@ -308,8 +299,6 @@ class TestFullStudentFormStillNeedsASurname:
     must not inherit that."""
 
     def test_last_name_is_required(self):
-        from students.forms import StudentForm
-
         assert StudentForm().fields["last_name"].required is True
 
 

@@ -15,10 +15,13 @@ from django.utils import timezone
 from django.views.decorators.http import require_http_methods
 
 from billing import constants
+from billing.exports import build_database_workbook
 from billing.models import Payment
+from billing.services.pdf_service import generate_payment_receipt, generate_student_payment_history
 from core.constants import MESES_ES
 from core.decorators import admin_required
 from core.models import HistoryLog
+from core.tasks import dispatch_payment_completed_on_commit
 from core.utils import MAX_QUERY_YEAR, MIN_QUERY_YEAR, csv_safe_row, safe_int
 from students.models import Parent, Student
 
@@ -52,7 +55,7 @@ def parse_date_value(date_value):
 def _queue_payment_receipt(payment_id: int) -> None:
     """Fire every side effect of a payment just marked completed, on COMMIT.
 
-    A one-line delegate to `comms.tasks.dispatch_payment_completed_on_commit`,
+    A one-line delegate to `core.tasks.dispatch_payment_completed_on_commit`,
     which is where the behaviour now lives — `billing/admin.py` is the app's
     second completion path and used to import THIS private name out of a view
     module to get its receipts sent (v1.29.5). It survives as a local alias for
@@ -60,7 +63,6 @@ def _queue_payment_receipt(payment_id: int) -> None:
     repeat the lazy import four times, and the import has to stay lazy to keep
     the comms->billing cycle closed.
     """
-    from comms.tasks import dispatch_payment_completed_on_commit
 
     dispatch_payment_completed_on_commit(payment_id)
 
@@ -448,7 +450,6 @@ def payment_receipt_pdf(request, payment_id):
     leave a permanent gap if it were later cancelled. The payments list already
     hides the link; this is what makes a hand-typed URL agree with it.
     """
-    from billing.services.pdf_service import generate_payment_receipt
 
     payment = get_object_or_404(
         Payment.objects.select_related("student", "parent", "enrollment", "enrollment__enrollment_type"),
@@ -470,7 +471,6 @@ def student_payments_pdf(request, student_id):
     a glance when each fee was paid and how. `?year=` narrows to one academic
     calendar year; omitted means every payment on record.
     """
-    from billing.services.pdf_service import generate_student_payment_history
 
     student = get_object_or_404(Student.objects.select_related("group"), id=student_id)
 
@@ -1009,7 +1009,6 @@ def export_payments(request):
 @admin_required
 def export_database_excel(request):
     """Export Estudiantes, Matrículas and Pagos as a single .xlsx file."""
-    from billing.exports import build_database_workbook
 
     wb = build_database_workbook()
     today = timezone.localtime().strftime("%Y%m%d")

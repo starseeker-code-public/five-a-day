@@ -1,15 +1,35 @@
 """
-Extra tests that fill in specific uncovered branches across the fix set.
+The failure branches of the service layer -- the paths only an outage reaches.
+
+A bad credential, an unreachable API, a malformed upload, a disabled throttle:
+each is a branch that never runs in development and runs for the first time
+during an incident. Each test names the file:line it targets.
 Each test names the file:line it's targeting so grep-based coverage debt
 tracking stays sane.
 """
 
+import hashlib
+import hmac
+import sys
+import time
+from datetime import date
+from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
 import pytest
 from django.core.cache import cache
+from django.http import HttpRequest, HttpResponse
 from django.test import override_settings
 from django.urls import reverse
+from gspread.exceptions import WorksheetNotFound
+
+from billing.models import Expense
+from billing.tasks import materialize_recurring_expenses_task
+from comms.services.sms_service import SmsService
+from core.models import AuditLog, HistoryLog
+from core.rate_limit import _client_ip, rate_limit
+from core.services.google_sheets_service import GoogleSheetsService
+from students.models import Student
 
 pytestmark = pytest.mark.django_db
 
@@ -20,9 +40,8 @@ pytestmark = pytest.mark.django_db
 class TestMaterializeRecurringExpensesTask:
     def test_task_delegates_to_service(self):
         """Covers billing/tasks.py:23-30 (the recurring expenses Beat task)."""
-        from billing.tasks import materialize_recurring_expenses_task
 
-        with patch("billing.services.expense_service.materialize_recurring", return_value=3) as mock:
+        with patch("billing.tasks.materialize_recurring", return_value=3) as mock:
             result = materialize_recurring_expenses_task.run(month=3, year=2026)
 
         mock.assert_called_once_with(3, 2026)
@@ -32,9 +51,7 @@ class TestMaterializeRecurringExpensesTask:
         assert result["year"] == 2026
 
     def test_task_defaults_to_today(self):
-        from billing.tasks import materialize_recurring_expenses_task
-
-        with patch("billing.services.expense_service.materialize_recurring", return_value=0) as mock:
+        with patch("billing.tasks.materialize_recurring", return_value=0) as mock:
             materialize_recurring_expenses_task.run()
         # Called with today's month/year — sanity, not the exact values
         assert mock.called
@@ -49,7 +66,6 @@ class TestMaterializeRecurringExpensesTask:
 class TestGoogleSheetsServiceInternals:
     def test_an_existing_worksheet_is_reused(self):
         """Covers the WorksheetNotFound-catch branch by hitting the try side."""
-        from core.services.google_sheets_service import GoogleSheetsService
 
         svc = GoogleSheetsService(spreadsheet_id="abc")
         fake_sheet = MagicMock()
@@ -68,9 +84,6 @@ class TestGoogleSheetsServiceInternals:
         because the catch was a bare `except Exception`. It was therefore
         asserting the defect: that ANY failure is read as "not there yet".
         """
-        from gspread.exceptions import WorksheetNotFound
-
-        from core.services.google_sheets_service import GoogleSheetsService
 
         svc = GoogleSheetsService(spreadsheet_id="abc")
         fake_sheet = MagicMock()
@@ -91,7 +104,6 @@ class TestGoogleSheetsServiceInternals:
         failed with next — and a permissions problem surfaced as a confusing
         write error instead of a permissions problem.
         """
-        from core.services.google_sheets_service import GoogleSheetsService
 
         svc = GoogleSheetsService(spreadsheet_id="abc")
         fake_sheet = MagicMock()
@@ -104,7 +116,6 @@ class TestGoogleSheetsServiceInternals:
 
     def test_get_sheet_raises_when_unconfigured(self):
         """Covers the two RuntimeErrors in _get_sheet."""
-        from core.services.google_sheets_service import GoogleSheetsService
 
         with override_settings(
             GOOGLE_SHEETS_SERVICE_ACCOUNT_JSON="",
@@ -116,8 +127,6 @@ class TestGoogleSheetsServiceInternals:
                 svc._get_sheet()
 
     def test_get_sheet_raises_when_no_spreadsheet_id(self):
-        from core.services.google_sheets_service import GoogleSheetsService
-
         with override_settings(
             GOOGLE_SHEETS_SERVICE_ACCOUNT_JSON='{"type":"service_account"}',
             GOOGLE_SHEETS_SPREADSHEET_ID="",
@@ -134,9 +143,6 @@ class TestSmsServiceGetClient:
     def test_get_client_raises_when_twilio_missing(self):
         """Covers sms_service.py:55-62 — the ImportError branch when the
         `twilio` SDK isn't installed."""
-        import sys
-
-        from comms.services.sms_service import SmsService
 
         with override_settings(TWILIO_ACCOUNT_SID="AC1", TWILIO_AUTH_TOKEN="t", TWILIO_FROM_NUMBER="+1"):
             svc = SmsService()
@@ -152,10 +158,6 @@ class TestSmsServiceGetClient:
 
 class TestRateLimitEdgeCases:
     def test_client_ip_falls_back_to_remote_addr_when_no_forwarded(self):
-        from django.http import HttpRequest
-
-        from core.rate_limit import _client_ip
-
         req = HttpRequest()
         req.META["REMOTE_ADDR"] = "3.3.3.3"
         assert _client_ip(req) == "3.3.3.3"
@@ -164,9 +166,6 @@ class TestRateLimitEdgeCases:
         """Rightmost hop with one trusted proxy — see test_rate_limit.py for why
         the leftmost entry is not trustworthy. TRUSTED_PROXY_COUNT is pinned
         because the settings default is now 0 outside production."""
-        from django.http import HttpRequest
-
-        from core.rate_limit import _client_ip
 
         settings.TRUSTED_PROXY_COUNT = 1
         req = HttpRequest()
@@ -174,18 +173,11 @@ class TestRateLimitEdgeCases:
         assert _client_ip(req) == "2.2.2.2"
 
     def test_client_ip_unknown_when_nothing_set(self):
-        from django.http import HttpRequest
-
-        from core.rate_limit import _client_ip
-
         req = HttpRequest()
         assert _client_ip(req) == "unknown"
 
     def test_incr_fallback_when_key_expires(self):
         """Cover the incr-ValueError branch in the rate-limit decorator."""
-        from django.http import HttpRequest, HttpResponse
-
-        from core.rate_limit import rate_limit
 
         calls = {"n": 0}
 
@@ -214,9 +206,6 @@ class TestRateLimitEdgeCases:
 class TestStripeViewsEdgeCases:
     def test_webhook_returns_400_on_malformed_json_with_valid_signature(self, client):
         """Line 85-86: signature-valid but body isn't JSON."""
-        import hashlib
-        import hmac
-        import time
 
         secret = "whsec_test"
         payload = b"not json"
@@ -242,8 +231,6 @@ class TestExpensesFormBadInput:
         assert response.status_code == 200
 
     def test_create_rejects_zero_amount(self, authenticated_client):
-        from billing.models import Expense
-
         before = Expense.objects.count()
         response = authenticated_client.post(
             reverse("create_expense"),
@@ -253,10 +240,6 @@ class TestExpensesFormBadInput:
         assert Expense.objects.count() == before
 
     def test_create_bad_date_falls_back_to_today(self, authenticated_client):
-        from datetime import date
-
-        from billing.models import Expense
-
         response = authenticated_client.post(
             reverse("create_expense"),
             {
@@ -271,8 +254,6 @@ class TestExpensesFormBadInput:
         assert latest.expense_date == date.today()
 
     def test_create_recurring_with_bad_day_clamped(self, authenticated_client):
-        from billing.models import Expense
-
         response = authenticated_client.post(
             reverse("create_expense"),
             {
@@ -288,11 +269,6 @@ class TestExpensesFormBadInput:
         assert latest.recurring_day == 1  # fallback
 
     def test_delete_expense_ajax(self, authenticated_client):
-        from datetime import date
-        from decimal import Decimal
-
-        from billing.models import Expense
-
         e = Expense.objects.create(description="X", category="other", amount=Decimal("1"), expense_date=date.today())
         response = authenticated_client.post(
             reverse("delete_expense", args=[e.id]),
@@ -313,9 +289,6 @@ class TestWaitingListBranches:
 
     def test_assign_when_group_full_redirects_back(self, authenticated_client, group, student, site_config):
         """A full group blocks the enrollment shortcut and bounces back to the list."""
-        from datetime import date
-
-        from students.models import Student
 
         group.max_students = 1
         group.save()
@@ -332,8 +305,6 @@ class TestWaitingListBranches:
         assert response.url == reverse("waiting_list")
 
     def test_add_to_waiting_list_logs_history(self, authenticated_client, student):
-        from core.models import HistoryLog
-
         before = HistoryLog.objects.filter(action="waiting_list_added").count()
         authenticated_client.post(reverse("add_to_waiting_list", args=[student.id]))
         after = HistoryLog.objects.filter(action="waiting_list_added").count()
@@ -379,10 +350,6 @@ class TestParentPortalEdgeBranches:
 class TestAuditSignalsRareBranches:
     def test_snapshot_field_error_swallowed(self, group):
         """If a field raises during snapshot, the audit record still fires."""
-        from datetime import date
-
-        from core.models import AuditLog
-        from students.models import Student
 
         # Just create a student — snapshot has no errors — this covers the
         # happy-path serialisation. Broken-field path is defensive.

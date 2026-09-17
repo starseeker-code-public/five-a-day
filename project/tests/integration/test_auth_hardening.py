@@ -5,17 +5,23 @@ names the failure it prevents. Grouped by the thing being defended, not by
 module.
 """
 
+import inspect
 import json
 import logging
+import pathlib
 import re
 from unittest.mock import patch
 
 import pytest
-from django.contrib.auth import get_user_model
-from django.test import Client
+from django.contrib.auth import SESSION_KEY, get_user_model
+from django.contrib.auth.models import AnonymousUser
+from django.http import HttpResponse
+from django.test import Client, RequestFactory
 from django.urls import reverse
 from django.utils import timezone
 
+from core.context_processors import today_notifications
+from core.decorators import admin_required
 from core.middleware import (
     NON_ADMIN_ALLOWED_URL_NAMES,
     QAErrorEmailMiddleware,
@@ -24,6 +30,10 @@ from core.middleware import (
     _is_non_admin_teacher,
     _session_identity_revoked,
 )
+from core.rate_limit import ErrorAlertThrottleFilter
+from core.services.portal_access_service import PORTAL_TEMPORARY_PASSWORD_COOLDOWN, send_portal_temporary_password
+from core.views import parent_portal
+from core.views.parent_portal import _run_after_response_sent, _start_parent_session
 from students.models import Teacher
 
 User = get_user_model()
@@ -153,8 +163,6 @@ class TestOffboardedSessionIsRejected:
 
 
 def _session_identity_revoked_for(client):
-    from django.test import RequestFactory
-
     request = RequestFactory().get("/payments/")
     request.session = client.session
     return _session_identity_revoked(request)
@@ -165,24 +173,18 @@ class TestNonAdminDeterminationFailsClosed:
     unrestricted one."""
 
     def _request(self, user=None, session=None):
-        from django.contrib.auth.models import AnonymousUser
-        from django.test import RequestFactory
-
         request = RequestFactory().get("/payments/")
         request.user = user if user is not None else AnonymousUser()
         request.session = session if session is not None else {}
         return request
 
     def test_a_claimed_but_unresolvable_identity_is_restricted(self):
-        from django.contrib.auth import SESSION_KEY
-
         request = self._request(session={SESSION_KEY: "7", "is_authenticated": True})
         assert _is_non_admin_teacher(request) is True
 
     def test_an_inactive_admin_teacher_is_restricted(self, client):
         """Reading `admin` off a deactivated row would keep granting the full
         set to somebody who has been let go."""
-        from django.test import RequestFactory
 
         teacher = _make_teacher(email="inact@fiveaday.test", admin=True)
         teacher.active = False
@@ -256,8 +258,6 @@ class TestExceptionReporterRedaction:
     which none of this app's hand-rolled auth views do."""
 
     def test_post_secrets_are_cleansed(self):
-        from django.test import RequestFactory
-
         request = RequestFactory().post("/login/", data={"username": "ana", "password": "hunter2", "code": "123456"})
         cleansed = RedactingExceptionReporterFilter().get_post_parameters(request)
 
@@ -266,8 +266,6 @@ class TestExceptionReporterRedaction:
         assert cleansed["username"] == "ana", "non-credential fields stay readable"
 
     def test_the_live_request_is_not_mutated(self):
-        from django.test import RequestFactory
-
         request = RequestFactory().post("/login/", data={"password": "hunter2"})
         RedactingExceptionReporterFilter().get_post_parameters(request)
         assert request.POST["password"] == "hunter2"
@@ -373,8 +371,6 @@ class TestRecoveryCannotBeUsedToDenyRecovery:
         assert _normalised_body(first) == _normalised_body(second)
 
     def test_a_genuine_second_request_after_the_cooldown_reissues(self, client, parent):
-        from core.services.portal_access_service import PORTAL_TEMPORARY_PASSWORD_COOLDOWN
-
         with patch("comms.services.email_service.EmailService.send_email", return_value=True) as send:
             self._post(client, parent.email)
             first = send.call_args[1]["context"]["temporary_password"]
@@ -393,7 +389,6 @@ class TestRecoveryCannotBeUsedToDenyRecovery:
 
     def test_an_admin_reissue_ignores_the_cooldown(self, client, parent, rf):
         """An admin on the phone with a family must be able to reissue now."""
-        from core.services.portal_access_service import send_portal_temporary_password
 
         request = rf.get("/admin/")
         with patch("comms.services.email_service.EmailService.send_email", return_value=True) as send:
@@ -413,9 +408,6 @@ class TestRecoveryCannotBeUsedToDenyRecovery:
         Asserted on the source because `RATELIMIT_ENABLE` is False in the test
         settings, so the decorator cannot be exercised end to end here.
         """
-        import inspect
-
-        from core.views import parent_portal
 
         source = inspect.getsource(parent_portal)
         assert 'rate_limit("parent_portal_forgot", limit=3, window_seconds=900)' in source
@@ -432,9 +424,6 @@ class TestRecoveryTimingIsNotAnEnumerationOracle:
     def test_the_send_happens_after_the_response_is_written(self):
         """`response.close()` is called by the WSGI server AFTER the body has
         been sent (PEP 3333), and by Django's test client for the same reason."""
-        from django.http import HttpResponse
-
-        from core.views.parent_portal import _run_after_response_sent
 
         ran = []
         response = HttpResponse("body")
@@ -447,10 +436,6 @@ class TestRecoveryTimingIsNotAnEnumerationOracle:
         assert ran == [1], "and exactly once"
 
     def test_a_failure_after_the_response_cannot_500_it(self):
-        from django.http import HttpResponse
-
-        from core.views.parent_portal import _run_after_response_sent
-
         response = HttpResponse("body")
         _run_after_response_sent(response, lambda: 1 / 0)
         response.close()  # must not raise
@@ -459,7 +444,7 @@ class TestRecoveryTimingIsNotAnEnumerationOracle:
         """The dummy-hash equalisation is kept and EXTENDED: it is now paid by
         the known branch too, so neither can be identified by how long the POST
         took."""
-        with patch("students.models.burn_portal_login_work") as burn:
+        with patch("core.views.parent_portal.burn_portal_login_work") as burn:
             client.post(reverse("parent_portal_forgot_password"), {"email": parent.email})
             known = burn.call_count
             client.post(reverse("parent_portal_forgot_password"), {"email": "nobody@example.com"})
@@ -545,10 +530,6 @@ class TestSessionStartTakesTheParent:
         assert client.session["parent_credential_stamp"] == parent.portal_credential_changed_at.isoformat()
 
     def test_it_no_longer_accepts_an_id(self, parent):
-        import inspect
-
-        from core.views.parent_portal import _start_parent_session
-
         signature = inspect.signature(_start_parent_session)
         assert "parent_id" not in signature.parameters
         assert "parent" in signature.parameters
@@ -594,19 +575,12 @@ class TestAdminRequiredDecorator:
 
     @staticmethod
     def _view(request):
-        from django.http import HttpResponse
-
         return HttpResponse("ok")
 
     def _wrapped(self):
-        from core.decorators import admin_required
-
         return admin_required(self._view)
 
     def _request(self, path, client=None):
-        from django.contrib.auth.models import AnonymousUser
-        from django.test import RequestFactory
-
         request = RequestFactory().get(path)
         request.user = AnonymousUser()
         request.session = {} if client is None else client.session
@@ -648,9 +622,6 @@ class TestIsAdminUserFailsClosed:
         """`not is_non_admin_teacher` answered True for a request with no
         session at all, so any page rendered to an anonymous visitor claimed
         admin in its context."""
-        from django.test import RequestFactory
-
-        from core.context_processors import today_notifications
 
         request = RequestFactory().get("/login/")
         request.session = {}  # type: ignore[assignment]
@@ -710,8 +681,6 @@ class TestNonAdminLedger:
 class TestSettingsPosture:
     @staticmethod
     def _source():
-        import pathlib
-
         return (pathlib.Path(__file__).resolve().parents[2] / "project" / "settings.py").read_text(encoding="utf-8")
 
     def test_the_production_guard_asserts_the_cache_backend(self):
@@ -757,21 +726,15 @@ class TestErrorAlertThrottle:
         return logging.LogRecord(name, logging.ERROR, "/app/x.py", line, "boom %s", ("x",), None)
 
     def test_the_first_alert_passes(self):
-        from core.rate_limit import ErrorAlertThrottleFilter
-
         assert ErrorAlertThrottleFilter().filter(self._record()) is True
 
     def test_a_repeat_from_the_same_site_is_suppressed(self):
-        from core.rate_limit import ErrorAlertThrottleFilter
-
         throttle = ErrorAlertThrottleFilter()
         assert throttle.filter(self._record()) is True
         assert throttle.filter(self._record()) is False
         assert throttle.filter(self._record()) is False
 
     def test_a_different_site_is_not_suppressed(self):
-        from core.rate_limit import ErrorAlertThrottleFilter
-
         throttle = ErrorAlertThrottleFilter()
         throttle.filter(self._record(line=10))
         assert throttle.filter(self._record(line=99)) is True
@@ -779,7 +742,6 @@ class TestErrorAlertThrottle:
     def test_the_message_text_cannot_defeat_it(self):
         """Keyed on the call SITE, not the formatted text — a per-request id or
         a student name in the message is exactly what spams."""
-        from core.rate_limit import ErrorAlertThrottleFilter
 
         throttle = ErrorAlertThrottleFilter()
         first = self._record()
@@ -789,8 +751,6 @@ class TestErrorAlertThrottle:
         assert throttle.filter(second) is False
 
     def test_the_bookkeeping_is_bounded(self):
-        from core.rate_limit import ErrorAlertThrottleFilter
-
         throttle = ErrorAlertThrottleFilter()
         for line in range(ErrorAlertThrottleFilter.MAX_TRACKED * 2):
             throttle.filter(self._record(line=line))

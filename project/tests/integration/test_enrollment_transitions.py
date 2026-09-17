@@ -14,18 +14,21 @@ from decimal import Decimal
 
 import pytest
 from django.contrib import admin as dj_admin
+from django.core.exceptions import ValidationError
 from django.urls import reverse
 
 from billing.admin import PaymentAdmin
 from billing.models import Enrollment, Payment, SiteConfiguration
 from billing.services.enrollment_service import EnrollmentService
 from billing.services.payment_service import PaymentService
+from billing.services.pdf_service import _get_academy_info
 from billing.services.pricing_service import (
     PricingService,
     quarterly_price_from_monthly,
     round_money,
 )
 from core.models import HistoryLog
+from students.models import Student
 
 pytestmark = pytest.mark.django_db
 
@@ -322,7 +325,6 @@ class TestRefundedPaymentCannotBeCompleted:
     def test_the_refusal_comes_from_the_model_guard(self, pending_payment):
         """The view must not carry its own copy of the status list — that copy is
         what was missing `refunded`."""
-        from django.core.exceptions import ValidationError
 
         pending_payment.payment_status = "refunded"
         with pytest.raises(ValidationError):
@@ -464,7 +466,6 @@ class TestAcademyFiscalDetails:
         """`pdf_service._get_academy_info()` read these five names off the config
         all along; they simply did not exist, so the CIF printed blank on a
         document that asserts IRPF validity."""
-        from billing.services.pdf_service import _get_academy_info
 
         site_config.academy_cif = "B02123456"
         site_config.save()
@@ -562,7 +563,6 @@ class TestPickerTruncationIsAnnounced:
         """A sibling past the cap was simply unfindable, so the admin left
         "Descuento hermano" unticked and the family lost the discount all year —
         a mis-bill with nothing on screen to explain it."""
-        from students.models import Student
 
         Student.objects.create(first_name="Hermana", last_name="Segunda", group=group, active=True)
         monkeypatch.setattr("core.views.students._PICKER_CAP", 1)

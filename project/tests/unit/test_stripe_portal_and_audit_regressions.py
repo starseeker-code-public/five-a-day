@@ -1,16 +1,39 @@
-"""
-Regression tests for the review pass — every fix from the /review + fix
-loop has at least one dedicated test here so a future refactor cannot
-silently reintroduce the bug.
+"""Stripe reconciliation, the portal credential mail, the audit log, and the PWA.
+
+Four unrelated subsystems, grouped because each contributes one rule that is
+invisible from its own module and expensive to get wrong:
+
+* a replayed Stripe webhook must not re-collect a payment, and a checkout URL
+  must point at this deployment;
+* the portal's temporary password is generated INSIDE the task, so the
+  plaintext never reaches the broker or a task log;
+* the audit label is PII-minimised, because the log outlives the record;
+* the service worker must not cache `/login/` (a stale CSRF token 403s the
+  next sign-in) and the rate limiter must count only the methods it is told to.
+
+Plus the waiting-list assign guard, payment-reminder deduplication, and the
+report PDF living in the service rather than the view.
 """
 
+import re
+from datetime import date, timedelta
+from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
 import pytest
+from django.core.cache import cache
+from django.http import HttpRequest, HttpResponse
 from django.test import override_settings
 from django.urls import reverse
 
+from billing.models import Enrollment, Payment
+from billing.services.pdf_service import generate_report_pdf
 from billing.services.stripe_service import StripeService
+from comms.tasks import send_payment_reminders
+from core.models import AuditLog
+from core.rate_limit import rate_limit
+from core.views.parent_portal import _PARENT_CRED_STAMP_KEY, _credential_stamp
+from students.models import Student, StudentParent
 
 pytestmark = pytest.mark.django_db
 
@@ -23,7 +46,6 @@ class TestStripeReplaySafety:
         """Stripe retries webhooks up to ~3 days after the first 2xx;
         replaying `checkout.session.completed` for an already-paid Payment
         must NOT overwrite payment_date or trigger a duplicate receipt."""
-        from datetime import date
 
         pending_payment.stripe_session_id = "cs_replay"
         pending_payment.payment_status = "completed"
@@ -138,7 +160,6 @@ class TestPortalCredentialEmailAsync:
         # The credential stamp the session was opened with — a password change
         # bumps it and invalidates every session that predates it, so a
         # hand-built session must carry the current value to be accepted.
-        from core.views.parent_portal import _PARENT_CRED_STAMP_KEY, _credential_stamp
 
         session[_PARENT_CRED_STAMP_KEY] = _credential_stamp(parent)
         session.save()
@@ -149,8 +170,6 @@ class TestPortalCredentialEmailAsync:
         }
 
         with override_settings(RATELIMIT_ENABLE=True):
-            from django.core.cache import cache
-
             cache.clear()
             for _ in range(5):
                 assert client.post(reverse("parent_portal_change_password"), payload).status_code == 200
@@ -164,11 +183,6 @@ class TestPortalCredentialEmailAsync:
 
 class TestRateLimitCountMethods:
     def test_get_can_be_counted(self):
-        from django.core.cache import cache
-        from django.http import HttpRequest, HttpResponse
-
-        from core.rate_limit import rate_limit
-
         @rate_limit("get_test_scope", limit=2, window_seconds=60, count_methods=("GET",))
         def _view(request):
             return HttpResponse("ok")
@@ -187,11 +201,6 @@ class TestRateLimitCountMethods:
             cache.clear()
 
     def test_post_not_counted_when_only_get_is_configured(self):
-        from django.core.cache import cache
-        from django.http import HttpRequest, HttpResponse
-
-        from core.rate_limit import rate_limit
-
         @rate_limit("post_bypass_scope", limit=1, window_seconds=60, count_methods=("GET",))
         def _view(request):
             return HttpResponse("ok")
@@ -219,9 +228,6 @@ class TestWaitingListAssignGuards:
         straight from the list. Now the button hands over to the normal
         "Matricular" flow, which asks for the padre/tutor first.
         """
-        from datetime import date
-
-        from students.models import Student
 
         s = Student.objects.create(
             first_name="Orphan",
@@ -246,12 +252,6 @@ class TestWaitingListAssignGuards:
 class TestPaymentReminderDedupe:
     def test_sms_deduped_by_parent(self, group, parent, enrollment_type_new_student, site_config):
         """Parents with several kids should only get one SMS per weekly run."""
-        from datetime import date, timedelta
-        from decimal import Decimal
-
-        from billing.models import Enrollment, Payment
-        from comms.tasks import send_payment_reminders
-        from students.models import Student, StudentParent
 
         parent.sms_opt_in = True
         parent.phone = "+34600111222"
@@ -310,15 +310,12 @@ class TestPaymentReminderDedupe:
     def test_reminder_context_uses_string_amount_not_float(self, pending_payment):
         """Money in Decimal, never float. The reminder email context used to
         do `float(payment.amount)` which loses precision."""
-        from datetime import date, timedelta
 
         # Make the payment "due within 7 days" so the reminder task picks it up.
         pending_payment.parent.sms_opt_in = False
         pending_payment.parent.save()
         pending_payment.due_date = date.today() + timedelta(days=3)
         pending_payment.save()
-
-        from comms.tasks import send_payment_reminders
 
         captured = {}
 
@@ -343,7 +340,6 @@ class TestAuditLogPii:
     def test_parent_update_does_not_log_dni_or_email(self, parent):
         """After the fix, Parent audit rows must not persist DNI or email —
         GDPR-sensitive PII was previously written into the JSON payload."""
-        from core.models import AuditLog
 
         parent.first_name = "Renamed"
         parent.email = "changed@example.com"
@@ -358,8 +354,6 @@ class TestAuditLogPii:
         assert "phone" not in log.changes
 
     def test_teacher_update_does_not_log_email(self, teacher):
-        from core.models import AuditLog
-
         teacher.first_name = "Renamed"
         teacher.email = "new@example.com"
         teacher.save()
@@ -371,9 +365,6 @@ class TestAuditLogPii:
     def test_payment_amount_serialises_as_string(self, pending_payment):
         """Decimal amounts must be JSON-serialised as strings (not floats
         that lose precision)."""
-        from decimal import Decimal
-
-        from core.models import AuditLog
 
         pending_payment.amount = Decimal("99.99")
         pending_payment.save()
@@ -398,7 +389,6 @@ class TestPwaCacheExclusions:
         # authenticated route.
         assert "STATIC_SHELL" in body
         # Explicitly ensure the old shell URLs are gone
-        import re
 
         static_shell = re.search(r"const STATIC_SHELL = \[(.*?)\];", body, re.DOTALL).group(1)
         assert '"/",' not in static_shell
@@ -431,8 +421,6 @@ class TestPwaCacheExclusions:
 
 class TestReportPdfInService:
     def test_service_function_returns_pdf(self):
-        from billing.services.pdf_service import generate_report_pdf
-
         stub_report = {
             "current_month": {
                 "income": 100.0,
@@ -452,7 +440,6 @@ class TestReportPdfInService:
         # behaviour every other view uses. It used to CLAMP to 12 here (its own
         # third copy of the helper), so /reports/?month=99 showed December while
         # /payments/?month=99 showed the current month.
-        from datetime import date
 
         response = authenticated_client.get(reverse("reports_view"), {"month": 99, "year": 2026})
         assert response.status_code == 200

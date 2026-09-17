@@ -28,6 +28,8 @@ from pathlib import Path
 
 import pytest
 
+from billing.models import Payment
+
 PROJECT_DIR = Path(__file__).resolve().parents[2]
 CORE_TEMPLATES = PROJECT_DIR / "core" / "templates"
 ROOT_TEMPLATES = PROJECT_DIR / "templates"
@@ -765,7 +767,6 @@ def test_complete_trigger_is_hidden_on_every_uncompletable_status():
     that was returned. `failed` stays completable — a failed card retried in
     cash is a real workflow.
     """
-    from billing.models import Payment
 
     # The guard is the MODEL's predicate (v1.29.2), not a status chain typed
     # into the template: `Payment.is_open` is what quick_complete_payment,

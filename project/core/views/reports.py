@@ -5,6 +5,7 @@ from datetime import date
 from django.http import HttpResponse
 from django.shortcuts import render
 
+from billing.services.pdf_service import generate_report_pdf
 from core.decorators import admin_required
 from core.services.analytics_service import dashboard_report
 from core.utils import MAX_QUERY_YEAR, MIN_QUERY_YEAR, safe_int
@@ -49,7 +50,6 @@ def reports_pdf(request):
     Thin view: delegates rendering to the pdf_service so the same code path
     is used from any future cron job that emails the report.
     """
-    from billing.services.pdf_service import generate_report_pdf
 
     month, year = _parse_month_year(request)
     report = dashboard_report(month, year)

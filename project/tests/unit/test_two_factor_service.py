@@ -1,6 +1,7 @@
 """Unit tests for the TOTP two-factor service (v1.13)."""
 
 from unittest.mock import patch
+from urllib.parse import quote
 
 import pyotp
 import pytest
@@ -12,8 +13,6 @@ pytestmark = pytest.mark.django_db
 
 class TestBeginEnrolment:
     def test_generates_secret_qr_and_backup_codes(self, teacher):
-        from urllib.parse import quote
-
         payload = tfs.begin_enrolment(teacher)
         teacher.refresh_from_db()
         assert payload.secret

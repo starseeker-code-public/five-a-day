@@ -251,8 +251,6 @@ class TestEnrollmentServiceEdgeCases:
     """
 
     def test_sibling_discount_comes_off_the_monthly_fee(self, db, student, enrollment_type_new_student, site_config):
-        from billing.services.enrollment_service import EnrollmentService
-
         enrollment = EnrollmentService.create_enrollment(
             student,
             {
@@ -272,7 +270,6 @@ class TestEnrollmentServiceEdgeCases:
     def test_an_adult_gets_no_sibling_discount(self, db, adult_student, enrollment_type_adults, site_config):
         """`_apply_discounts` gates the sibling discount on `not is_adult` — an
         adult student has no siblings on the roll to discount against."""
-        from billing.services.enrollment_service import EnrollmentService
 
         enrollment = EnrollmentService.create_enrollment(
             adult_student,

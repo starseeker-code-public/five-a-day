@@ -17,6 +17,7 @@ import pytest
 
 from billing.forms import EnrollmentForm
 from billing.models import Payment, current_academic_year
+from billing.models import relevant_academic_years as _real
 from billing.services.enrollment_service import EnrollmentService
 from billing.services.payment_service import PaymentService
 
@@ -39,10 +40,9 @@ class TestCreateEnrollmentStartDate:
     def test_form_passes_start_date_through(self, student, enrollment_type_new_student, site_config, monkeypatch):
         # Widen the typo-year window to include the elapsed anchor course —
         # the window rule itself is covered in TestStartDateWindow below.
-        from billing.models import relevant_academic_years as _real
 
         monkeypatch.setattr(
-            "billing.models.relevant_academic_years",
+            "billing.forms.relevant_academic_years",
             lambda reference_date=None: ["2020-2021", *_real(reference_date)],
         )
         form = EnrollmentForm({"enrollment_plan": "monthly_full", "start_date": "2020-11-15"})

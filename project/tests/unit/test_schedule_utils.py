@@ -24,6 +24,7 @@ from core.schedule_utils import (
     is_valid_slot,
     slot_time_range,
 )
+from students.models import Group
 
 pytestmark = pytest.mark.django_db
 
@@ -147,8 +148,6 @@ class TestGetGroupScheduleLines:
         assert get_group_schedule_lines(group) == []
 
     def test_other_groups_slots_are_excluded(self, group, teacher):
-        from students.models import Group
-
         other = Group.objects.create(group_name="Group B", color="#000000", teacher=teacher, active=True)
         ScheduleSlot.objects.create(row=0, day=0, col=0, group=group)
         ScheduleSlot.objects.create(row=1, day=3, col=0, group=other)

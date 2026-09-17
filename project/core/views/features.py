@@ -7,6 +7,8 @@ of it are the individual tickets. Everything here is QA-only
 (``@qa_access_required``), same as ``testing_tools``.
 """
 
+import csv
+import io
 import json
 import logging
 
@@ -24,6 +26,7 @@ from core.decorators import qa_access_required
 from core.models import BacklogTask, Feature
 from core.utils import csv_safe
 from core.views.testing_tools import VALID_PRIORITIES, backlog_task_json, email_backlog_task_created
+from students.models import Teacher
 
 logger = logging.getLogger(__name__)
 
@@ -127,8 +130,6 @@ def _email_feature(feature, kind):
         subject = f"[DESARROLLO] {feature.title}"
         headline = "Nuevo desarrollo registrado en el panel de QA"
     else:
-        from students.models import Teacher
-
         recipients = list(Teacher.objects.filter(admin=True, active=True).values_list("email", flat=True))
         subject = f"[DESARROLLO][HECHO] {feature.title}"
         headline = "Un desarrollo se ha marcado como HECHO"
@@ -372,9 +373,6 @@ def export_features(request):
     filename = f"desarrollos-{scope}-{stamp}"
 
     if export_format == "csv":
-        import csv
-        import io
-
         buffer = io.StringIO()
         fieldnames = list(rows[0].keys()) if rows else ["id", "title", "description", "status", "deadline"]
         writer = csv.DictWriter(buffer, fieldnames=fieldnames)

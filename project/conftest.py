@@ -4,12 +4,14 @@ from decimal import Decimal
 import pytest
 
 from billing.models import (
+    _CONFIG_CACHE,
     Enrollment,
     EnrollmentType,
     Payment,
     SiteConfiguration,
     academic_year_for_month,
 )
+from core.views.dashboard import reset_quote_cache
 from students.models import Group, Parent, Student, StudentParent, Teacher
 
 
@@ -266,7 +268,6 @@ def _reset_siteconfig_cache():
     config row that no longer exists (`objects.count() == 0` while
     `get_config()` happily returns an instance).
     """
-    from billing.models import _CONFIG_CACHE
 
     _CONFIG_CACHE.set(None)
     yield
@@ -282,7 +283,6 @@ def _reset_dashboard_quote_cache():
     whichever test ran first decided whether later ones saw a cache hit, a
     fetch, or a suppressed fetch during backoff.
     """
-    from core.views.dashboard import reset_quote_cache
 
     reset_quote_cache()
     yield

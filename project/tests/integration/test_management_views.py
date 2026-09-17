@@ -9,8 +9,9 @@ from decimal import Decimal
 import pytest
 from django.urls import reverse
 
+from billing.models import Enrollment
 from conftest import current_course_year
-from students.models import Teacher
+from students.models import Group, Teacher
 
 pytestmark = pytest.mark.django_db
 
@@ -144,8 +145,6 @@ class TestCreateGroup:
         assert response.status_code == 400
 
     def test_max_students_defaults_to_eight(self, authenticated_client, teacher):
-        from students.models import Group
-
         authenticated_client.post(
             reverse("create_group"),
             data=json.dumps({"group_name": "Default Cupo", "teacher_id": teacher.id}),
@@ -154,8 +153,6 @@ class TestCreateGroup:
         assert Group.objects.get(group_name="Default Cupo").max_students == 8
 
     def test_max_students_is_stored(self, authenticated_client, teacher):
-        from students.models import Group
-
         response = authenticated_client.post(
             reverse("create_group"),
             data=json.dumps({"group_name": "Cupo 12", "teacher_id": teacher.id, "max_students": 12}),
@@ -165,8 +162,6 @@ class TestCreateGroup:
         assert Group.objects.get(group_name="Cupo 12").max_students == 12
 
     def test_max_students_zero_means_no_cap(self, authenticated_client, teacher):
-        from students.models import Group
-
         authenticated_client.post(
             reverse("create_group"),
             data=json.dumps({"group_name": "Sin Cupo", "teacher_id": teacher.id, "max_students": 0}),
@@ -242,8 +237,6 @@ class TestUpdateEnrollmentModality:
 
 class TestLanguageChequeStudents:
     def test_returns_list(self, authenticated_client, student_with_parent, enrollment_type_new_student, site_config):
-        from billing.models import Enrollment
-
         # The endpoint filters on relevant_academic_years(), so this enrollment
         # has to be in the *current* course — see conftest.current_course_year().
         academic_year, start_year = current_course_year()
