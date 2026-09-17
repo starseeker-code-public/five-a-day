@@ -11,12 +11,14 @@ Uso:
 """
 
 import json
+import os
 from datetime import date, datetime
 
 from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
 from django.db.models import Prefetch
 
+from billing.models import SiteConfiguration
 from comms.services.email_functions import (
     cheque_idioma_fee,
     send_all_tax_certificates,
@@ -295,9 +297,6 @@ class Command(BaseCommand):
         # Resolve the fee/IBAN from the real sources when the flags are omitted,
         # so this command bills the same numbers the app does — SiteConfiguration
         # is the single source of truth for prices.
-        import os
-
-        from billing.models import SiteConfiguration
 
         config = SiteConfiguration.get_config()
         iban = options.get("iban") or os.getenv("ACADEMY_IBAN", "")

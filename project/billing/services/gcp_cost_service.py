@@ -118,15 +118,27 @@ def _load_service_account_info() -> dict | None:
 
 def _credentials():
     """Google credentials for BigQuery, or None when nothing resolves."""
+    # Deliberately lazy. googleapiclient / google-auth-oauthlib /
+    # google-auth-httplib2 / httplib2 are TRANSITIVE deps (via django-gsheets),
+    # not declared in pyproject.toml — at module level a shift in that tree
+    # turns a degraded Google feature into an app that cannot boot. It also
+    # keeps ~300 ms of Google stack off every cold start for a path most
+    # requests never take.
+    import google.auth
+
+    # Deliberately lazy. googleapiclient / google-auth-oauthlib /
+    # google-auth-httplib2 / httplib2 are TRANSITIVE deps (via django-gsheets),
+    # not declared in pyproject.toml — at module level a shift in that tree
+    # turns a degraded Google feature into an app that cannot boot. It also
+    # keeps ~300 ms of Google stack off every cold start for a path most
+    # requests never take.
+    from google.oauth2.service_account import Credentials
+
     # Late imports — the google stack is only needed once a real query runs.
     info = _load_service_account_info()
     if info is not None:
-        from google.oauth2.service_account import Credentials
-
         return Credentials.from_service_account_info(info, scopes=[_BIGQUERY_SCOPE])
     try:
-        import google.auth
-
         creds, _project = google.auth.default(scopes=[_BIGQUERY_SCOPE])
         return creds
     except Exception:  # noqa: BLE001 — no ADC on a dev machine is the normal case
@@ -141,6 +153,14 @@ def _query_month(year: int, month: int) -> Decimal | None:
     usage is attributed to the invoice it lands on, which is what Google's own
     billing reports page shows.
     """
+    # Deliberately lazy. googleapiclient / google-auth-oauthlib /
+    # google-auth-httplib2 / httplib2 are TRANSITIVE deps (via django-gsheets),
+    # not declared in pyproject.toml — at module level a shift in that tree
+    # turns a degraded Google feature into an app that cannot boot. It also
+    # keeps ~300 ms of Google stack off every cold start for a path most
+    # requests never take.
+    from google.auth.transport.requests import AuthorizedSession
+
     table = getattr(settings, "GCP_BILLING_EXPORT_TABLE", "")
     if not _TABLE_ID_RE.match(table):
         # Deliberately not echoing the value: CodeQL taints it as sensitive
@@ -179,8 +199,6 @@ def _query_month(year: int, month: int) -> Decimal | None:
     job_project = getattr(settings, "GCP_BILLING_PROJECT_ID", "") or table.split(".", 1)[0]
 
     try:
-        from google.auth.transport.requests import AuthorizedSession
-
         session = AuthorizedSession(creds)
         response = session.post(
             f"https://bigquery.googleapis.com/bigquery/v2/projects/{job_project}/queries",

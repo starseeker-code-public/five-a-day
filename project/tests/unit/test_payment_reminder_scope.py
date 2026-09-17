@@ -1,7 +1,14 @@
-"""Unit tests for the v1.29.5 review findings.
+"""Who the weekly payment reminder reaches, and over what window.
 
-One file per review round, like `test_review_fixes.py` and
-`test_v1292_review_fixes.py`. Each class names the defect it pins, not the
+Three rules, each of which was wrong: a debt stopped being chased the moment it
+became one (`due_date__gte=today`), adult students were never reminded at all
+(no Parent row, and only `payment.parent.email` was read), and two consecutive
+INCLUSIVE windows overlapped on a day, so a Monday due date was reminded twice.
+
+From the v1.29.5 review.
+
+One file per review round, like `test_stripe_portal_and_audit_regressions.py` and
+`test_payment_lifecycle_rules.py`. Each class names the defect it pins, not the
 function it happens to call, because the point of these is that the specific
 failure cannot come back.
 """
@@ -12,7 +19,9 @@ from unittest.mock import patch
 
 import pytest
 
-from billing.models import Payment
+from billing.models import Enrollment, Payment
+from comms.tasks import send_payment_reminders
+from conftest import current_course_year
 
 pytestmark = pytest.mark.django_db
 
@@ -26,8 +35,6 @@ def adult_enrollment(db, adult_student, enrollment_type_adults, site_config):
     date bomb (see CLAUDE.md), it falls out of `relevant_academic_years()` the
     moment the course rolls over.
     """
-    from billing.models import Enrollment
-    from conftest import current_course_year
 
     academic_year, start_year = current_course_year()
     return Enrollment.objects.create(
@@ -66,7 +73,6 @@ def _run_reminders():
     patched, so the queryset, the window and the recipient resolution are all
     the real ones.
     """
-    from comms.tasks import send_payment_reminders
 
     captured: list[dict] = []
 

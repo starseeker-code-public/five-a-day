@@ -11,10 +11,12 @@ from django.views.decorators.http import require_http_methods
 from billing import constants
 from billing.models import Enrollment, SiteConfiguration, current_academic_year, relevant_academic_years
 from billing.services.enrollment_service import EnrollmentService
+from billing.services.enrollment_type_service import ensure_enrollment_types
 from core.decorators import admin_required
 from core.models import HistoryLog
 from core.transactions import visible_students_for
 from core.views.password_reset import can_change_own_password, send_password_setup_email
+from core.views.waiting_list import group_capacity_summary
 from students.models import Group, Parent, Student, Teacher
 
 logger = logging.getLogger(__name__)
@@ -24,7 +26,6 @@ def gestion_view(request):
     """
     Vista principal de gestión con configuración de precios, profesores y grupos.
     """
-    from core.views.waiting_list import group_capacity_summary
 
     config = SiteConfiguration.get_config()
     teachers = Teacher.objects.filter(active=True).order_by("first_name", "last_name")
@@ -118,7 +119,6 @@ def update_site_config(request):
         # /admin/billing/enrollmenttype/ column showed the OLD matrícula fee until
         # the next container restart, which its own docstring says exists to make
         # drift VISIBLE.
-        from billing.services.enrollment_type_service import ensure_enrollment_types
 
         ensure_enrollment_types(config)
 

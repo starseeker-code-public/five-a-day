@@ -14,11 +14,13 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
+from googleapiclient.errors import HttpError
 
 from core.services import drive_service
 from core.services.drive_service import (
     DriveReceiptService,
     curso_folder_name,
+    get_service,
     month_folder_name,
     receipt_filename,
 )
@@ -232,8 +234,6 @@ class TestUploadReceipt:
 
     @patch.object(drive_service, "_service_account_info", return_value={"type": "service_account"})
     def test_http_403_is_named_as_a_sharing_problem(self, _info):
-        from googleapiclient.errors import HttpError
-
         svc = self._svc()
         resp = SimpleNamespace(status=403, reason="Forbidden")
         fake = MagicMock()
@@ -261,8 +261,6 @@ class TestGetService:
             svc._get_service()
 
     def test_module_singleton(self):
-        from core.services.drive_service import get_service
-
         assert get_service() is get_service()
 
 
@@ -281,20 +279,14 @@ class TestFolderCache:
 
 class TestDescribeError:
     def test_404_points_at_the_folder_id(self):
-        from googleapiclient.errors import HttpError
-
         msg = drive_service._describe_error(HttpError(SimpleNamespace(status=404, reason="NF"), b"{}"))
         assert "no encontrada" in msg.lower()
 
     def test_transient_http_is_labelled_transient(self):
-        from googleapiclient.errors import HttpError
-
         msg = drive_service._describe_error(HttpError(SimpleNamespace(status=503, reason="x"), b"{}"))
         assert "transitorio" in msg.lower()
 
     def test_other_http_status(self):
-        from googleapiclient.errors import HttpError
-
         msg = drive_service._describe_error(HttpError(SimpleNamespace(status=418, reason="teapot"), b"{}"))
         assert "418" in msg
 

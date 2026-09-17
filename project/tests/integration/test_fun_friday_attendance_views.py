@@ -8,6 +8,8 @@ from datetime import date
 import pytest
 from django.urls import reverse
 
+from core.models import FunFridayAttendance
+
 pytestmark = pytest.mark.django_db
 
 
@@ -42,8 +44,6 @@ class TestFunFridayAttendanceEndpoints:
         assert response.status_code == 400
 
     def test_remove_attendance(self, authenticated_client, student):
-        from core.models import FunFridayAttendance
-
         FunFridayAttendance.objects.create(student=student, date=date(2026, 5, 1))
         response = authenticated_client.post(
             reverse("remove_fun_friday_attendance", kwargs={"student_id": student.id}),

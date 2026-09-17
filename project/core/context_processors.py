@@ -3,6 +3,9 @@ from datetime import date
 
 from django.conf import settings
 
+from core.decorators import may_use_qa_tools
+from core.middleware import _is_non_admin_teacher
+
 from .constants import SCHEDULED_APPS
 from .models import HistoryLog, TodoItem
 
@@ -16,8 +19,6 @@ def today_notifications(request):
     # predicate the middleware enforces with — computed independently, the two
     # disagreed for an authenticated user with no Teacher row (the UI trimmed
     # itself while the middleware treated the session as admin, or vice versa).
-    from core.decorators import may_use_qa_tools
-    from core.middleware import _is_non_admin_teacher
 
     user = getattr(request, "user", None)
     teacher = None

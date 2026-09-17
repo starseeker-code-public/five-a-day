@@ -1,4 +1,9 @@
-"""Security regressions + the v1.15 feature additions.
+"""Injection sinks and session handling, plus the v1.15 feature additions.
+
+The security half pins holes confirmed exploitable against the running app: two
+stored-XSS sinks reachable by a non-admin teacher, a JSON block that could be
+broken out of, a rate limit bypassed by rotating a header, and a login that
+reused the pre-auth session id.
 
 The security half pins holes that were confirmed exploitable against the
 running app: two stored-XSS sinks reachable by a non-admin teacher, a JSON
@@ -9,17 +14,25 @@ session id.
 The feature half covers the backlog items added in the same pass.
 """
 
+import json
 from datetime import date
 from decimal import Decimal
 
 import pytest
 from django.conf import settings
+from django.contrib.auth import get_user_model
+from django.core import mail
+from django.core.cache import cache
 from django.test import Client
 from django.urls import reverse
+from django.utils import timezone
 
+from billing.constants import ENROLLMENT_TYPE_DISPLAY_ES
 from billing.models import Payment
-from core.models import HistoryLog, TodoItem
-from students.models import Student
+from comms.tasks import send_welcome_email_task
+from core.models import BacklogTask, FunFridayScheduledSend, HistoryLog, ScheduleSlot, TodoItem
+from core.tasks import send_due_fun_friday_emails_task
+from students.models import Group, Student, Teacher
 
 pytestmark = pytest.mark.django_db
 
@@ -132,8 +145,6 @@ class TestRateLimitCannotBeBypassedByHeaderSpoofing:
     """
 
     def test_rotating_the_spoofed_prefix_still_throttles(self, settings):
-        from django.core.cache import cache
-
         settings.RATELIMIT_ENABLE = True
         settings.TRUSTED_PROXY_COUNT = 1
         cache.clear()
@@ -152,7 +163,6 @@ class TestRateLimitCannotBeBypassedByHeaderSpoofing:
     def test_distinct_real_clients_get_distinct_buckets(self, settings):
         """The throttle must not become a global one — two genuinely different
         clients should not share a counter."""
-        from django.core.cache import cache
 
         settings.RATELIMIT_ENABLE = True
         settings.TRUSTED_PROXY_COUNT = 1
@@ -256,8 +266,6 @@ class TestScheduleSlotValidation:
         [(99, 0, 0), (-1, 0, 0), (0, 9, 0), (0, 0, 5), (2, 4, 0)],  # last: Friday row 2 has no session
     )
     def test_invalid_slots_are_rejected(self, authenticated_client, group, row, day, col):
-        import json
-
         response = authenticated_client.post(
             reverse("save_schedule_slot"),
             data=json.dumps({"row": row, "day": day, "col": col, "group_id": group.id}),
@@ -268,7 +276,6 @@ class TestScheduleSlotValidation:
 
     def test_schedule_page_survives_a_poisoned_row(self, authenticated_client, group):
         """Rows written before validation existed must not break rendering."""
-        from core.models import ScheduleSlot
 
         ScheduleSlot.objects.create(row=99, day=0, col=0, group=group)
         assert authenticated_client.get(reverse("schedule_view")).status_code == 200
@@ -280,12 +287,6 @@ class TestTeacherCreatedInTheUiCanRecoverTheirAccount:
     """
 
     def test_linked_user_is_created(self, authenticated_client):
-        import json
-
-        from django.contrib.auth import get_user_model
-
-        from students.models import Teacher
-
         authenticated_client.post(
             reverse("create_teacher"),
             data=json.dumps({"first_name": "Nuevo", "last_name": "Profe", "email": "nuevo@fiveaday.test"}),
@@ -296,10 +297,6 @@ class TestTeacherCreatedInTheUiCanRecoverTheirAccount:
         assert get_user_model().objects.filter(username="nuevo@fiveaday.test").exists()
 
     def test_password_reset_reaches_them(self, authenticated_client):
-        import json
-
-        from django.core import mail
-
         authenticated_client.post(
             reverse("create_teacher"),
             data=json.dumps({"first_name": "Nuevo", "last_name": "Profe", "email": "nuevo@fiveaday.test"}),
@@ -310,12 +307,6 @@ class TestTeacherCreatedInTheUiCanRecoverTheirAccount:
         assert len(mail.outbox) == 1, "the new teacher must be able to activate their account"
 
     def test_new_teacher_has_no_usable_password_until_they_set_one(self, authenticated_client):
-        import json
-
-        from django.contrib.auth import get_user_model
-
-        from students.models import Teacher
-
         authenticated_client.post(
             reverse("create_teacher"),
             data=json.dumps({"first_name": "Nuevo", "last_name": "Profe", "email": "nuevo@fiveaday.test"}),
@@ -480,8 +471,6 @@ class TestDatabaseGroupFilter:
     """Backlog: "filtrar por grupos" in Base de Datos."""
 
     def test_filter_narrows_to_one_group(self, student, teacher, group):
-        from students.models import Group
-
         other_group = Group.objects.create(group_name="Otro", color="#000000", teacher=teacher, active=True)
         Student.objects.create(
             first_name="Fuera", last_name="Grupo", birth_date=date(2015, 1, 1), group=other_group, active=True
@@ -492,8 +481,6 @@ class TestDatabaseGroupFilter:
         assert context["students_group"] == group.id
 
     def test_no_filter_shows_everyone(self, student, teacher, group):
-        from students.models import Group
-
         other = Group.objects.create(group_name="Otro", color="#000000", teacher=teacher, active=True)
         Student.objects.create(
             first_name="Fuera", last_name="Grupo", birth_date=date(2015, 1, 1), group=other, active=True
@@ -512,9 +499,6 @@ class TestBacklogExport:
     @pytest.fixture
     def qa_admin_client(self, settings, db):
         """The QA dashboard is gated on an ADMIN Teacher in the testing env."""
-        from django.contrib.auth import get_user_model
-
-        from students.models import Teacher
 
         settings.IS_TESTING_ENV = True
         teacher = Teacher.objects.create(
@@ -530,14 +514,10 @@ class TestBacklogExport:
 
     @pytest.fixture
     def tasks(self, db):
-        from core.models import BacklogTask
-
         BacklogTask.objects.create(title="Abierta", description="Pendiente", priority="high", status="open")
         BacklogTask.objects.create(title="Terminada", description="Hecha", priority="low", status="done")
 
     def test_json_export_defaults_to_active_tasks(self, qa_admin_client, tasks):
-        import json
-
         response = qa_admin_client.get(reverse("export_backlog_tasks"))
         assert response.status_code == 200
         payload = json.loads(response.content)
@@ -546,16 +526,12 @@ class TestBacklogExport:
         assert payload["count"] == 1
 
     def test_json_export_includes_every_field(self, qa_admin_client, tasks):
-        import json
-
         payload = json.loads(qa_admin_client.get(reverse("export_backlog_tasks")).content)
         task = payload["tasks"][0]
         for field in ("id", "title", "description", "priority", "status", "created_by", "created_at", "updated_at"):
             assert field in task
 
     def test_scope_all_includes_done_tasks(self, qa_admin_client, tasks):
-        import json
-
         payload = json.loads(qa_admin_client.get(reverse("export_backlog_tasks") + "?scope=all").content)
         assert {t["title"] for t in payload["tasks"]} == {"Abierta", "Terminada"}
 
@@ -578,12 +554,6 @@ class TestFunFridayDrainDoesNotDoubleSend:
     """
 
     def test_a_second_drain_sends_nothing(self):
-        from django.core import mail
-        from django.utils import timezone
-
-        from comms.tasks import send_due_fun_friday_emails_task
-        from core.models import FunFridayScheduledSend
-
         FunFridayScheduledSend.objects.create(
             recipients=["a@test.com", "b@test.com"],
             day_name="viernes",
@@ -601,11 +571,6 @@ class TestFunFridayDrainDoesNotDoubleSend:
         assert len(mail.outbox) == after_first == 2
 
     def test_the_row_is_marked_sent(self):
-        from django.utils import timezone
-
-        from comms.tasks import send_due_fun_friday_emails_task
-        from core.models import FunFridayScheduledSend
-
         row = FunFridayScheduledSend.objects.create(
             recipients=["a@test.com"],
             day_name="viernes",
@@ -627,8 +592,6 @@ class TestNewsletterDoesNotBlastEveryone:
     """
 
     def test_missing_group_sends_nothing(self, student_with_parent, parent, group):
-        from django.core import mail
-
         group.active = False
         group.save()
         mail.outbox.clear()
@@ -640,8 +603,6 @@ class TestNewsletterDoesNotBlastEveryone:
         assert len(mail.outbox) == 0
 
     def test_valid_group_still_sends(self, student_with_parent, parent, group):
-        from django.core import mail
-
         mail.outbox.clear()
         _client().post(
             "/apps/newsletter/",
@@ -657,8 +618,6 @@ class TestAdultReceiptsReachAdultStudents:
     """
 
     def test_sent_to_the_adult_student(self, adult_student, student_with_parent, parent):
-        from django.core import mail
-
         mail.outbox.clear()
         _client().post("/apps/receipts/", data={"receipt_type": "adult", "adult_month": "enero"})
         recipients = {addr for message in mail.outbox for addr in message.to}
@@ -685,9 +644,6 @@ class TestPaymentReceiptEmail:
         yet, so the dispatch moved to `on_commit` — which pytest-django's
         non-committing test transaction would otherwise discard.
         """
-        import json
-
-        from django.core import mail
 
         payment = Payment.objects.create(
             student=student_with_parent,
@@ -711,10 +667,6 @@ class TestPaymentReceiptEmail:
         assert parent.email in mail.outbox[0].to
 
     def test_no_receipt_when_editing_an_already_completed_payment(self, student_with_parent, parent, active_enrollment):
-        import json
-
-        from django.core import mail
-
         payment = Payment.objects.create(
             student=student_with_parent,
             parent=parent,
@@ -789,18 +741,12 @@ class TestEnrollmentTypeLabelsAreSpanish:
     """
 
     def test_seed_labels_are_translated(self):
-        from billing.constants import ENROLLMENT_TYPE_DISPLAY_ES
-
         assert ENROLLMENT_TYPE_DISPLAY_ES["new_student"] == "Nuevo estudiante"
         assert ENROLLMENT_TYPE_DISPLAY_ES["returning_student"] == "Antiguo estudiante"
         assert ENROLLMENT_TYPE_DISPLAY_ES["adults"] == "Adulto"
         assert ENROLLMENT_TYPE_DISPLAY_ES["special"] == "Especial"
 
     def test_welcome_email_states_the_payment_frequency(self, student_with_parent, parent, active_enrollment):
-        from django.core import mail
-
-        from comms.tasks import send_welcome_email_task
-
         mail.outbox.clear()
         send_welcome_email_task(
             parent_id=parent.id, student_id=student_with_parent.id, enrollment_id=active_enrollment.id

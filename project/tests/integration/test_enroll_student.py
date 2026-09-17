@@ -13,6 +13,7 @@ import pytest
 from django.urls import reverse
 
 from billing.models import Enrollment, Payment
+from billing.models import relevant_academic_years as _real
 from students.models import Student
 
 pytestmark = pytest.mark.django_db
@@ -27,10 +28,9 @@ def _allow_elapsed_course_start_dates(monkeypatch):
     widen the window to include it. The window rule itself is covered in
     unit/test_enrollment_start_date.py.
     """
-    from billing.models import relevant_academic_years as _real
 
     monkeypatch.setattr(
-        "billing.models.relevant_academic_years",
+        "billing.forms.relevant_academic_years",
         lambda reference_date=None: ["2020-2021", *_real(reference_date)],
     )
 

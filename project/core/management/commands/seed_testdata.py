@@ -24,6 +24,7 @@ from django.conf import settings
 from django.contrib.auth.models import User
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
+from django.db.models import Count
 
 from billing.models import (
     Enrollment,
@@ -809,8 +810,6 @@ class Command(BaseCommand):
     # ------------------------------------------------------------------
 
     def _print_summary(self):
-        from django.db.models import Count
-
         by_status = {
             row["payment_status"]: row["n"]
             for row in Payment.objects.values("payment_status").order_by().annotate(n=Count("id"))

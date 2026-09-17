@@ -1,14 +1,16 @@
 """Tests for views — HTTP endpoints, auth, AJAX APIs."""
 
 import json
+import os
 from datetime import date
 from decimal import Decimal
+from unittest.mock import patch
 
 import pytest
 from django.urls import reverse
 
 from billing.models import Payment
-from core.models import HistoryLog, TodoItem
+from core.models import FunFridayAttendance, HistoryLog, TodoItem
 from students.models import Group, Teacher
 
 # All view tests need DB access
@@ -79,7 +81,6 @@ class TestAuthMiddleware:
 
     def test_health_deep_returns_503_when_database_unreachable(self, client):
         """A dead database must surface as degraded, not as a healthy 200."""
-        from unittest.mock import patch
 
         with patch("django.db.connection.cursor", side_effect=Exception("boom")):
             response = client.get("/health/?deep=1")
@@ -93,7 +94,6 @@ class TestAuthMiddleware:
 
     def test_health_shallow_still_200_when_database_unreachable(self, client):
         """Liveness must not depend on the database."""
-        from unittest.mock import patch
 
         with patch("django.db.connection.cursor", side_effect=Exception("boom")):
             response = client.get("/health/")
@@ -102,8 +102,6 @@ class TestAuthMiddleware:
         assert response.json()["status"] == "healthy"
 
     def test_login_with_valid_credentials(self, client, settings):
-        import os
-
         os.environ["LOGIN_USERNAME"] = "testuser"
         os.environ["LOGIN_PASSWORD"] = "testpass"
         response = client.post(
@@ -574,8 +572,6 @@ class TestFunFridayViews:
         assert data["success"] is True
 
     def test_remove_fun_friday_attendance(self, authenticated_client, student):
-        from core.models import FunFridayAttendance
-
         FunFridayAttendance.objects.create(student=student, date=date(2025, 10, 3))
         response = authenticated_client.post(
             reverse("remove_fun_friday_attendance", kwargs={"student_id": student.id}),

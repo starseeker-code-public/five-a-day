@@ -102,6 +102,21 @@ class GoogleSheetsService:
 
     def _get_sheet(self):
         """Lazy-open the target spreadsheet. Cached on the instance."""
+        # Deliberately lazy. googleapiclient / google-auth-oauthlib /
+        # google-auth-httplib2 / httplib2 are TRANSITIVE deps (via django-gsheets),
+        # not declared in pyproject.toml — at module level a shift in that tree
+        # turns a degraded Google feature into an app that cannot boot. It also
+        # keeps ~300 ms of Google stack off every cold start for a path most
+        # requests never take.
+        # Deliberately lazy. googleapiclient / google-auth-oauthlib /
+        # google-auth-httplib2 / httplib2 are TRANSITIVE deps (via django-gsheets),
+        # not declared in pyproject.toml — at module level a shift in that tree
+        # turns a degraded Google feature into an app that cannot boot. It also
+        # keeps ~300 ms of Google stack off every cold start for a path most
+        # requests never take.
+        import gspread
+        from google.oauth2.service_account import Credentials
+
         if self._sheet is not None:
             return self._sheet
 
@@ -113,8 +128,6 @@ class GoogleSheetsService:
 
         # Late import — google-auth is only needed once a real export runs, and
         # the transitive dependency footprint is heavy.
-        import gspread
-        from google.oauth2.service_account import Credentials
 
         creds = Credentials.from_service_account_info(info, scopes=_SCOPES)
         self._client = gspread.authorize(creds)
@@ -129,6 +142,12 @@ class GoogleSheetsService:
         share, a 429 — and answered it by trying to CREATE the worksheet, so the
         real cause was replaced by whatever `add_worksheet` failed with next.
         """
+        # Deliberately lazy. googleapiclient / google-auth-oauthlib /
+        # google-auth-httplib2 / httplib2 are TRANSITIVE deps (via django-gsheets),
+        # not declared in pyproject.toml — at module level a shift in that tree
+        # turns a degraded Google feature into an app that cannot boot. It also
+        # keeps ~300 ms of Google stack off every cold start for a path most
+        # requests never take.
         from gspread.exceptions import WorksheetNotFound
 
         sheet = self._get_sheet()

@@ -1,7 +1,9 @@
 import functools
 import secrets
+from datetime import date
 
 from django.conf import settings
+from django.contrib.auth import get_user_model
 from django.contrib.auth.hashers import check_password, make_password
 from django.core.validators import EmailValidator
 from django.db import models
@@ -9,6 +11,8 @@ from django.db.models.functions import Upper
 from django.db.models.signals import post_delete, post_save, pre_save
 from django.dispatch import receiver
 from django.utils import timezone
+
+from core.services.capacity_service import notify_capacity_freed
 
 # What `Parent.authenticate_portal` returns, so callers branch on a name rather
 # than on which of two hashes happened to match.
@@ -129,7 +133,6 @@ class Teacher(models.Model):
 
         Returns the linked User instance.
         """
-        from django.contrib.auth import get_user_model
 
         User = get_user_model()
 
@@ -239,8 +242,6 @@ def _deactivate_orphaned_user(sender, instance, **kwargs):
     /admin/ if the delete was a mistake.
     """
     if instance.user_id:
-        from django.contrib.auth import get_user_model
-
         get_user_model().objects.filter(pk=instance.user_id, is_active=True).update(is_active=False)
 
 
@@ -701,7 +702,6 @@ class Student(models.Model):
         a phone number), so callers must handle None — templates render it as
         blank, which is what we want.
         """
-        from datetime import date
 
         if not self.birth_date:
             return None
@@ -726,8 +726,6 @@ class Student(models.Model):
 
     def save(self, *args, **kwargs):
         if self.is_waiting and self.waiting_since is None:
-            from django.utils import timezone
-
             self.waiting_since = timezone.now()
         elif not self.is_waiting and self.waiting_since is not None:
             self.waiting_since = None
@@ -791,7 +789,6 @@ def _notify_group_spot_freed(sender, instance, created, **kwargs):
     # nothing else), so this no longer has to dodge an app-loading cycle by
     # reaching into a view module — see that module's docstring. Kept as a
     # function-body import purely because signals fire during app loading.
-    from core.services.capacity_service import notify_capacity_freed
 
     notify_capacity_freed(instance)
 

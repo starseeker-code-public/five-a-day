@@ -2,10 +2,16 @@ import logging
 from typing import Any
 
 from django.conf import settings
+from django.db import connection
+from django.db.migrations.executor import MigrationExecutor
 from django.http import JsonResponse
 from django.shortcuts import render
 from django.utils.crypto import constant_time_compare
 from django.views.decorators.csrf import csrf_exempt
+
+from billing.models import Enrollment, Payment
+from core.models import QAConfiguration
+from students.models import Parent, Student
 
 logger = logging.getLogger(__name__)
 
@@ -56,8 +62,6 @@ def _database_probe(request):
     Returns (payload, ok). Kept out of the default /health/ response because
     liveness probes must not depend on the database being up — see health_check.
     """
-    from django.db import connection
-    from django.db.migrations.executor import MigrationExecutor
 
     # Annotated: the payload carries a bool, two ints, a name and a counts dict,
     # and an unannotated literal makes it `dict[str, bool]` to a type checker.
@@ -85,9 +89,6 @@ def _database_probe(request):
     token = getattr(settings, "HEALTH_PROBE_TOKEN", "")
     supplied = request.headers.get("X-Probe-Token", "")
     if token and constant_time_compare(supplied, token):
-        from billing.models import Enrollment, Payment
-        from students.models import Parent, Student
-
         probe["name"] = connection.settings_dict.get("NAME")
         probe["counts"] = {
             "students": Student.objects.count(),
@@ -135,8 +136,6 @@ def health_check(request):
         return JsonResponse(payload, status=503)
 
     if getattr(settings, "IS_TESTING_ENV", False):
-        from core.models import QAConfiguration
-
         payload["ready_for_prod"] = QAConfiguration.get_config().ready_for_prod
 
     return JsonResponse(payload, status=200)

@@ -11,7 +11,12 @@ They should be moved to comms/templates/ in a future step.
 import logging
 import os
 
+from billing.models import Payment
+from billing.services.pdf_service import generate_tax_certificate
+from billing.services.pricing_service import PricingService, _euros
 from comms.services.email_service import email_service
+from comms.services.email_service import email_service as _svc
+from students.models import Parent
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +40,6 @@ def cheque_idioma_fee(config=None) -> str:
     # formateadores distintos en la misma tabla es exactamente el bug de arriba.
     # La cifra sale de `PricingService.cheque_idioma_price`, que la calcula con
     # la MISMA aritmética que factura el generador — no de un `fee - 20` local.
-    from billing.services.pricing_service import PricingService, _euros
 
     return _euros(PricingService.cheque_idioma_price(config))
 
@@ -303,7 +307,6 @@ def send_payment_reminder_email(
     if any(value is None for value in fees.values()):
         # Only hit SiteConfiguration when the caller left a gap — the batch
         # senders pass every figure and loop over every parent.
-        from billing.services.pricing_service import PricingService
 
         defaults = PricingService.payment_reminder_fees()
         fees = {key: (defaults[key] if value is None else value) for key, value in fees.items()}
@@ -447,7 +450,6 @@ def generate_tax_certificate_pdf(parent, year: int) -> bytes:
     Delegates to `billing.services.pdf_service.generate_tax_certificate`,
     which uses reportlab (a hard dependency of the project).
     """
-    from billing.services.pdf_service import generate_tax_certificate
 
     return generate_tax_certificate(parent, year)
 
@@ -465,8 +467,6 @@ def send_tax_certificate_email(parent, year: int, connection=None) -> bool:
     Returns:
         True si se envio correctamente
     """
-    from billing.models import Payment
-    from students.models import Parent
 
     # Si se pasa un ID, obtener el objeto Parent
     if isinstance(parent, int):
@@ -536,8 +536,6 @@ def send_all_tax_certificates(year: int) -> dict[str, int]:
     certificados como fallidos en lugar de propagar la excepción: quien llama es
     una vista.
     """
-    from comms.services.email_service import email_service as _svc
-    from students.models import Parent
 
     # Obtener todos los padres con pagos completados en ese ano
     parents_with_payments = Parent.objects.filter(

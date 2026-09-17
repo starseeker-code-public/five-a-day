@@ -13,11 +13,12 @@ import logging
 
 from django.contrib import messages
 from django.db import transaction
-from django.db.models import ProtectedError
+from django.db.models import Count, ProtectedError, Q
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.views.decorators.http import require_http_methods
 
+from billing.services.enrollment_service import EnrollmentService
 from core.date_utils import first_day_of_next_month
 from core.decorators import admin_required
 from core.models import HistoryLog
@@ -211,7 +212,6 @@ def discard_waiting_entry(waiting, new_student=None):
 def add_to_waiting_list(request, student_id):
     """Flip an existing student back onto the waiting list (rare — usually used on
     admin's request when a spot needs to be freed without deleting the student)."""
-    from billing.services.enrollment_service import EnrollmentService
 
     student = get_object_or_404(Student, id=student_id, active=True)
     if student.is_waiting:
@@ -277,7 +277,6 @@ def group_capacity_summary():
     Uses annotations to avoid N+1 counts over `group.enrolled_count` /
     `group.waiting_count` when many groups are shown.
     """
-    from django.db.models import Count, Q
 
     # The annotation aliases are load-bearing: `Group.ENROLLED_ANNOTATIONS` /
     # `WAITING_ANNOTATIONS` name them, so `enrolled_count`, `waiting_count`,

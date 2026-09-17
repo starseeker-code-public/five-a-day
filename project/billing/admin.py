@@ -24,7 +24,9 @@ from billing.models import (
     Payment,
     SiteConfiguration,
 )
+from billing.services.enrollment_type_service import REQUIRED_ENROLLMENT_TYPES
 from core.admin_purge import PurgeWithHistoryMixin
+from core.tasks import dispatch_payment_completed_on_commit
 from core.utils import csv_safe_row
 
 logger = logging.getLogger(__name__)
@@ -59,8 +61,6 @@ class EnrollmentTypeAdmin(admin.ModelAdmin):
         return ["name"] if obj else []
 
     def has_delete_permission(self, request, obj=None):
-        from billing.services.enrollment_type_service import REQUIRED_ENROLLMENT_TYPES
-
         if obj is not None and obj.name in REQUIRED_ENROLLMENT_TYPES:
             return False
         return super().has_delete_permission(request, obj)
@@ -237,7 +237,6 @@ class PaymentAdmin(PurgeWithHistoryMixin, admin.ModelAdmin):
         internals, and the reason a completion side effect could be added to one
         of the app's two completion paths and silently missed on the other.
         """
-        from comms.tasks import dispatch_payment_completed_on_commit
 
         # ONLY pending rows. `exclude("completed")` also caught `cancelled`,
         # `failed` and `refunded` — so this action resurrected them, dated them

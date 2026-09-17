@@ -7,17 +7,33 @@ leaving the fix silently undone.
 """
 
 import hashlib
+import inspect
+import pathlib
+import re
+from decimal import Decimal
 from pathlib import Path
+from unittest.mock import patch
 
+import pyotp
 import pytest
+from django.conf import settings
 from django.contrib.auth.hashers import identify_hasher
 from django.contrib.sessions.backends.db import SessionStore
-from django.test import override_settings
+from django.contrib.sessions.models import Session
+from django.core.cache import cache
+from django.http import HttpResponse
+from django.test import RequestFactory, override_settings
 from django.urls import reverse
 
+from core.context_processors import csp_nonce
 from core.middleware import QAErrorEmailMiddleware, SecurityHeadersMiddleware
+from core.models import QAConfiguration
+from core.rate_limit import rate_limit
 from core.services import two_factor_service as tfs
+from core.tasks import purge_expired_sessions
 from core.utils import MAX_QUERY_YEAR, MIN_QUERY_YEAR, csv_safe, csv_safe_row, safe_int
+from core.views import auth as auth_views
+from core.views.auth import _GOOGLE_SCOPES
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -47,7 +63,6 @@ class TestCsvSafe:
 
     def test_non_strings_pass_through_unchanged(self):
         """A Decimal amount of -50 is a legitimate leading '-' and must not gain a quote."""
-        from decimal import Decimal
 
         assert csv_safe(Decimal("-50.00")) == Decimal("-50.00")
         assert csv_safe(7) == 7
@@ -120,7 +135,6 @@ class TestQaErrorEmailRedaction:
     @override_settings(IS_TESTING_ENV=False, SUPPORT_EMAIL="qa@example.com")
     def test_no_email_outside_the_qa_environment(self, mailoutbox, rf):
         """The DB flag must not be honoured in production."""
-        from core.models import QAConfiguration
 
         config = QAConfiguration.get_config()
         config.error_email_enabled = True
@@ -135,8 +149,6 @@ class TestQaErrorEmailRedaction:
     @pytest.mark.django_db
     @override_settings(IS_TESTING_ENV=True, SUPPORT_EMAIL="qa@example.com")
     def test_qa_environment_sends_but_redacts(self, mailoutbox, rf):
-        from core.models import QAConfiguration
-
         config = QAConfiguration.get_config()
         config.error_email_enabled = True
         config.save(update_fields=["error_email_enabled"])
@@ -155,9 +167,6 @@ class TestQaErrorEmailRedaction:
 # ─────────────────────────────────────────────────────────────────────────────
 class TestSecurityHeaders:
     def _response(self, content_type="text/html; charset=utf-8"):
-        from django.http import HttpResponse
-        from django.test import RequestFactory
-
         request = RequestFactory().get("/")
         return SecurityHeadersMiddleware(lambda r: HttpResponse("<p>hi</p>", content_type=content_type))(request)
 
@@ -170,19 +179,12 @@ class TestSecurityHeaders:
         assert "{nonce}" not in policy, "the placeholder must be substituted per request"
 
     def test_the_nonce_changes_every_request(self):
-        import re
-
         def nonce_of(resp):
             return re.search(r"'nonce-([^']+)'", resp["Content-Security-Policy-Report-Only"]).group(1)
 
         assert nonce_of(self._response()) != nonce_of(self._response())
 
     def test_the_nonce_is_exposed_to_templates(self):
-        from django.http import HttpResponse
-        from django.test import RequestFactory
-
-        from core.context_processors import csp_nonce
-
         request = RequestFactory().get("/")
         seen = {}
 
@@ -217,7 +219,6 @@ class TestSecurityHeaders:
         directly and bypasses the wiring entirely. This asserts the setting
         exists and tracks the environment.
         """
-        from django.conf import settings
 
         assert isinstance(getattr(settings, "CSP_ENFORCE", None), bool)
 
@@ -265,6 +266,14 @@ class TestTwoFactorHardening:
         payload = tfs.begin_enrolment(teacher)
         teacher.refresh_from_db()
 
+        # Count first. Every assertion here lives inside the loop, so an empty
+        # `two_factor_backup_codes` would make this test report success while
+        # proving nothing — and "the column is empty" is indistinguishable from
+        # "every code is hashed" to a `for` that never runs. This is the one
+        # assertion standing between hashed codes and plaintext ones.
+        assert len(teacher.two_factor_backup_codes) == 8, (
+            f"expected 8 stored codes, found {len(teacher.two_factor_backup_codes)}"
+        )
         for stored in teacher.two_factor_backup_codes:
             # identify_hasher raises for a bare sha256 digest.
             assert identify_hasher(stored) is not None
@@ -297,8 +306,6 @@ class TestTwoFactorHardening:
         assert tfs.verify_backup_code(teacher, "") is False
 
     def test_totp_cannot_be_replayed(self, teacher):
-        import pyotp
-
         payload = tfs.begin_enrolment(teacher)
         code = pyotp.TOTP(payload.secret).now()
 
@@ -307,8 +314,6 @@ class TestTwoFactorHardening:
         assert tfs.verify_totp(teacher, code) is False, "RFC 6238 §5.2: a used code must be refused"
 
     def test_replay_counter_is_persisted(self, teacher):
-        import pyotp
-
         payload = tfs.begin_enrolment(teacher)
         tfs.verify_totp(teacher, pyotp.TOTP(payload.secret).now())
 
@@ -326,8 +331,6 @@ class TestTwoFactorHardening:
 # ─────────────────────────────────────────────────────────────────────────────
 class TestOAuthScopes:
     def test_only_identity_scopes_are_requested(self):
-        from core.views.auth import _GOOGLE_SCOPES
-
         joined = " ".join(_GOOGLE_SCOPES)
         assert "gmail.send" not in joined, "nothing uses the Gmail API — email goes over SMTP"
         assert "spreadsheets" not in joined, "the Sheets export authenticates as a service account"
@@ -335,9 +338,6 @@ class TestOAuthScopes:
 
     def test_the_callback_keeps_no_credentials(self):
         """Guards the fix structurally: the source must not stash tokens."""
-        import inspect
-
-        from core.views import auth as auth_views
 
         # Strip comments: auth.py now DOCUMENTS what was removed, so a naive
         # substring search matches its own explanatory prose.
@@ -363,10 +363,6 @@ class TestSessionPurge:
     """
 
     def test_expired_sessions_are_deleted(self):
-        from django.contrib.sessions.models import Session
-
-        from core.tasks import purge_expired_sessions
-
         store = SessionStore()
         store["parent_id"] = 1
         store.set_expiry(-1)  # already expired
@@ -397,8 +393,6 @@ class TestPasswordResetThrottle:
     plain class — only SimpleTestCase subclasses."""
 
     def test_fourth_request_in_the_window_is_throttled(self, client, settings):
-        from django.core.cache import cache
-
         settings.RATELIMIT_ENABLE = True
         cache.clear()
         url = reverse("password_reset")
@@ -413,7 +407,6 @@ class TestPasswordResetThrottle:
 
     def test_get_is_not_throttled(self, client, settings):
         """Only POSTs send mail, so rendering the form must stay free."""
-        from django.core.cache import cache
 
         settings.RATELIMIT_ENABLE = True
         cache.clear()
@@ -435,16 +428,11 @@ class TestRateLimiterCacheOutage:
         root handler caplog attaches to and `caplog.text` stays empty even
         though the message is emitted.
         """
-        from unittest.mock import patch
-
-        from core.rate_limit import rate_limit
 
         settings.RATELIMIT_ENABLE = True
 
         @rate_limit("outage_scope", limit=1)
         def view(request):
-            from django.http import HttpResponse
-
             return HttpResponse("served")
 
         with (
@@ -456,6 +444,119 @@ class TestRateLimiterCacheOutage:
         assert response.status_code == 200, "a cache outage must not lock the academy out"
         mock_logger.error.assert_called_once()
         assert "UNTHROTTLED" in mock_logger.error.call_args[0][0], "the degradation must be loud"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# M1b — the throttles nothing exercised
+# ─────────────────────────────────────────────────────────────────────────────
+@pytest.mark.django_db
+class TestTheRemainingThrottlesAreReal:
+    """Six endpoints carry `@rate_limit`; three of them had no behavioural test.
+
+    Proven by mutation: raising every `limit=` to 9999 — i.e. switching all six
+    throttles off — failed only three tests, and one of those failed because it
+    matches the DECORATOR'S SOURCE TEXT rather than its behaviour. Turning off
+    the family-login and 2FA throttles entirely was noticed by nothing.
+
+    These are the missing three. Same discipline as `TestPasswordResetThrottle`
+    above: the suite disables the limiter globally so its shared cache cannot
+    leak between cases, so each test re-enables it through the `settings`
+    fixture and clears the cache on both sides.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _throttled(self, settings):
+        settings.RATELIMIT_ENABLE = True
+        # 0 = read REMOTE_ADDR and ignore X-Forwarded-For entirely, so the
+        # per-test address below is what actually keys the bucket.
+        settings.TRUSTED_PROXY_COUNT = 0
+        cache.clear()
+        yield
+        cache.clear()
+
+    @pytest.fixture
+    def own_ip(self, request):
+        """A client address unique to this test.
+
+        The limiter is cache-backed and keyed on `(scope, ip)`, and the cache
+        outlives a single test — several other tests in the suite enable the
+        limiter, and `pytest-randomly` reorders them on every run. Clearing the
+        cache in a fixture is necessary but not sufficient: it only protects
+        against what ran BEFORE. Giving each test its own address means no
+        other test can occupy or free this bucket whatever the order, which is
+        what makes these deterministic rather than merely usually-green.
+        """
+        return f"198.51.100.{abs(hash(request.node.name)) % 254 + 1}"
+
+    @staticmethod
+    def _post_until_throttled(client, url, data, ceiling, ip):
+        """POST `ceiling + 1` times from one address; return the status of each."""
+        return [client.post(url, data, REMOTE_ADDR=ip).status_code for _ in range(ceiling + 1)]
+
+    def test_the_seventh_2fa_code_in_a_minute_is_throttled(self, client, own_ip):
+        """6 digits is a 10^6 space and `valid_window=1` keeps a code alive ~90 s.
+
+        Against an attacker who already has the password, the limit IS the
+        second factor's security — unthrottled, the whole space is reachable.
+        The decorator sits OUTSIDE `require_http_methods` here, so the attempt
+        is counted before the view looks at the session.
+        """
+        statuses = self._post_until_throttled(client, reverse("two_factor_verify"), {"code": "000000"}, 6, own_ip)
+
+        assert statuses[-1] == 429, f"the 7th 2FA attempt was not throttled: {statuses}"
+        assert statuses.count(429) == 1, f"throttled too early: {statuses}"
+
+    def test_the_sixth_portal_login_in_a_minute_is_throttled(self, client, parent, own_ip):
+        """The portal shows a family's payment history and mints their tax
+        certificate, so it is worth as much to an attacker as the staff login."""
+        statuses = self._post_until_throttled(
+            client,
+            reverse("parent_portal_login"),
+            {"email": parent.email, "password": "definitely-not-the-password"},
+            5,
+            own_ip,
+        )
+
+        assert statuses[-1] == 429, f"the 6th portal login was not throttled: {statuses}"
+        assert statuses.count(429) == 1, f"throttled too early: {statuses}"
+
+    def test_the_sixth_staff_password_change_in_five_minutes_is_throttled(self, authenticated_client, own_ip):
+        """`/api/password-change/` takes the CURRENT password, so an unthrottled
+        version is an online password oracle against a live session — the exact
+        argument `test_change_password_is_rate_limited` makes about the parent
+        portal's equivalent, which it calls "the staff equivalent" while that
+        one had no test of its own.
+
+        Needs a signed-in client, not a bare one: `SimpleAuthMiddleware`
+        redirects an anonymous POST to `/login/` before the decorator is ever
+        reached, so a bare client measures the middleware, not the throttle.
+        """
+        statuses = self._post_until_throttled(
+            authenticated_client,
+            reverse("change_password"),
+            {"current_password": "wrong", "new_password": "N3w-Passw0rd!", "confirm_password": "N3w-Passw0rd!"},
+            5,
+            own_ip,
+        )
+
+        assert statuses[-1] == 429, f"the 6th password-change attempt was not throttled: {statuses}"
+        assert statuses.count(429) == 1, f"throttled too early: {statuses}"
+
+    def test_a_get_is_not_counted_against_the_portal_login_limit(self, client, own_ip):
+        """Rendering the form is not an attempt; charging quota for it would let
+        a family lock themselves out by refreshing the page."""
+        for _ in range(10):
+            assert client.get(reverse("parent_portal_login"), REMOTE_ADDR=own_ip).status_code == 200
+
+        # And the bucket is genuinely untouched: a POST from the same address
+        # must still be allowed. Without this the test also passes when GETs
+        # are counted but the limit is never reached.
+        assert (
+            client.post(
+                reverse("parent_portal_login"), {"email": "x@y.z", "password": "w"}, REMOTE_ADDR=own_ip
+            ).status_code
+            != 429
+        )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -477,8 +578,6 @@ class TestProductionPostureGuard:
     )
 
     def test_the_guard_exists_and_names_every_control(self):
-        import pathlib
-
         source = pathlib.Path(__file__).resolve().parents[2] / "project" / "settings.py"
         text = source.read_text(encoding="utf-8")
 
@@ -491,7 +590,6 @@ class TestProductionPostureGuard:
 
     def test_the_guard_is_keyed_on_environment_not_debug(self):
         """`not DEBUG` would break the testing VM, which runs over plain HTTP."""
-        import pathlib
 
         source = pathlib.Path(__file__).resolve().parents[2] / "project" / "settings.py"
         text = source.read_text(encoding="utf-8")

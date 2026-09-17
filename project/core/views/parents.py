@@ -8,6 +8,7 @@ from django.views.generic import CreateView
 
 from core.decorators import admin_required
 from core.services.portal_access_service import send_portal_invitation_once
+from core.views.waiting_list import waiting_entry_from_request
 from students.forms import PORTAL_EMAIL_COLLISION_WARNING, ParentForm
 from students.models import Parent
 
@@ -22,7 +23,6 @@ class ParentCreateView(CreateView):
 
     def get_waiting_entry(self):
         """Waiting-list entry this enrollment came from (`?from_waiting=<id>`), if any."""
-        from core.views.waiting_list import waiting_entry_from_request
 
         return waiting_entry_from_request(self.request)
 

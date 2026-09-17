@@ -19,6 +19,8 @@ some copies and not others, which is exactly what copy-paste guarantees:
   paths (`_emailable_parent`).
 """
 
+import contextlib
+import datetime as _dt
 import logging
 import os
 from collections.abc import Callable
@@ -36,6 +38,7 @@ from django.utils import timezone
 from django.utils.html import strip_tags
 
 from billing.constants import SEPTEMBER_CLASSES_START_DAY
+from billing.models import SiteConfiguration, academic_year_for_month, current_academic_year
 from billing.services.pricing_service import REMINDER_SPECIAL_MONTHS, PricingService
 from comms.services.email_functions import (
     cheque_idioma_fee,
@@ -47,10 +50,12 @@ from comms.services.email_functions import (
     send_welcome_email,
 )
 from comms.services.email_service import email_service
+from comms.tasks import _dispatch
 from core.constants import DIAS_ES, MESES_ES
 from core.decorators import admin_required
 from core.log_safe import safe_log
-from core.models import HistoryLog
+from core.models import FunFridayScheduledSend, HistoryLog
+from core.tasks import send_due_fun_friday_emails_task
 from core.utils import MAX_QUERY_YEAR, MIN_QUERY_YEAR, safe_int
 from students.models import Group, Parent, Student
 
@@ -66,7 +71,6 @@ def _birthday_image_path():
     reproduce what parents complained about. Same file the cron and
     test_all_emails use.
     """
-    from django.conf import settings
 
     return os.path.join(settings.BASE_DIR, "core/static/images/happy-birthday.png")
 
@@ -333,6 +337,30 @@ def _preview_or_test(request, action: str, template_name: str, context: dict, su
 # ============================================================================
 
 
+def _drop_poisoned_connection(connection, view_name: str):
+    """Close the shared SMTP session after a failed message and return None.
+
+    Django's SMTP backend never reopens a connection it still holds, so ONE
+    mid-batch disconnect turned every remaining recipient into a guaranteed
+    failure — and Gmail both drops idle sockets and enforces a per-session
+    message cap, which at this academy's roster size makes that the normal case,
+    not an edge one. The batch then reported N individual failures for what was
+    a single dead socket.
+
+    Returning None hands the rest of the batch back to Django's per-message
+    connection: a wasted reconnect after a genuine per-recipient failure (a bad
+    address) costs one handshake, where guessing wrong the other way costs the
+    whole run. Identical reasoning, and identical shape, to
+    `EmailService.send_bulk_emails` — the two must not disagree.
+    """
+    if connection is None:
+        return None
+    with contextlib.suppress(Exception):
+        connection.close()
+    logger.warning("Dropped the shared SMTP session after a failed message in %s; the batch continues", view_name)
+    return None
+
+
 def _mass_send(request, jobs: list[dict], sender, *, log_label: str, success_text: str, failure_text: str):
     """Deliver one batch over ONE SMTP session and report accurately.
 
@@ -399,6 +427,7 @@ def _mass_send(request, jobs: list[dict], sender, *, log_label: str, success_tex
                     success_count += 1
                 else:
                     error_count += 1
+                    connection = _drop_poisoned_connection(connection, view_name)
             except Exception:
                 # Never silent: this is the academy's outbound channel, and an
                 # operator who sees only a count cannot tell a bad address from
@@ -406,11 +435,13 @@ def _mass_send(request, jobs: list[dict], sender, *, log_label: str, success_tex
                 # text can carry it, so `logger.exception` alone is the record.
                 logger.exception("Email send failed in %s", view_name)
                 error_count += 1
+                connection = _drop_poisoned_connection(connection, view_name)
     finally:
-        try:
-            connection.close()
-        except Exception:
-            logger.exception("SMTP connection could not be closed in %s", view_name)
+        if connection is not None:
+            try:
+                connection.close()
+            except Exception:
+                logger.exception("SMTP connection could not be closed in %s", view_name)
 
     detail = f"{success_count} email(s) enviados"
     if error_count:
@@ -622,10 +653,6 @@ Esta semana haremos manualidades creativas con materiales reciclados.
         # survives eager mode: send_due_fun_friday_emails_task drains due rows
         # (Celery Beat in dev/testing, Cloud Scheduler job in production). If
         # the moment has already passed, drain immediately.
-        import datetime as _dt
-
-        from comms.tasks import _dispatch, send_due_fun_friday_emails_task
-        from core.models import FunFridayScheduledSend
 
         monday = event_date - timedelta(days=event_date.weekday())
         send_at = _dt.datetime.combine(monday, _dt.time(14, 30))
@@ -742,7 +769,6 @@ def payment_reminder_form(request):
     GET: Muestra formulario con valores por defecto
     POST: Envía recordatorio a todos los padres con estudiantes activos
     """
-    from billing.models import SiteConfiguration
 
     today = date.today()
     config = SiteConfiguration.get_config()
@@ -1330,8 +1356,6 @@ def receipts_form(request):
                 _ctx = {"student_name": "Alumno Ejemplo", "month_1": _m1, "month_2": _m2, "month_3": _m3}
                 _subject = f"[TEST] 🧾 Recibo Trimestral - {_m1.title()}/{_m2.title()}/{_m3.title()}"
             elif _rtype == "enrollment":
-                from billing.models import current_academic_year
-
                 _ay = current_academic_year()
                 _template = "receipt_enrollment"
                 _ctx = {"student_name": "Alumno Ejemplo", "academic_year": _ay}
@@ -1370,8 +1394,6 @@ def receipts_form(request):
                 for student in parent.active_children
             ]
         elif receipt_type == "enrollment":
-            from billing.models import current_academic_year
-
             academic_year = current_academic_year()
             sender = email_service.send_email
             jobs = [
@@ -1550,7 +1572,6 @@ def enrollment_form(request):
     GET: Muestra formulario con selector de estudiante
     POST: Envía confirmación al padre del estudiante seleccionado
     """
-    from billing.models import academic_year_for_month
 
     today = date.today()
     current_month = MESES_ES[today.month - 1]

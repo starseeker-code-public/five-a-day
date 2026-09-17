@@ -13,7 +13,7 @@ pytestmark = pytest.mark.django_db
 class TestSubmitSupportTicket:
     @override_settings(SUPPORT_EMAIL="sup@test.com")
     def test_success(self, authenticated_client):
-        with patch("django.core.mail.send_mail") as mock_mail:
+        with patch("core.views.support.send_mail") as mock_mail:
             response = authenticated_client.post(
                 reverse("submit_support_ticket"),
                 data=json.dumps(
@@ -56,7 +56,7 @@ class TestSubmitSupportTicket:
 
     @override_settings(SUPPORT_EMAIL="sup@test.com")
     def test_unexpected_exception(self, authenticated_client):
-        with patch("django.core.mail.send_mail", side_effect=RuntimeError("smtp")):
+        with patch("core.views.support.send_mail", side_effect=RuntimeError("smtp")):
             response = authenticated_client.post(
                 reverse("submit_support_ticket"),
                 data=json.dumps({"message": "long message here please"}),
@@ -78,7 +78,7 @@ class TestSupportCategoryIsValidatedNotTrusted:
     """
 
     def _send(self, client, payload):
-        with patch("django.core.mail.send_mail") as mock_mail:
+        with patch("core.views.support.send_mail") as mock_mail:
             response = client.post(
                 reverse("submit_support_ticket"),
                 data=json.dumps({"message": "a long enough message", **payload}),

@@ -111,10 +111,6 @@ class TestContextProcessorsUnauthed:
         as an authenticated one. Uses `mock.patch` on `date.today()` so the
         assertion doesn't become fragile on Fridays (Fun Friday auto-adds a
         scheduled-app notification) or the 1st of the month (monthly job)."""
-        from datetime import date
-        from unittest.mock import patch
-
-        from core.context_processors import today_notifications
 
         rf = RequestFactory()
         req = rf.get("/")
@@ -129,7 +125,6 @@ class TestContextProcessorsUnauthed:
 
     def test_unauthenticated_no_query(self, client):
         """Covers the early-return when not authenticated."""
-        from core.context_processors import today_notifications
 
         rf = RequestFactory()
         req = rf.get("/")

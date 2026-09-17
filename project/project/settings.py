@@ -1,4 +1,6 @@
+import logging
 import os
+import tomllib
 from pathlib import Path
 from typing import Any
 
@@ -37,8 +39,6 @@ def _version_from_pyproject() -> str:
     /health/ says plainly that the deploy cannot see its own pyproject.toml.
     """
     try:
-        import tomllib
-
         with open(BASE_DIR.parent / "pyproject.toml", "rb") as handle:
             return str(tomllib.load(handle)["project"]["version"])
     except (OSError, KeyError, ValueError):
@@ -65,8 +65,6 @@ def _env_int(name: str, default: int) -> int:
     try:
         return int(raw)
     except ValueError:
-        import logging
-
         logging.getLogger(__name__).error("Invalid integer for env %s; using default %d", name, default)
         return default
 

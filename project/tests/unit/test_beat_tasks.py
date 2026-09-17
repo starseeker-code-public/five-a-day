@@ -1,6 +1,7 @@
 """Unit tests for the v1.4 Celery Beat tasks."""
 
 from datetime import date
+from datetime import timedelta as td
 from decimal import Decimal
 from unittest.mock import patch
 
@@ -9,6 +10,7 @@ from django.test import override_settings
 from django.utils import timezone
 
 from billing.models import Expense
+from billing.models import Payment as P
 from billing.tasks import (
     generate_monthly_payments_task,
     materialize_recurring_expenses_daily_task,
@@ -21,7 +23,7 @@ pytestmark = pytest.mark.django_db
 
 class TestGenerateMonthlyPaymentsTask:
     def test_calls_management_command(self):
-        with patch("django.core.management.call_command") as mock_call:
+        with patch("billing.tasks.call_command") as mock_call:
             result = generate_monthly_payments_task.run(month=3, year=2026)
         assert result["status"] == "success"
         assert result["month"] == 3
@@ -33,7 +35,7 @@ class TestGenerateMonthlyPaymentsTask:
         assert kwargs["year"] == 2026
 
     def test_defaults_to_today(self):
-        with patch("django.core.management.call_command") as mock_call:
+        with patch("billing.tasks.call_command") as mock_call:
             generate_monthly_payments_task.run()
         assert mock_call.called
 
@@ -162,7 +164,6 @@ class TestSendMonthlyReportTask:
         date-field (due_date) for both sides so it can never go negative."""
         with patch("comms.services.email_service.EmailService.send_email", return_value=True):
             result = send_monthly_report_task.run(recipient_email="admin@example.com")
-        from decimal import Decimal
 
         assert Decimal(result["outstanding"]) >= Decimal("0.00")
 
@@ -204,9 +205,6 @@ class TestFanOutSurvivesAFailingItem:
         """The SMS dispatch used to sit inside the loop BEFORE the bulk email
         send, so one Twilio failure raised first and no reminder email went out
         at all — the comment on that line claimed the opposite."""
-        from datetime import timedelta as td
-
-        from billing.models import Payment as P
 
         parent.sms_opt_in = True
         parent.phone = "600000001"

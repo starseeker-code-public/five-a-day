@@ -1,10 +1,13 @@
 """Unit tests for the v1.8 SMS Celery task."""
 
+from datetime import date
+from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
 import pytest
 from django.test import override_settings
 
+from billing.models import Payment
 from comms.tasks import send_payment_reminder_sms_task
 
 pytestmark = pytest.mark.django_db
@@ -16,11 +19,6 @@ class TestSendPaymentReminderSmsTask:
         assert result["status"] == "error"
 
     def test_skipped_when_no_parent(self, adult_student, active_enrollment):
-        from datetime import date
-        from decimal import Decimal
-
-        from billing.models import Payment
-
         p = Payment.objects.create(
             student=adult_student,
             parent=None,

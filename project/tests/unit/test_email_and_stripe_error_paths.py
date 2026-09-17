@@ -1,10 +1,18 @@
-"""Final coverage-boost tests — hits the last few uncovered branches from
+"""What happens when the receipt PDF, the welcome mail or the Stripe call fails.
+
+Three error paths on flows that must not take the request down with them: a
+welcome email dispatched on commit, a Stripe checkout that times out, and a
+receipt task whose PDF generation raises.
 the review-pass fixes so my own new code is at or near 100%."""
 
 from unittest.mock import patch
 
+import httpx
 import pytest
+from django.test import TestCase, override_settings
 from django.urls import reverse
+
+from comms.tasks import send_payment_receipt_email_task
 
 pytestmark = pytest.mark.django_db
 
@@ -23,7 +31,6 @@ class TestWelcomeEmailOnCommitHappyPath:
         on_commit callbacks are queued but never fired. Use
         `TestCase.captureOnCommitCallbacks(execute=True)` to force them.
         """
-        from django.test import TestCase
 
         with patch("comms.tasks.send_welcome_email_task.delay") as mock_task:
             with TestCase.captureOnCommitCallbacks(execute=True):
@@ -76,9 +83,6 @@ class TestWelcomeEmailOnCommitHappyPath:
 
 class TestStripeCheckoutHttpxError:
     def test_httpx_error_is_wrapped(self, client, pending_payment):
-        import httpx
-        from django.test import override_settings
-
         session = client.session
         session["parent_id"] = pending_payment.parent_id
         session.save()
@@ -99,10 +103,9 @@ class TestReceiptEmailTaskPdfError:
     def test_pdf_render_error_reraises_for_retry(self, completed_payment):
         """When generate_payment_receipt raises, the receipt task re-raises so
         Celery's autoretry_for=(Exception,) triggers the retry chain."""
-        from comms.tasks import send_payment_receipt_email_task
 
         with patch(
-            "billing.services.pdf_service.generate_payment_receipt",
+            "comms.tasks.generate_payment_receipt",
             side_effect=RuntimeError("reportlab boom"),
         ):
             with pytest.raises(RuntimeError, match="reportlab boom"):

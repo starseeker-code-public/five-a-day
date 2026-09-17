@@ -6,6 +6,8 @@ from datetime import date
 import pytest
 from django.urls import reverse
 
+from core.models import TodoItem
+
 pytestmark = pytest.mark.django_db
 
 
@@ -43,8 +45,6 @@ class TestTodos:
         assert response.status_code == 200
 
     def test_complete_todo(self, authenticated_client, db):
-        from core.models import TodoItem
-
         todo = TodoItem.objects.create(text="Buy milk", due_date=date(2026, 5, 1))
         response = authenticated_client.post(reverse("complete_todo", kwargs={"todo_id": todo.id}))
         assert response.status_code == 200

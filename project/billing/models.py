@@ -12,6 +12,7 @@ from django.db.models import Q
 from django.db.models.functions import ExtractMonth, ExtractYear, Length
 
 from billing import constants
+from billing.money import period_base_amount, round_money
 
 logger = logging.getLogger(__name__)
 
@@ -67,8 +68,13 @@ def _clear_config_cache(**_kwargs):
 request_started.connect(_clear_config_cache, dispatch_uid="billing.clear_siteconfig_cache.start")
 request_finished.connect(_clear_config_cache, dispatch_uid="billing.clear_siteconfig_cache.end")
 
-try:  # pragma: no cover - celery is a hard dependency; the guard keeps a bare
-    # `python manage.py` usable if it is ever vendored out.
+# NOT a plain top-level import: the `else:` branch below must only connect the
+# receivers when the import SUCCEEDED, which needs the try/except/else shape.
+# Celery is a hard dependency today, so this guard exists purely to keep a bare
+# `python manage.py` usable if it is ever vendored out — without it, importing
+# billing.models would be fatal rather than degrading to "the worker does not
+# clear the price cache", which is the only thing lost.
+try:  # pragma: no cover
     from celery.signals import task_postrun, task_prerun
 except ImportError:
     pass
@@ -548,7 +554,6 @@ class Enrollment(models.Model):
             # is what keeps `models` out of a `models → pricing_service → models`
             # import cycle (pricing_service reaches back here for
             # `SiteConfiguration.get_config()`). CodeQL flagged the old edge.
-            from billing.money import period_base_amount, round_money
 
             config = SiteConfiguration.get_config()
             base_amount = period_base_amount(config, self.schedule_type, self.payment_modality)

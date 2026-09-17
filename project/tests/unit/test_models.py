@@ -449,8 +449,18 @@ class TestCancelledEnrollment:
 
 class TestModelBranches:
     def test_student_age_no_birth_date(self, db, group):
-        """Student without birth_date → age is None or 0."""
-        from students.models import Student
+        """A waiting-list entry has no birth date, so `age` must be None.
+
+        `birth_date` IS nullable (v1.15) — an entry is taken over the phone with
+        a first name and a number. The answer matters because Django renders
+        `None` as the literal string "None", which is what put "None años" on
+        five templates; `test_frontend_invariants.py` guards the render side
+        and this guards the value.
+
+        This test previously wrapped the property access in `try/except: pass`
+        with no assertion at all, under a comment claiming birth_date was
+        non-null. It could not fail.
+        """
 
         s = Student(
             first_name="X",
@@ -460,11 +470,15 @@ class TestModelBranches:
             group=group,
             active=True,
         )
-        # Don't save (birth_date is non-null on the model). Just access the property.
-        try:
-            _ = s.age
-        except (AttributeError, TypeError):
-            pass
+        assert s.age is None
+
+    def test_student_age_is_computed_from_the_birth_date(self, db, group):
+        """The companion: a test that only pins the None case would also pass
+        against a property that returned None for everybody."""
+
+        ten_years_ago = date.today() - timedelta(days=365 * 10 + 3)
+        s = Student(first_name="X", last_name="Y", birth_date=ten_years_ago, group=group, active=True)
+        assert s.age == 10
 
     def test_parent_str(self, parent):
         """Parent.__str__ includes the DNI in parens."""
@@ -473,15 +487,17 @@ class TestModelBranches:
         assert parent.last_name in s
 
     def test_historylog_str(self, db):
-        from core.models import HistoryLog
-
         h = HistoryLog.objects.create(action="todo_completed", message="test", icon="check")
         assert "test" in str(h)
 
 
 class TestBillingModelBranches:
     def test_site_config_str(self, site_config):
-        assert "Configuración" in str(site_config) or "Site" in str(site_config).title() or str(site_config)
+        """Asserted exactly, because the three-way `or` this replaced ended in a
+        bare `str(site_config)` — truthy for any non-empty string, so the two
+        real clauses in front of it were decoration and the test could not fail.
+        """
+        assert str(site_config) == "Configuración del sitio"
 
     def test_enrollment_type_str(self, enrollment_type_new_student):
         assert str(enrollment_type_new_student)
@@ -489,7 +505,33 @@ class TestBillingModelBranches:
     def test_payment_str(self, pending_payment):
         assert str(pending_payment)
 
-    def test_payment_days_overdue_negative_when_not_overdue(self, pending_payment):
-        # pending_payment due_date is in past from conftest (2025-10-01)
-        _ = pending_payment.is_overdue
-        _ = pending_payment.days_overdue
+    def test_days_overdue_is_zero_when_the_payment_is_not_yet_due(self, pending_payment):
+        """`days_overdue` returns 0, never a negative number, before the due date.
+
+        It feeds the chase list and the "Vencido" badge, so a negative value
+        would sort a not-yet-due payment in among the debts. This replaces a
+        test named `..._negative_when_not_overdue` that asserted nothing at all
+        and whose fixture was the OVERDUE case, so it described the opposite of
+        what it ran.
+        """
+
+        pending_payment.due_date = date.today() + timedelta(days=30)
+
+        assert pending_payment.is_overdue is False
+        assert pending_payment.days_overdue == 0
+
+    def test_days_overdue_counts_from_the_due_date_once_it_has_passed(self, pending_payment):
+        pending_payment.due_date = date.today() - timedelta(days=12)
+
+        assert pending_payment.is_overdue is True
+        assert pending_payment.days_overdue == 12
+
+    def test_a_collected_payment_is_never_overdue(self, pending_payment):
+        """`is_overdue` is gated on `pending`, so money already banked drops off
+        the chase list the moment it is collected — not when its date passes."""
+
+        pending_payment.due_date = date.today() - timedelta(days=90)
+        pending_payment.payment_status = "completed"
+
+        assert pending_payment.is_overdue is False
+        assert pending_payment.days_overdue == 0

@@ -1,20 +1,18 @@
 """Unit tests for the audit log signal + model (v1.10)."""
 
+from datetime import date
 from decimal import Decimal
 
 import pytest
 
 from core.models import AuditLog
+from students.models import Group, Student
 
 pytestmark = pytest.mark.django_db
 
 
 class TestAuditLogSignals:
     def test_create_is_logged(self, group):
-        from datetime import date
-
-        from students.models import Student
-
         before = AuditLog.objects.filter(model="students.Student", action="create").count()
         Student.objects.create(
             first_name="Audited",
@@ -42,8 +40,6 @@ class TestAuditLogSignals:
         assert "last_name" not in log.changes
 
     def test_delete_is_logged(self, group, teacher):
-        from students.models import Group
-
         g = Group.objects.create(group_name="Ephemeral", color="#000", teacher=teacher)
         gid = g.id
         g.delete()

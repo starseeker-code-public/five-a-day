@@ -9,6 +9,7 @@ import json
 from datetime import date, timedelta
 
 import pytest
+from django.core import mail
 from django.test import override_settings
 from django.urls import reverse
 
@@ -193,8 +194,6 @@ class TestApiCreateFeature:
 
     @override_settings(IS_TESTING_ENV=True, SUPPORT_EMAIL="sup@test.com")
     def test_creation_emails_support(self, qa_client):  # noqa: F811
-        from django.core import mail
-
         qa_client.post(
             reverse("api_create_feature"),
             data=json.dumps({"title": "Avisadme"}),
@@ -326,8 +325,6 @@ class TestApiUpdateFeature:
 
     @QA_SETTINGS
     def test_marking_done_emails_admin_teachers(self, qa_client, feature):  # noqa: F811
-        from django.core import mail
-
         mail.outbox.clear()
         qa_client.post(
             reverse("api_update_feature", args=[feature.id]),
@@ -339,8 +336,6 @@ class TestApiUpdateFeature:
 
     @QA_SETTINGS
     def test_re_marking_done_does_not_email_again(self, qa_client, feature):  # noqa: F811
-        from django.core import mail
-
         feature.status = "done"
         feature.save()
         mail.outbox.clear()
@@ -413,8 +408,6 @@ class TestApiCreateFeatureTask:
 
     @override_settings(IS_TESTING_ENV=True, SUPPORT_EMAIL="sup@test.com")
     def test_task_creation_emails_support_naming_the_feature(self, qa_client, feature):  # noqa: F811
-        from django.core import mail
-
         mail.outbox.clear()
         qa_client.post(
             reverse("api_create_feature_task", args=[feature.id]),

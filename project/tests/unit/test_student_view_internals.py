@@ -11,7 +11,12 @@ from decimal import Decimal
 from unittest.mock import patch
 
 import pytest
+from django.contrib.messages.storage.fallback import FallbackStorage
 from django.test import RequestFactory
+
+from billing.models import Enrollment
+from core.views.students import StudentUpdateView
+from students.forms import StudentForm
 
 pytestmark = pytest.mark.django_db
 
@@ -23,9 +28,6 @@ class TestStudentUpdateView:
     / form_invalid), not the HTML rendering."""
 
     def _req(self, method, path="/x", data=None):
-        from django.contrib.messages.storage.fallback import FallbackStorage
-        from django.test import RequestFactory
-
         rf = RequestFactory()
         req = getattr(rf, method)(path, data=data or {})
         req.session = {"is_authenticated": True, "username": "testuser"}
@@ -33,8 +35,6 @@ class TestStudentUpdateView:
         return req
 
     def test_get_context_with_active_enrollment(self, student_with_parent, active_enrollment):
-        from core.views.students import StudentUpdateView
-
         view = StudentUpdateView()
         view.request = self._req("get")
         view.kwargs = {"student_id": student_with_parent.id}
@@ -46,9 +46,6 @@ class TestStudentUpdateView:
     def test_get_context_quarterly_enrollment(
         self, student_with_parent, enrollment_type_returning_student, site_config
     ):
-        from billing.models import Enrollment
-        from core.views.students import StudentUpdateView
-
         Enrollment.objects.filter(student=student_with_parent).delete()
         Enrollment.objects.create(
             student=student_with_parent,
@@ -70,9 +67,6 @@ class TestStudentUpdateView:
         assert "enrollment_form" in ctx
 
     def test_get_context_part_time(self, student_with_parent, enrollment_type_new_student, site_config):
-        from billing.models import Enrollment
-        from core.views.students import StudentUpdateView
-
         Enrollment.objects.filter(student=student_with_parent).delete()
         Enrollment.objects.create(
             student=student_with_parent,
@@ -94,8 +88,6 @@ class TestStudentUpdateView:
         assert "enrollment_form" in ctx
 
     def test_get_context_no_active_enrollment(self, student_with_parent):
-        from core.views.students import StudentUpdateView
-
         view = StudentUpdateView()
         view.request = self._req("get")
         view.object = student_with_parent
@@ -103,16 +95,12 @@ class TestStudentUpdateView:
         assert "enrollment_form" in ctx
 
     def test_success_url(self, student_with_parent):
-        from core.views.students import StudentUpdateView
-
         view = StudentUpdateView()
         view.object = student_with_parent
         assert "/students/" in str(view.get_success_url())
 
     def test_form_valid_invalid_enrollment_returns_form_invalid(self, student_with_parent, active_enrollment):
         """Invalid enrollment form → form_invalid path. Mock render to avoid missing template."""
-        from core.views.students import StudentUpdateView
-        from students.forms import StudentForm
 
         view = StudentUpdateView()
         view.request = self._req(
@@ -136,9 +124,6 @@ class TestStudentUpdateView:
         assert result is not None
 
     def test_form_valid_exception_goes_to_form_invalid(self, student_with_parent, active_enrollment):
-        from core.views.students import StudentUpdateView
-        from students.forms import StudentForm
-
         view = StudentUpdateView()
         view.request = self._req(
             "post",
@@ -180,7 +165,6 @@ def rf():
 def _auth_post(rf, path, data):
     req = rf.post(path, data=data)
     # Add a message storage so messages.error(...) doesn't blow up
-    from django.contrib.messages.storage.fallback import FallbackStorage
 
     req.session = {}
     req._messages = FallbackStorage(req)
@@ -189,7 +173,6 @@ def _auth_post(rf, path, data):
 
 def _auth_get(rf, path):
     req = rf.get(path)
-    from django.contrib.messages.storage.fallback import FallbackStorage
 
     req.session = {}
     req._messages = FallbackStorage(req)

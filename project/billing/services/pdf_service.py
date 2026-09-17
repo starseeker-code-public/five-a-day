@@ -29,6 +29,9 @@ from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import mm
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
+from billing.models import Payment, SiteConfiguration
+from billing.services.payment_service import PaymentService
+
 _PRIMARY_COLOR = colors.HexColor("#4F46E5")
 _HEADER_TEXT_COLOR = colors.white
 _MUTED_COLOR = colors.HexColor("#666666")
@@ -80,8 +83,6 @@ def _get_academy_info() -> AcademyInfo:
     letterhead.
     """
     try:
-        from billing.models import SiteConfiguration
-
         config = SiteConfiguration.get_config()
         return AcademyInfo(
             name=config.academy_name or AcademyInfo.name,
@@ -314,8 +315,6 @@ def _receipt_breakdown_rows(payment) -> list[list[str]]:
     restated its base at the NEW price with the difference as an "Ajuste".
     A receipt that cannot explain the amount must not guess at it.
     """
-    from billing.models import SiteConfiguration
-    from billing.services.payment_service import PaymentService
 
     enrollment = payment.enrollment
     if enrollment is None or payment.due_date is None:
@@ -568,7 +567,6 @@ def generate_tax_certificate(parent, year: int) -> bytes:
     `parent`, grouped by student. Replaces the HTML-fallback path in
     `comms/services/email_functions.generate_tax_certificate_pdf`.
     """
-    from billing.models import Payment
 
     academy = _get_academy_info()
     styles = _styles()

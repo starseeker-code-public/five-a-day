@@ -1,12 +1,29 @@
 """
-Regression tests for the email-bug hunt fixes (round 2 of the review loop).
+What the email templates render, and what the email tasks pass them.
+
+Every defect here produced a mail that went out looking wrong rather than not
+going out: a `cid:` image with nothing attached, a hard-coded year, a reminder
+missing its overdue branch, a birthday mail reaching one parent instead of
+both, and a closure spanning two months rendered as one.
+
+From round 2 of the email-bug hunt.
 """
 
-from unittest.mock import patch
+import json
+import os
+from datetime import date, timedelta
+from unittest.mock import MagicMock, patch
 
 import pytest
+from django.core.management import call_command
 from django.template.loader import get_template
+from django.test import RequestFactory
 from django.urls import reverse
+
+from comms.services.email_functions import send_fun_friday_email
+from comms.tasks import send_birthday_email_task, send_birthday_emails_task, send_payment_reminders
+from core.views.app_forms import vacation_closure_form
+from students.models import Group, Parent, Student, StudentParent, Teacher
 
 pytestmark = pytest.mark.django_db
 
@@ -27,10 +44,6 @@ class TestPaymentReminderSimpleTemplate:
         assert "05/03/2026" in rendered
 
     def test_weekly_reminder_uses_simple_template(self, pending_payment):
-        from datetime import date, timedelta
-
-        from comms.tasks import send_payment_reminders
-
         pending_payment.due_date = date.today() + timedelta(days=3)
         pending_payment.save()
 
@@ -65,9 +78,6 @@ class TestBirthdayEmailTemplate:
 
     def test_task_attaches_the_image_the_template_references(self, student_with_parent):
         """The cid in the template is only real if the task ships the file."""
-        import os
-
-        from comms.tasks import send_birthday_email_task
 
         captured = {}
 
@@ -94,8 +104,6 @@ class TestFunFridayImageGuard:
         img = tmp_path / "party.png"
         img.write_bytes(b"\x89PNG\r\n\x1a\nfake")
 
-        from comms.services.email_functions import send_fun_friday_email
-
         captured = {}
 
         def _capture(**kwargs):
@@ -119,8 +127,6 @@ class TestFunFridayImageGuard:
         assert captured["inline_images"] == {"event_image": str(img)}
 
     def test_send_omits_flag_when_no_image(self):
-        from comms.services.email_functions import send_fun_friday_email
-
         captured = {}
 
         def _capture(**kwargs):
@@ -188,11 +194,6 @@ class TestCliBatchEmailPerRecipientLoop:
         """The old CLI passed the entire parent list into the `To:` header of
         a single message; the fix loops so each parent receives their own
         email with only their own address in `To:`."""
-        from datetime import date
-
-        from django.core.management import call_command
-
-        from students.models import Group, Parent, Student, StudentParent, Teacher
 
         # Two parents linked to active students so the queryset picks both up
         teacher = Teacher.objects.create(first_name="T", last_name="X", email="t@x.com")
@@ -242,10 +243,6 @@ class TestBirthdayAllParents:
     def test_send_to_every_parent_with_email(self, group, second_parent):
         """After the fix, birthday emails go to EVERY parent with an email,
         not just the first one — both mom and dad want to know."""
-        from datetime import date
-
-        from comms.tasks import send_birthday_email_task
-        from students.models import Parent, Student, StudentParent
 
         p1 = Parent.objects.create(
             first_name="Mom",
@@ -284,10 +281,6 @@ class TestBirthdayAllParents:
 
     def test_falls_back_to_student_email_when_adult_no_parent(self, group):
         """Adult students receive their own birthday email."""
-        from datetime import date
-
-        from comms.tasks import send_birthday_email_task
-        from students.models import Student
 
         s = Student.objects.create(
             first_name="Adult",
@@ -311,11 +304,6 @@ class TestBirthdayAllParents:
         assert recipients_seen == ["adult@example.com"]
 
     def test_skipped_when_no_recipient_at_all(self, group):
-        from datetime import date
-
-        from comms.tasks import send_birthday_email_task
-        from students.models import Student
-
         s = Student.objects.create(
             first_name="No",
             last_name="Contact",
@@ -335,9 +323,6 @@ class TestBirthdayTaskTimezone:
         """Fix guard: the task's `today` value should come from
         `django.utils.timezone.localdate()` (which respects TIME_ZONE),
         not from `datetime.date.today()` (container local time = UTC)."""
-        from unittest.mock import MagicMock
-
-        from comms.tasks import send_birthday_emails_task
 
         # Freeze localdate to a known value so we can assert the query used it.
         fixed = MagicMock()
@@ -417,11 +402,6 @@ class TestVacationClosureCrossMonth:
         vacation_closure_form view never passed it — so a Navidad closure
         (23 dic → 3 ene) rendered "3 de diciembre". The view must derive the
         end month from the closure END date."""
-        import json
-
-        from django.test import RequestFactory
-
-        from core.views.app_forms import vacation_closure_form
 
         req = RequestFactory().post(
             "/apps/vacation-closure/",

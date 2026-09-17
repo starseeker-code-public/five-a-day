@@ -1,9 +1,11 @@
 """Tests for the returning-student enrollment discount (v1.13)."""
 
+import json
 from datetime import date
 from decimal import Decimal
 
 import pytest
+from django.urls import reverse
 
 from billing.models import Enrollment, SiteConfiguration
 from billing.services.enrollment_service import EnrollmentService
@@ -142,10 +144,6 @@ class TestSiteConfigurationDefaults:
 
 class TestUpdateSiteConfigApi:
     def test_admin_can_update_discount(self, authenticated_client, site_config):
-        import json
-
-        from django.urls import reverse
-
         response = authenticated_client.post(
             reverse("update_site_config"),
             data=json.dumps({"returning_student_enrollment_discount": "35.00"}),

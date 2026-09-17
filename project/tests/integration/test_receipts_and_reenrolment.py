@@ -1,4 +1,12 @@
-"""Regression tests for the v1.28.2 QA fix pass.
+"""Receipt numbering and its breakdown, plus the bulk re-enrolment flow.
+
+A receipt is a fiscal document: its `YYYY-NNN` number continues the academy's
+paper books, is assigned once, and is only ever minted for collected money. Its
+discount breakdown must reconstruct the price exactly or show nothing at all.
+Alongside: manual payments are born pending, waiting-list entries are
+removable, and prior students can be re-enrolled in bulk.
+
+From the v1.28.2 QA pass.
 
 Covers the behaviours QA reported broken: manual payments must be born pending,
 waiting-list entries must be removable, prior students must be re-enrollable in
@@ -12,7 +20,10 @@ from decimal import Decimal
 import pytest
 from django.urls import reverse
 
-from billing.models import Enrollment, Payment
+from billing.models import Enrollment, Payment, SiteConfiguration
+from billing.money import period_base_amount, round_money
+from billing.services.payment_service import PaymentService
+from billing.services.pdf_service import _receipt_breakdown_rows
 from students.models import Student
 
 pytestmark = pytest.mark.django_db
@@ -131,9 +142,6 @@ class TestReceiptBreakdown:
     def test_precio_menos_descuentos_equals_importe(
         self, student_with_parent, site_config, enrollment_type_new_student
     ):
-        from billing.money import period_base_amount, round_money
-        from billing.services.pdf_service import _receipt_breakdown_rows
-
         base = round_money(period_base_amount(site_config, "full_time", "monthly"))
         sibling = round_money(base * (Decimal(site_config.sibling_discount) / Decimal("100")))
         amount = round_money(base - sibling)
@@ -191,9 +199,6 @@ class TestReceiptBreakdownReconstructsOrSaysNothing:
     """
 
     def _quarterly_enrollment(self, student, enrollment_type, *, start):
-        from billing.models import SiteConfiguration
-        from billing.services.payment_service import PaymentService
-
         enrollment = Enrollment.objects.create(
             student=student,
             enrollment_type=enrollment_type,
@@ -218,7 +223,6 @@ class TestReceiptBreakdownReconstructsOrSaysNothing:
         language cheque x3, so the ~2/3 difference printed as a large
         "Prorrateo primer periodo" on a payment that is neither first nor
         prorated."""
-        from billing.services.pdf_service import _receipt_breakdown_rows
 
         enrollment, config, PaymentService = self._quarterly_enrollment(
             student_with_parent, enrollment_type_new_student, start=date(2026, 9, 1)
@@ -254,7 +258,6 @@ class TestReceiptBreakdownReconstructsOrSaysNothing:
     ):
         """Re-downloading an old receipt after a price rise must not restate its
         base at the NEW price and call the difference an "Ajuste"."""
-        from billing.services.pdf_service import _receipt_breakdown_rows
 
         enrollment, config, PaymentService = self._quarterly_enrollment(
             student_with_parent, enrollment_type_new_student, start=date(2026, 9, 1)
@@ -287,7 +290,6 @@ class TestReceiptBreakdownReconstructsOrSaysNothing:
     ):
         """A negotiated matrícula cheaper than the standard fee used to print
         "Descuento antiguo alumno" for a family with no prior history at all."""
-        from billing.services.pdf_service import _receipt_breakdown_rows
 
         enrollment = Enrollment.objects.create(
             student=student_with_parent,

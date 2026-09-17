@@ -5,7 +5,9 @@ import json
 import pytest
 from django.urls import reverse
 
-from core.models import ScheduleSlot
+from core.models import FunFridayAttendance, ScheduleSlot
+from core.views.students import get_last_friday, get_next_friday
+from students.models import Student
 
 pytestmark = pytest.mark.django_db
 
@@ -28,9 +30,6 @@ class TestScheduleView:
         `students_json` used to be every active student, so the schedule's Fun
         Friday panel listed people who were not going.
         """
-        from core.models import FunFridayAttendance
-        from core.views.students import get_next_friday
-        from students.models import Student
 
         not_attending = Student.objects.create(first_name="Nadie", last_name="Apuntado", group=group, active=True)
 
@@ -153,9 +152,6 @@ class TestFunFridayViewExtra:
         assert response.status_code == 200
 
     def test_renders_with_attendance(self, authenticated_client, student):
-        from core.models import FunFridayAttendance
-        from core.views.students import get_last_friday, get_next_friday
-
         FunFridayAttendance.objects.create(student=student, date=get_next_friday())
         FunFridayAttendance.objects.create(student=student, date=get_last_friday())
         response = authenticated_client.get(reverse("fun_friday_view"))

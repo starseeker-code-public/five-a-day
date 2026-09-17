@@ -1,6 +1,8 @@
 from django.db.models import Prefetch, Q
 
 from billing.models import Enrollment, Payment, relevant_academic_years
+from core.decorators import _request_teacher
+from core.middleware import _is_non_admin_teacher
 from students.models import Student
 
 
@@ -60,8 +62,6 @@ def visible_students_for(request, queryset=None):
       restricts it by default-deny); "no groups" is the honest answer, and
       failing closed matches how every other control here behaves.
     """
-    from core.decorators import _request_teacher
-    from core.middleware import _is_non_admin_teacher
 
     if queryset is None:
         queryset = students_on_the_roll()

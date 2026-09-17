@@ -1,12 +1,17 @@
 """Tests for core.views.students — list, detail, create, update, search."""
 
-from decimal import Decimal
+import inspect
+from datetime import date
+from datetime import date as _date
+from decimal import ROUND_HALF_UP, Decimal
 from unittest.mock import patch
 
 import pytest
 from django.urls import reverse
 
-from billing.models import Payment
+from billing.models import Payment, current_academic_year
+from billing.services.payment_service import PaymentService
+from core.views.students import _STUDENT_LIST_CAP, StudentListView
 from students.models import Student
 
 pytestmark = pytest.mark.django_db
@@ -25,11 +30,6 @@ def first_period_amount(base):
     Derived from `proration_fraction` — the documented rule — and NOT from the
     pricing code these tests exercise, so it stays an independent expectation.
     """
-    from datetime import date as _date
-    from decimal import ROUND_HALF_UP
-
-    from billing.models import current_academic_year
-    from billing.services.payment_service import PaymentService
 
     # `student_create` stamps `enrollment_date` with today, and `billing_periods`
     # takes its proration reference from that field.
@@ -155,11 +155,6 @@ class TestFirstPeriodProrationContext:
     """
 
     def test_context_exposes_the_proration(self, authenticated_client, group, site_config, enrollment_type_new_student):
-        from datetime import date
-
-        from billing.models import current_academic_year
-        from billing.services.payment_service import PaymentService
-
         response = authenticated_client.get(reverse("student_create"))
         assert response.status_code == 200
 
@@ -483,12 +478,9 @@ class TestStudentListCap:
         assert response.context["list_cap"] == 500
 
     def test_the_queryset_is_actually_capped(self):
-        from core.views.students import _STUDENT_LIST_CAP, StudentListView
-
         assert _STUDENT_LIST_CAP == 500
         # The cap is applied by slicing in get_queryset; a paginate_by would
         # break the client-side "search all students" behaviour instead.
-        import inspect
 
         src = inspect.getsource(StudentListView.get_queryset)
         assert "_STUDENT_LIST_CAP" in src

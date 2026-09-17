@@ -1,5 +1,6 @@
 import logging as _logging
 import os
+import urllib.parse
 from typing import TYPE_CHECKING
 
 from django.conf import settings
@@ -14,7 +15,12 @@ from django.views.decorators.http import require_http_methods
 
 from core.log_safe import safe_log
 from core.rate_limit import rate_limit
+from core.views.two_factor import _PENDING_USER_SESSION_KEY
+from students.models import Teacher
 
+# Annotation-only. Deliberately NOT a runtime import: the name is used in type
+# hints and nowhere else, and `if TYPE_CHECKING` is the idiom that keeps it out
+# of the import graph at run time. mypy reads it; the interpreter never does.
 if TYPE_CHECKING:
     from django.contrib.auth.models import User
 
@@ -129,7 +135,6 @@ def _stage_pending_2fa(request, user):
     factor/verify/ page can finish the login. `SimpleAuthMiddleware` treats
     the session as unauthenticated until the OTP is confirmed.
     """
-    from core.views.two_factor import _PENDING_USER_SESSION_KEY
 
     # Clear any leftover pre-auth state from a previous attempt
     request.session.flush()
@@ -255,6 +260,12 @@ def _google_callback_uri(request):
 
 
 def _build_flow(client_id, client_secret, callback_uri, state=None):
+    # Deliberately lazy. googleapiclient / google-auth-oauthlib /
+    # google-auth-httplib2 / httplib2 are TRANSITIVE deps (via django-gsheets),
+    # not declared in pyproject.toml — at module level a shift in that tree
+    # turns a degraded Google feature into an app that cannot boot. It also
+    # keeps ~300 ms of Google stack off every cold start for a path most
+    # requests never take.
     from google_auth_oauthlib.flow import Flow
 
     cfg = {
@@ -308,7 +319,6 @@ def _ensure_oauth_superuser(email: str, first_name: str) -> "User":
     # admin status. Refuse an ambiguous match (link nothing) rather than guess;
     # an admin resolves the duplicate. `linked_user` on the Teacher signal keeps
     # the flags in sync once linked.
-    from students.models import Teacher
 
     matches = list(Teacher.objects.filter(email__iexact=email)[:2])
     if len(matches) == 1:
@@ -367,8 +377,18 @@ def google_oauth_callback(request):
     (get-or-created) and logged in via django.contrib.auth.login, so the same
     session also grants access to /admin/ without a second login prompt.
     """
-    import urllib.parse
-
+    # Deliberately lazy. googleapiclient / google-auth-oauthlib /
+    # google-auth-httplib2 / httplib2 are TRANSITIVE deps (via django-gsheets),
+    # not declared in pyproject.toml — at module level a shift in that tree
+    # turns a degraded Google feature into an app that cannot boot. It also
+    # keeps ~300 ms of Google stack off every cold start for a path most
+    # requests never take.
+    # Deliberately lazy. googleapiclient / google-auth-oauthlib /
+    # google-auth-httplib2 / httplib2 are TRANSITIVE deps (via django-gsheets),
+    # not declared in pyproject.toml — at module level a shift in that tree
+    # turns a degraded Google feature into an app that cannot boot. It also
+    # keeps ~300 ms of Google stack off every cold start for a path most
+    # requests never take.
     from google.auth.transport import requests as google_requests
     from google.oauth2 import id_token
 

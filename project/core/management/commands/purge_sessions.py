@@ -11,12 +11,12 @@ Usage:
 
 from django.core.management.base import BaseCommand
 
+from core.tasks import purge_expired_sessions
+
 
 class Command(BaseCommand):
     help = "Delete expired django_session rows (the parent-portal token table no longer exists)"
 
     def handle(self, *args, **options):
-        from core.tasks import purge_expired_sessions
-
         result = purge_expired_sessions.apply().get()
         self.stdout.write(self.style.SUCCESS(f"Session purge: {result}"))

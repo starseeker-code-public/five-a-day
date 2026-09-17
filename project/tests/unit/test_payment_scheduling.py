@@ -12,7 +12,8 @@ from io import StringIO
 import pytest
 from django.core.management import call_command
 
-from billing.models import Enrollment, Payment
+from billing.models import Enrollment, Payment, current_academic_year
+from billing.services.enrollment_service import EnrollmentService
 from billing.services.payment_service import PaymentService
 
 pytestmark = pytest.mark.django_db
@@ -173,7 +174,6 @@ class TestSpecialPriceIsBilled:
 
     def test_enrollment_service_end_to_end(self, student, enrollment_type_special, site_config, parent):
         """The price typed in the form is what the year of payments charges."""
-        from billing.services.enrollment_service import EnrollmentService
 
         enrollment = EnrollmentService.create_enrollment(
             student,
@@ -204,7 +204,6 @@ class TestSpecialPriceIsBilled:
 
     def test_periodic_command_uses_the_custom_price(self, student_with_parent, enrollment_type_special, site_config):
         """`generate_payments` (the monthly cron) reads the same rule."""
-        from django.core.management import call_command
 
         enrollment = self._special_enrollment(student_with_parent, enrollment_type_special, "monthly", Decimal("35.00"))
         call_command("generate_payments", month=10, year=2025)
@@ -309,7 +308,6 @@ class TestJuneEnrollmentRollsToNextYear:
         self, student, enrollment_type_returning_student, site_config, parent
     ):
         """Enrolment rolls over in May, so a June signup joins the NEXT course."""
-        from billing.models import current_academic_year
 
         assert current_academic_year(date(2026, 6, 10)) == "2026-2027"
 

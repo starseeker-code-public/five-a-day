@@ -12,8 +12,24 @@ Usage:
     send_birthday_emails_task.delay()
 """
 
+import os
+from datetime import timedelta
+from decimal import Decimal
+
 from celery import shared_task
 from celery.utils.log import get_task_logger
+from django.conf import settings
+from django.db.models import Case, DecimalField, Prefetch, Sum, Value, When
+from django.utils import timezone
+
+from billing.constants import LIVE_PAYMENT_STATUSES, RECEIPT_RELATIONS
+from billing.models import Enrollment, Payment
+from billing.services.pdf_service import generate_payment_receipt
+from comms.services.email_functions import send_enrollment_confirmation_email
+from comms.services.email_service import email_service
+from comms.services.sms_service import get_sms_service
+from core.constants import MESES_ES
+from students.models import Parent, Student
 
 logger = get_task_logger(__name__)
 
@@ -54,7 +70,9 @@ def _dispatch(task, *args, what: str = "subtask", **kwargs) -> bool:
     retry_backoff=True,
     retry_backoff_max=600,
 )
-def send_welcome_email_task(self, parent_id: int, student_id: int, enrollment_id: int):
+def send_welcome_email_task(
+    self, parent_id: int, student_id: int, enrollment_id: int, schedule_lines: list[str] | None = None
+):
     """
     Async task to send a welcome email.
     Triggered when a new student is created.
@@ -63,10 +81,12 @@ def send_welcome_email_task(self, parent_id: int, student_id: int, enrollment_id
         parent_id: ID of the parent/guardian
         student_id: ID of the student
         enrollment_id: ID of the enrollment
+        schedule_lines: the group's timetable, already rendered by the caller.
+            Passed IN rather than computed here: the lines come from
+            `core.schedule_utils`, and `comms` must not import `core` (see the
+            dependency flow in CLAUDE.md). The caller owns the ScheduleSlot
+            query; this task only renders what it is given.
     """
-    from billing.models import Enrollment
-    from comms.services.email_service import email_service
-    from students.models import Parent, Student
 
     try:
         student = Student.objects.select_related("group").get(id=student_id)
@@ -84,8 +104,6 @@ def send_welcome_email_task(self, parent_id: int, student_id: int, enrollment_id
         if not recipient_email:
             logger.warning("No email address for welcome email (student_id=%d)", student_id)
             return {"status": "skipped", "message": "No email address"}
-
-        from core.schedule_utils import get_group_schedule_lines
 
         enrollment_type = enrollment.enrollment_type
         # `Enrollment.is_hand_priced` — the shared predicate. This task inlined
@@ -108,7 +126,7 @@ def send_welcome_email_task(self, parent_id: int, student_id: int, enrollment_id
             "enrollment_type": enrollment_type.display_name if enrollment_type else None,
             "payment_modality": payment_modality,
             "schedule_type": enrollment.get_schedule_type_display(),
-            "schedule_lines": get_group_schedule_lines(student.group),
+            "schedule_lines": schedule_lines or [],
             # "Fecha de inicio" is when CLASSES start, not when the family signed
             # the enrolment. enrollment_date is the signup day, so a family
             # enrolling in August was told their start date was that same August
@@ -165,13 +183,6 @@ def send_birthday_email_task(self, student_id: int):
     mom and dad want to know it's their kid's birthday; before this fix the
     task did `.first()` and only picked the arbitrary first row.
     """
-    import os
-
-    from django.conf import settings
-    from django.db.models import Prefetch
-
-    from comms.services.email_service import email_service
-    from students.models import Parent, Student
 
     try:
         # The email filter goes INSIDE the prefetch. It used to be
@@ -235,9 +246,6 @@ def send_birthday_emails_task(self):
 
     Configured in celery.py to run at 8:00 AM.
     """
-    from django.utils import timezone
-
-    from students.models import Student
 
     # `date.today()` reads the container's local time (UTC in Docker), which
     # can be the previous day when Celery Beat fires at 08:00 Europe/Madrid
@@ -286,14 +294,6 @@ def send_monthly_report_task(self, recipient_email: str | None = None):
     already goes) and `settings.DEFAULT_FROM_EMAIL` (the academy's own Gmail),
     deduped — so it is skipped only when neither is configured.
     """
-    from decimal import Decimal
-
-    from django.conf import settings
-    from django.db.models import Case, DecimalField, Sum, Value, When
-    from django.utils import timezone
-
-    from billing.models import Payment
-    from comms.services.email_service import email_service
 
     if recipient_email:
         # Explicit override (the --recipient flag on the management command):
@@ -323,7 +323,6 @@ def send_monthly_report_task(self, recipient_email: str | None = None):
     # without the status filter every cancelled/failed/refunded row due this
     # month inflated `expected` and produced phantom `outstanding` debt — the
     # exact pre-v1.15 bug the constant exists to prevent.
-    from billing.constants import LIVE_PAYMENT_STATUSES
 
     stats = Payment.objects.aggregate(
         expected=Sum(
@@ -403,12 +402,6 @@ def send_payment_reminders(self):
     (`parent.sms_opt_in=True`) — SMS is a *supplement* to email, not a
     replacement, so both channels fire for opted-in parents.
     """
-    from datetime import timedelta
-
-    from django.utils import timezone
-
-    from billing.models import Payment
-    from comms.services.email_service import email_service
 
     # `timezone.localdate()`, not `date.today()` — see `send_monthly_report_task`.
     # Read ONCE: the old code called `date.today()` twice, so a run straddling
@@ -526,8 +519,6 @@ def send_payment_reminder_sms_task(self, payment_id: int):
     v1.8: send a single-payment SMS reminder to the parent. Skips gracefully
     when the SMS service isn't configured or the parent hasn't opted in.
     """
-    from billing.models import Payment
-    from comms.services.sms_service import get_sms_service
 
     try:
         payment = Payment.objects.select_related("student", "parent").get(id=payment_id)
@@ -582,8 +573,6 @@ def send_parent_temporary_password_task(self, parent_id: int, login_url: str = "
     regardless of SMTP latency — that keeps the enumeration-protection story
     honest (an attacker can't distinguish real from unknown emails by timing).
     """
-    from comms.services.email_service import email_service
-    from students.models import Parent
 
     try:
         parent = Parent.objects.get(id=parent_id)
@@ -614,73 +603,6 @@ def send_parent_temporary_password_task(self, parent_id: int, login_url: str = "
     return {"status": "success" if success else "failed", "recipient": parent.email}
 
 
-def dispatch_payment_completed_on_commit(payment_id: int) -> None:
-    """`dispatch_payment_completed`, deferred to COMMIT.
-
-    Production runs ``CELERY_TASK_ALWAYS_EAGER=True`` (Cloud Run, no worker), so
-    ``.delay()`` executes the task *here* — it re-reads the payment by id and
-    emails a receipt. Called from inside a ``transaction.atomic()`` block that
-    later rolls back, that is a receipt for money the database does not record;
-    with a real broker it is a worker reading the row before the write is
-    visible. ``transaction.on_commit`` runs the callback immediately when there
-    is no open transaction, so callers outside one behave exactly as before.
-
-    It lives HERE, next to the dispatch it defers, rather than in
-    ``core/views/payments.py`` where it started life as ``_queue_payment_receipt``:
-    ``billing/admin.py`` is the second completion path in the app and had to
-    reach into a view module for a private helper to get its receipts sent.
-    A completion side effect is not a view concern.
-
-    Consequence for tests: under the plain ``django_db`` fixture on_commit
-    callbacks never fire, so anything asserting ``mail.outbox`` needs
-    ``django_capture_on_commit_callbacks(execute=True)``.
-    """
-    from django.db import transaction
-
-    def _dispatch():
-        dispatch_payment_completed(int(payment_id))
-
-    transaction.on_commit(_dispatch)
-
-
-def dispatch_payment_completed(payment_id: int) -> None:
-    """Fire every side effect of a payment becoming COMPLETED: receipt + archive.
-
-    The one statement of "what happens when money lands", because there are two
-    completion paths — the admin marking a payment cobrado and the Stripe webhook
-    — and each carried its own copy of this pair of dispatches. A third side
-    effect, or a third completion path, would have had to be written twice to be
-    right and once to be silently half-wrong.
-
-    Each dispatch gets its own ``try``: a Drive outage must not cost the family
-    their receipt email, and vice versa. Neither may raise, because production
-    runs ``CELERY_TASK_ALWAYS_EAGER`` — the "queue" is this call stack, inside
-    the request that recorded the money.
-
-    Callers inside a transaction must go through
-    ``dispatch_payment_completed_on_commit`` above: eager execution re-reads the
-    payment by id, which a not-yet-committed write is invisible to.
-    """
-    try:
-        send_payment_receipt_email_task.delay(int(payment_id))
-    except Exception:  # receipt is nice-to-have
-        logger.exception("Failed to enqueue payment receipt for payment %d", int(payment_id))
-
-    try:
-        upload_receipt_to_drive_task.delay(int(payment_id))
-    except Exception:  # Drive archive is nice-to-have
-        logger.exception("Failed to enqueue Drive receipt upload for payment %d", int(payment_id))
-
-
-#: Everything `generate_payment_receipt` touches off a Payment. The receipt's
-#: discount breakdown reads the enrollment and its matrícula category, and
-#: `enrollment.student` is a separate FK cache from `payment.student` — without
-#: the pair the two receipt tasks each paid 3 extra lazy queries per payment,
-#: which production (eager Celery) spends inside the completion request and the
-#: Drive backfill multiplies by the whole archive.
-_RECEIPT_RELATIONS = ("student", "parent", "enrollment", "enrollment__enrollment_type", "enrollment__student")
-
-
 @shared_task(
     name="comms.tasks.send_payment_receipt_email_task",
     bind=True,
@@ -694,12 +616,9 @@ def send_payment_receipt_email_task(self, payment_id: int):
     parent a PDF receipt so they have written proof of the transaction.
     Silently skipped when the parent has no email.
     """
-    from billing.models import Payment
-    from billing.services.pdf_service import generate_payment_receipt
-    from comms.services.email_service import email_service
 
     try:
-        payment = Payment.objects.select_related(*_RECEIPT_RELATIONS).get(id=payment_id)
+        payment = Payment.objects.select_related(*RECEIPT_RELATIONS).get(id=payment_id)
     except Payment.DoesNotExist:
         logger.warning("send_payment_receipt_email_task: payment %s not found", payment_id)
         return {"status": "error", "message": "payment not found"}
@@ -732,61 +651,6 @@ def send_payment_receipt_email_task(self, payment_id: int):
     return {"status": "success", "recipient": recipient, "payment_id": payment_id}
 
 
-@shared_task(name="comms.tasks.upload_receipt_to_drive_task", bind=True)
-def upload_receipt_to_drive_task(self, payment_id: int):
-    """Best-effort: archive a completed payment's receipt PDF to Google Drive.
-
-    A no-op outside production unless the QA VM's `/testing/` toggle is on, in
-    which case the receipt is filed into the month's `testing/` sandbox — see
-    `core.services.drive_service.drive_uploads_allowed`.
-
-    Deliberately NOT auto-retrying and NOT raising: the Drive archive is a
-    convenience on top of the `Payment` row and the emailed receipt, so a Drive
-    problem must never fail the payment flow or spawn a retry storm (production
-    runs eager, so a raise here would surface inside the completion request). The
-    upload service already swallows every error and returns a status; this task
-    just resolves the payment, renders the PDF and records the outcome.
-    """
-    from billing.models import Payment
-    from billing.services.pdf_service import generate_payment_receipt
-    from core.services.drive_service import drive_uploads_allowed
-    from core.services.drive_service import get_service as get_drive_service
-
-    # Same gate the service enforces, asked here too so a disallowed environment
-    # never even loads the payment or renders its PDF (production runs eager, so
-    # that work happens inside the "marcar cobrado" request).
-    if not drive_uploads_allowed():
-        return {"status": "disabled", "payment_id": payment_id}
-
-    drive = get_drive_service()
-    if not drive.is_configured():
-        return {"status": "not_configured", "payment_id": payment_id}
-
-    try:
-        payment = Payment.objects.select_related(*_RECEIPT_RELATIONS).get(id=payment_id)
-    except Payment.DoesNotExist:
-        logger.warning("upload_receipt_to_drive_task: payment %s not found", payment_id)
-        return {"status": "error", "message": "payment not found"}
-
-    # Only completed payments have a real receipt to archive.
-    if payment.payment_status != "completed":
-        return {"status": "skipped", "reason": "not completed", "payment_id": payment_id}
-
-    try:
-        pdf_bytes = generate_payment_receipt(payment)
-    except Exception:
-        # Rendering failing is worth knowing about, but still must not blow up the
-        # completion flow — log and stop.
-        logger.exception("upload_receipt_to_drive_task: failed to render PDF for payment %s", payment_id)
-        return {"status": "error", "message": "pdf render failed", "payment_id": payment_id}
-
-    result = drive.upload_receipt(payment, pdf_bytes)
-    if not result.success and result.status == "error":
-        # result.error is one of the service's own fixed messages, not user input.
-        logger.warning("upload_receipt_to_drive_task: payment %s not archived (%s)", payment_id, result.error)
-    return {"payment_id": payment_id, **result.as_dict()}
-
-
 @shared_task(
     name="comms.tasks.send_generic_email_task",
     bind=True,
@@ -813,7 +677,6 @@ def send_generic_email_task(self, template_name: str, recipient_email: str, subj
             context={'student_name': 'Juan', 'amount': 100}
         )
     """
-    from comms.services.email_service import email_service
 
     logger.info("Sending email: template=%s", template_name)
 
@@ -847,20 +710,12 @@ def send_enrollment_confirmation_task(self, enrollment_id: int, attachments_path
         enrollment_id: ID of the enrollment
         attachments_paths: List of paths to attached PDFs (optional)
     """
-    import os
-
-    from django.db.models import Prefetch
-
-    from billing.models import Enrollment
-    from comms.services.email_functions import send_enrollment_confirmation_email
 
     # `core.constants.MESES_ES` is the one list of Spanish month names — this
     # task carried its own copy under a different name, which is how two
     # spellings of a month end up in the same product. Imported in the function
     # body like the other core imports in this module (see the "known debt" note
     # in CLAUDE.md); `comms/management/commands/send_email.py` already reads it.
-    from core.constants import MESES_ES
-    from students.models import Parent
 
     try:
         # The email filter goes INSIDE the prefetch, same as
@@ -920,152 +775,3 @@ def send_enrollment_confirmation_task(self, enrollment_id: int, attachments_path
     except Enrollment.DoesNotExist:
         logger.error("Enrollment not found: id=%d", enrollment_id)
         return {"status": "error", "message": "Enrollment not found"}
-
-
-# NOTE: the old `send_fun_friday_emails_task` (an immediate fan-out taking a raw
-# `recipients` list) was removed. It had NO code callers, but was advertised as
-# the "manual send" path while bypassing the `FunFridayScheduledSend` claim guard
-# (`WHERE sent_at IS NULL`) that `_send_fun_friday_batch` implements below — so
-# anyone following the README could double-mail every family. All sends now go
-# through a persisted `FunFridayScheduledSend` row (drained immediately if its
-# slot has already passed), so the claim guard always applies.
-
-
-def _send_fun_friday_batch(
-    recipients: list,
-    day_name: str,
-    day_number: int,
-    month: str,
-    start_time: str,
-    end_time: str,
-    activity_description: str,
-    minimum_age=None,
-    maximum_age=None,
-    meeting_point=None,
-) -> dict:
-    """Send one Fun Friday announcement batch. Shared by the direct task and the drain task.
-
-    ONE SMTP session for the whole announcement: this loop is the academy's
-    largest single batch (every family), and it was paying a TCP+TLS+AUTH
-    handshake per address. Opening the connection is wrapped because `open()`
-    is not `fail_silently` — an unwrapped failure here would abort a drain whose
-    row is already CLAIMED, i.e. lose the announcement outright.
-    """
-    from comms.services.email_functions import send_fun_friday_email
-    from comms.services.email_service import email_service
-
-    connection = None
-    try:
-        connection = email_service.open_connection()
-        connection.open()
-    except Exception:
-        logger.exception("Fun Friday batch: SMTP connection could not be opened")
-        return {"status": "failed", "sent": 0, "total": len(recipients)}
-
-    sent = 0
-    try:
-        for index, email in enumerate(recipients, start=1):
-            try:
-                if send_fun_friday_email(
-                    recipients=email,
-                    day_name=day_name,
-                    day_number=day_number,
-                    month=month,
-                    start_time=start_time,
-                    end_time=end_time,
-                    activity_description=activity_description,
-                    minimum_age=minimum_age,
-                    maximum_age=maximum_age,
-                    meeting_point=meeting_point,
-                    connection=connection,
-                ):
-                    sent += 1
-            except Exception:  # one bad recipient must not abort the batch
-                # Opaque index, not the address: recipient emails are family PII
-                # and Cloud Logging retention outlives the app's own controls
-                # (this file's own rule — see the module docstring on args).
-                logger.exception("Fun Friday email failed for recipient %d of %d", index, len(recipients))
-    finally:
-        try:
-            connection.close()
-        except Exception:
-            logger.exception("Fun Friday batch: SMTP connection could not be closed")
-
-    logger.info("Fun Friday emails sent: %d/%d", sent, len(recipients))
-    return {"status": "success", "sent": sent, "total": len(recipients)}
-
-
-@shared_task(name="comms.tasks.send_due_fun_friday_emails_task", bind=True)
-def send_due_fun_friday_emails_task(self):
-    """Send every ``FunFridayScheduledSend`` whose scheduled time has passed.
-
-    Idempotent: rows are marked ``sent_at`` and never re-sent. Runs via
-    Celery Beat (daily 14:30) in dev/testing and via the
-    ``send_due_fun_friday_emails`` management command in production.
-    """
-    from django.utils import timezone
-
-    from core.models import FunFridayScheduledSend
-
-    due_ids = list(
-        FunFridayScheduledSend.objects.filter(sent_at__isnull=True, scheduled_for__lte=timezone.now()).values_list(
-            "id", flat=True
-        )
-    )
-
-    processed = 0
-    sent_total = 0
-    failed = 0
-    for row_id in due_ids:
-        # CLAIM the row before sending, with a conditional UPDATE that only
-        # matches while sent_at IS NULL. Marking it after the send left a
-        # window where two overlapping drains (the immediate .delay() from the
-        # form and the scheduled Beat/Cloud Scheduler run, which both fire at
-        # 14:30) each saw sent_at=None and mailed every parent twice.
-        claimed = FunFridayScheduledSend.objects.filter(id=row_id, sent_at__isnull=True).update(sent_at=timezone.now())
-        if not claimed:
-            continue  # another worker got there first
-        scheduled = FunFridayScheduledSend.objects.get(id=row_id)
-
-        # The row is CLAIMED above, before sending. If the send then raises, the
-        # row stays claimed on purpose: `_send_fun_friday_batch` mails parents
-        # one at a time and may have delivered some already, so releasing the
-        # claim would re-mail them. Losing an announcement is recoverable by
-        # hand; sending it twice to every family is not.
-        #
-        # The `try` is what stops one bad row taking the whole drain down —
-        # previously an exception here aborted the loop and every later due row
-        # silently went unsent, with its claim already written.
-        try:
-            result = _send_fun_friday_batch(
-                recipients=scheduled.recipients,
-                day_name=scheduled.day_name,
-                day_number=scheduled.day_number,
-                month=scheduled.month,
-                start_time=scheduled.start_time,
-                end_time=scheduled.end_time,
-                activity_description=scheduled.activity_description,
-                minimum_age=scheduled.minimum_age,
-                maximum_age=scheduled.maximum_age,
-                meeting_point=scheduled.meeting_point,
-            )
-        except Exception:
-            failed += 1
-            logger.exception(
-                "Fun Friday scheduled send %d failed AFTER being claimed — it will not retry. "
-                "Re-create it from /apps/ if the announcement still needs to go out.",
-                int(row_id),
-            )
-            continue
-
-        processed += 1
-        sent_total += result["sent"]
-
-    if processed or failed:
-        logger.info(
-            "Fun Friday drain: %d scheduled send(s) processed, %d email(s) sent, %d failed",
-            processed,
-            sent_total,
-            failed,
-        )
-    return {"status": "success", "processed": processed, "sent": sent_total, "failed": failed}

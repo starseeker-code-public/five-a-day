@@ -21,7 +21,17 @@ from django.core.management.base import CommandError
 from django.test import override_settings
 
 from billing.models import Payment
-from core.services.drive_service import DriveUploadResult
+from core.models import QAConfiguration
+from core.services import drive_service
+from core.services.drive_service import (
+    TESTING_SUBFOLDER,
+    DriveReceiptService,
+    DriveUploadResult,
+    archive_subfolder,
+    drive_uploads_allowed,
+)
+from core.tasks import upload_receipt_to_drive_task
+from core.views.payments import _queue_payment_receipt
 
 pytestmark = pytest.mark.django_db
 
@@ -52,10 +62,9 @@ class TestUploadTask:
         """The suite runs as development, so the task refuses before it even
         looks at the credentials — a developer clicking "marcar cobrado" must not
         file a fictional receipt into the academy's real archive."""
-        from comms.tasks import upload_receipt_to_drive_task
 
         p = _completed_payment(student_with_parent, student_with_parent.parents.first(), active_enrollment)
-        with patch("core.services.drive_service.get_service") as get_service:
+        with patch("core.tasks.get_drive_service") as get_service:
             get_service.return_value.is_configured.return_value = True
             result = upload_receipt_to_drive_task.apply(args=[p.id]).get()
         assert result["status"] == "disabled"
@@ -63,8 +72,6 @@ class TestUploadTask:
 
     @PRODUCTION
     def test_not_configured_is_a_noop(self, student_with_parent, active_enrollment, site_config):
-        from comms.tasks import upload_receipt_to_drive_task
-
         p = _completed_payment(student_with_parent, student_with_parent.parents.first(), active_enrollment)
         # The suite has no GOOGLE_DRIVE_RECEIPTS_FOLDER_ID → not configured.
         result = upload_receipt_to_drive_task.apply(args=[p.id]).get()
@@ -72,11 +79,9 @@ class TestUploadTask:
 
     @PRODUCTION
     def test_skips_a_non_completed_payment(self, student_with_parent, active_enrollment, site_config):
-        from comms.tasks import upload_receipt_to_drive_task
-
         p = _completed_payment(student_with_parent, student_with_parent.parents.first(), active_enrollment)
         Payment.objects.filter(pk=p.pk).update(payment_status="pending")
-        with patch("core.services.drive_service.get_service") as get_service:
+        with patch("core.tasks.get_drive_service") as get_service:
             get_service.return_value.is_configured.return_value = True
             result = upload_receipt_to_drive_task.apply(args=[p.id]).get()
         assert result["status"] == "skipped"
@@ -84,10 +89,8 @@ class TestUploadTask:
 
     @PRODUCTION
     def test_uploads_a_completed_payment(self, student_with_parent, active_enrollment, site_config):
-        from comms.tasks import upload_receipt_to_drive_task
-
         p = _completed_payment(student_with_parent, student_with_parent.parents.first(), active_enrollment)
-        with patch("core.services.drive_service.get_service") as get_service:
+        with patch("core.tasks.get_drive_service") as get_service:
             svc = get_service.return_value
             svc.is_configured.return_value = True
             svc.upload_receipt.return_value = DriveUploadResult(
@@ -99,9 +102,7 @@ class TestUploadTask:
 
     @PRODUCTION
     def test_missing_payment_is_reported_not_raised(self):
-        from comms.tasks import upload_receipt_to_drive_task
-
-        with patch("core.services.drive_service.get_service") as get_service:
+        with patch("core.tasks.get_drive_service") as get_service:
             get_service.return_value.is_configured.return_value = True
             result = upload_receipt_to_drive_task.apply(args=[999999]).get()
         assert result["status"] == "error"
@@ -112,11 +113,10 @@ class TestUploadTask:
         """The wiring: `_queue_payment_receipt` (fired on every pending→completed
         transition) dispatches BOTH the receipt email and the Drive upload, in
         independent try/excepts."""
-        from core.views.payments import _queue_payment_receipt
 
         p = _completed_payment(student_with_parent, student_with_parent.parents.first(), active_enrollment)
         with (
-            patch("comms.tasks.upload_receipt_to_drive_task.delay") as drive_delay,
+            patch("core.tasks.upload_receipt_to_drive_task.delay") as drive_delay,
             patch("comms.tasks.send_payment_receipt_email_task.delay") as email_delay,
         ):
             with django_capture_on_commit_callbacks(execute=True):
@@ -173,8 +173,6 @@ class TestEnvironmentGate:
 
     @PRODUCTION
     def test_production_always_archives(self):
-        from core.services.drive_service import archive_subfolder, drive_uploads_allowed
-
         assert drive_uploads_allowed() is True
         # No sandbox level: production files receipts straight into the month.
         assert archive_subfolder() == ""
@@ -183,8 +181,6 @@ class TestEnvironmentGate:
     def test_production_ignores_the_qa_toggle(self):
         """The flag is QA's, not a production kill switch — production must keep
         archiving whatever the row on the QA database happens to say."""
-        from core.models import QAConfiguration
-        from core.services.drive_service import drive_uploads_allowed
 
         config = QAConfiguration.get_config()
         config.drive_uploads_enabled = False
@@ -192,9 +188,6 @@ class TestEnvironmentGate:
         assert drive_uploads_allowed() is True
 
     def test_development_never_archives_even_with_the_flag_on(self):
-        from core.models import QAConfiguration
-        from core.services.drive_service import drive_uploads_allowed
-
         config = QAConfiguration.get_config()
         config.drive_uploads_enabled = True
         config.save()
@@ -202,15 +195,10 @@ class TestEnvironmentGate:
 
     @QA_VM
     def test_qa_vm_is_off_by_default(self):
-        from core.services.drive_service import drive_uploads_allowed
-
         assert drive_uploads_allowed() is False
 
     @QA_VM
     def test_qa_vm_archives_into_the_sandbox_when_the_toggle_is_on(self):
-        from core.models import QAConfiguration
-        from core.services.drive_service import TESTING_SUBFOLDER, archive_subfolder, drive_uploads_allowed
-
         config = QAConfiguration.get_config()
         config.drive_uploads_enabled = True
         config.save()
@@ -221,7 +209,6 @@ class TestEnvironmentGate:
     def test_a_database_error_fails_closed(self):
         """The archive is best-effort and never raises, so an unreadable toggle
         must mean "do not write to the academy's archive", not "assume yes"."""
-        from core.services import drive_service
 
         with patch("core.models.QAConfiguration.get_config", side_effect=RuntimeError("db down")):
             assert drive_service.drive_uploads_allowed() is False
@@ -231,8 +218,6 @@ class TestSandboxPath:
     """The QA VM files into `<Mes> YY/testing/`, production into `<Mes> YY/`."""
 
     def _service(self):
-        from core.services.drive_service import DriveReceiptService
-
         svc = DriveReceiptService(base_folder_id="BASE")
         # Pre-seed the credential sentinel so `is_configured()` is True without a
         # real service account; the Drive client itself is stubbed below.
@@ -263,8 +248,6 @@ class TestSandboxPath:
 
     @QA_VM
     def test_qa_path_ends_in_the_testing_folder(self, student_with_parent, active_enrollment, site_config):
-        from core.models import QAConfiguration
-
         config = QAConfiguration.get_config()
         config.drive_uploads_enabled = True
         config.save()

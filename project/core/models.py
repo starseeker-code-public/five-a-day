@@ -66,7 +66,7 @@ class FunFridayScheduledSend(models.Model):
     Replaces the old ``apply_async(eta=...)`` approach, which silently sends
     immediately under ``CELERY_TASK_ALWAYS_EAGER=True`` (production on Cloud
     Run has no Celery worker). Rows are drained by
-    ``comms.tasks.send_due_fun_friday_emails_task`` — via Celery Beat in
+    ``core.tasks.send_due_fun_friday_emails_task`` — via Celery Beat in
     dev/testing and via the ``send_due_fun_friday_emails`` management command
     (Cloud Scheduler → Cloud Run Job) in production.
     """

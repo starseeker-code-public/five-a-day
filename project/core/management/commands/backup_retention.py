@@ -33,8 +33,11 @@ which is exactly the class of bug the birthday task had.
 import logging
 import time
 
+import google.auth
+import httpx
 from django.core.management.base import BaseCommand, CommandError
 from django.utils import timezone
+from google.auth.transport.requests import Request
 
 logger = logging.getLogger(__name__)
 
@@ -58,9 +61,6 @@ class SqlAdminClient:
     """
 
     def __init__(self):
-        import google.auth
-        from google.auth.transport.requests import Request
-
         self._credentials, _ = google.auth.default(scopes=[_SCOPE])
         self._auth_request = Request()
 
@@ -70,8 +70,6 @@ class SqlAdminClient:
         return {"Authorization": f"Bearer {self._credentials.token}"}
 
     def _call(self, method: str, url: str, **kwargs):
-        import httpx
-
         response = httpx.request(method, url, headers=self._headers(), timeout=30.0, **kwargs)
         response.raise_for_status()
         return response.json() if response.content else {}

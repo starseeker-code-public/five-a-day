@@ -8,13 +8,14 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from core.views.testing_tools import _git_info
+
 pytestmark = pytest.mark.django_db
 
 
 class TestGitInfo:
     def test_git_info_success_path(self):
         """Non-zero returncode branch (lines 35-45)."""
-        from core.views.testing_tools import _git_info
 
         with patch("core.views.testing_tools.subprocess.run") as mock_run:
             # First call returns a valid commit format
@@ -27,8 +28,6 @@ class TestGitInfo:
         assert info["commit_id_full"] == "sha1"
 
     def test_git_info_log_returncode_nonzero(self):
-        from core.views.testing_tools import _git_info
-
         with patch("core.views.testing_tools.subprocess.run") as mock_run:
             mock_log = MagicMock(returncode=1, stdout="")
             mock_run.return_value = mock_log

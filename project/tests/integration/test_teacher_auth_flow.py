@@ -5,7 +5,7 @@ These tests simulate the testing/production environment (non-development)
 where login goes through Django's ModelBackend using Teacher email+password.
 """
 
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from django.contrib.auth import get_user_model
@@ -312,7 +312,6 @@ class TestLogoutDjangoSession:
 class TestOAuthCreatesSuperuser:
     def test_oauth_callback_creates_django_user(self, client, monkeypatch):
         """Successful OAuth should create a Django superuser and log them in."""
-        from unittest.mock import MagicMock
 
         monkeypatch.setenv("GOOGLE_CLIENT_ID", "abc")
         monkeypatch.setenv("GOOGLE_CLIENT_SECRET", "xyz")
@@ -354,7 +353,6 @@ class TestOAuthCreatesSuperuser:
 
     def test_oauth_promotes_existing_non_staff_user(self, client, monkeypatch):
         """If a User exists with the OAuth email but isn't superuser, OAuth promotes them."""
-        from unittest.mock import MagicMock
 
         User.objects.create_user(
             username="promoted@example.com",
@@ -396,7 +394,6 @@ class TestOAuthCreatesSuperuser:
 
     def test_oauth_links_existing_teacher(self, client, monkeypatch):
         """If a Teacher exists with the OAuth email, the User gets linked to it."""
-        from unittest.mock import MagicMock
 
         monkeypatch.setenv("GOOGLE_CLIENT_ID", "abc")
         monkeypatch.setenv("GOOGLE_CLIENT_SECRET", "xyz")

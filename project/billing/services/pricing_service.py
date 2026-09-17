@@ -3,6 +3,7 @@ from decimal import ROUND_HALF_UP, Decimal
 from types import SimpleNamespace
 
 from billing.constants import SEPTEMBER_CLASSES_START_DAY
+from billing.models import SiteConfiguration
 
 # The money math lives in `billing.money`, a leaf module that imports no models.
 # `billing.models` imports these from there too — routing them through this
@@ -17,6 +18,7 @@ from billing.money import (
     quarterly_price_from_monthly,
     round_money,
 )
+from billing.services.payment_service import PaymentService
 
 __all__ = [
     "MONEY_QUANTUM",
@@ -62,8 +64,6 @@ class PricingService:
 
     @staticmethod
     def get_config():
-        from billing.models import SiteConfiguration
-
         return SiteConfiguration.get_config()
 
     @staticmethod
@@ -140,7 +140,6 @@ class PricingService:
         Imported lazily: `payment_service` imports `billing.models` at module
         level, and this module must stay importable from there.
         """
-        from billing.services.payment_service import PaymentService
 
         carrier = SimpleNamespace(
             schedule_type=schedule_type,
@@ -231,8 +230,6 @@ class PricingService:
 
         price = PricingService._standard_period_price
         if case == "september":
-            from billing.services.payment_service import PaymentService
-
             day = PricingService._september_start_day(september_start_day)
             year = date.today().year  # September always has 30 days; the year is immaterial
             fraction = PaymentService.proration_fraction(date(year, 9, day), 9, year)

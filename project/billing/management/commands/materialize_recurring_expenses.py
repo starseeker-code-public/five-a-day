@@ -13,6 +13,11 @@ Usage:
 
 from django.core.management.base import BaseCommand, CommandError
 
+from billing.tasks import (
+    materialize_recurring_expenses_daily_task,
+    materialize_recurring_expenses_task,
+)
+
 
 class Command(BaseCommand):
     help = "Materialize recurring expense templates (monthly by default, weekly/yearly with --daily)"
@@ -30,11 +35,6 @@ class Command(BaseCommand):
         parser.add_argument("--date", type=str, default=None, help="ISO date for the --daily run. Defaults to today.")
 
     def handle(self, *args, **options):
-        from billing.tasks import (
-            materialize_recurring_expenses_daily_task,
-            materialize_recurring_expenses_task,
-        )
-
         if options["daily"]:
             if options["month"] or options["year"]:
                 raise CommandError("--month/--year only apply to the monthly run (omit --daily)")

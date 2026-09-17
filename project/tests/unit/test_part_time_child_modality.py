@@ -11,14 +11,18 @@ to `adult_group` before the plan is read at all, and the academy picks this band
 by hand in a handful of cases a year.
 """
 
+import json
 from decimal import Decimal
 
 import pytest
+from django.urls import reverse
 
 from billing.constants import PART_TIME_CHILD_MONTHLY_FEE, SCHEDULE_TYPE_CHOICES
 from billing.forms import ENROLLMENT_PLAN_CHOICES
-from billing.money import monthly_fee_for, period_base_amount, quarterly_price_from_monthly
+from billing.models import SiteConfiguration
+from billing.money import monthly_fee_for, period_base_amount, quarterly_price_from_monthly, round_money
 from billing.services.enrollment_service import EnrollmentService
+from billing.services.pricing_service import PricingService
 
 pytestmark = pytest.mark.django_db
 
@@ -84,7 +88,6 @@ class TestDiscountsLayerOnTopOfIt:
         through `_standard_period_price`, i.e. through the generator's own
         arithmetic.
         """
-        from billing.services.pricing_service import PricingService
 
         amount = PricingService._standard_period_price(
             site_config, months=[10], schedule_type="part_time_child", cheque=True
@@ -92,9 +95,6 @@ class TestDiscountsLayerOnTopOfIt:
         assert amount == site_config.part_time_child_monthly_fee - site_config.language_cheque_discount
 
     def test_the_sibling_discount_comes_off_it(self, site_config):
-        from billing.money import round_money
-        from billing.services.pricing_service import PricingService
-
         amount = PricingService._standard_period_price(
             site_config, months=[10], schedule_type="part_time_child", sibling=True
         )
@@ -104,20 +104,12 @@ class TestDiscountsLayerOnTopOfIt:
         assert amount == expected
 
     def test_june_discounts_it_like_any_other_child_band(self, site_config):
-        from billing.services.pricing_service import PricingService
-
         amount = PricingService._standard_period_price(site_config, months=[6], schedule_type="part_time_child")
         assert amount == site_config.part_time_child_monthly_fee - site_config.june_discount
 
 
 class TestItIsEditableFromManagement:
     def test_the_price_endpoint_accepts_it(self, authenticated_client, site_config):
-        import json
-
-        from django.urls import reverse
-
-        from billing.models import SiteConfiguration
-
         response = authenticated_client.post(
             reverse("update_site_config"),
             data=json.dumps({"part_time_child_monthly_fee": "30.50"}),
@@ -127,7 +119,5 @@ class TestItIsEditableFromManagement:
         assert SiteConfiguration.get_config(refresh=True).part_time_child_monthly_fee == Decimal("30.50")
 
     def test_the_management_page_renders_the_input(self, authenticated_client, site_config):
-        from django.urls import reverse
-
         page = authenticated_client.get(reverse("management")).content.decode()
         assert 'name="part_time_child_monthly_fee"' in page

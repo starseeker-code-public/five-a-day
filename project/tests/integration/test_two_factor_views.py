@@ -5,9 +5,13 @@ from unittest.mock import patch
 import pyotp
 import pytest
 from django.contrib.auth import get_user_model
+from django.core.management import call_command
+from django.core.management.base import CommandError
 from django.urls import reverse
 
 from core.services import two_factor_service as tfs
+from core.views.auth import _needs_two_factor
+from core.views.two_factor import _PENDING_USER_SESSION_KEY
 
 pytestmark = pytest.mark.django_db
 
@@ -91,16 +95,50 @@ class TestManageView:
         assert response.status_code == 200
 
     def test_rotate_action_regenerates_codes(self, admin_client, admin_teacher_with_user):
+        """NOTE: this posts NO code, and that is the behaviour today — see
+        `test_rotating_backup_codes_requires_a_current_code` directly below,
+        which states the property this one currently contradicts. Keep them
+        together: when rotate learns to re-authenticate, this test has to start
+        sending a code too.
+        """
+
         teacher, _ = admin_teacher_with_user
         tfs.begin_enrolment(teacher)
         teacher.two_factor_enabled = True
         teacher.save()
+        teacher.refresh_from_db()
         old_hashes = list(teacher.two_factor_backup_codes)
-        response = admin_client.post(reverse("two_factor_manage"), {"action": "rotate"})
+        code = pyotp.TOTP(teacher.two_factor_secret).now()
+        response = admin_client.post(reverse("two_factor_manage"), {"action": "rotate", "code": code})
         assert response.status_code == 200
         assert len(response.context["new_backup_codes"]) == 8
         teacher.refresh_from_db()
         assert teacher.two_factor_backup_codes != old_hashes
+
+    def test_rotating_backup_codes_requires_a_current_code(self, admin_client, admin_teacher_with_user):
+        """Rotating is at least as sensitive as disabling.
+
+        `disable` takes the second factor away — loud, and the account still
+        needs a password. `rotate` hands the caller eight long-lived codes that
+        each bypass the second factor from then on, and leaves 2FA looking
+        enabled. An attacker holding a session cookie wants rotate, not disable.
+
+        This is the property `test_disable_requires_a_current_code` states for
+        the sibling action, applied to this one.
+        """
+        teacher, _ = admin_teacher_with_user
+        tfs.begin_enrolment(teacher)
+        teacher.two_factor_enabled = True
+        teacher.save()
+        teacher.refresh_from_db()
+        old_hashes = list(teacher.two_factor_backup_codes)
+
+        admin_client.post(reverse("two_factor_manage"), {"action": "rotate"})  # no code
+
+        teacher.refresh_from_db()
+        assert teacher.two_factor_backup_codes == old_hashes, (
+            "rotate issued new backup codes without re-authenticating the caller"
+        )
 
     def test_disable_requires_a_current_code(self, admin_client, admin_teacher_with_user):
         """Disabling without a code is refused — otherwise a stolen session
@@ -117,8 +155,6 @@ class TestManageView:
         assert teacher.two_factor_secret != ""
 
     def test_disable_action_wipes_with_valid_code(self, admin_client, admin_teacher_with_user):
-        import pyotp
-
         teacher, _ = admin_teacher_with_user
         tfs.begin_enrolment(teacher)
         teacher.two_factor_enabled = True
@@ -161,8 +197,6 @@ class TestLoginGateFlow:
         assert client.session.get("is_authenticated") is None
 
     def test_login_with_2fa_redirects_to_verify(self, client, admin_teacher_with_user):
-        from core.views.auth import _needs_two_factor
-
         teacher, user = admin_teacher_with_user
         tfs.begin_enrolment(teacher)
         teacher.two_factor_enabled = True
@@ -232,8 +266,6 @@ class TestLoginGateFlow:
 
 
 def _stage_pending_2fa_via_session(session, user):
-    from core.views.two_factor import _PENDING_USER_SESSION_KEY
-
     session[_PENDING_USER_SESSION_KEY] = user.id
     session.save()
 
@@ -244,16 +276,11 @@ class TestResetTwoFactorCommand:
         teacher.two_factor_enabled = True
         teacher.save()
 
-        from django.core.management import call_command
-
         call_command("reset_two_factor", teacher.email)
         teacher.refresh_from_db()
         assert teacher.two_factor_enabled is False
         assert teacher.two_factor_secret == ""
 
     def test_unknown_email_errors(self):
-        from django.core.management import call_command
-        from django.core.management.base import CommandError
-
         with pytest.raises(CommandError):
             call_command("reset_two_factor", "nobody@nowhere.com")

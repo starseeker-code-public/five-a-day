@@ -56,8 +56,14 @@ class SmsService:
     def _get_client(self):
         if self._client is not None:
             return self._client
+        # NOT a top-level import: `twilio` is deliberately absent from
+        # pyproject.toml — SMS is opt-in and the package is not installed in the
+        # image. At module level this would make the whole `comms` app
+        # unimportable (every email task with it) on an install that simply does
+        # not use SMS. Here it degrades to a clear error on the one call path
+        # that actually needs it.
         try:
-            from twilio.rest import Client  # lazy import (optional dep)
+            from twilio.rest import Client
         except ImportError as e:
             raise RuntimeError("twilio package is not installed — run `uv add twilio`") from e
         self._client = Client(self.account_sid, self.auth_token)

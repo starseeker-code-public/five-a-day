@@ -6,8 +6,8 @@ from unittest.mock import patch
 import pytest
 from django.utils import timezone
 
-from comms.tasks import send_due_fun_friday_emails_task
 from core.models import FunFridayScheduledSend
+from core.tasks import send_due_fun_friday_emails_task
 
 pytestmark = pytest.mark.django_db
 
@@ -54,7 +54,7 @@ class TestSendDueFunFridayEmailsTask:
     def test_sends_due_rows_and_marks_sent(self):
         due = _make_scheduled(timezone.now() - timedelta(minutes=5))
         with patch(
-            "comms.tasks._send_fun_friday_batch", return_value={"status": "success", "sent": 1, "total": 1}
+            "core.tasks._send_fun_friday_batch", return_value={"status": "success", "sent": 1, "total": 1}
         ) as mock_batch:
             result = send_due_fun_friday_emails_task.apply().get()
         assert result == {"status": "success", "processed": 1, "sent": 1, "failed": 0}
@@ -77,7 +77,7 @@ class TestSendDueFunFridayEmailsTask:
                 raise RuntimeError("smtp down")
             return {"status": "success", "sent": 1, "total": 1}
 
-        with patch("comms.tasks._send_fun_friday_batch", side_effect=flaky):
+        with patch("core.tasks._send_fun_friday_batch", side_effect=flaky):
             result = send_due_fun_friday_emails_task.apply().get()
 
         assert len(calls) == 2, "the drain must continue past the failing row"
@@ -91,7 +91,7 @@ class TestSendDueFunFridayEmailsTask:
 
     def test_skips_future_rows(self):
         future = _make_scheduled(timezone.now() + timedelta(days=2))
-        with patch("comms.tasks._send_fun_friday_batch") as mock_batch:
+        with patch("core.tasks._send_fun_friday_batch") as mock_batch:
             result = send_due_fun_friday_emails_task.apply().get()
         assert result["processed"] == 0
         assert not mock_batch.called
@@ -101,7 +101,7 @@ class TestSendDueFunFridayEmailsTask:
     def test_idempotent_never_resends(self):
         _make_scheduled(timezone.now() - timedelta(minutes=5))
         with patch(
-            "comms.tasks._send_fun_friday_batch", return_value={"status": "success", "sent": 1, "total": 1}
+            "core.tasks._send_fun_friday_batch", return_value={"status": "success", "sent": 1, "total": 1}
         ) as mock_batch:
             send_due_fun_friday_emails_task.apply().get()
             result = send_due_fun_friday_emails_task.apply().get()

@@ -55,7 +55,7 @@ Dev environment (`DJANGO_ENV=development`) keeps using the legacy env-var basic-
 ## Admin
 
 `*/admin.py` is excluded from coverage, which is how rules rot there — the five v1.27.1 fixes below
-are pinned by `tests/integration/test_students_periphery_fixes.py`, alongside the earlier sweep in
+are pinned by `tests/integration/test_students_app_guards.py`, alongside the earlier sweep in
 `tests/integration/test_admin_hardening.py`.
 
 - `StudentAdminForm` (v1.27.1) — `StudentAdmin` set no `form`, so the admin's auto-generated

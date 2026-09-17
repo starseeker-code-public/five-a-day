@@ -1,4 +1,9 @@
-"""Fixes around the students app's periphery — forms, admin, audit label.
+"""Rules the students app enforces on its own writes — forms, admin and indexes.
+
+The group cap, the portal-invitation guard, the duplicate-email refusal, the
+PII-minimised audit label, the optional birth date, the group-count
+annotations and the `UPPER(email)` index. Each is enforced in code the rest
+of the suite reaches only indirectly, which is why they needed their own file.
 
 Five separate bugs, all in code the rest of the suite reaches only indirectly:
 
@@ -21,11 +26,14 @@ from datetime import date
 
 import pytest
 from django.contrib.auth.models import User
+from django.contrib.messages import get_messages
 from django.db import connection
 from django.db.models import Count, Q
 from django.urls import reverse
 
 from core.audit_models import AuditLog
+from core.services.portal_access_service import send_portal_invitation_once
+from core.views.waiting_list import group_capacity_summary
 from students.forms import ParentForm, StudentForm
 from students.models import Group, Parent, Student
 
@@ -283,7 +291,6 @@ class TestResendPortalInvitationStampsTheGuard:
 
     def test_a_later_sibling_enrolment_does_not_re_invite(self, admin_ui, parent, rf):
         """`send_portal_invitation_once` must still refuse after a resend."""
-        from core.services.portal_access_service import send_portal_invitation_once
 
         self._resend(admin_ui, parent)
         parent.refresh_from_db()
@@ -399,8 +406,6 @@ class TestDuplicatePortalEmail:
         assert form.email_collides_with_other_family is False
 
     def test_the_create_view_surfaces_the_warning(self, authenticated_client, parent):
-        from django.contrib.messages import get_messages
-
         response = authenticated_client.post(
             reverse("parent_create"),
             {
@@ -522,8 +527,6 @@ class TestGroupCountsPreferAnnotations:
     one; the properties now read its annotations."""
 
     def test_reading_all_four_off_an_annotated_row_is_free(self, group, django_assert_num_queries):
-        from core.views.waiting_list import group_capacity_summary
-
         _fill(group, 1)
         _waiting(group)
 
@@ -537,8 +540,6 @@ class TestGroupCountsPreferAnnotations:
             assert annotated.is_full is False
 
     def test_the_summary_values_are_unchanged(self, group):
-        from core.views.waiting_list import group_capacity_summary
-
         _fill(group, 1)
         _waiting(group)
 

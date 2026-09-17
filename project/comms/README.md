@@ -79,7 +79,7 @@ Generic email sending service with HTML template rendering and inline images.
 > `fail_silently=False`, so a TCP/TLS/AUTH failure propagates — in a request path that is a 500
 > where the per-message loop would have reported "N no pudieron enviarse". Any batch must wrap the
 > open in its own try/except; `core.views.app_forms._mass_send` does it for every mass mail in the
-> app, and `comms.tasks._send_fun_friday_batch` does it for the drain task (whose row is already
+> app, and `core.tasks._send_fun_friday_batch` does it for the drain task (whose row is already
 > **claimed** by the time it sends, so an unwrapped failure would lose the announcement outright).
 
 `LOGO_PATH` / `_get_logo_path()` were **removed** in v1.27.1 — nothing referenced either, and
@@ -161,29 +161,16 @@ can be coerced (an integer id) or simply left out of the record, prefer that.
 
 All tasks have retry logic (3 retries, exponential backoff):
 
-**`dispatch_payment_completed(payment_id)`** (v1.29.1, a plain function, not a task) — the one
-statement of *what happens when money lands*: the receipt email and the Drive archive, each in
-its own `try`. There are two completion paths — the admin marking a payment cobrado and the
-Stripe webhook — and each carried its own copy of this pair of dispatches, so a third side
-effect (or a third completion path) would have had to be written twice to be right and once to
-be silently half-wrong. Neither dispatch may raise, because production runs
-`CELERY_TASK_ALWAYS_EAGER`: the "queue" is this call stack, inside the request that recorded the
-money.
-
-**`dispatch_payment_completed_on_commit(payment_id)`** (v1.29.5) — the same dispatch, deferred to
-`transaction.on_commit`, and the entry point every caller inside a transaction must use: eager
-execution re-reads the payment by id, which a not-yet-committed write is invisible to, so an
-inline call inside a block that later rolls back emails a receipt for money the database does not
-record. `transaction.on_commit` runs the callback immediately when there is no open transaction,
-so callers outside one behave exactly as before. It lives **here**, beside the dispatch it defers,
-rather than in `core/views/payments.py` where it started life as the private
-`_queue_payment_receipt`: `billing/admin.py` is the app's second completion path and was reaching
-into a view module for that private name to get its receipts sent — which is precisely how a
-completion side effect gets added to one path and silently missed on the other. That view module
-keeps a one-line delegate under the old name (four call sites, one lazy import).
-
-Consequence for tests: under the plain `django_db` fixture on_commit callbacks never fire, so
-anything asserting `mail.outbox` needs `django_capture_on_commit_callbacks(execute=True)`.
+**Payment-completion dispatch moved to `core/tasks.py` in v1.29.9.**
+`dispatch_payment_completed(payment_id)` and `dispatch_payment_completed_on_commit(payment_id)`
+are still the one statement of *what happens when money lands* — the receipt email and the Drive
+archive, each in its own `try`, neither allowed to raise (production runs
+`CELERY_TASK_ALWAYS_EAGER`, so the "queue" is the request that recorded the money). They simply no
+longer live here: one of the two side effects is the Drive archive, and `core.services.drive_service`
+is a **core** service reading a **core** model, so keeping the dispatcher in `comms` forced a
+module-level `comms → core` import against the dependency flow. `core` may import `comms`, so the
+dispatcher reaches both from there. The receipt **email** task below is unchanged and still lives
+here. See `project/core/README.md`.
 
 | Task | Purpose | Trigger |
 | ---- | ------- | ------- |
@@ -194,13 +181,14 @@ anything asserting `mail.outbox` needs `django_capture_on_commit_callbacks(execu
 | `send_payment_reminder_sms_task` | Twilio SMS reminder for one payment — opt-in parents only (v1.8) | Called from the reminder batch |
 | `send_monthly_report_task` | Admin monthly report. With no explicit recipient it now (v1.26.8) goes to **both** `SUPPORT_EMAIL` and `DEFAULT_FROM_EMAIL`, deduped — the academy reads it in two inboxes — and is skipped only when neither is set. `--recipient` still overrides both. v1.27.1 uses `timezone.localdate()` instead of `date.today()`: the container runs UTC, so a scheduled run at 00:xx or a late-evening run in CEST read the **wrong month** and the "informe mensual" then aggregated a month nobody asked for | Celery Beat (28th, 20:00) / `send_monthly_report` command |
 | `send_parent_temporary_password_task` | Generates, hashes onto `Parent.temporary_password` and emails a one-off portal password — the invitation when the record is created, and the recovery from `¿Has olvidado tu contraseña?` (`reset=True` swaps the copy). The plaintext is generated **inside** the task, never passed as an argument: task arguments are serialised into the broker and printed in task logs (v1.9, reworked v1.27) | `ParentCreateView`, parent-portal recovery form |
-| `send_payment_receipt_email_task` | Emails a receipt PDF for a completed payment (v1.11). v1.29.1 `select_related`s the full `_RECEIPT_RELATIONS` set the receipt's discount breakdown reads (`enrollment__enrollment_type`, `enrollment__student`) — without them each send paid 3 extra lazy queries, which production (eager Celery) spends inside the completion request | Payment completion / Stripe webhook |
-| `upload_receipt_to_drive_task` | Best-effort: archives a completed payment's receipt PDF to Google Drive (v1.29.0, `core.services.drive_service`); never raises, no-op unless `GOOGLE_DRIVE_RECEIPTS_FOLDER_ID` is set. Shares `_RECEIPT_RELATIONS` with the receipt-email task. **v1.29.5: a no-op outside PRODUCTION too** — it asks `drive_uploads_allowed()` first (the same gate the service enforces) so a disallowed environment does not even load the payment or render its PDF, which under eager Celery is work done inside the "marcar cobrado" request. On the QA VM with `/testing/`'s "Recibos a Drive" toggle on, the receipt is filed into the month's `testing/` subfolder | Payment completion / Stripe webhook |
+| `send_payment_receipt_email_task` | Emails a receipt PDF for a completed payment (v1.11). v1.29.1 `select_related`s the full `RECEIPT_RELATIONS` set (moved to `billing/constants.py` in v1.29.9, since the Drive task that shares it now lives in `core.tasks` and the two may not import each other, while both may import billing) the receipt's discount breakdown reads (`enrollment__enrollment_type`, `enrollment__student`) — without them each send paid 3 extra lazy queries, which production (eager Celery) spends inside the completion request | Payment completion / Stripe webhook |
 | `send_generic_email_task` | Generic email dispatcher | Manual |
 | `send_enrollment_confirmation_task` | Enrollment confirmation with attachments (uses `student.gender` field). v1.27.1 reads `core.constants.MESES_ES` instead of its own private `MONTHS_ES` copy — two lists of Spanish month names under different names is how two spellings of a month end up in the same product | On enrollment |
-| `send_due_fun_friday_emails_task` | Drains due `FunFridayScheduledSend` rows (idempotent — rows are marked `sent_at`). **The only Fun Friday send path** — manual sends persist a row (drained immediately if its slot has passed) so the claim guard always applies. | Celery Beat (daily 14:30) / `send_due_fun_friday_emails` command |
 
-`_send_fun_friday_batch()` is the shared loop behind both Fun Friday paths and, since v1.27.1, uses
+`_send_fun_friday_batch()` **moved to `core/tasks.py` in v1.29.9** alongside
+`send_due_fun_friday_emails_task`, because the drain reads the `FunFridayScheduledSend` **core**
+model directly — the second of the two `comms → core` imports that release inverted. It is
+unchanged otherwise, and since v1.27.1 uses
 **one SMTP session** for the whole announcement — this is the academy's largest single batch (every
 family) and it was paying a handshake per address. The open is wrapped, because `open()` is not
 `fail_silently` and the drain task's row is already **claimed** by the time it sends: an unwrapped
@@ -268,8 +256,11 @@ Run Jobs (or plain cron) can trigger it. See `DEPLOYMENT.md` for the schedule ta
 python manage.py send_birthday_emails            # daily 08:00 batch
 python manage.py send_payment_reminders          # weekly Monday 09:00 batch
 python manage.py send_monthly_report             # 28th 20:00 (--recipient overrides SUPPORT_EMAIL)
-python manage.py send_due_fun_friday_emails      # daily 14:30 — drains due FunFridayScheduledSend rows
 ```
+
+`send_due_fun_friday_emails` moved to **`core/management/commands/`** in v1.29.9 with the task it
+wraps. The command NAME is unchanged — Django discovers commands across every installed app — so
+the Cloud Scheduler job and `DEPLOYMENT.md`'s schedule table need no change.
 
 ## URL Patterns (comms/urls.py)
 
@@ -287,10 +278,10 @@ Tests for comms services live in `project/tests/`:
 | `test_tasks.py` | The core email tasks called synchronously with `email_service` mocked |
 | `test_new_email_tasks.py` | `send_parent_temporary_password_task` (v1.9, reworked v1.27 — both the invitation and the reset flavour, and the plaintext never crossing the task boundary) + `send_payment_receipt_email_task` (v1.11) |
 | `test_sms_service.py` / `test_sms_tasks.py` | `SmsService` configuration/send/opt-in gate, and the SMS reminder task |
-| `test_email_bug_hunt_fixes.py` | Round-2 email regressions — templates, image guard, `on_commit`, all-parents birthday, timezone |
+| `test_email_template_regressions.py` | Round-2 email regressions — templates, image guard, `on_commit`, all-parents birthday, timezone |
 | `test_fun_friday_scheduling.py` | `FunFridayScheduledSend.is_due` + the idempotent drain task |
 | `test_beat_commands.py` | The Beat-task management-command wrappers |
-| `test_mass_mail_fixes.py` *(integration)* | The v1.27.1 mass-mail rework, each test named after the wrong behaviour it pins shut: waiting-list families receiving every mass mail, the Fun Friday counter/recipients/banner being three different numbers, no address deduplication, an SMTP `open()` 500ing the request instead of reporting a failure, a Fun Friday announcement lost to a `DataError` on a seconds-precision time (and a double submit scheduling it twice), "34€ euros", the PDF tables drawn past the right edge of the page, and the fiscal certificate merging same-named siblings into one subtotal |
+| `test_mass_mail.py` *(integration)* | The v1.27.1 mass-mail rework, each test named after the wrong behaviour it pins shut: waiting-list families receiving every mass mail, the Fun Friday counter/recipients/banner being three different numbers, no address deduplication, an SMTP `open()` 500ing the request instead of reporting a failure, a Fun Friday announcement lost to a `DataError` on a seconds-precision time (and a double submit scheduling it twice), "34€ euros", the PDF tables drawn past the right edge of the page, and the fiscal certificate merging same-named siblings into one subtotal |
 
 Run with `make test` (requires Docker + PostgreSQL running).
 

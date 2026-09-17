@@ -1,9 +1,11 @@
 from django import forms
+from django.conf import settings
 from django.contrib import admin, messages
 from django.db.models import Count, Q
 from django.utils import timezone
 
 from core.admin_purge import PurgeWithHistoryMixin
+from core.services.portal_access_service import send_portal_temporary_password
 from students.forms import (
     PORTAL_EMAIL_COLLISION_ERROR,
     PORTAL_EMAIL_COLLISION_WARNING,
@@ -376,10 +378,6 @@ class ParentAdmin(PurgeWithHistoryMixin, admin.ModelAdmin):
 
     @admin.action(description="Reenviar invitación al portal (nueva contraseña temporal)")
     def resend_portal_invitation(self, request, queryset):
-        from django.conf import settings
-
-        from core.services.portal_access_service import send_portal_temporary_password
-
         # PARENT PORTAL KILL SWITCH — see settings.PARENT_PORTAL_ENABLED.
         # Bail out BEFORE the `portal_invite_sent_at` stamp below: the sender
         # already refuses while the portal is off, but this action stamps first,

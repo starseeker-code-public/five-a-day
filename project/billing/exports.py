@@ -10,6 +10,7 @@ from datetime import datetime
 import openpyxl
 from django.utils import timezone
 from openpyxl.styles import Alignment, Font, PatternFill
+from openpyxl.utils import get_column_letter
 
 from billing.models import Enrollment, Payment
 from core.utils import xlsx_safe_append
@@ -35,8 +36,6 @@ _AUTO_WIDTH_SAMPLE_ROWS = 200
 
 
 def _auto_width(ws):
-    from openpyxl.utils import get_column_letter
-
     # Cap at the ACTUAL content — `iter_rows(max_row=N)` would otherwise
     # materialise empty rows up to N and inflate the sheet's max_row.
     sample_limit = min(_AUTO_WIDTH_SAMPLE_ROWS + 1, ws.max_row)  # +1 for the header row
