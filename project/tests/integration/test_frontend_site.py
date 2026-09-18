@@ -30,6 +30,31 @@ def _frontend_source(*parts: str) -> str:
     return (Path(settings.FRONTEND_DIR).joinpath(*parts)).read_text(encoding="utf-8")
 
 
+@pytest.fixture(autouse=True)
+def _spa_shell(tmp_path, settings):
+    """Guarantee there is an index.html to serve, without needing a real build.
+
+    `frontend/dist` is a BUILD ARTEFACT: gitignored, produced by
+    `make frontend-build` locally and by the Dockerfile's node stage in CI. The
+    `Tests` job has no Node, so on a fresh clone and in CI the file is simply
+    absent and every serving test 404s — which is what happened on the first
+    push of v1.30.0: green locally, red in CI.
+
+    What these tests are about is Django's serving behaviour — the routing, the
+    caching header, the CSRF cookie — not the contents of the bundle, so a stub
+    is the honest subject. It is written to a per-test `tmp_path` and pointed at
+    with the `settings` fixture rather than into the real tree: the suite runs
+    under `xdist -n auto`, and workers sharing one filesystem raced on creating
+    and deleting a shared stub. A real build is used as-is when present.
+    """
+    if (Path(settings.FRONTEND_DIST_DIR) / "index.html").exists():
+        yield
+        return
+    (tmp_path / "index.html").write_text("<!doctype html><title>stub</title><div id=root></div>", encoding="utf-8")
+    settings.FRONTEND_DIST_DIR = str(tmp_path)
+    yield
+
+
 class TestSpaRoutesMatchReact:
     """`SPA_ROUTES` is a hand-kept mirror of App.jsx, so it is machine-checked.
 
@@ -105,6 +130,19 @@ class TestContactForm:
     they believe was delivered.
     """
 
+    @pytest.fixture(autouse=True)
+    def _recipient(self, settings):
+        """Pin the recipient instead of inheriting it from the environment.
+
+        It defaults to DEFAULT_FROM_EMAIL, which is EMAIL_HOST_USER, which is
+        empty in CI — so without this the endpoint correctly answers 503 and
+        every test below fails for a reason unrelated to the code under test.
+        Same shape as the `_test_send_recipients` gotcha in CLAUDE.md: a test
+        that inherits half its configuration from the developer's own `.env`
+        passes locally and fails in CI, or the reverse.
+        """
+        settings.CONTACT_FORM_RECIPIENT = "academia@example.com"
+
     @staticmethod
     def _payload(**overrides):
         data = {
@@ -130,10 +168,15 @@ class TestContactForm:
         assert len(mail.outbox) == 1
         assert mail.outbox[0].to == [settings.CONTACT_FORM_RECIPIENT]
 
-    def test_it_goes_to_the_academy_not_to_support(self):
+    def test_it_defaults_to_the_academy_not_to_support(self):
         """SUPPORT_EMAIL is the developer's channel (QA tickets, error alerts);
-        a prospective family asking about classes is the academy's business."""
-        assert settings.CONTACT_FORM_RECIPIENT == settings.DEFAULT_FROM_EMAIL
+        a prospective family asking about classes is the academy's business.
+
+        Asserted against the WIRING in settings.py rather than the resolved
+        value, which is environment-dependent — and empty in CI.
+        """
+        source = (Path(settings.BASE_DIR) / "project" / "settings.py").read_text(encoding="utf-8")
+        assert 'CONTACT_FORM_RECIPIENT = os.getenv("CONTACT_FORM_RECIPIENT") or DEFAULT_FROM_EMAIL' in source
 
     def test_the_email_carries_every_submitted_field(self, client):
         client.post(reverse("submit_contact_form"), self._payload())

@@ -15,7 +15,7 @@ Built to centralize student records, automate billing cycles, and streamline par
 ### Project Status
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v1.30.0-brightgreen?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-v1.30.1-brightgreen?style=flat-square" alt="Version">
   &nbsp;|&nbsp;
   <a href="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml?query=branch%3Amain"><img src="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml/badge.svg?branch=main&style=flat-square" alt="CI main"></a>
   &nbsp;|&nbsp;
@@ -36,9 +36,9 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 | Version | Date | Description |
 |---------|------|-------------|
-| **v1.30.0** | 2026-09-19 | Public React site at `/`, app moved to `/app/`, responsive pass |
+| **v1.30.1** | 2026-09-19 | CI: the new frontend tests no longer depend on a local build |
+| v1.30.0 | 2026-09-19 | Public React site at `/`, app moved to `/app/`, responsive pass |
 | v1.29.12 | 2026-09-18 | QA dashboard cleanup; testing deploy no longer fails silently |
-| v1.29.11 | 2026-09-18 | CodeQL: side-effect hoisted out of an assert |
 
 ---
 
@@ -140,8 +140,19 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 ## Version History
 
-<details id="v1300" open>
-<summary><strong>v1.30.0 — The public site moves in, and the app moves over (current)</strong></summary>
+<details id="v1301" open>
+<summary><strong>v1.30.1 — CI: the new frontend tests no longer depend on a local build (current)</strong></summary>
+
+**Testing**
+
+- The v1.30.0 frontend tests passed locally and failed in CI for two environment reasons, both mine: `CONTACT_FORM_RECIPIENT` resolves to `DEFAULT_FROM_EMAIL` -> `EMAIL_HOST_USER`, which is empty in CI (the endpoint correctly answered 503), and `frontend/dist/index.html` is a gitignored build artefact the `Tests` job has no Node to produce.
+- The recipient is now pinned with the `settings` fixture, and the SPA shell is stubbed into a per-test `tmp_path` - a shared on-disk stub raced between `xdist` workers.
+- Verified by deleting `frontend/dist` and running the whole suite, which is the check that should have run before the first push.
+
+</details>
+
+<details id="v1300">
+<summary><strong>v1.30.0 — The public site moves in, and the app moves over</strong></summary>
 
 **The origin root is now the academy's public site**
 
