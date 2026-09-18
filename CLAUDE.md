@@ -4,6 +4,8 @@
 
 Five a Day Evolution is a Django student management system for a small English academy in Albacete, Spain. It manages students, parents, enrollments, payments, class scheduling, and automated email communications. The system is designed for 3-10 admin users managing up to 2,000 students.
 
+As of v1.30.0 the repo holds **two front ends on one origin**: the Django management app, mounted under `/app/`, and the academy's public React site (`frontend/`), served by Django at `/`.
+
 ## Architecture
 
 ### 4 Django apps
@@ -11,9 +13,13 @@ Five a Day Evolution is a Django student management system for a small English a
 - **students** — People models (Student, Parent, Teacher, Group, StudentParent). No views of its own — views live in `core/views/`.
 - **billing** — Financial models (SiteConfiguration, EnrollmentType, Enrollment, Payment, Expense). Contains the 8-module service layer (EnrollmentService, EnrollmentTypeService, PaymentService, PricingService, ExpenseService, PdfService, StripeService, GcpCostService) where business logic lives.
 - **comms** — No models. Email service (EmailService), SMS service (SmsService, Twilio), 9 email convenience functions, 11 Celery tasks, management commands for sending emails and for wrapping the Beat tasks.
-- **core** — Cross-cutting models (TodoItem, HistoryLog, FunFridayAttendance, FunFridayScheduledSend, ScheduleSlot, BacklogTask, Feature, QAConfiguration, plus AuditLog in `audit_models.py`). Owns ALL views (split into **23 modules** in `core/views/`), ALL templates, middleware, and URL routing for dashboard/auth/schedule.
+- **core** — Cross-cutting models (TodoItem, HistoryLog, FunFridayAttendance, FunFridayScheduledSend, ScheduleSlot, BacklogTask, Feature, QAConfiguration, plus AuditLog in `audit_models.py`). Owns ALL views (split into **25 modules** in `core/views/`, including `frontend.py`, which serves the public React site and its contact endpoint), ALL templates, middleware, and URL routing for dashboard/auth/schedule.
 
 ### Key design decisions
+
+- **The app is mounted under `/app/`; `/` is the public React site (v1.30.0)** — `settings.APP_URL_PREFIX` ("app") is the SINGLE owner of that prefix. The root URLconf, `SimpleAuthMiddleware.PUBLIC_PREFIXES` / `PORTAL_URL_PREFIX` / `API_URL_PREFIX`, `@admin_required`, the PWA manifest and service worker, and `window.APP_PREFIX` in the JS all DERIVE from it — a second hand-typed `/app` is how a public URL quietly stops being public (for the Stripe webhook that means a 302 where Stripe expects a 200, i.e. payments stop reconciling with nothing erroring). It is a constant rather than an env var because the Google OAuth callback URIs and the Stripe webhook URL are registered per environment and a prefix that could differ would let those silently disagree with what the app serves. Three things stay at the ORIGIN ROOT and must not move: **`/health/`** (the deploy pipeline, the QA sign-off gate and the uptime checks all poll it — ~25 references across the workflows), **`/static/`** and **`/media/`**. `/admin/` DID move, to `/app/admin/`.
+- **`SimpleAuthMiddleware` guards ONLY `/app/…`** — it returns early for every other path. Without that early return, visiting `/` while logged out redirected to the staff login, which is the one thing the marketing site must never do. Gating by prefix rather than by an allowlist is what makes that true for every future public route at once; the alternative is remembering to exempt each one, and the failure mode is every visitor bounced into a staff login.
+- **Django serves the built React site — `core/views/frontend.py`** — `frontend/dist/index.html` is returned for `/` and for each route in `SPA_ROUTES`, and WhiteNoise serves everything beside it from the origin root via `settings.WHITENOISE_ROOT`, so `/images/…` and `/videos/…` resolve at the absolute paths the React sources already hard-code (no `base` rewriting). Routes are **ENUMERATED, not a catch-all**: React Router has no catch-all route either, so a catch-all here would answer every typo with a 200 and a blank page. `tests/integration/test_frontend_site.py` parses `App.jsx` and fails if the two lists drift — that drift is silent in the direction that matters, because a route added in React but missing in Django works on every in-app click and 404s only on a refresh. Django serves the HTML rather than WhiteNoise so `NoHtmlCacheMiddleware` marks it `no-cache`; Vite content-hashes the bundle, so a cached shell pins the previous deploy's asset hashes.
 
 - **Views stay in core** — while models are split across apps, all views remain in `core/views/` for simplicity. Each app's `urls.py` imports views from `core.views`.
 - **Service layer in billing** — business logic (enrollment creation, payment calculation, pricing) is extracted from views/forms into `billing/services/`. Forms delegate to services.
@@ -59,12 +65,27 @@ make test unit         # Suite selector is POSITIONAL (unit | integration | cove
 make test K=payment    # Filter by keyword;  make test ARGS='-x --lf'  passes raw pytest flags
 make test-cov-gate     # Full suite + hard fail under 75% coverage (used by pre-commit)
 make e2e               # End-to-end journeys vs the REAL Google Drive (v1.29.10, local dev only)
+
+make frontend-build    # Vite build of the public React site -> frontend/dist (Django serves it at /)
+make frontend-test     # Vitest component tests in jsdom (v1.30.0)
+make frontend-dev      # Vite dev server on :6001 (HMR), proxying /app + /static + /api to Django
+make frontend-lint     # ESLint over frontend/
 ```
 
 `make test` and `make test-cov-gate` are the **only** two PYTEST targets. There is no
 `make test-unit` / `test-integration` / `test-coverage` / `test-sqlite` / `test-fast` / `test-k`.
 
 `make e2e` is a third test target and deliberately **not** pytest — see the end-to-end gotcha.
+
+`make frontend-test` is a FOURTH, and it is not pytest either: it is Vitest in jsdom over
+`frontend/src/test/`. It exists because `make test` structurally cannot answer the question —
+Django returning 200 for `/faq` only proves it served the SPA **shell**, which is the same shell
+it serves for every public route, so whether React then renders a page or throws on mount is
+invisible to it. A component that throws is a blank white page with a 200 status. Both
+`frontend-lint` and `frontend-test` run as pre-commit hooks and as CI's `Frontend` job, which
+gates `docker-publish`. **Until `make frontend-build` has run at least once, `/` answers 404**
+with a message saying so — `frontend/dist` is gitignored and built by the Dockerfile's node stage
+in CI.
 
 - **UV** for dependency management (see [docs/UV.md](docs/UV.md))
 - **Ruff** for linting and formatting (`pyproject.toml [tool.ruff]`)
@@ -128,6 +149,10 @@ make e2e               # End-to-end journeys vs the REAL Google Drive (v1.29.10,
 All pricing flows through `billing/services/`. The single source of truth is `SiteConfiguration` (DB). Never hardcode prices in views or templates — read from config.
 
 ## Gotchas
+
+- **The public React site is a SEPARATE stack sharing one origin — `frontend/`, built by Vite, served by Django (v1.30.0)** — sources in `frontend/`, build config (`package.json`, `vite.config.js`, `eslint.config.js`) at the repo ROOT beside `pyproject.toml`. `frontend/dist` and `node_modules` are gitignored; the image builds them in a pinned **node stage** and copies `dist` in AFTER `COPY . .` (reversing those two lets `COPY . .` delete it). Things that are easy to get wrong here. (1) **A link from the React site into the app must be a plain `<a href>`, never `<Link>`/`<NavLink>`** — a router link navigates client-side, matches no `<Route>`, and renders a blank page while the URL bar shows the right address, which reads as a server fault and is not one. (2) **`frontend_index` carries `@ensure_csrf_cookie`** — it returns a FILE, not a rendered template, so nothing else would mint a `csrftoken` and every contact-form POST would be refused; the alternative (exempting the endpoint) would make it the app's third `@csrf_exempt` view, and the two that exist are each authenticated by something else. (3) `eslint .` at the repo root walks into `.venv/` and lints Django's bundled jQuery — the npm script names its targets instead. (4) The contact form was a **Netlify Form** (`netlify` attribute + `fetch("/")`) and Netlify is gone; it posts to `/api/contact/` now, and the React handler CHECKS the response — it used to set "mensaje enviado" inside its `try` regardless, so a form delivering nowhere looked identical to one that worked.
+- **`{# … #}` is SINGLE-LINE and a multi-line one renders as VISIBLE TEXT — this bit again in v1.30.0, in `base.html`** — the rule was already documented under *Templates* and there is already a test for it (`tests/integration/test_frontend_invariants.py::test_no_multiline_django_hash_comments`). It is repeated here because of how it presented: three multi-line `{# #}` comments in the app shell became a text node inside the layout's flex row, which collapsed `<main>` to **0px wide** and pushed the sidebar to the right edge. Every automated measurement said "no overflow" while the page was destroyed; only a screenshot showed it. If a layout breaks in a way the numbers cannot explain, grep for `\{#[^#]*$` before debugging CSS. And note the trap when writing the fix: a `{% comment %}` block explaining the rule cannot itself contain the characters `*/}`, which is what terminated the replacement comment early on the first attempt.
+- **A transform makes an element the containing block for its `position: fixed` descendants — hence `lg:transform-none`, not `lg:translate-x-0`** — the app sidebar is an off-canvas drawer below `lg` (it was a fixed 7.5rem at every width, 38% of a 320px phone). `.sidebar-fixed-links` is `position: fixed; top: 50%`, so the desktop icon rail centres on the SCREEN; under any transform — including `translate-x-0`, which looks like a no-op — it centres on the sidebar instead and drifts down the moment a page makes that taller than the viewport. Measured 88px vs 92px, i.e. invisible until it isn't. `transform: none` removes the containing block. A test pins it, because `translate-x-0` is the obvious thing to write. The drawer's CSS keys on `@media (max-width: 1023px)` and the markup on Tailwind's `lg` (1024px); those two must move together or there is a band of widths where the sidebar is a drawer styled as a rail.
 
 - **AJAX CSRF token comes from the hidden input, NOT the cookie** — `CSRF_COOKIE_HTTPONLY` is `True` whenever `DEBUG=False` (testing/production), so JS cannot read the `csrftoken` cookie via `document.cookie`. Every AJAX helper must read the token from the hidden `{% csrf_token %}` input (`document.querySelector('[name=csrfmiddlewaretoken]')?.value`, rendered globally in `base.html`), with the cookie only as a fallback. `base.js` exposes `window.CSRF_TOKEN` built this way. A cookie-only reader works in dev (`DEBUG=True`, non-HttpOnly cookie) but silently 403s every POST in the testing/prod stack — this bug hid an entire class of "broken" features (payments, Fun Friday, todos). When adding a new AJAX POST, reuse the input-first pattern.
 - **Development can log in as a real Teacher now — `login_view` falls through to Django auth, and `seed_teachers` runs in EVERY environment** — the dev branch used to compare against `LOGIN_USERNAME`/`LOGIN_PASSWORD` and stop there, and that path always get-or-creates a **superuser**. So the trimmed non-admin UI, `NON_ADMIN_ALLOWED_URL_NAMES` and every `{% if is_admin_user %}` gate were only reachable on the QA VM. The env-var admin login is tried first and is unchanged; anything it does not match now falls through to `_authenticate_teacher`, which is the same path testing/production use. `entrypoint.sh` therefore runs `seed_teachers` + `seed_enrollment_types` unconditionally (both are no-ops without their env vars) instead of only on testing/production. Two consequences worth knowing: `.env`/`.env.development` now carry a `TEACHER_SEED_1_*` block (login `teacher` / `teacher`, non-admin), and because `settings.py` does `load_dotenv(".env")` those vars are in `os.environ` for the whole **test session** — `test_seed_teachers_command.py` has an autouse fixture clearing every `TEACHER_SEED_*` key for exactly that reason. A test that sets some of the block and inherits the rest from the developer's file is the failure mode.

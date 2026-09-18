@@ -309,7 +309,7 @@ class _CapturingPaymentAdmin(PaymentAdmin):
 class TestAdminCannotDeleteFiscalRecords:
     def test_row_delete_permission_is_refused(self, completed_payment, pending_payment, rf):
         payment_admin = _CapturingPaymentAdmin()
-        request = rf.get("/admin/billing/payment/")
+        request = rf.get("/app/admin/billing/payment/")
         request.user = type(
             "U", (), {"is_active": True, "is_staff": True, "is_superuser": True, "has_perm": lambda *a: True}
         )()

@@ -636,15 +636,22 @@ def _is_non_admin_teacher(request) -> bool:
 
 class SimpleAuthMiddleware:
     """
-    Enforces access control in three parts:
+    Enforces access control in three parts — over the app's URLs ONLY.
 
-    0. The parent portal (`/parent/…`) is a SEPARATE authentication domain with
+    Scope first: the app is mounted under `settings.APP_PATH_PREFIX` ("/app")
+    and the origin root belongs to the public React site, so a request that is
+    not under that prefix is passed straight through. Without that, visiting
+    "/" while logged out redirected to the app's login form, which is the one
+    thing the marketing site must never do.
+
+    0. The parent portal (`<prefix>/parent/…`) is a SEPARATE authentication domain with
        its own session key, checked first and never subject to the staff login
        or the teacher whitelist. Default-deny: only the URL names in
        `PORTAL_PUBLIC_URL_NAMES` are reachable without a portal session.
     1. Authentication: every non-public URL requires an authenticated session
        (either via env-var basic-auth in dev, Teacher login in testing/prod, or
-       Google OAuth). Unauthenticated requests are redirected to /login/. The
+       Google OAuth). Unauthenticated requests are redirected to the app's
+       login page. The
        session FLAG is not sufficient — the identity behind it must still exist
        and still be active (`_session_identity_revoked`).
     2. Authorization: requests made by a non-admin teacher are restricted to
@@ -652,17 +659,39 @@ class SimpleAuthMiddleware:
        dashboard with a flash message for non-API routes).
     """
 
+    #: Everything the four apps route now lives under `settings.APP_PATH_PREFIX`
+    #: ("/app"), so the app-served entries below are BUILT from it rather than
+    #: typed out — a second hand-written copy of the prefix is exactly how a
+    #: public URL quietly stops being public (it would fall through to the
+    #: login redirect, and for the Stripe webhook that means a 302 where Stripe
+    #: expects a 200, i.e. payments silently stop reconciling).
+    #:
+    #: `/health/`, `/static/` and `/media/` are at the ORIGIN ROOT and stay
+    #: there — see the APP MOUNT POINT block in settings.py.
+    #: `/health/`, `/static/` and `/media/` used to be listed here. They are at
+    #: the ORIGIN ROOT, so the early return in `__call__` now passes them
+    #: through before this list is ever consulted — leaving them would be dead
+    #: tolerance, i.e. an allowlist entry implying a protection it no longer
+    #: provides.
     PUBLIC_PREFIXES = (
-        "/health/",
-        "/static/",
-        "/media/",
-        "/auth/google/",
-        "/password-reset/",
-        "/api/stripe/webhook/",  # v1.11: called by Stripe's servers, signed via header
-        "/manifest.webmanifest",  # v1.12: PWA manifest, must be public
-        "/sw.js",  # v1.12: service worker, must be public
-        "/two-factor/verify/",  # v1.13: mid-login 2FA gate (pre-session)
+        f"{settings.APP_PATH_PREFIX}/auth/google/",
+        f"{settings.APP_PATH_PREFIX}/password-reset/",
+        # v1.11: called by Stripe's servers, signed via header
+        f"{settings.APP_PATH_PREFIX}/api/stripe/webhook/",
+        # v1.12: PWA manifest, must be public
+        f"{settings.APP_PATH_PREFIX}/manifest.webmanifest",
+        # v1.12: service worker, must be public
+        f"{settings.APP_PATH_PREFIX}/sw.js",
+        # v1.13: mid-login 2FA gate (pre-session)
+        f"{settings.APP_PATH_PREFIX}/two-factor/verify/",
     )
+
+    #: Prefix for the JSON/AJAX endpoints. Built from the same setting so the
+    #: 403-as-JSON branch below keeps matching after the mount point moved.
+    #: `core.decorators.admin_required` carries the mirror-image check and
+    #: builds it the same way — the two responses must stay identical, so a
+    #: blocked caller cannot tell which layer refused.
+    API_URL_PREFIX = f"{settings.APP_PATH_PREFIX}/api/"
 
     #: The parent portal keeps its OWN session (`parent_id`) and never sets
     #: `is_authenticated`, so it cannot be checked by layer 1 below — it used to
@@ -674,7 +703,7 @@ class SimpleAuthMiddleware:
     #: is protected by default. The views' own `_require_parent` remains the
     #: real check (it also verifies the credential stamp and the
     #: must-change-password pin); this is the default-deny net under it.
-    PORTAL_URL_PREFIX = "/parent/"
+    PORTAL_URL_PREFIX = f"{settings.APP_PATH_PREFIX}/parent/"
     PORTAL_PUBLIC_URL_NAMES = frozenset(
         {
             "parent_portal_login",
@@ -717,9 +746,38 @@ class SimpleAuthMiddleware:
             return JsonResponse({"success": False, "error": "not authenticated"}, status=401)
         return redirect("parent_portal_login")
 
+    #: Everything this middleware guards lives under the app's mount point.
+    #: Kept as one attribute so the early return and the docstring cannot
+    #: disagree about where the app begins.
+    APP_PREFIX = f"{settings.APP_PATH_PREFIX}/"
+
+    def _is_app_path(self, path: str) -> bool:
+        """True for the app's own URLs, false for everything else on the origin.
+
+        `/app` with no trailing slash counts: CommonMiddleware's APPEND_SLASH
+        redirect happens after this gate, so treating it as foreign would send
+        a logged-in user to the login page for a missing slash.
+        """
+        return path.startswith(self.APP_PREFIX) or path == settings.APP_PATH_PREFIX
+
     def __call__(self, request):
-        login_url = reverse("login")
         path = request.path
+
+        # NOTHING OUTSIDE THE APP IS THIS MIDDLEWARE'S BUSINESS.
+        # The origin root belongs to the public React site, so an
+        # unauthenticated visitor to "/" must get the marketing page (today: a
+        # 404, until the frontend is served there) — NOT a redirect to the
+        # app's login form. Gating by prefix rather than by an allowlist is
+        # what makes that true for every future public route at once: the
+        # alternative is remembering to exempt each one, and the failure mode
+        # is a visitor bounced off the home page into a staff login.
+        #
+        # /health/, /static/ and /media/ fall out here too, which is why they
+        # are no longer in PUBLIC_PREFIXES above.
+        if not self._is_app_path(path):
+            return self.get_response(request)
+
+        login_url = reverse("login")
 
         # The portal is a separate authentication domain — checked first, and
         # never subject to the staff login redirect or the teacher whitelist.
@@ -752,7 +810,7 @@ class SimpleAuthMiddleware:
             if url_name not in NON_ADMIN_ALLOWED_URL_NAMES:
                 # AJAX / API endpoints: return a plain 403 JSON response so the
                 # frontend sees a real error instead of an HTML redirect body.
-                if path.startswith("/api/"):
+                if path.startswith(self.API_URL_PREFIX):
                     return JsonResponse(
                         {"success": False, "error": "No tienes permiso para esta acción."},
                         status=403,

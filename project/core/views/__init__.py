@@ -60,6 +60,9 @@ from core.views.features import (
     features_view,
 )
 
+# Public site — the origin root, served from frontend/dist (the React site)
+from core.views.frontend import SPA_ROUTES, frontend_index, submit_contact_form
+
 # Fun Friday attendance
 from core.views.fun_friday_attendance import (
     add_fun_friday_attendance,

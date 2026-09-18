@@ -577,7 +577,7 @@ def test_financial_write_controls_are_admin_gated(template, needles):
 def test_logout_is_a_post_form_not_a_link():
     """Both logout views are `@require_http_methods(["POST"])`.
 
-    A GET logout is CSRF-able (any third-party `<img src="/logout/">` ends the
+    A GET logout is CSRF-able (any third-party `<img src="/app/logout/">` ends the
     session), so the views reject GET — which makes an `<a href>` a 405.
     """
     for template, url_name in (
@@ -814,3 +814,74 @@ def test_backlog_rows_use_server_rendered_display_labels():
     assert "priority_display" in source, "the inserted row must use the server's priority label"
     assert "status_display" in source, "the inserted row must use the server's status label"
     assert '"status-badge status-open">Open<' not in source, "raw status key back in the markup"
+
+
+# ---------------------------------------------------------------------------
+# The app shell's off-canvas sidebar (below lg)
+# ---------------------------------------------------------------------------
+# The sidebar is a 7.5rem icon rail at lg and up and a drawer below it, where a
+# permanent rail took 38% of a 320px phone. These pin the parts of that whose
+# breakage is SILENT — each one leaves a layout that still renders.
+
+
+def test_the_sidebar_drawer_has_its_controls():
+    """A drawer with no way to open it is a hidden sidebar, i.e. no navigation
+    at all below lg."""
+    source = _read(CORE_TEMPLATES / "base.html")
+    assert 'id="sidebar-toggle"' in source, "no button opens the drawer"
+    assert 'id="sidebar-backdrop"' in source, "no backdrop to click away"
+    assert 'aria-controls="main-sidebar"' in source, "the toggle does not name what it controls"
+    assert "lg:hidden" in source, "the toggle must disappear where the sidebar is permanent"
+
+    js = _read(JS_DIR / "base.js")
+    for handle in ("sidebar-toggle", "sidebar-backdrop", "main-sidebar"):
+        assert handle in js, f"base.js never binds #{handle}"
+
+
+def test_the_sidebar_is_off_canvas_below_lg_and_in_flow_above():
+    source = _read(CORE_TEMPLATES / "base.html")
+    aside = source.split('id="main-sidebar"', 1)[1].split(">", 1)[0]
+    for cls in ("fixed", "-translate-x-full", "z-40"):
+        assert cls in aside, f"the sidebar is not off-canvas below lg (missing {cls})"
+    for cls in ("lg:static", "lg:z-auto"):
+        assert cls in aside, f"the sidebar does not return to the layout at lg (missing {cls})"
+
+
+def test_the_sidebar_drops_its_transform_at_lg_rather_than_zeroing_it():
+    """`lg:transform-none`, never `lg:translate-x-0`.
+
+    Any transform makes an element the containing block for its
+    `position: fixed` descendants. `.sidebar-fixed-links` is fixed with
+    `top: 50%` so the icon rail centres on the SCREEN; under a transform it
+    centres on the sidebar instead and slides down the moment a page makes that
+    taller than the viewport. `translate-x-0` is the obvious thing to write
+    here and it looks identical until that happens.
+    """
+    aside = _read(CORE_TEMPLATES / "base.html").split('id="main-sidebar"', 1)[1].split(">", 1)[0]
+    assert "lg:transform-none" in aside
+    assert "lg:translate-x-0" not in aside, (
+        "lg:translate-x-0 re-creates the containing block that lg:transform-none exists to remove"
+    )
+
+
+def test_the_drawer_shows_labels_because_touch_has_no_hover():
+    """At lg the rail reveals its labels on hover. There is no hover on a phone,
+    so the drawer would be unlabelled icons — worse than the rail it replaced."""
+    css = _read(CSS_DIR / "app.css")
+    block = css.split("@media (max-width: 1023px)", 1)
+    assert len(block) == 2, "the drawer's media query is gone from app.css"
+    rules = block[1].split("\n}\n\n", 1)[0]
+    assert ".sidebar-text" in rules, "the drawer does not show its link labels"
+    assert "position: static" in rules, (
+        ".sidebar-fixed-links must return to flow in the drawer, or it renders over the heading"
+    )
+
+
+def test_the_drawer_breakpoint_matches_the_template():
+    """The CSS keys on 1023px and the markup on Tailwind's `lg` (1024px). If
+    those drift, there is a band of widths where the sidebar is a drawer that
+    styles itself as a rail, or the reverse."""
+    css = _read(CSS_DIR / "app.css")
+    assert "@media (max-width: 1023px)" in css, (
+        "the drawer's media query must stop exactly where Tailwind's lg: starts (1024px)"
+    )

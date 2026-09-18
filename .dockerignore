@@ -74,3 +74,10 @@ scripts/
 
 # Backups
 backups/
+
+# Frontend: the node stage installs from package-lock.json and runs the build
+# itself, so a local node_modules/ (platform-specific binaries) and a local
+# dist/ must never be copied in — they would shadow the image's own build.
+node_modules
+frontend/dist
+.vite

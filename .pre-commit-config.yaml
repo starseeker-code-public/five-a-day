@@ -60,6 +60,43 @@ repos:
         pass_filenames: false
         always_run: true
 
+      # The public React site in frontend/. ESLint then Vitest, mirroring the
+      # ruff/pytest split on the Python side, and placed BEFORE the two slow
+      # hooks below so a broken frontend costs ~25s rather than four minutes of
+      # Docker first.
+      #
+      # `make frontend-*` rather than `npm` directly: those targets run
+      # `npm ci` when node_modules is missing, so the hook works on a fresh
+      # clone instead of failing with "vitest: not found".
+      - id: frontend-lint
+        name: eslint (frontend/)
+        entry: make frontend-lint
+        language: system
+        pass_filenames: false
+        always_run: true
+
+      # always_run, like every hook here, even though this is the one suite
+      # that looks independent of the Python tree. It is not: the two halves
+      # are coupled in both directions and each coupling is checked by a test
+      # that reads the OTHER side's files. Vitest's data.test.js asserts the
+      # nav button points at Django's app prefix and that every image path in
+      # data.js exists on disk; project/tests/integration/test_frontend_site.py
+      # parses App.jsx and fails if it disagrees with Django's SPA_ROUTES. So a
+      # commit touching only project/ really can turn this red, and a
+      # types:-gated hook would skip it and let CI find out.
+      #
+      # It is deliberately NOT on the pre-push stage as well. That backstop
+      # exists for `e2e` because CI cannot run it — no Drive credential — while
+      # these DO run in CI's `Frontend` job, which gates docker-publish. One
+      # bypass here is caught before anything ships.
+      - id: frontend-test
+        name: vitest (frontend/)
+        entry: make frontend-test
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-commit]
+
       # Every end-to-end journey in project/tests/e2e/: a family is enrolled,
       # the year is billed, a payment is collected through the real HTTP
       # endpoint, the receipt email is produced and the PDF is really uploaded

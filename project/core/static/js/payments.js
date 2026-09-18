@@ -259,7 +259,7 @@ const localDateISO = window.localDateISO;
             // reload showed "Transferencia".
             const methodLabel = this.dataset.methodLabel || method;
 
-            window.apiFetch(`/api/payments/${paymentId}/quick-complete/`, {
+            window.apiFetch(`${window.APP_PREFIX}/api/payments/${paymentId}/quick-complete/`, {
                 method: 'POST',
                 body: JSON.stringify({ payment_method: method }),
             })
@@ -333,7 +333,7 @@ const localDateISO = window.localDateISO;
             }
             disarm();
             const paymentId = this.dataset.paymentId;
-            window.apiFetch(`/payments/${paymentId}/deactivate/`, {
+            window.apiFetch(`${window.APP_PREFIX}/payments/${paymentId}/deactivate/`, {
                 method: 'POST',
                 body: '{}',
             })
@@ -415,7 +415,7 @@ const localDateISO = window.localDateISO;
         const query = this.value.trim();
         if (query.length < 2) { studentSuggestions.classList.add('hidden'); return; }
         studentTimeout = setTimeout(() => {
-            window.apiFetch(`/api/search/students/?q=${encodeURIComponent(query)}`)
+            window.apiFetch(`${window.APP_PREFIX}/api/search/students/?q=${encodeURIComponent(query)}`)
                 .then(data => displayStudentSuggestions(data.results))
                 .catch(err => {
                     // A silent console.error left the box empty with nothing on

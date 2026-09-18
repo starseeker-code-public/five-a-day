@@ -116,10 +116,39 @@
 
     {% block extra_css %}{% endblock %}
 </head>
-<body id="top" data-history-url="{% url 'history_list' %}">
+<body id="top" data-history-url="{% url 'history_list' %}" data-app-prefix="{{ app_path_prefix }}">
     <div class="flex min-h-screen bg-neutral-50">
         <!-- Sidebar -->
-        <aside id="main-sidebar" class="{% block sidebar_class %}w-[7.5rem]{% endblock %} bg-primary-100 p-6 border-r border-primary-200 transition-all duration-300 ease-in-out group flex flex-col relative {% block sidebar_hover %}{% endblock %}">
+        {% comment %}
+            Backdrop for the drawer below lg. Click to close; inert and
+            invisible at lg and up, where the sidebar is part of the layout.
+        {% endcomment %}
+        <div id="sidebar-backdrop" class="hidden lg:!hidden fixed inset-0 bg-black/40 z-30" aria-hidden="true"></div>
+
+        {% comment %}
+            OFF-CANVAS BELOW lg. The sidebar was a fixed 7.5rem at every width,
+            which is 38% of a 320px phone and left 200px of usable content.
+            Below lg it is now `fixed` and translated off-screen until the
+            header's menu button opens it; from lg up the `lg:` classes restore
+            exactly the previous in-flow column, so the laptop layout this app
+            is designed for is untouched.
+
+            `lg:transform-none`, NOT `lg:translate-x-0`: any transform makes an
+            element the containing block for its `position: fixed` descendants,
+            and `.sidebar-fixed-links` is fixed with `top: 50%` so the icon rail
+            sits centred on the SCREEN. Under a transform it would centre on the
+            sidebar instead and drift down the moment a page made that taller
+            than the viewport. `transform: none` removes the containing block,
+            so above lg the rail is positioned exactly as it was before.
+
+            The links stay in the DOM while closed — `data-hotkey` navigation
+            in base.js resolves them by selector.
+        {% endcomment %}
+        <aside id="main-sidebar"
+               class="{% block sidebar_class %}w-[7.5rem]{% endblock %} bg-primary-100 p-6 border-r border-primary-200 transition-transform lg:transition-all duration-300 ease-in-out group flex flex-col
+                      fixed inset-y-0 left-0 z-40 -translate-x-full overflow-y-auto
+                      lg:static lg:transform-none lg:z-auto lg:overflow-visible {% block sidebar_hover %}{% endblock %}"
+               aria-label="Navegación principal">
             {# `sidebar-expanded:items-start` was here: an inert Tailwind variant  #}
             {# (no such variant is configured) matching the dead .sidebar-expanded #}
             {# CSS block that app.css no longer carries. Removed with it.          #}
@@ -196,7 +225,7 @@
                     {% endif %}
                     {% comment %}
                        A POST form, not a link: `logout` is @require_http_methods(["POST"])
-                       (a GET logout is CSRF-able — any <img src="/logout/"> on any page
+                       (a GET logout is CSRF-able — any <img src="<prefix>/logout/"> on any page
                        ends the session), so an <a href> returns 405. Styled with the same
                        sidebar-link classes and `border:0;background:none` so it renders
                        byte-identically to the other nav items; the hotkey badge is not on
@@ -230,7 +259,18 @@
             <!-- Header -->
             <header class="bg-neutral-50 border-b border-neutral-200 p-6 flex justify-between items-center sticky top-0 z-10">
                 <div class="flex items-center gap-4">
-                    <img src="{% static 'images/logo.png' %}" width="100" height="100" alt="Logo">
+                    {% comment %}
+                        Opens the off-canvas sidebar. Hidden from lg up, where
+                        the sidebar is always visible. 44x44 so it is usable
+                        with a thumb — below lg this is the only way to
+                        navigate.
+                    {% endcomment %}
+                    <button type="button" id="sidebar-toggle"
+                            class="lg:hidden shrink-0 w-11 h-11 inline-flex items-center justify-center rounded-md text-primary-700 hover:bg-primary-100 transition-colors"
+                            aria-label="Abrir menú" aria-controls="main-sidebar" aria-expanded="false">
+                        <span class="material-symbols-outlined">menu</span>
+                    </button>
+                    <img src="{% static 'images/logo.png' %}" width="100" height="100" alt="Logo" class="hidden sm:block">
                     <div class="flex flex-col">
                         <h2 class="text-2xl font-bold text-primary-700">
                             {% block page_title %}¡Bienvenidas business women!{% endblock %}

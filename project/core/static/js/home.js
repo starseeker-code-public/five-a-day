@@ -30,7 +30,7 @@ document.addEventListener('DOMContentLoaded', function () {
     const todoError = document.getElementById('todoError');
     const customDate = document.getElementById('customDate');
     const dateBtns = document.querySelectorAll('.todo-date-btn');
-    const createTodoUrl = document.body.dataset.createTodoUrl || '/api/todos/create/';
+    const createTodoUrl = document.body.dataset.createTodoUrl || `${window.APP_PREFIX}/api/todos/create/`;
 
     let selectedDate = getTodayISO();
     let activeMode = 'hoy';
@@ -186,7 +186,7 @@ document.addEventListener('DOMContentLoaded', function () {
         checkbox.disabled = true;
         row.style.opacity = '0.4';
 
-        window.apiFetch(`/api/todos/${id}/complete/`, { method: 'POST' })
+        window.apiFetch(`${window.APP_PREFIX}/api/todos/${id}/complete/`, { method: 'POST' })
         .then(data => {
             if (data.success) {
                 row.remove();

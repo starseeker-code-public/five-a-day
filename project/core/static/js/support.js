@@ -203,7 +203,7 @@ const SupportSystem = {
             // El token CSRF y la comprobación de estado vienen de base.js
             // (window.CSRF_TOKEN / window.apiFetch): input oculto primero, la
             // cookie solo como reserva.
-            const data = await window.apiFetch('/api/support/submit/', {
+            const data = await window.apiFetch(`${window.APP_PREFIX}/api/support/submit/`, {
                 method: 'POST',
                 body: JSON.stringify({
                     category: this.categoryMap[this.selectedCategory] || 'exception',

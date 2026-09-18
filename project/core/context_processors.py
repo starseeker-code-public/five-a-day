@@ -106,3 +106,15 @@ def csp_nonce(request):
     report while `CSP_ENFORCE` is off, and will not execute once it is on.
     """
     return {"csp_nonce": getattr(request, "csp_nonce", "")}
+
+
+def app_prefix(request):
+    """Expose the app's mount point ("/app") to every template.
+
+    `base.html` renders it onto `<body data-app-prefix>`, which is where
+    `base.js` reads `window.APP_PREFIX` from. It exists so the JS modules have
+    ONE owner for the prefix instead of sixteen copies of the literal — see the
+    note beside that assignment. Templates themselves should keep using
+    `{% url %}`, which already resolves through the prefix.
+    """
+    return {"app_path_prefix": settings.APP_PATH_PREFIX}

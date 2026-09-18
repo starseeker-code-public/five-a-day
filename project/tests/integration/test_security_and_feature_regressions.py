@@ -93,7 +93,7 @@ class TestStudentSearchIsNotAnXssSink:
             group=group,
             active=True,
         )
-        results = _client().get("/api/search/students/?q=Ana").json()["results"]
+        results = _client().get("/app/api/search/students/?q=Ana").json()["results"]
         assert results, "the student should still be findable"
 
     def test_suggestions_are_built_as_dom_nodes(self):
@@ -152,7 +152,7 @@ class TestRateLimitCannotBeBypassedByHeaderSpoofing:
         client = Client(raise_request_exception=False)
         statuses = [
             client.post(
-                "/login/",
+                "/app/login/",
                 data={"username": "x", "password": "y"},
                 HTTP_X_FORWARDED_FOR=f"10.0.0.{i}, 203.0.113.7",
             ).status_code
@@ -170,8 +170,8 @@ class TestRateLimitCannotBeBypassedByHeaderSpoofing:
 
         client = Client(raise_request_exception=False)
         for _ in range(5):
-            client.post("/login/", data={"username": "x", "password": "y"}, HTTP_X_FORWARDED_FOR="203.0.113.1")
-        other = client.post("/login/", data={"username": "x", "password": "y"}, HTTP_X_FORWARDED_FOR="203.0.113.99")
+            client.post("/app/login/", data={"username": "x", "password": "y"}, HTTP_X_FORWARDED_FOR="203.0.113.1")
+        other = client.post("/app/login/", data={"username": "x", "password": "y"}, HTTP_X_FORWARDED_FOR="203.0.113.99")
         assert other.status_code != 429
 
 
@@ -249,11 +249,11 @@ class TestServiceWorkerDoesNotCacheLogin:
     def test_login_is_excluded(self, client):
         body = client.get(reverse("service_worker")).content.decode()
         cacheable = body.split("function isCacheable")[1].split("}")[0]
-        assert '"/login/"' not in cacheable
+        assert '"/app/login/"' not in cacheable
 
     def test_login_page_does_carry_a_csrf_token(self, client):
         """Establishes why caching it was unsafe in the first place."""
-        assert "csrfmiddlewaretoken" in client.get("/login/").content.decode()
+        assert "csrfmiddlewaretoken" in client.get("/app/login/").content.decode()
 
 
 class TestScheduleSlotValidation:
@@ -325,7 +325,7 @@ class TestTeacherCreatedInTheUiCanRecoverTheirAccount:
 class TestWaitingListShortForm:
     """Backlog: only a name and a number should be needed to take an entry."""
 
-    URL = "/students/waiting/create/"
+    URL = "/app/students/waiting/create/"
 
     def test_name_and_phone_are_enough(self):
         response = _client().post(
@@ -409,29 +409,29 @@ class TestStudentPaymentHistoryPdf:
     """Backlog: "ver cuándo lo pagó y cómo lo pagó"."""
 
     def test_returns_a_pdf(self, student_with_parent, completed_payment):
-        response = _client().get(f"/students/{student_with_parent.id}/payments.pdf")
+        response = _client().get(f"/app/students/{student_with_parent.id}/payments.pdf")
         assert response.status_code == 200
         assert response["Content-Type"] == "application/pdf"
         assert response.content[:4] == b"%PDF"
 
     def test_works_for_a_student_with_no_payments(self, student):
-        response = _client().get(f"/students/{student.id}/payments.pdf")
+        response = _client().get(f"/app/students/{student.id}/payments.pdf")
         assert response.status_code == 200
         assert response.content[:4] == b"%PDF"
 
     def test_year_filter_is_accepted(self, student_with_parent, completed_payment):
-        response = _client().get(f"/students/{student_with_parent.id}/payments.pdf?year=2025")
+        response = _client().get(f"/app/students/{student_with_parent.id}/payments.pdf?year=2025")
         assert response.status_code == 200
 
     def test_bad_year_does_not_crash(self, student_with_parent, completed_payment):
-        assert _client().get(f"/students/{student_with_parent.id}/payments.pdf?year=abc").status_code == 200
+        assert _client().get(f"/app/students/{student_with_parent.id}/payments.pdf?year=abc").status_code == 200
 
     def test_reportlab_markup_in_a_name_does_not_break_it(self, group):
         """`O<Brien` used to raise `paraparser: syntax error` and kill the PDF."""
         student = Student.objects.create(
             first_name="O<Brien", last_name="<b>Test</b>", birth_date=date(2015, 1, 1), group=group, active=True
         )
-        assert _client().get(f"/students/{student.id}/payments.pdf").status_code == 200
+        assert _client().get(f"/app/students/{student.id}/payments.pdf").status_code == 200
 
 
 class TestPaymentsMonthFilter:
@@ -453,16 +453,16 @@ class TestPaymentsMonthFilter:
             )
 
     def test_filtering_by_month_narrows_the_list(self, two_months):
-        context = _client().get("/payments/?month=3&year=2026").context
+        context = _client().get("/app/payments/?month=3&year=2026").context
         concepts = {p.concept for p in context["payments_list"]}
         assert concepts == {"marzo"}
 
     def test_no_month_shows_the_whole_year(self, two_months):
-        context = _client().get("/payments/?year=2026").context
+        context = _client().get("/app/payments/?year=2026").context
         assert {p.concept for p in context["payments_list"]} == {"marzo", "abril"}
 
     def test_the_month_dropdown_is_populated(self, two_months):
-        context = _client().get("/payments/?year=2026").context
+        context = _client().get("/app/payments/?year=2026").context
         assert len(context["month_choices"]) == 12
         assert 2026 in context["year_choices"]
 
@@ -475,7 +475,7 @@ class TestDatabaseGroupFilter:
         Student.objects.create(
             first_name="Fuera", last_name="Grupo", birth_date=date(2015, 1, 1), group=other_group, active=True
         )
-        context = _client().get(f"/database/?students_group={group.id}").context
+        context = _client().get(f"/app/database/?students_group={group.id}").context
         names = {s.first_name for s in context["students"]}
         assert "Fuera" not in names
         assert context["students_group"] == group.id
@@ -485,10 +485,10 @@ class TestDatabaseGroupFilter:
         Student.objects.create(
             first_name="Fuera", last_name="Grupo", birth_date=date(2015, 1, 1), group=other, active=True
         )
-        assert len(_client().get("/database/").context["students"]) == 2
+        assert len(_client().get("/app/database/").context["students"]) == 2
 
     def test_bad_group_id_is_ignored(self, student):
-        response = _client().get("/database/?students_group=abc")
+        response = _client().get("/app/database/?students_group=abc")
         assert response.status_code == 200
         assert response.context["students_group"] is None
 
@@ -596,7 +596,7 @@ class TestNewsletterDoesNotBlastEveryone:
         group.save()
         mail.outbox.clear()
         response = _client().post(
-            "/apps/newsletter/",
+            "/app/apps/newsletter/",
             data={"group_name": group.group_name, "newsletter_link": "http://x", "message": "hola"},
         )
         assert response.status_code == 302
@@ -605,7 +605,7 @@ class TestNewsletterDoesNotBlastEveryone:
     def test_valid_group_still_sends(self, student_with_parent, parent, group):
         mail.outbox.clear()
         _client().post(
-            "/apps/newsletter/",
+            "/app/apps/newsletter/",
             data={"group_name": group.group_name, "newsletter_link": "http://x", "message": "hola"},
         )
         assert len(mail.outbox) == 1
@@ -619,7 +619,7 @@ class TestAdultReceiptsReachAdultStudents:
 
     def test_sent_to_the_adult_student(self, adult_student, student_with_parent, parent):
         mail.outbox.clear()
-        _client().post("/apps/receipts/", data={"receipt_type": "adult", "adult_month": "enero"})
+        _client().post("/app/apps/receipts/", data={"receipt_type": "adult", "adult_month": "enero"})
         recipients = {addr for message in mail.outbox for addr in message.to}
         assert adult_student.email in recipients
         assert parent.email not in recipients, "a child's parent must not get the adult receipt"
@@ -659,7 +659,7 @@ class TestPaymentReceiptEmail:
         mail.outbox.clear()
         with django_capture_on_commit_callbacks(execute=True):
             _client().post(
-                f"/api/payments/{payment.id}/quick-complete/",
+                f"/app/api/payments/{payment.id}/quick-complete/",
                 data=json.dumps({"payment_method": "cash"}),
                 content_type="application/json",
             )
@@ -681,7 +681,7 @@ class TestPaymentReceiptEmail:
         )
         mail.outbox.clear()
         _client().post(
-            f"/payments/{payment.id}/update/",
+            f"/app/payments/{payment.id}/update/",
             data=json.dumps({"observations": "una nota"}),
             content_type="application/json",
         )
@@ -764,7 +764,7 @@ class TestHistoryLogActionsAreDeclared:
     def test_fun_friday_scheduling_uses_a_declared_action(self, student_with_parent, parent, group):
         valid = {key for key, _ in HistoryLog.ACTION_CHOICES}
         response = _client().post(
-            "/apps/fun-friday/",
+            "/app/apps/fun-friday/",
             data={
                 "event_date": "2026-09-18",
                 "start_time": "17:30",

@@ -127,7 +127,7 @@ On the QA VM the two admins have **two accounts each**: the EMAIL logins (`lope.
 
 **Enrollment-type seeding (every environment)** — `entrypoint.sh` also runs `manage.py seed_enrollment_types` on container start. It provisions the `EnrollmentType` reference table (`monthly`, `quarterly`, `adults`, `special`) from `SiteConfiguration`. This is **not** optional test data: nothing else creates these rows, and without them `EnrollmentService` raises and no student can be enrolled. The command is idempotent, so it is a no-op once the rows exist.
 
-**Parent-portal demo family (never production)** — `entrypoint.sh` runs `manage.py seed_demo_parents` when `DJANGO_ENV` is not `production`, and the QA dashboard's "Seed database" button runs it after `seed_testdata`. It reads `DEMO_PARENT_<N>_*` (`USERNAME`, `PASSWORD`, `EMAIL` required; `CHILDREN` a comma-separated list of first names), creates the parent, their children, enrollments and payments, and sets `PASSWORD` as the parent's real portal password (stored **hashed** on the `Parent` row). The demo family then signs in through the ordinary `/parent/login/` form — since v1.27 there is no demo-only login mode, so what QA exercises is exactly what a real family runs. On the VM the block is `fernando`; log in with `DEMO_PARENT_1_EMAIL`, not the username. **The command raises `CommandError` when `DJANGO_ENV=production`** and production's env has no `DEMO_PARENT_*` var in the first place. Do not add one — it would plant a fake family in the academy's real roll holding a password that also lives in the env set. Real families are emailed a **temporary password** once, when their record is created (`send_portal_invitation_once`, guarded by `Parent.portal_invite_sent_at` so a family with three children still gets exactly one invitation), and log in with it through the same ordinary form — there is no single-use link and no token table; `ParentSessionToken` was deleted in v1.27 precisely because an expiring link was the thing being removed. Logging in with a temporary password forces an immediate change. `¿Has olvidado tu contraseña?` issues a new temporary password into a **second** column, never over the family's real one, so an unauthenticated request cannot lock a family out of their own payment history; since v1.27.1 it is also rate-limited to 3 per 15 minutes and coalesces repeat requests inside a 15-minute cooldown, so replaying the form cannot keep rotating a credential the family is trying to type.
+**Parent-portal demo family (never production)** — `entrypoint.sh` runs `manage.py seed_demo_parents` when `DJANGO_ENV` is not `production`, and the QA dashboard's "Seed database" button runs it after `seed_testdata`. It reads `DEMO_PARENT_<N>_*` (`USERNAME`, `PASSWORD`, `EMAIL` required; `CHILDREN` a comma-separated list of first names), creates the parent, their children, enrollments and payments, and sets `PASSWORD` as the parent's real portal password (stored **hashed** on the `Parent` row). The demo family then signs in through the ordinary `/app/parent/login/` form — since v1.27 there is no demo-only login mode, so what QA exercises is exactly what a real family runs. On the VM the block is `fernando`; log in with `DEMO_PARENT_1_EMAIL`, not the username. **The command raises `CommandError` when `DJANGO_ENV=production`** and production's env has no `DEMO_PARENT_*` var in the first place. Do not add one — it would plant a fake family in the academy's real roll holding a password that also lives in the env set. Real families are emailed a **temporary password** once, when their record is created (`send_portal_invitation_once`, guarded by `Parent.portal_invite_sent_at` so a family with three children still gets exactly one invitation), and log in with it through the same ordinary form — there is no single-use link and no token table; `ParentSessionToken` was deleted in v1.27 precisely because an expiring link was the thing being removed. Logging in with a temporary password forces an immediate change. `¿Has olvidado tu contraseña?` issues a new temporary password into a **second** column, never over the family's real one, so an unauthenticated request cannot lock a family out of their own payment history; since v1.27.1 it is also rate-limited to 3 per 15 minutes and coalesces repeat requests inside a 15-minute cooldown, so replaying the form cannot keep rotating a credential the family is trying to type.
 
 Keep these vars directly in `.env.testing` (alongside the rest of the testing config). There is no overlay file system — `.env.testing` is self-contained and is renamed to `.env` on the VM before bringing the stack up. It's gitignored via `.env*`.
 
@@ -315,7 +315,7 @@ The route that DOES work, and what v1.29.10 ships, is **OAuth delegation**: the 
 Google account consents once, so that account - not a service account - owns the files. There
 is a one-time manual step after the deploy, and until it is done the archive stays silent:
 
-1. An admin opens `/management/` and clicks **Conectar Drive** (the control sits beside the
+1. An admin opens `/app/management/` and clicks **Conectar Drive** (the control sits beside the
    page title, with a red dot while disconnected and a green one once connected). Home also
    raises a dialog on **every** visit while it is disconnected - deliberately not dismissible
    for good, because the symptom of a disconnected archive is silence. Note this covers "never
@@ -351,7 +351,7 @@ every 7 days and the archive stops. Three things to know before relying on a das
 
 1. **Nothing tells you.** `GoogleDriveCredential.is_connected` is `bool(self.refresh_token)` - it
    asks whether a decryptable string is stored, not whether Google still honours it. An expired
-   token decrypts perfectly, so the `/management/` status dot stays GREEN and the home reconnect
+   token decrypts perfectly, so the `/app/management/` status dot stays GREEN and the home reconnect
    dialog (which fires on `not config.is_connected`) never appears. The only signal is
    `upload_receipt_to_drive_task` returning `error` in the logs:
 
@@ -359,7 +359,7 @@ every 7 days and the archive stops. Three things to know before relying on a das
    gcloud logging read 'resource.type="cloud_run_revision" AND jsonPayload.message:"upload_receipt_to_drive_task"' --project=five-a-day-evolution --limit=20 --freshness=7d --format="value(severity, jsonPayload.message)"
    ```
 
-2. **Reconnecting is the fix.** `/management/` -> **Conectar Drive**, re-consent as the account
+2. **Reconnecting is the fix.** `/app/management/` -> **Conectar Drive**, re-consent as the account
    that owns the receipts folder. `prompt=consent` is already forced, so a fresh refresh token is
    always issued rather than silently omitted.
 
@@ -739,7 +739,7 @@ update:
   it.** `drive` is a restricted scope, so publishing means Google verification plus a CASA
   security assessment (see *The consent screen stays in "Testing"* above). The cost is that
   Google expires the Drive refresh token every 7 days and the archive stops filing **silently** —
-  reconnecting from `/management/` is a routine, not an incident, and
+  reconnecting from `/app/management/` is a routine, not an incident, and
   `manage.py backfill_drive_receipts` files whatever was missed.
 
 ### Repairing a single env var
@@ -783,7 +783,7 @@ no env value carries a non-ASCII byte; check any new one you add. (The GDPR lega
 Django and cannot transcode.)
 
 Snapshot the env before and after (the count must not move — expect 35 vars and 6 `secretKeyRef`
-entries) and verify through a request path that prints the value; `/apps/payment-reminder/` renders
+entries) and verify through a request path that prints the value; `/app/apps/payment-reminder/` renders
 `{{ iban_holder }}` in its preview. The full procedure, including the snapshot command, is in
 `.claude/skills/deploy/SKILL.md`.
 
@@ -1430,7 +1430,7 @@ An unreachable VM counts as a reason to deploy: a stack that is not answering ge
 **Every fresh deploy locks the version for production.** The deploy's last remote action runs
 `manage.py set_ready_for_prod off` in the web container and asserts through
 `/health/?deep=1` that `ready_for_prod` reads `false`. Only the **¿Listo para desplegar?**
-button on `/testing/` (admin teacher, QA dashboard) sets it back to `true` — that click is
+button on `/app/testing/` (admin teacher, QA dashboard) sets it back to `true` — that click is
 QA's sign-off, and the production workflow's preflight refuses to arm a release without it.
 Because the nightly deploy resets the flag on every new version, a sign-off always refers to
 the exact version it was given on; it can never silently cover a later, untested build.
@@ -1760,7 +1760,7 @@ Cost: ~$0.02/GB/month. At this scale, effectively free.
 ### Sendgrid or Mailgun — high-volume email
 
 Gmail SMTP allows 500 emails/day via App Password. **This is no longer a comfortable margin — it is
-roughly ONE mass-mail run.** The `/apps/` email forms (Fun Friday, newsletter, payment reminders,
+roughly ONE mass-mail run.** The `/app/apps/` email forms (Fun Friday, newsletter, payment reminders,
 vacation closure, monthly report, receipts, tax certificates) each send to every reachable family in
 one go, so at the documented 2,000-student ceiling a single announcement plus that month's reminders
 already exceeds the daily cap — and the failure is per-message and partial, so the operator sees a

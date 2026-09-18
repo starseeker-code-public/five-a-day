@@ -1,0 +1,69 @@
+{% extends "emails/base_email.html" %}
+{# Delivered to the academy (settings.CONTACT_FORM_RECIPIENT) when somebody   #}
+{# fills in "Contacta con nosotras" on the public site. It replaces Netlify   #}
+{# Forms' notification mail.                                                  #}
+{#                                                                            #}
+{# It extends base_email.html rather than carrying its own <style>, and that  #}
+{# is what makes it read correctly for a recipient on a DARK client: the base #}
+{# declares the message light-only (color-scheme: light) so clients do not    #}
+{# auto-invert it. A dark variant or an adaptive media query is deliberately  #}
+{# NOT used here — that was tried and still rendered dark and wrong in        #}
+{# Outlook, which takes the scheme from the OS theme. See the email gotcha in #}
+{# CLAUDE.md before changing any of this.                                     #}
+{% block title %}Nuevo contacto desde la web · Five a Day{% endblock %}
+
+{% block content %}
+<h1 style="color: #6d28d9; font-size: 26px; margin: 0 0 6px 0;">
+    📬 Nuevo contacto desde la web
+</h1>
+<p style="font-size: 15px; color: #4a4a57; line-height: 1.6; margin: 0 0 24px 0;">
+    <strong style="color: #1f2430;">{{ full_name }}</strong> ha rellenado el formulario
+    de contacto de la página web.
+</p>
+
+{# The submitter's own words, given room of their own — it is the part worth  #}
+{# reading first, and burying it as the last row of a table hides it.         #}
+<div style="background-color: #ede9fe; border-left: 4px solid #6d28d9; padding: 16px 18px; border-radius: 6px; margin: 0 0 24px 0;">
+    <p style="margin: 0 0 8px 0; font-size: 12px; font-weight: 700; color: #6d28d9; letter-spacing: .04em; text-transform: uppercase;">
+        Mensaje
+    </p>
+    {# white-space: pre-line keeps the line breaks the family typed. The value #}
+    {# is autoescaped by Django, so markup in it renders as text.              #}
+    <p style="margin: 0; font-size: 16px; color: #1f2430; line-height: 1.6; white-space: pre-line;">{{ message }}</p>
+</div>
+
+<p style="margin: 0 0 10px 0; font-size: 12px; font-weight: 700; color: #6d28d9; letter-spacing: .04em; text-transform: uppercase;">
+    Datos de contacto
+</p>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"
+       style="border-collapse: collapse; margin: 0 0 24px 0;">
+    {% for label, value in rows %}
+    <tr>
+        <td style="padding: 9px 12px 9px 0; font-size: 14px; color: #4a4a57; vertical-align: top; white-space: nowrap; border-bottom: 1px solid #ede9fe;">
+            {{ label }}
+        </td>
+        <td style="padding: 9px 0; font-size: 15px; color: #1f2430; font-weight: 600; vertical-align: top; border-bottom: 1px solid #ede9fe; word-break: break-word;">
+            {% if label == "Email" %}
+                <a href="mailto:{{ value }}" style="color: #6d28d9; text-decoration: none;">{{ value }}</a>
+            {% elif label == "Teléfono" %}
+                <a href="tel:{{ value }}" style="color: #6d28d9; text-decoration: none;">{{ value }}</a>
+            {% else %}
+                {{ value }}
+            {% endif %}
+        </td>
+    </tr>
+    {% endfor %}
+</table>
+
+{% if reply_to %}
+<div style="text-align: center; margin: 0 0 8px 0;">
+    <a href="mailto:{{ reply_to }}"
+       style="display: inline-block; background-color: #6d28d9; color: #ffffff; text-decoration: none; padding: 12px 28px; border-radius: 8px; font-weight: 600; font-size: 15px;">
+        Responder a {{ full_name }}
+    </a>
+</div>
+<p style="font-size: 13px; color: #4a4a57; text-align: center; margin: 0;">
+    O escribe directamente a <a href="mailto:{{ reply_to }}" style="color: #6d28d9;">{{ reply_to }}</a>
+</p>
+{% endif %}
+{% endblock %}

@@ -46,8 +46,8 @@ def _logged_in(client, teacher):
 
 
 def _confirm_link(message) -> str:
-    """Pull the /password-reset/confirm/<uid>/<token>/ path out of an email."""
-    match = re.search(r"/password-reset/confirm/[^/]+/[^/\s]+/", message.body)
+    """Pull the /app/password-reset/confirm/<uid>/<token>/ path out of an email."""
+    match = re.search(r"/app/password-reset/confirm/[^/]+/[^/\s]+/", message.body)
     assert match, f"no confirm link in:\n{message.body}"
     return match.group(0)
 

@@ -11,7 +11,7 @@
         sync lint format pre-commit-install pc-run \
         mypy bandit audit coverage-badge check-deploy \
         celery-logs celery-restart celery-status celery-test-task \
-        connect-testing
+        connect-testing \n        frontend-install frontend-build frontend-dev frontend-lint frontend-test
 
 # ============================================================================
 # COMPOSE FILE SELECTION — every target goes through $(COMPOSE)
@@ -95,7 +95,7 @@ help:
 	@echo "    DJANGO_ENV in .env: $(if $(DJANGO_ENV_ACTIVE),$(DJANGO_ENV_ACTIVE),<unset>)   (override with TESTING=1)"
 	@echo ""
 	@echo "  Testing:"
-	@echo "    make test               Run all tests (Docker + coverage)"
+	@echo "    make test               Run all PYTHON tests (Docker + coverage)"
 	@echo "    make test unit          Run only unit tests"
 	@echo "    make test integration   Run only integration tests"
 	@echo "    make test coverage      All tests + HTML coverage report"
@@ -105,6 +105,13 @@ help:
 	@echo "    make e2e                All end-to-end journeys vs the REAL Drive (local dev only)"
 	@echo "    make e2e ARGS=--list    List the journeys"
 	@echo "    make e2e ARGS='--only payment'   Run one of them"
+	@echo ""
+	@echo "  Frontend (public React site at /):"
+	@echo "    make frontend-build     Build frontend/ -> frontend/dist  (Django serves it at /)"
+	@echo "    make frontend-test      Vitest component tests (jsdom)"
+	@echo "    make frontend-dev       Vite dev server on :6001 (HMR), proxying /app to Django"
+	@echo "    make frontend-lint      ESLint over the React sources"
+	@echo "    make frontend-install   npm ci  (the three above run it for you)"
 	@echo ""
 	@echo "  Payments:"
 	@echo "    make generate-payments          Generate current month"
@@ -541,6 +548,44 @@ celery-test-task:
 # ============================================================================
 sync:
 	uv sync --no-install-project
+
+# ============================================================================
+# FRONTEND — the public React site (frontend/, built to frontend/dist)
+# ============================================================================
+# Runs on the HOST, not in the web container: the image has no Node, and the
+# Dockerfile builds dist/ in its own node stage. `npm ci` (not `install`) so a
+# local build uses exactly the locked versions CI does.
+#
+# Django serves the result — "/" and each public route return
+# frontend/dist/index.html, WhiteNoise serves everything beside it. Until this
+# has been run at least once, "/" answers 404 with a message saying so.
+frontend-install:
+	npm ci
+
+frontend-build:
+	@[ -d node_modules ] || $(MAKE) frontend-install
+	npm run build
+	@echo "Built frontend/dist — reload http://localhost:8000/"
+
+# HMR for the React site. The Vite dev server proxies /app, /static, /media,
+# /api and /health to Django on :8000, so both halves are reachable from the
+# ONE origin they share in production.
+frontend-dev:
+	@[ -d node_modules ] || $(MAKE) frontend-install
+	npm run dev
+
+frontend-lint:
+	@[ -d node_modules ] || $(MAKE) frontend-install
+	npm run lint
+
+# Vitest + Testing Library in jsdom. These cover what `make test` structurally
+# cannot: Django answering 200 for /faq only proves it served the SHELL — the
+# same shell it serves for every route — so whether React then renders a page
+# or throws is invisible from the server. A component that throws on mount is
+# a blank white page with a 200 status.
+frontend-test:
+	@[ -d node_modules ] || $(MAKE) frontend-install
+	npm test
 
 lint:
 	uv run --no-project ruff check $(if $(FIX),--fix,) project/
