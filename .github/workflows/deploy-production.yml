@@ -1132,8 +1132,11 @@ jobs:
           fi
           # Print the annotated report (file + line + operation) only when there
           # is one, so a clean release does not pad the log.
+          # `|| true` is load-bearing: exit 1 means "found", the shell is
+          # `bash -e`, and the verdict was already taken above — without it
+          # the step dies here and ack_destructive can never pass.
           if [ -n "$DESTRUCTIVE" ]; then
-            python scripts/detect_destructive_migrations.py $MIGRATIONS --format text
+            python scripts/detect_destructive_migrations.py $MIGRATIONS --format text || true
           fi
 
           if [ -z "$DESTRUCTIVE" ]; then
