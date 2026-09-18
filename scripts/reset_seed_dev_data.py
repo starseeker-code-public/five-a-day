@@ -13,6 +13,7 @@ from django.db.models import Count
 # ImportError before line 1 of logic, so the production guard below had never
 # actually run despite the README advertising it as a live safety control.
 from billing.models import Enrollment, EnrollmentType, Payment, SiteConfiguration
+from billing.services.enrollment_type_service import ensure_enrollment_types as provision
 from students.models import Group, Parent, Student, Teacher
 
 
@@ -162,7 +163,6 @@ def ensure_enrollment_types(config: SiteConfiguration):
     Delegates to the shared service so the dev seed can never drift from what
     `seed_enrollment_types` puts in testing and production.
     """
-    from billing.services.enrollment_type_service import ensure_enrollment_types as provision
 
     provision(config)
 

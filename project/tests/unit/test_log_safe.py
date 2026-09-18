@@ -2,6 +2,7 @@
 
 import pytest
 
+from comms.log_safe import safe_log as comms_safe_log
 from core.log_safe import safe_log
 
 
@@ -66,13 +67,9 @@ class TestCommsSafeLogParity:
         ],
     )
     def test_line_breaks_are_replaced(self, raw, expected_contains_no):
-        from comms.log_safe import safe_log as comms_safe_log
-
         cleaned = comms_safe_log(raw)
         assert expected_contains_no not in cleaned
 
     def test_matches_core_implementation(self):
-        from comms.log_safe import safe_log as comms_safe_log
-
         for value in ["plain@x.com", 42, None, "a\r\nb", "x" * 500, "x" * 200]:
             assert comms_safe_log(value) == safe_log(value)

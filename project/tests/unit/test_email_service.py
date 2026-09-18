@@ -160,7 +160,6 @@ class TestSendBulkEmails:
 class TestEmailServiceExtra:
     def test_send_email_with_nonexistent_inline_image_skipped(self):
         """Inline image path that doesn't exist is silently skipped."""
-        from comms.services.email_service import EmailService
 
         svc = EmailService()
         with patch("comms.services.email_service.EmailMultiAlternatives") as mock_email:
@@ -177,8 +176,6 @@ class TestEmailServiceExtra:
         assert result is True
 
     def test_send_email_with_attachments(self):
-        from comms.services.email_service import EmailService
-
         svc = EmailService()
         with patch("comms.services.email_service.EmailMultiAlternatives") as mock_email:
             instance = MagicMock()
@@ -194,8 +191,6 @@ class TestEmailServiceExtra:
         instance.attach.assert_called()
 
     def test_send_email_exception_fail_silently(self):
-        from comms.services.email_service import EmailService
-
         svc = EmailService()
         with patch(
             "comms.services.email_service.EmailMultiAlternatives",
@@ -211,8 +206,6 @@ class TestEmailServiceExtra:
         assert result is False
 
     def test_send_email_exception_raises_when_not_silent(self):
-        from comms.services.email_service import EmailService
-
         svc = EmailService()
         with patch(
             "comms.services.email_service.EmailMultiAlternatives",
@@ -228,8 +221,6 @@ class TestEmailServiceExtra:
                 )
 
     def test_bulk_emails_mixed_success_failure(self):
-        from comms.services.email_service import EmailService
-
         svc = EmailService()
         with patch.object(svc, "send_email", side_effect=[True, False, True]):
             results = svc.send_bulk_emails(

@@ -31,6 +31,8 @@ from django.conf import settings
 from django.urls import reverse
 from django.utils import timezone
 
+from comms.tasks import send_parent_temporary_password_task
+
 logger = logging.getLogger(__name__)
 
 
@@ -102,8 +104,6 @@ def send_portal_temporary_password(request, parent, *, reset: bool = False, resp
         # boundary (see `_parent_by_email`).
         logger.info("Parent portal: recovery within the cooldown, keeping the temporary password already issued")
         return False
-
-    from comms.tasks import send_parent_temporary_password_task
 
     # Only the (non-secret) login URL crosses the task boundary — see the task's
     # docstring for why the password itself does not.

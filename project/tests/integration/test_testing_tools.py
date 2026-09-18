@@ -8,11 +8,24 @@ Tests use override_settings + a Teacher-authenticated client to satisfy the gate
 """
 
 import json
+import subprocess
+from datetime import date, timedelta
+from decimal import Decimal
 from unittest.mock import patch
 
 import pytest
+from django.core import mail
+from django.core.files.uploadedfile import SimpleUploadedFile
+from django.core.management import call_command
+from django.core.management.base import CommandError
 from django.test import override_settings
 from django.urls import reverse
+from django.utils import timezone
+
+from billing.models import Expense
+from billing.services.gcp_cost_service import GCP_EXPENSE_DESCRIPTION, previous_month
+from core.models import BacklogTask, QAConfiguration
+from students.models import Teacher
 
 pytestmark = pytest.mark.django_db
 
@@ -23,7 +36,6 @@ QA_SETTINGS = override_settings(IS_TESTING_ENV=True)
 @pytest.fixture
 def qa_client(client, db):
     """A Django test client authenticated as a logged-in Teacher (QA access)."""
-    from students.models import Teacher
 
     teacher = Teacher.objects.create(
         first_name="QA",
@@ -85,11 +97,6 @@ class TestTestingToolsView:
     @override_settings(GCP_BILLING_EXPORT_TABLE="")
     def test_gcp_costs_show_archived_previous_month(self, qa_client):
         """A finished month reads from its archived Expense row, never live."""
-        from datetime import date
-        from decimal import Decimal
-
-        from billing.models import Expense
-        from billing.services.gcp_cost_service import GCP_EXPENSE_DESCRIPTION, previous_month
 
         prev_year, prev_month = previous_month()
         Expense.objects.create(
@@ -105,7 +112,6 @@ class TestTestingToolsView:
     @QA_SETTINGS
     def test_git_subprocess_failure_is_handled(self, qa_client):
         """If the git subprocess call throws, _git_info returns {} without raising."""
-        import subprocess
 
         with patch("core.views.testing_tools.subprocess.run", side_effect=subprocess.SubprocessError):
             response = qa_client.get(reverse("testing_tools"))
@@ -121,7 +127,7 @@ class TestTestingToolsView:
 class TestApiSeedDatabase:
     @QA_SETTINGS
     def test_success(self, qa_client):
-        with patch("django.core.management.call_command") as mock_cmd:
+        with patch("core.views.testing_tools.call_command") as mock_cmd:
             response = qa_client.post(
                 reverse("api_seed_database"),
                 data=json.dumps({"reset": False}),
@@ -139,7 +145,7 @@ class TestApiSeedDatabase:
 
     @QA_SETTINGS
     def test_success_with_reset(self, qa_client):
-        with patch("django.core.management.call_command") as mock_cmd:
+        with patch("core.views.testing_tools.call_command") as mock_cmd:
             response = qa_client.post(
                 reverse("api_seed_database"),
                 data=json.dumps({"reset": True}),
@@ -160,7 +166,7 @@ class TestApiSeedDatabase:
             if name == "seed_demo_parents":
                 raise RuntimeError("boom")
 
-        with patch("django.core.management.call_command", side_effect=_fail_on_demo):
+        with patch("core.views.testing_tools.call_command", side_effect=_fail_on_demo):
             response = qa_client.post(
                 reverse("api_seed_database"),
                 data=json.dumps({"reset": False}),
@@ -172,7 +178,7 @@ class TestApiSeedDatabase:
 
     @QA_SETTINGS
     def test_command_error_returns_500(self, qa_client):
-        with patch("django.core.management.call_command", side_effect=RuntimeError("boom")):
+        with patch("core.views.testing_tools.call_command", side_effect=RuntimeError("boom")):
             response = qa_client.post(
                 reverse("api_seed_database"),
                 data=json.dumps({"reset": False}),
@@ -239,8 +245,6 @@ class TestApiCreateBacklogTask:
 
     @override_settings(IS_TESTING_ENV=True, SUPPORT_EMAIL="sup@test.com")
     def test_email_is_sent_when_support_email_configured(self, qa_client):
-        from django.core import mail
-
         qa_client.post(
             reverse("api_create_backlog_task"),
             data=json.dumps({"title": "Issue", "description": "", "priority": "medium"}),
@@ -251,9 +255,6 @@ class TestApiCreateBacklogTask:
 
     @override_settings(IS_TESTING_ENV=True, SUPPORT_EMAIL="sup@test.com")
     def test_screenshot_is_attached_to_email_not_stored(self, qa_client):
-        from django.core import mail
-        from django.core.files.uploadedfile import SimpleUploadedFile
-
         img = SimpleUploadedFile("shot.png", b"\x89PNG\r\n\x1a\n" + b"0" * 64, content_type="image/png")
         # multipart POST (form-data), not JSON — this is how a screenshot rides along
         qa_client.post(
@@ -285,8 +286,6 @@ class TestApiCreateBacklogTask:
 class TestApiUpdateBacklogTask:
     @QA_SETTINGS
     def test_update_status_success(self, qa_client):
-        from core.models import BacklogTask
-
         task = BacklogTask.objects.create(title="T", description="", priority="low", created_by="u")
         response = qa_client.post(
             reverse("api_update_backlog_task", kwargs={"task_id": task.id}),
@@ -300,8 +299,6 @@ class TestApiUpdateBacklogTask:
 
     @QA_SETTINGS
     def test_invalid_status_returns_400(self, qa_client):
-        from core.models import BacklogTask
-
         task = BacklogTask.objects.create(title="T", description="", priority="low", created_by="u")
         response = qa_client.post(
             reverse("api_update_backlog_task", kwargs={"task_id": task.id}),
@@ -358,100 +355,6 @@ class TestApiToggleErrorEmail:
         assert response.status_code == 500
 
 
-# ============================================================================
-# api_toggle_drive_uploads (POST) — QA's opt-in to the Drive receipt archive
-# ============================================================================
-
-
-class TestApiToggleDriveUploads:
-    """The switch that lets the QA VM exercise the Google Drive receipt archive.
-
-    Off by default, QA-only, and reachable nowhere else: production always
-    archives and ignores the flag, development can never turn it on.
-    """
-
-    @QA_SETTINGS
-    def test_drive_uploads_default_to_off(self, qa_client):
-        from core.models import QAConfiguration
-
-        assert QAConfiguration.get_config().drive_uploads_enabled is False
-
-    @QA_SETTINGS
-    def test_the_switch_is_rendered_unchecked(self, qa_client):
-        """The dashboard has to actually carry the control — the gate is useless
-        if QA cannot reach it, and `checked` must reflect the stored flag."""
-        html = qa_client.get(reverse("testing_tools")).content.decode()
-        assert 'id="drive-uploads-toggle"' in html
-        assert reverse("api_toggle_drive_uploads") in html
-        # Off by default → no `checked` attribute on that input.
-        toggle = html.split('id="drive-uploads-toggle"')[1].split(">")[0]
-        assert "checked" not in toggle
-
-    @QA_SETTINGS
-    def test_the_switch_renders_checked_once_enabled(self, qa_client):
-        from core.models import QAConfiguration
-
-        config = QAConfiguration.get_config()
-        config.drive_uploads_enabled = True
-        config.save()
-        html = qa_client.get(reverse("testing_tools")).content.decode()
-        toggle = html.split('id="drive-uploads-toggle"')[1].split(">")[0]
-        assert "checked" in toggle
-
-    @QA_SETTINGS
-    def test_toggling_on_then_off_persists_each_time(self, qa_client):
-        from core.models import QAConfiguration
-
-        response = qa_client.post(
-            reverse("api_toggle_drive_uploads"),
-            data=json.dumps({"enabled": True}),
-            content_type="application/json",
-        )
-        assert response.status_code == 200
-        assert response.json()["enabled"] is True
-        assert QAConfiguration.get_config().drive_uploads_enabled is True
-
-        response = qa_client.post(
-            reverse("api_toggle_drive_uploads"),
-            data=json.dumps({"enabled": False}),
-            content_type="application/json",
-        )
-        assert response.json()["enabled"] is False
-        assert QAConfiguration.get_config().drive_uploads_enabled is False
-
-    @QA_SETTINGS
-    def test_leaves_the_other_qa_flag_alone(self, qa_client):
-        """Both switches write through one helper; the field is chosen by the
-        view, so one must never move the other."""
-        from core.models import QAConfiguration
-
-        config = QAConfiguration.get_config()
-        config.error_email_enabled = True
-        config.save()
-
-        qa_client.post(
-            reverse("api_toggle_drive_uploads"),
-            data=json.dumps({"enabled": True}),
-            content_type="application/json",
-        )
-        config = QAConfiguration.get_config()
-        assert config.error_email_enabled is True
-        assert config.drive_uploads_enabled is True
-
-    def test_404_outside_the_qa_environment(self, authenticated_client):
-        response = authenticated_client.post(
-            reverse("api_toggle_drive_uploads"),
-            data=json.dumps({"enabled": True}),
-            content_type="application/json",
-        )
-        assert response.status_code == 404
-
-
-# ============================================================================
-# api_update_backlog_task — QA verification tick (v1.17.5)
-# ============================================================================
-
-
 class TestBacklogQaVerificationTick:
     """The shaded tick beside the priority badge, which the tester turns green.
 
@@ -460,8 +363,6 @@ class TestBacklogQaVerificationTick:
     """
 
     def _task(self):
-        from core.models import BacklogTask
-
         return BacklogTask.objects.create(title="Revisar el alta", priority="high", created_by="qa")
 
     def test_defaults_to_unverified(self):
@@ -536,12 +437,6 @@ class TestBacklogOrdering:
 
     @staticmethod
     def _make(title, status, days_old):
-        from datetime import timedelta
-
-        from django.utils import timezone
-
-        from core.models import BacklogTask
-
         task = BacklogTask.objects.create(title=title, status=status)
         # created_at is auto_now_add, so it has to be rewritten after the insert.
         BacklogTask.objects.filter(pk=task.pk).update(created_at=timezone.now() - timedelta(days=days_old))
@@ -586,8 +481,6 @@ class TestApiMarkReady:
 
     @override_settings(IS_TESTING_ENV=True, SUPPORT_EMAIL="sup@test.com")
     def test_success_sends_email_opens_the_gate_and_arms_the_deploy(self, qa_client, mailoutbox):
-        from core.models import QAConfiguration
-
         assert QAConfiguration.get_config().ready_for_prod is False
 
         with patch("core.views.testing_tools.notify_github_qa_signoff", return_value=True) as notify:
@@ -608,7 +501,6 @@ class TestApiMarkReady:
         """A missing token or an unreachable GitHub API must not break the
         button: the flag is the source of truth and the nightly workflow_run
         re-trigger remains the fallback arming path."""
-        from core.models import QAConfiguration
 
         with patch("core.views.testing_tools.notify_github_qa_signoff", return_value=False):
             response = qa_client.post(reverse("api_mark_ready"), data="{}", content_type="application/json")
@@ -621,8 +513,6 @@ class TestApiMarkReady:
 
     @override_settings(IS_TESTING_ENV=True, SUPPORT_EMAIL="sup@test.com")
     def test_email_failure_keeps_the_gate_closed(self, qa_client):
-        from core.models import QAConfiguration
-
         with (
             patch("core.views.testing_tools.send_mail", side_effect=RuntimeError("smtp down")),
             patch("core.views.testing_tools.notify_github_qa_signoff") as notify,
@@ -637,8 +527,6 @@ class TestApiMarkReady:
 
     @override_settings(IS_TESTING_ENV=True, SUPPORT_EMAIL=None)
     def test_missing_support_email_keeps_the_gate_closed(self, qa_client):
-        from core.models import QAConfiguration
-
         response = qa_client.post(reverse("api_mark_ready"), data="{}", content_type="application/json")
 
         assert response.status_code == 500
@@ -660,8 +548,6 @@ class TestReadyForProdInHealth:
 
     @override_settings(IS_TESTING_ENV=True)
     def test_deep_probe_reports_the_flag(self, client):
-        from core.models import QAConfiguration
-
         response = client.get(reverse("health_check"), {"deep": "1"})
         assert response.status_code == 200
         assert response.json()["ready_for_prod"] is False
@@ -692,10 +578,6 @@ class TestReadyForProdInHealth:
 
 class TestSetReadyForProdCommand:
     def test_off_locks_and_on_unlocks(self):
-        from django.core.management import call_command
-
-        from core.models import QAConfiguration
-
         config = QAConfiguration.get_config()
         config.ready_for_prod = True
         config.save()
@@ -707,9 +589,6 @@ class TestSetReadyForProdCommand:
         assert QAConfiguration.get_config().ready_for_prod is True
 
     def test_rejects_unknown_state(self):
-        from django.core.management import call_command
-        from django.core.management.base import CommandError
-
         with pytest.raises(CommandError):
             call_command("set_ready_for_prod", "maybe")
 
@@ -717,12 +596,11 @@ class TestSetReadyForProdCommand:
         """A manual `on` is still a sign-off, so it fires the same
         repository_dispatch as the /testing/ button; `off` (the nightly
         deploy's reset) must never dispatch anything."""
-        from django.core.management import call_command
 
-        with patch("core.github_dispatch.notify_github_qa_signoff", return_value=True) as notify:
+        with patch("core.management.commands.set_ready_for_prod.notify_github_qa_signoff", return_value=True) as notify:
             call_command("set_ready_for_prod", "on")
         notify.assert_called_once_with()
 
-        with patch("core.github_dispatch.notify_github_qa_signoff") as notify:
+        with patch("core.management.commands.set_ready_for_prod.notify_github_qa_signoff") as notify:
             call_command("set_ready_for_prod", "off")
         notify.assert_not_called()

@@ -9,6 +9,8 @@ from django.contrib import messages
 from django.http import Http404, JsonResponse
 from django.shortcuts import redirect
 
+from core.middleware import _is_non_admin_teacher
+
 
 def _request_teacher(request):
     """Return the Teacher linked to the request's authenticated user, or None.
@@ -48,7 +50,6 @@ def admin_required(view_func):
     def wrapper(request, *args, **kwargs):
         # Imported lazily: core.middleware imports nothing from here, but this
         # keeps the module import-cycle-free regardless of load order.
-        from core.middleware import _is_non_admin_teacher
 
         session = getattr(request, "session", None)
         authenticated = bool(session is not None and session.get("is_authenticated"))

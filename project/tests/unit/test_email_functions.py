@@ -6,6 +6,20 @@ from unittest.mock import patch
 
 import pytest
 
+from billing.models import Payment
+from comms.services.email_functions import (
+    send_all_tax_certificates,
+    send_enrollment_confirmation_email,
+    send_fun_friday_email,
+    send_monthly_report,
+    send_payment_reminder_email,
+    send_quarterly_receipt_email,
+    send_tax_certificate_email,
+    send_vacation_closure_email,
+    send_welcome_email,
+)
+from students.models import Parent
+
 pytestmark = pytest.mark.django_db
 
 
@@ -19,8 +33,6 @@ def mock_email_service():
 
 class TestMonthlyReport:
     def test_send_monthly_report(self, mock_email_service):
-        from comms.services.email_functions import send_monthly_report
-
         result = send_monthly_report("admin@test.com", {"total_students": 100})
         assert result is True
         mock_email_service.send_email.assert_called_once()
@@ -28,8 +40,6 @@ class TestMonthlyReport:
 
 class TestWelcomeEmail:
     def test_send_welcome_email(self, mock_email_service):
-        from comms.services.email_functions import send_welcome_email
-
         result = send_welcome_email(
             parent_email="parent@test.com",
             parent_name="Maria",
@@ -47,8 +57,6 @@ class TestWelcomeEmail:
 
 class TestEnrollmentConfirmation:
     def test_send_enrollment_confirmation(self, mock_email_service):
-        from comms.services.email_functions import send_enrollment_confirmation_email
-
         result = send_enrollment_confirmation_email(
             parent_email="parent@test.com",
             student_name="Daniel",
@@ -62,8 +70,6 @@ class TestEnrollmentConfirmation:
 
 class TestFunFridayEmail:
     def test_send_fun_friday_email(self, mock_email_service):
-        from comms.services.email_functions import send_fun_friday_email
-
         result = send_fun_friday_email(
             recipients=["parent1@test.com", "parent2@test.com"],
             day_name="viernes",
@@ -79,8 +85,6 @@ class TestFunFridayEmail:
         mock_email_service.send_email.assert_called_once()
 
     def test_send_fun_friday_email_without_image(self, mock_email_service):
-        from comms.services.email_functions import send_fun_friday_email
-
         result = send_fun_friday_email(
             recipients=["parent@test.com"],
             day_name="viernes",
@@ -98,8 +102,6 @@ class TestFunFridayEmail:
 
 class TestVacationClosure:
     def test_send_vacation_closure_email(self, mock_email_service):
-        from comms.services.email_functions import send_vacation_closure_email
-
         result = send_vacation_closure_email(
             recipients=["parent@test.com"],
             start_closure_day_name="lunes",
@@ -118,8 +120,6 @@ class TestVacationClosure:
 
 class TestPaymentReminderFull:
     def test_send_payment_reminder_email(self, mock_email_service):
-        from comms.services.email_functions import send_payment_reminder_email
-
         result = send_payment_reminder_email(
             recipients=["parent@test.com"],
             payment_start_day_name="lunes",
@@ -136,8 +136,6 @@ class TestPaymentReminderFull:
 
 class TestQuarterlyReceipt:
     def test_send_quarterly_receipt_email(self, mock_email_service):
-        from comms.services.email_functions import send_quarterly_receipt_email
-
         result = send_quarterly_receipt_email(
             parent_email="parent@test.com",
             student_name="Hugo",
@@ -157,7 +155,6 @@ class TestQuarterlyReceipt:
 class TestEmailFunctionsExtra:
     def test_fun_friday_with_existing_image_path(self, tmp_path):
         """event_image_path present and exists → inline_images populated."""
-        from comms.services.email_functions import send_fun_friday_email
 
         img = tmp_path / "img.png"
         img.write_bytes(b"\x89PNG\r\n")
@@ -180,19 +177,13 @@ class TestEmailFunctionsExtra:
         assert call_kwargs["inline_images"] is not None
 
     def test_tax_certificate_parent_by_id_not_found(self):
-        from comms.services.email_functions import send_tax_certificate_email
-
         assert send_tax_certificate_email(99999, 2025) is False
 
     def test_tax_certificate_no_payments(self, parent):
-        from comms.services.email_functions import send_tax_certificate_email
-
         # No payments for this parent → False
         assert send_tax_certificate_email(parent, 2025) is False
 
     def test_tax_certificate_pdf_generation_fails(self, completed_payment, parent):
-        from comms.services.email_functions import send_tax_certificate_email
-
         with patch(
             "comms.services.email_functions.generate_tax_certificate_pdf",
             side_effect=RuntimeError("pdf broken"),
@@ -201,7 +192,6 @@ class TestEmailFunctionsExtra:
 
     def test_tax_certificate_html_fallback_when_no_weasyprint(self, completed_payment, parent):
         """When weasyprint isn't installed, generate_tax_certificate_pdf returns HTML bytes."""
-        from comms.services.email_functions import send_tax_certificate_email
 
         with patch("comms.services.email_functions.email_service.send_email", return_value=True):
             result = send_tax_certificate_email(parent, 2025)
@@ -211,9 +201,6 @@ class TestEmailFunctionsExtra:
 
     def test_send_all_tax_certificates_with_skipped(self, db, student_with_parent, parent, active_enrollment):
         """Parent with payment but no email → skipped counter increments."""
-        from billing.models import Payment
-        from comms.services.email_functions import send_all_tax_certificates
-        from students.models import Parent
 
         Parent.objects.filter(id=parent.id).update(email="")
 
@@ -234,9 +221,6 @@ class TestEmailFunctionsExtra:
         assert results["skipped"] >= 1
 
     def test_send_all_tax_certificates_with_failure(self, db, student_with_parent, parent, active_enrollment):
-        from billing.models import Payment
-        from comms.services.email_functions import send_all_tax_certificates
-
         Payment.objects.create(
             student=student_with_parent,
             parent=parent,

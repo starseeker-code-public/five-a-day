@@ -15,6 +15,8 @@ from billing.models import Payment
 from core.constants import SCHEDULED_APPS
 from core.decorators import admin_required
 from core.models import TodoItem
+from core.transactions import get_active_students, get_all_payments_unrestricted
+from core.views.waiting_list import group_capacity_summary
 from students.models import Group, Student
 
 # Dates shown per recurring scheduled email on the home card (Fun Friday repeats weekly).
@@ -308,7 +310,6 @@ def _capacity_card() -> dict:
     `available_spots` / `is_full` per row instead costs four queries per group —
     that helper exists precisely to stop this page doing that.
     """
-    from core.views.waiting_list import group_capacity_summary
 
     capacity_rows = group_capacity_summary()
     return {
@@ -319,6 +320,41 @@ def _capacity_card() -> dict:
             if row["has_room_for_waiters"]
         ],
     }
+
+
+def _drive_disconnected_warning(request) -> bool:
+    """True when an admin should be nagged that the Drive archive is off.
+
+    Three conditions, and all three matter: the viewer is an admin (nobody else
+    can fix it), this environment can complete the consent at all (the QA VM
+    cannot — see `core.views.google_drive.drive_connect_available`), and no
+    account is currently connected.
+
+    Reads the singleton per request rather than caching: connecting from
+    `/management/` must silence this on the very next page load, and one indexed
+    primary-key lookup on the dashboard is not worth a cache.
+    """
+    from core.middleware import _is_non_admin_teacher
+    from core.models import GoogleDriveCredential
+    from core.views.google_drive import drive_connect_available
+
+    # The same predicate `@admin_required` uses, so the warning and the page it
+    # points at can never disagree about who is an admin.
+    session = getattr(request, "session", None)
+    authenticated = bool(session is not None and session.get("is_authenticated"))
+    if not authenticated or _is_non_admin_teacher(request) or not drive_connect_available():
+        return False
+    try:
+        # A plain SELECT, NOT `get_config()`: that helper is `get_or_create`, so
+        # simply rendering the dashboard would INSERT the singleton row the first
+        # time anyone looked at it. A read path must not write — and the uneven
+        # cost (a write on the first render, none afterwards) is what
+        # `test_cost_is_flat_between_three_and_thirty_families` caught.
+        config = GoogleDriveCredential.objects.filter(pk=1).first()
+        return not (config and config.is_connected)
+    except Exception:  # a dashboard must render even when this lookup cannot
+        logger.exception("Could not read the Google Drive credential for the dashboard warning")
+        return False
 
 
 def home(request):
@@ -350,6 +386,12 @@ def home(request):
         "today": today,
         "inspirational_quote": quote_text,
         "inspirational_author": quote_author,
+        # Nag an ADMIN, on every visit, while the receipt archive is off. Only an
+        # admin can connect it, so warning a teacher would be noise about a
+        # control they cannot reach. Deliberately NOT dismissible-once: the
+        # symptom of it being off is silence — receipts simply are not filed —
+        # so the reminder has to be as persistent as the problem.
+        "drive_disconnected_warning": _drive_disconnected_warning(request),
     }
 
     response = render(request, "home.html", context)
@@ -366,8 +408,6 @@ def home(request):
 
 @admin_required
 def all_info(request):
-    from core.transactions import get_active_students, get_all_payments_unrestricted
-
     DB_PAGE_SIZE = 20
 
     # ── Students sorting ──

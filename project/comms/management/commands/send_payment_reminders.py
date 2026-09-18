@@ -10,12 +10,12 @@ Usage:
 
 from django.core.management.base import BaseCommand
 
+from comms.tasks import send_payment_reminders
+
 
 class Command(BaseCommand):
     help = "Send payment reminder emails (and opt-in SMS) for payments due within 7 days"
 
     def handle(self, *args, **options):
-        from comms.tasks import send_payment_reminders
-
         result = send_payment_reminders.apply().get()
         self.stdout.write(self.style.SUCCESS(f"Payment reminders: {result}"))

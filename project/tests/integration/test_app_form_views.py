@@ -5,6 +5,10 @@ from unittest.mock import patch
 
 import pytest
 from django.urls import reverse
+from django.utils import timezone
+
+from core.models import FunFridayScheduledSend
+from students.models import Parent, Student, StudentParent
 
 pytestmark = pytest.mark.django_db
 
@@ -59,9 +63,6 @@ class TestFunFridayForm:
 
     def test_send_all_schedules_for_monday_1430(self, authenticated_client, student_with_parent):
         """The real announcement persists a FunFridayScheduledSend for 14:30 on the Monday of the target week."""
-        from django.utils import timezone
-
-        from core.models import FunFridayScheduledSend
 
         friday = timezone.localdate() + timedelta(days=(4 - timezone.localdate().weekday()) % 7 + 14)
         expected_monday = friday - timedelta(days=friday.weekday())
@@ -97,14 +98,11 @@ class TestFunFridayForm:
         Production is unaffected: there is no ATOMIC_REQUESTS, so the `save()`
         autocommits and the callback fires immediately.
         """
-        from django.utils import timezone
-
-        from core.models import FunFridayScheduledSend
 
         # Last week's Friday — its Monday-14:30 slot is guaranteed to be in the past
         past_friday = timezone.localdate() - timedelta(days=7)
         with patch(
-            "comms.tasks._send_fun_friday_batch", return_value={"status": "success", "sent": 1, "total": 1}
+            "core.tasks._send_fun_friday_batch", return_value={"status": "success", "sent": 1, "total": 1}
         ) as mock_batch:
             with django_capture_on_commit_callbacks(execute=True) as callbacks:
                 response = authenticated_client.post(
@@ -448,7 +446,7 @@ class TestFunFridayExtra:
 
     def test_send_all_with_email_failures(self, authenticated_client, student_with_parent):
         """Exceptions during send (in the scheduled task) don't break the form."""
-        with patch("comms.services.email_functions.send_fun_friday_email", side_effect=Exception("SMTP down")):
+        with patch("core.tasks.send_fun_friday_email", side_effect=Exception("SMTP down")):
             next_friday = date.today() + timedelta(days=(4 - date.today().weekday()) % 7 or 7)
             response = authenticated_client.post(
                 reverse("fun_friday_form"),
@@ -583,7 +581,6 @@ class TestVacationClosureExtra:
 
     def test_no_parents_with_email(self, authenticated_client, db, group):
         """If no parents have email, warning + redirect to apps."""
-        from students.models import Parent, Student, StudentParent
 
         no_email_parent = Parent.objects.create(
             first_name="X",
@@ -732,7 +729,6 @@ class TestBirthdayFormExtra:
 
     def test_main_send_with_birthday_today(self, authenticated_client, db, group, parent):
         """A student with a birthday today triggers an email send."""
-        from students.models import Student, StudentParent
 
         today = date.today()
         s = Student.objects.create(
@@ -751,8 +747,6 @@ class TestBirthdayFormExtra:
         assert response.status_code == 302
 
     def test_main_send_email_exception_handled(self, authenticated_client, db, group, parent):
-        from students.models import Student, StudentParent
-
         today = date.today()
         s = Student.objects.create(
             first_name="Another",
@@ -1011,8 +1005,6 @@ class TestNewsletterExtra:
         assert response.status_code == 302
 
     def test_main_send_no_parent_emails(self, authenticated_client, db, group):
-        from students.models import Parent, Student, StudentParent
-
         p = Parent.objects.create(
             first_name="No",
             last_name="Mail",
@@ -1207,8 +1199,6 @@ class TestEnrollmentFormExtra:
         assert response.status_code == 302
 
     def test_main_send_enrollment_adult_success(self, authenticated_client, adult_student, parent):
-        from students.models import StudentParent
-
         StudentParent.objects.create(student=adult_student, parent=parent)
         with patch("core.views.app_forms.email_service") as svc:
             svc.send_email.return_value = True

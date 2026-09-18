@@ -1,9 +1,16 @@
 """Tests for core.middleware — auth middleware edge cases."""
 
 import logging
+import logging as _logging
+from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
-from django.test import Client
+from django.http import HttpResponse, HttpResponseForbidden, HttpResponseServerError
+from django.test import Client, RequestFactory
+
+from core.logging_utils import RequestContextFilter, get_request_id, get_trace_id
+from core.middleware import RequestLogMiddleware
 
 pytestmark = pytest.mark.django_db
 
@@ -104,12 +111,6 @@ class TestRequestLogMiddleware:
 
     def _run(self, response=None, path="/", **meta):
         """Drive the middleware directly so a status can be forced."""
-        from unittest.mock import patch
-
-        from django.http import HttpResponse
-        from django.test import RequestFactory
-
-        from core.middleware import RequestLogMiddleware
 
         request = RequestFactory().get(path, **meta)
         final = response if response is not None else HttpResponse("ok")
@@ -147,14 +148,6 @@ class TestRequestLogMiddleware:
         """The formatter builds `logging.googleapis.com/trace` from a record
         field that NOTHING populated until this was plumbed through — the trace
         could never be emitted however the project was configured."""
-        import logging as _logging
-        from unittest.mock import patch
-
-        from django.http import HttpResponse
-        from django.test import RequestFactory
-
-        from core.logging_utils import RequestContextFilter
-        from core.middleware import RequestLogMiddleware
 
         seen = {}
 
@@ -176,7 +169,6 @@ class TestRequestLogMiddleware:
 
     def test_a_malformed_trace_header_is_dropped_not_invented(self, client):
         """A fabricated trace would file our records under another request."""
-        from core.logging_utils import get_trace_id
 
         response = client.get("/login/", HTTP_X_CLOUD_TRACE_CONTEXT="not-a-trace/1;o=1")
         assert get_trace_id() == ""
@@ -186,14 +178,11 @@ class TestRequestLogMiddleware:
     def test_context_is_cleared_afterwards(self, client):
         """An id left bound leaks onto the next request the worker serves —
         Gunicorn reuses threads, so this is a real mix-up, not a tidy-up."""
-        from core.logging_utils import get_request_id
 
         client.get("/login/")
         assert get_request_id() == ""
 
     def test_5xx_returned_by_a_view_is_an_error(self):
-        from django.http import HttpResponseServerError
-
         _response, mock_logger = self._run(response=HttpResponseServerError("boom"))
         assert self._level(mock_logger) == logging.ERROR
 
@@ -203,12 +192,6 @@ class TestRequestLogMiddleware:
         incident out of two throttle buckets — so the completion line drops to
         the INFO rung: still there, with the timing and the correlation id, but
         it does not alert on its own."""
-        from unittest.mock import patch
-
-        from django.http import HttpResponseServerError
-        from django.test import RequestFactory
-
-        from core.middleware import RequestLogMiddleware
 
         request = RequestFactory().get("/")
 
@@ -229,8 +212,6 @@ class TestRequestLogMiddleware:
         assert self._level(mock_logger) == logging.WARNING
 
     def test_4xx_is_visible_but_never_alerts(self):
-        from django.http import HttpResponseForbidden
-
         _response, mock_logger = self._run(response=HttpResponseForbidden("no"))
         assert self._level(mock_logger) == logging.INFO
 
@@ -250,14 +231,6 @@ class TestRequestLogMiddleware:
         assert "INJECTED" not in str(mock_logger.log.call_args)
 
     def test_the_url_name_is_logged(self):
-        from types import SimpleNamespace
-        from unittest.mock import patch
-
-        from django.http import HttpResponse
-        from django.test import RequestFactory
-
-        from core.middleware import RequestLogMiddleware
-
         request = RequestFactory().get("/")
 
         def get_response(req):

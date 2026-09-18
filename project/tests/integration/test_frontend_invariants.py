@@ -28,6 +28,8 @@ from pathlib import Path
 
 import pytest
 
+from billing.models import Payment
+
 PROJECT_DIR = Path(__file__).resolve().parents[2]
 CORE_TEMPLATES = PROJECT_DIR / "core" / "templates"
 ROOT_TEMPLATES = PROJECT_DIR / "templates"
@@ -701,7 +703,11 @@ def test_modal_dialogs_get_the_shared_focus_management():
 # by construction. Listed rather than guarded so the exemption is a decision on
 # the record instead of an omission.
 AGE_GUARD_EXEMPT = {
-    "core/templates/home.html:141",
+    # NOTE: keyed by LINE NUMBER, so anything inserted above it in home.html
+    # moves the target and fails this test with the card itself untouched
+    # (it moved 141 -> 149 when the Drive warning modal was added). If that
+    # happens, re-point it rather than guarding a value that cannot be None.
+    "core/templates/home.html:149",
 }
 
 
@@ -765,7 +771,6 @@ def test_complete_trigger_is_hidden_on_every_uncompletable_status():
     that was returned. `failed` stays completable — a failed card retried in
     cash is a real workflow.
     """
-    from billing.models import Payment
 
     # The guard is the MODEL's predicate (v1.29.2), not a status chain typed
     # into the template: `Payment.is_open` is what quick_complete_payment,

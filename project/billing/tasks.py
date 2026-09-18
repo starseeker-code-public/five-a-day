@@ -5,10 +5,15 @@ Wraps existing management commands / service methods so they can be
 scheduled via Celery Beat instead of an external cron.
 """
 
+import io
 from datetime import date
 
 from celery import shared_task
 from celery.utils.log import get_task_logger
+from django.core.management import call_command
+
+from billing.services.expense_service import materialize_recurring, materialize_recurring_for_date
+from billing.services.gcp_cost_service import archive_month, previous_month
 
 logger = get_task_logger(__name__)
 
@@ -20,7 +25,6 @@ def materialize_recurring_expenses_task(self, month: int | None = None, year: in
     concrete Expense row for the given month. Idempotent — skips templates that
     have already been materialised via `generated_from`.
     """
-    from billing.services.expense_service import materialize_recurring
 
     today = date.today()
     m = month or today.month
@@ -37,7 +41,6 @@ def materialize_recurring_expenses_daily_task(self, target_date: str | None = No
     and YEARLY templates whose month+day match today. Idempotent — safe to re-run
     (matches on template + concrete date). `target_date` is an ISO string for tests.
     """
-    from billing.services.expense_service import materialize_recurring_for_date
 
     d = date.fromisoformat(target_date) if target_date else date.today()
     created = materialize_recurring_for_date(d)
@@ -58,7 +61,6 @@ def archive_gcp_costs_task(self, month: int | None = None, year: int | None = No
     `gcp_cost_service.archive_month`). `month`/`year` override the target for
     backfills; by default the month before today is archived.
     """
-    from billing.services.gcp_cost_service import archive_month, previous_month
 
     if month is None or year is None:
         year, month = previous_month()
@@ -74,9 +76,6 @@ def generate_monthly_payments_task(self, month: int | None = None, year: int | N
     rows for every active enrollment. Runs the existing `generate_payments`
     management command so CLI and Beat share exactly one code path.
     """
-    import io
-
-    from django.core.management import call_command
 
     today = date.today()
     m = month or today.month

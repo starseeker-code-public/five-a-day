@@ -25,13 +25,17 @@ double-billed. These tests check the constraint bites on the duplicate AND that
 it still permits the legitimate shapes the academy really has.
 """
 
+import importlib.util
 import os
 from datetime import date, timedelta
 from decimal import Decimal
 from io import StringIO
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+from django.conf import settings as dj_settings
+from django.contrib.admin.sites import AdminSite
 from django.contrib.auth.models import User
 from django.core.exceptions import ValidationError
 from django.core.management import call_command
@@ -40,8 +44,16 @@ from django.db.models import Prefetch
 from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 
+from billing.admin import EnrollmentAdmin
 from billing.models import Enrollment, Expense, Payment
+from billing.services.expense_service import materialize_recurring
+from billing.services.payment_service import PaymentService
+from comms.tasks import send_birthday_email_task, send_enrollment_confirmation_task
 from core.models import BacklogTask, Feature, FunFridayAttendance
+from core.services.analytics_service import financial_summary_month, financial_summary_year
+from core.views.app_forms import _ACTIVE_CHILDREN_PREFETCH
+from core.views.students import get_ff_student_ids
+from core.views.testing_tools import _backlog_tasks_qs
 from students.models import Group, Parent, Student, StudentParent
 
 pytestmark = pytest.mark.django_db
@@ -193,8 +205,6 @@ class TestBacklogDashboardDoesNotScaleWithTasks:
     of a development, and `_backlog_tasks_qs()` did not join `feature`."""
 
     def test_feature_titles_come_from_one_query(self, django_assert_max_num_queries):
-        from core.views.testing_tools import _backlog_tasks_qs
-
         feature = Feature.objects.create(title="Epic", description="d", status="open")
         for i in range(30):
             BacklogTask.objects.create(title=f"T{i}", description="d", priority="low", status="open", feature=feature)
@@ -273,9 +283,6 @@ class TestEnrollmentChangelistDoesNotScaleWithRows:
         If the two ever disagree the admin column silently lies, so compare them
         on the same row rather than trusting either alone.
         """
-        from django.contrib.admin.sites import AdminSite
-
-        from billing.admin import EnrollmentAdmin
 
         model_admin = EnrollmentAdmin(Enrollment, AdminSite())
         request = type("R", (), {"GET": {}, "user": None})()
@@ -293,8 +300,6 @@ class TestFinancialSummaryYearIsConstant:
     how much data exists."""
 
     def test_three_queries_regardless_of_rows(self, student, parent, active_enrollment, django_assert_max_num_queries):
-        from core.services.analytics_service import financial_summary_year
-
         year = date.today().year
         for month in range(1, 13):
             Payment.objects.create(
@@ -330,7 +335,6 @@ class TestFinancialSummaryYearIsConstant:
     def test_matches_the_per_month_helper(self, student, parent, active_enrollment):
         """`_months_by_month` is a second implementation of
         `financial_summary_month`; they must not drift."""
-        from core.services.analytics_service import financial_summary_month, financial_summary_year
 
         year = date.today().year
         Payment.objects.create(
@@ -406,8 +410,6 @@ class TestPrefetchIsNotDiscarded:
         assert len(captured) >= 10, "expected one query per parent from the discarded prefetch"
 
     def test_prefetch_with_to_attr_does_not(self, family, django_assert_max_num_queries):
-        from core.views.app_forms import _ACTIVE_CHILDREN_PREFETCH
-
         qs = Parent.objects.filter(children__active=True).distinct().prefetch_related(_ACTIVE_CHILDREN_PREFETCH)
         with django_assert_max_num_queries(2):
             names = [[s.full_name for s in p.active_children] for p in qs]
@@ -456,8 +458,6 @@ class TestFunFridayDateLookupIsIndexed:
     """
 
     def test_a_date_index_exists(self):
-        from django.db import connection
-
         with connection.cursor() as cur:
             cur.execute(
                 "SELECT indexdef FROM pg_indexes "
@@ -466,8 +466,6 @@ class TestFunFridayDateLookupIsIndexed:
             assert cur.fetchall(), "no single-column index on fun_friday_attendance.date"
 
     def test_lookup_still_returns_the_right_students(self, student, group):
-        from core.views.students import get_ff_student_ids
-
         friday = date(2026, 9, 4)
         other = Student.objects.create(first_name="Other", last_name="Kid", group=group, active=True)
         FunFridayAttendance.objects.create(student=student, date=friday)
@@ -593,7 +591,6 @@ class TestPendingPeriodicPaymentIsUniquePerMonth:
         """`schedule_academic_year_payments` swallows the IntegrityError and keeps
         going, so one lost race does not abort the remaining periods (or, in the
         cron, the remaining students)."""
-        from billing.services.payment_service import PaymentService
 
         first_pass = PaymentService.schedule_academic_year_payments(active_enrollment, parent, as_of=date(2026, 1, 31))
         assert first_pass > 0
@@ -657,8 +654,6 @@ class TestMaterialisedExpenseIsUniquePerDate:
         assert Expense.objects.filter(generated_from__isnull=True, is_recurring=False).count() == 3
 
     def test_materialising_twice_creates_one_row(self, template):
-        from billing.services.expense_service import materialize_recurring
-
         assert materialize_recurring(3, 2026) == 1
         assert materialize_recurring(3, 2026) == 0
         assert Expense.objects.filter(generated_from=template, expense_date=date(2026, 3, 1)).count() == 1
@@ -778,7 +773,6 @@ class TestBilledMonthsMap:
         """`billed_months_map` is a second implementation of the set
         `pending_periods` builds for itself. If the two disagree the batched cron
         bills differently from the unbatched one, which is worse than either."""
-        from billing.services.payment_service import PaymentService
 
         enrollments = _roster(teacher, enrollment_type_new_student, 6)
         call_command("generate_payments", stdout=StringIO())
@@ -795,8 +789,6 @@ class TestBilledMonthsMap:
             assert mapped.get((e.student_id, "monthly"), set()) == expected
 
     def test_batched_and_unbatched_pending_periods_agree(self, teacher, enrollment_type_new_student, site_config):
-        from billing.services.payment_service import PaymentService
-
         enrollments = _roster(teacher, enrollment_type_new_student, 6)
         call_command("generate_payments", stdout=StringIO())
 
@@ -812,7 +804,6 @@ class TestBilledMonthsMap:
         """`None` means "resolve it yourself"; an empty set means "this student has
         nothing billed yet". Testing falsiness instead of `is None` would make the
         batched path re-query for exactly the students it had already resolved."""
-        from billing.services.payment_service import PaymentService
 
         with CaptureQueriesContext(connection) as captured:
             PaymentService.pending_periods(active_enrollment, billed_months=set())
@@ -822,7 +813,6 @@ class TestBilledMonthsMap:
         """The map is mutated as rows are created, so a second call for the same
         student in the same run sees what the first issued. Without that the
         batched path would be LESS idempotent than the unbatched one."""
-        from billing.services.payment_service import PaymentService
 
         billed = set()
         first = PaymentService.schedule_academic_year_payments(
@@ -847,8 +837,6 @@ class TestBirthdayFanOutDoesNotDiscardItsPrefetch:
     """
 
     def test_two_queries_per_student(self, student_with_parent, django_assert_max_num_queries):
-        from comms.tasks import send_birthday_email_task
-
         with patch("comms.services.email_service.EmailService.send_email", return_value=True):
             with django_assert_max_num_queries(2):
                 send_birthday_email_task.apply(args=[student_with_parent.id]).get()
@@ -856,7 +844,6 @@ class TestBirthdayFanOutDoesNotDiscardItsPrefetch:
     def test_it_still_emails_every_parent_with_an_address(self, student, parent, second_parent):
         StudentParent.objects.create(student=student, parent=parent)
         StudentParent.objects.create(student=student, parent=second_parent)
-        from comms.tasks import send_birthday_email_task
 
         with patch("comms.services.email_service.EmailService.send_email", return_value=True) as send:
             send_birthday_email_task.apply(args=[student.id]).get()
@@ -868,7 +855,6 @@ class TestBirthdayFanOutDoesNotDiscardItsPrefetch:
         parent.email = ""
         parent.save(update_fields=["email"])
         StudentParent.objects.create(student=student, parent=parent)
-        from comms.tasks import send_birthday_email_task
 
         with patch("comms.services.email_service.EmailService.send_email", return_value=True) as send:
             result = send_birthday_email_task.apply(args=[student.id]).get()
@@ -881,7 +867,6 @@ class TestBirthdayFanOutDoesNotDiscardItsPrefetch:
         switch from `values_list` to the prefetch."""
         adult_student.email = "adult@example.com"
         adult_student.save(update_fields=["email"])
-        from comms.tasks import send_birthday_email_task
 
         with patch("comms.services.email_service.EmailService.send_email", return_value=True) as send:
             send_birthday_email_task.apply(args=[adult_student.id]).get()
@@ -904,11 +889,6 @@ class TestDatabaseConnectionSettings:
 
     @staticmethod
     def _load(**env):
-        import importlib.util
-        from pathlib import Path
-
-        from django.conf import settings as dj_settings
-
         path = Path(dj_settings.BASE_DIR) / "project" / "settings.py"
         spec = importlib.util.spec_from_file_location("_probe_settings", path)
         module = importlib.util.module_from_spec(spec)
@@ -1106,17 +1086,14 @@ class TestEnrollmentConfirmationDoesNotDiscardItsPrefetch:
     def test_two_queries_for_the_enrollment_and_its_parents(
         self, student, parent, active_enrollment, django_assert_max_num_queries
     ):
-        from comms.tasks import send_enrollment_confirmation_task
-
         StudentParent.objects.create(student=student, parent=parent)
 
-        with patch("comms.services.email_functions.send_enrollment_confirmation_email", return_value=True):
+        with patch("comms.tasks.send_enrollment_confirmation_email", return_value=True):
             with django_assert_max_num_queries(2):
                 send_enrollment_confirmation_task(active_enrollment.id)
 
     def test_a_parent_without_an_email_is_still_skipped(self, student, parent, second_parent, active_enrollment):
         """The email filter moved INTO the prefetch — it must still filter."""
-        from comms.tasks import send_enrollment_confirmation_task
 
         parent.email = ""
         parent.save(update_fields=["email"])
@@ -1126,14 +1103,12 @@ class TestEnrollmentConfirmationDoesNotDiscardItsPrefetch:
         # Patched on the SOURCE module: the task imports the function inside its
         # own body, so the name is resolved from `email_functions` at call time
         # and never becomes an attribute of `comms.tasks`.
-        with patch("comms.services.email_functions.send_enrollment_confirmation_email", return_value=True) as send:
+        with patch("comms.tasks.send_enrollment_confirmation_email", return_value=True) as send:
             send_enrollment_confirmation_task(active_enrollment.id)
 
         assert send.call_args.kwargs["parent_email"] == second_parent.email
 
     def test_it_reports_an_error_when_nobody_has_an_email(self, student, parent, active_enrollment):
-        from comms.tasks import send_enrollment_confirmation_task
-
         parent.email = ""
         parent.save(update_fields=["email"])
         StudentParent.objects.create(student=student, parent=parent)

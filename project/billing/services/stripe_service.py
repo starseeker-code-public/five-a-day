@@ -17,9 +17,13 @@ import json
 import logging
 import time
 from dataclasses import dataclass
+from datetime import date
 
 import httpx
 from django.conf import settings
+
+from billing.models import Payment
+from core.tasks import dispatch_payment_completed
 
 logger = logging.getLogger(__name__)
 
@@ -167,9 +171,6 @@ class StripeService:
                                           link can be issued cleanly
         Anything else is a no-op.
         """
-        from datetime import date
-
-        from billing.models import Payment
 
         event_type = event.get("type", "")
         session = event.get("data", {}).get("object", {})
@@ -276,7 +277,6 @@ class StripeService:
             # completion triggers, so a new side effect cannot reach only one of
             # the two ways a payment gets completed. It never raises.
             # Late import avoids circular imports at module load.
-            from comms.tasks import dispatch_payment_completed
 
             dispatch_payment_completed(payment.id)
 

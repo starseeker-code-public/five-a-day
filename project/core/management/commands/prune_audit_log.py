@@ -12,7 +12,7 @@ Usage:
 
 from django.core.management.base import BaseCommand, CommandError
 
-from core.tasks import AUDIT_LOG_RETENTION_DAYS
+from core.tasks import AUDIT_LOG_RETENTION_DAYS, prune_audit_log
 
 
 class Command(BaseCommand):
@@ -32,8 +32,6 @@ class Command(BaseCommand):
         )
 
     def handle(self, *args, **options):
-        from core.tasks import prune_audit_log
-
         try:
             result = prune_audit_log.apply(kwargs={"days": options["days"], "dry_run": options["dry_run"]}).get()
         except ValueError as e:

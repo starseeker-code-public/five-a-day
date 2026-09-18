@@ -12,7 +12,8 @@ from django.db import IntegrityError, transaction
 from django.db.models.functions import ExtractMonth, ExtractYear
 
 from billing.constants import PERIODIC_PAYMENT_TYPES
-from billing.models import Payment
+from billing.models import Payment, SiteConfiguration, enrollment_academic_year
+from billing.money import monthly_fee_for, round_money
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +43,6 @@ class PaymentService:
         `PricingService.get_monthly_fee`), so a schedule type added to one map
         priced correctly on the ficha and fell back to full-time on the invoice.
         """
-        from billing.money import monthly_fee_for
 
         return monthly_fee_for(enrollment.schedule_type, config)
 
@@ -227,7 +227,6 @@ class PaymentService:
         `Enrollment.save()` and `EnrollmentService._apply_discounts` already go
         straight there. Do not route this back through `pricing_service`.
         """
-        from billing.money import round_money
 
         return round_money(value)
 
@@ -364,7 +363,6 @@ class PaymentService:
         invoiced: there is nothing left to re-bill, so the caller must refuse the
         change rather than issue an enrollment that can never generate a payment.
         """
-        from billing.models import enrollment_academic_year
 
         requested_start = requested_start or date.today()
         earliest = requested_start
@@ -568,7 +566,6 @@ class PaymentService:
         than the unbatched one, which is the trap in caching a "what exists" set
         across writes.
         """
-        from billing.models import SiteConfiguration
 
         student = enrollment.student
         if not student.active:
@@ -679,7 +676,6 @@ class PaymentService:
 
         Returns the number of payments created.
         """
-        from billing.models import SiteConfiguration
 
         student = enrollment.student
         if not student.active or until is None:

@@ -6,11 +6,15 @@ The commands are thin: they run the task synchronously via `.apply()`.
 """
 
 import io
+from datetime import timedelta
 from unittest.mock import MagicMock, patch
 
 import pytest
 from django.core.management import call_command
 from django.core.management.base import CommandError
+from django.utils import timezone
+
+from core.models import BacklogTask
 
 pytestmark = pytest.mark.django_db
 
@@ -57,7 +61,7 @@ class TestSendMonthlyReportCommand:
 
 class TestSendDueFunFridayEmailsCommand:
     def test_runs_drain_task(self):
-        with patch("comms.tasks.send_due_fun_friday_emails_task.apply") as mock_apply:
+        with patch("core.tasks.send_due_fun_friday_emails_task.apply") as mock_apply:
             mock_apply.return_value = _eager_result({"status": "success", "processed": 0, "sent": 0})
             out = io.StringIO()
             call_command("send_due_fun_friday_emails", stdout=out)
@@ -102,11 +106,6 @@ class TestCleanupBacklogTasksCommand:
 
     def test_real_run_deletes_old_done_tasks(self):
         """End-to-end: an old done task is deleted, a fresh one survives."""
-        from datetime import timedelta
-
-        from django.utils import timezone
-
-        from core.models import BacklogTask
 
         old = BacklogTask.objects.create(title="old", description="x", status="done")
         BacklogTask.objects.filter(pk=old.pk).update(updated_at=timezone.now() - timedelta(days=40))

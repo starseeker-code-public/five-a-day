@@ -4,10 +4,13 @@
 - comms.tasks.send_payment_receipt_email_task  (v1.11 receipt email)
 """
 
+from datetime import date
+from decimal import Decimal
 from unittest.mock import patch
 
 import pytest
 
+from billing.models import Payment
 from comms.tasks import send_parent_temporary_password_task, send_payment_receipt_email_task
 
 pytestmark = pytest.mark.django_db
@@ -57,7 +60,9 @@ class TestSendParentTemporaryPasswordTask:
         # ...and it must not come back out in the return value either, which the
         # result backend stores.
         assert "temporary_password" not in result
-        assert set(result) == {"status", "recipient"}
+        # Nor the address: Celery logs the return dict at INFO, so an email in
+        # here is an email in Cloud Logging on every send.
+        assert set(result) == {"status", "parent_id"}
 
     def test_an_existing_password_keeps_working(self, parent):
         """Recovery is unauthenticated, so issuing a temporary password must not
@@ -101,12 +106,12 @@ class TestSendPaymentReceiptEmailTask:
         completed_payment.student.email = ""
         completed_payment.student.save()
 
-        with patch("billing.services.pdf_service.generate_payment_receipt", return_value=b"%PDF-fake"):
+        with patch("comms.tasks.generate_payment_receipt", return_value=b"%PDF-fake"):
             result = send_payment_receipt_email_task.run(completed_payment.id)
         assert result["status"] == "skipped"
 
     def test_sends_pdf_receipt(self, completed_payment):
-        with patch("billing.services.pdf_service.generate_payment_receipt", return_value=b"%PDF-1.4\nhi\n%%EOF"):
+        with patch("comms.tasks.generate_payment_receipt", return_value=b"%PDF-1.4\nhi\n%%EOF"):
             with patch("comms.services.email_service.EmailService.send_email", return_value=True) as mock_send:
                 result = send_payment_receipt_email_task.run(completed_payment.id)
 
@@ -122,10 +127,6 @@ class TestSendPaymentReceiptEmailTask:
 
     def test_falls_back_to_student_email_when_no_parent(self, adult_student, active_enrollment):
         """Adult students have no parent — recipient must be the student's own email."""
-        from datetime import date
-        from decimal import Decimal
-
-        from billing.models import Payment
 
         payment = Payment.objects.create(
             student=adult_student,
@@ -139,7 +140,7 @@ class TestSendPaymentReceiptEmailTask:
             payment_date=date.today(),
             concept="Test",
         )
-        with patch("billing.services.pdf_service.generate_payment_receipt", return_value=b"%PDF-fake"):
+        with patch("comms.tasks.generate_payment_receipt", return_value=b"%PDF-fake"):
             with patch("comms.services.email_service.EmailService.send_email", return_value=True) as mock_send:
                 result = send_payment_receipt_email_task.run(payment.id)
         assert result["status"] == "success"

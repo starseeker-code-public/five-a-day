@@ -9,12 +9,13 @@ call) live in unit/test_payment_helpers.py.
 import json
 from datetime import date
 from decimal import Decimal
-from unittest.mock import patch
+from unittest.mock import PropertyMock, patch
 
 import pytest
 from django.urls import reverse
 
 from billing.models import Payment
+from students.models import Student
 
 pytestmark = pytest.mark.django_db
 
@@ -369,9 +370,6 @@ class TestGetPaymentDetails:
         # The row fetch now lives OUTSIDE the try (a stale id is a 404, tested
         # below), so the catch-all is exercised by breaking serialization inside
         # the try instead.
-        from unittest.mock import PropertyMock
-
-        from students.models import Student
 
         with patch.object(Student, "full_name", new_callable=PropertyMock, side_effect=RuntimeError("boom")):
             response = authenticated_client.get(

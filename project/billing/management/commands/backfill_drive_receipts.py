@@ -23,7 +23,7 @@ from django.core.management.base import BaseCommand, CommandError
 
 from billing.models import Payment
 from billing.services.pdf_service import generate_payment_receipt
-from core.services.drive_service import DriveReceiptService, archive_subfolder, drive_uploads_allowed
+from core.services.drive_service import DriveReceiptService, drive_uploads_allowed
 
 
 class Command(BaseCommand):
@@ -77,9 +77,7 @@ class Command(BaseCommand):
 
         total = payments.count()
         mode = "APPLY" if apply_changes else "DRY RUN"
-        sandbox = archive_subfolder()
-        destination = f" into the '{sandbox}' sandbox subfolder" if sandbox else ""
-        self.stdout.write(f"[{mode}] {total} completed payment(s) to archive{destination}.")
+        self.stdout.write(f"[{mode}] {total} completed payment(s) to archive.")
 
         if not apply_changes:
             # Nothing to iterate for: the count IS the answer. Walking the rows to

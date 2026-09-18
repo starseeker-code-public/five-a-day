@@ -13,7 +13,7 @@ from datetime import date
 from email.message import MIMEPart
 
 from django.conf import settings
-from django.core.mail import EmailMultiAlternatives
+from django.core.mail import EmailMultiAlternatives, get_connection
 from django.template.loader import render_to_string
 
 from comms.log_safe import safe_log
@@ -62,7 +62,6 @@ class EmailService:
         open in its own try/except; `core.views.app_forms._mass_send` is the one
         place that does it for every mass mail in the app.
         """
-        from django.core.mail import get_connection
 
         return get_connection()
 

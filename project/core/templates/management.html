@@ -9,6 +9,34 @@
 
 {% block header_actions %}
 {% if is_admin_user %}
+{% comment %}
+Google Drive receipt archive. ADMIN ONLY and never rendered for teachers:
+connecting authorises the app against a real Google account, which is not a
+teacher's decision. Hidden entirely where the consent cannot complete
+(`drive_connect_available` — the QA VM, see core/views/google_drive.py), and the
+views refuse there too, so a missing button is never a working URL.
+{% endcomment %}
+{% if drive_connect_available %}
+{% if drive_credential.is_connected %}
+<form method="post" action="{% url 'drive_oauth_disconnect' %}" class="inline"
+      data-confirm="¿Desconectar Google Drive? Los recibos ya archivados no se borran, pero se dejarán de subir los nuevos.">
+    {% csrf_token %}
+    <button type="submit"
+            title="Conectado como {{ drive_credential.account_email }} — pulsa para desconectar"
+            class="header-action-btn bg-white hover:bg-neutral-50 text-neutral-700 px-6 py-3 rounded-md border border-neutral-300 flex items-center gap-2 transition-all duration-200 text-base leading-none">
+        <span style="display:inline-block;width:10px;height:10px;border-radius:9999px;background:#16a34a;flex:none;"></span>
+        <span class="material-symbols-outlined text-[20px]">cloud_done</span> Drive conectado
+    </button>
+</form>
+{% else %}
+<a href="{% url 'drive_oauth_redirect' %}"
+   title="Los recibos de los pagos cobrados no se están archivando en Drive"
+   class="header-action-btn bg-white hover:bg-neutral-50 text-neutral-700 px-6 py-3 rounded-md border border-neutral-300 flex items-center gap-2 transition-all duration-200 text-base leading-none">
+    <span style="display:inline-block;width:10px;height:10px;border-radius:9999px;background:#dc2626;flex:none;"></span>
+    <span class="material-symbols-outlined text-[20px]">cloud_upload</span> Conectar Drive
+</a>
+{% endif %}
+{% endif %}
 <button id="btn-edit-values" class="header-action-btn bg-primary-500 hover:bg-primary-600 text-white px-6 py-3 rounded-md flex items-center gap-2 transition-all duration-200 transform hover:scale-105 hover:shadow-md text-base leading-none">
     <span class="material-symbols-outlined text-[20px]">edit</span> Cambiar Valores
 </button>

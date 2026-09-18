@@ -9,17 +9,15 @@ The base folder is `settings.GOOGLE_DRIVE_RECEIPTS_FOLDER_ID` and the service
 account (reused from the Sheets integration, `drive` scope) must have Editor
 access to it. Every level of the path is find-or-created.
 
-**Only PRODUCTION archives receipts (v1.29.5).** Uploading from anywhere else
-writes into the academy's real, permanent archive, so a QA seed run or a
-developer clicking "marcar cobrado" would file fictional receipts beside the
-ones the academy files with its accountant — indistinguishable after the fact.
-`drive_uploads_allowed()` is THE gate: production always, the QA VM only while
-the `/testing/` toggle is on (`QAConfiguration.drive_uploads_enabled`, off by
-default) and then only into a `testing/` subfolder of the month
-(`archive_subfolder()`), development and the test suite never. Both the
-on-completion task and `backfill_drive_receipts` go through it, because the
-command builds a `DriveReceiptService` directly and would otherwise write real
-paths from the VM.
+**Only PRODUCTION archives receipts.** Uploading from anywhere else writes
+into the academy's real, permanent archive, so a QA seed run or a developer
+clicking "marcar cobrado" would file fictional receipts beside the ones the
+academy files with its accountant — indistinguishable after the fact.
+`drive_uploads_allowed()` is THE gate and it is now simply "is this
+production": the QA opt-in toggle and its `testing/` sandbox folder were
+removed in v1.29.10, because the archive authenticates as a delegated Google
+account and the QA VM cannot complete that consent at all (Google refuses a
+plain-HTTP redirect URI on a raw IP).
 
 **This module is best-effort and NEVER raises.** The Drive archive is a
 convenience on top of the real records (the `Payment` row and the emailed
@@ -32,13 +30,17 @@ from __future__ import annotations
 
 import dataclasses
 import logging
+import os
 import re
 from dataclasses import dataclass
 from datetime import date
 
 from django.conf import settings
 
+from core.constants import MESES_ES
 from core.log_safe import safe_log
+from core.models import GoogleDriveCredential
+from core.services.google_sheets_service import _load_service_account_info
 
 logger = logging.getLogger(__name__)
 
@@ -48,11 +50,21 @@ logger = logging.getLogger(__name__)
 # is shared. `drive` lets the service account use everything shared with it.
 _DRIVE_SCOPES = ["https://www.googleapis.com/auth/drive"]
 
+# Google's OAuth token endpoint. A module constant rather than a literal at the
+# call site below: bandit's B106 reads any `token`-ish keyword holding a string
+# literal as a hardcoded credential, and a public URL is not worth a `# nosec`
+# that would also mask a real secret slipping into that call.
+_GOOGLE_TOKEN_URI = "https://oauth2.googleapis.com/token"
+
 _FOLDER_MIME = "application/vnd.google-apps.folder"
 
 #: "not resolved yet", so a cached `None` (genuinely unconfigured) is not
 #: mistaken for a cache miss and re-read on every call.
 _UNSET = object()
+
+#: Lifetime of an impersonated token. Short on purpose — it is re-minted per
+#: service instance, and a payment upload takes seconds, not an hour.
+_IMPERSONATION_LIFETIME_SECONDS = 600
 
 #: How long a single Drive API call may take. googleapiclient's default is
 #: `socket.getdefaulttimeout()` — i.e. no timeout at all — and production runs
@@ -62,12 +74,6 @@ _UNSET = object()
 #: must fail fast rather than hold a request open.
 _DRIVE_TIMEOUT_SECONDS = 10
 
-#: The extra folder level QA uploads are quarantined into, inside the month:
-#: `<Mes> YY/testing/`. A separate folder rather than a filename prefix because
-#: the academy's accountant opens these folders — a fictional receipt has to be
-#: somewhere they will never scroll past, not merely named differently.
-TESTING_SUBFOLDER = "testing"
-
 
 def _is_production() -> bool:
     return getattr(settings, "ENVIRONMENT", "") == "production"
@@ -76,46 +82,30 @@ def _is_production() -> bool:
 def drive_uploads_allowed() -> bool:
     """THE gate on whether this environment may write to the Drive archive.
 
-    Production: always, and without touching the database — a DB blip must never
-    be able to switch the real archive off. The QA VM (``IS_TESTING_ENV``): only
-    while ``QAConfiguration.drive_uploads_enabled`` is on, which is off by
-    default and is the ``/testing/`` dashboard's "Recibos a Drive" toggle.
-    Everywhere else — development, Docker, the test suite: never.
+    **Production only, and decided without touching the database.** The Drive
+    folders are the academy's real, permanent archive — the one its accountant
+    opens — and there is nothing in a receipt PDF that says which environment
+    produced it, so a QA seed run or a developer clicking "marcar cobrado"
+    filing a fictional receipt beside the genuine ones is unrecoverable after
+    the fact.
 
-    One predicate, read by ``DriveReceiptService.upload_receipt`` (the true
-    enforcement point), by ``comms.tasks.upload_receipt_to_drive_task`` (so a
+    Until v1.29.10 the QA VM could opt in through a `/testing/` toggle
+    (`QAConfiguration.drive_uploads_enabled`) and its uploads were quarantined
+    into a `testing/` subfolder. Both are gone, because the archive now
+    authenticates as a DELEGATED Google account connected from `/management/`
+    (a service account cannot write to a consumer Drive at all — see
+    `_build_credentials`), and connecting one on the QA VM is not possible
+    anyway: Google refuses to register a redirect URI that is plain HTTP on a
+    raw IP, which is exactly what that VM is. A toggle nobody can reach is worse
+    than no toggle — it reads as a supported path.
+
+    One predicate, read by `DriveReceiptService.upload_receipt` (the true
+    enforcement point), by `core.tasks.upload_receipt_to_drive_task` (so a
     disallowed environment does not even render the PDF) and by
-    ``backfill_drive_receipts`` (which builds its own service instance and would
+    `backfill_drive_receipts` (which builds its own service instance and would
     otherwise walk the whole archive reporting one refusal per payment).
-
-    Fails CLOSED on a database error: the safe direction here is "do not write to
-    the academy's permanent archive", and this module never raises.
     """
-    if _is_production():
-        return True
-    if not getattr(settings, "IS_TESTING_ENV", False):
-        return False
-
-    from core.models import QAConfiguration
-
-    try:
-        return bool(QAConfiguration.get_config().drive_uploads_enabled)
-    except Exception:  # best-effort archive; fail closed
-        logger.exception("Could not read the QA Drive-upload toggle; refusing the upload")
-        return False
-
-
-def archive_subfolder() -> str:
-    """The month subfolder receipts are filed into: `""` in production,
-    ``TESTING_SUBFOLDER`` anywhere else.
-
-    Only ever consulted once `drive_uploads_allowed()` has said yes, so "not
-    production" here means "the QA VM with the toggle on". Derived from the same
-    `_is_production()` check as the gate, so the two cannot disagree — a QA
-    upload that landed in the real month folder would be indistinguishable from a
-    genuine receipt.
-    """
-    return "" if _is_production() else TESTING_SUBFOLDER
+    return _is_production()
 
 
 @dataclass
@@ -147,7 +137,15 @@ def curso_folder_name(d: date) -> str:
         start = d.year
     else:
         start = d.year - 1
-    return f"Curso {start}/{start + 1}"
+    # `Curso 2026/27`, NOT `Curso 2026/2027`. The second year is TWO digits,
+    # because that is how the academy has named these folders for years
+    # (`Curso 2024/25`, `Curso 2025/26`) and Drive folders are matched BY NAME.
+    # The four-digit form was caught by a real upload on 2026-09-18: find-or-
+    # create cheerfully built `Curso 2026/2027` beside the real `Curso 2026/27`,
+    # filed the receipt into it, reported success, and the accountant would
+    # never have seen a single one. Nothing errors in that failure — same shape
+    # as the MESES_ES warning on `month_folder_name` below.
+    return f"Curso {start}/{(start + 1) % 100:02d}"
 
 
 def month_folder_name(d: date) -> str:
@@ -159,7 +157,6 @@ def month_folder_name(d: date) -> str:
     differently-spelled folder beside the real one — find-or-create succeeds
     either way and nothing would error.
     """
-    from core.constants import MESES_ES
 
     return f"{MESES_ES[d.month - 1].capitalize()} {d:%y}"
 
@@ -206,30 +203,140 @@ class DriveReceiptService:
             self._credentials = _service_account_info()
         return self._credentials
 
+    def _delegated_credentials(self):
+        """Credentials for the Google account an admin connected, or None.
+
+        Reads the singleton every call rather than caching: connecting or
+        disconnecting from `/management/` must take effect on the next upload,
+        and this runs once per payment, not per row.
+        """
+        # Lazy: the google-auth stack is a TRANSITIVE dependency (via
+        # django-gsheets) and is not declared in pyproject.toml, so a
+        # module-level import turns a degraded Drive feature into an app
+        # that cannot boot.
+        from google.oauth2.credentials import Credentials as UserCredentials
+
+        client_id = os.getenv("GOOGLE_CLIENT_ID", "")
+        client_secret = os.getenv("GOOGLE_CLIENT_SECRET", "")
+        if not client_id or not client_secret:
+            return None
+
+        try:
+            config = GoogleDriveCredential.get_config()
+            refresh_token = config.refresh_token
+        except Exception:  # best-effort archive; fail closed
+            # Bare `Exception`, exactly as `drive_uploads_allowed` above: this
+            # runs inside "marcar cobrado" (production is Celery-eager), and the
+            # module's contract is that it NEVER raises. A database blip must
+            # cost the Drive copy, never the payment. Reported, so an archive
+            # that quietly stops filing is never a mystery.
+            logger.exception("Could not read the Google Drive credential; skipping the delegated route")
+            return None
+
+        if not refresh_token:
+            return None
+
+        return UserCredentials(
+            token=None,
+            refresh_token=refresh_token,
+            token_uri=_GOOGLE_TOKEN_URI,
+            client_id=client_id,
+            client_secret=client_secret,
+            scopes=_DRIVE_SCOPES,
+        )
+
+    def _impersonation_target(self) -> str:
+        """The service account to impersonate, or "" to fall back to a key.
+
+        Checked BEFORE the key so production never depends on stored credential
+        material: Cloud Run's own identity mints a drive-scoped token for itself
+        and nothing is written down. The key path stays for local use and for
+        anyone who cannot grant the token-creator role.
+        """
+        return (getattr(settings, "GOOGLE_DRIVE_IMPERSONATE_SA", "") or "").strip()
+
     def is_configured(self) -> bool:
-        """True iff a base folder and service-account credentials are both set."""
-        return bool(self.base_folder_id) and self._credential_info() is not None
+        """True iff a base folder AND some way to authenticate are both set.
+
+        Deliberately does not verify that the credential WORKS — that would mean
+        a network call on a predicate the task consults per payment. A wrong
+        impersonation target or an unshared folder surfaces as an `error` result
+        from the upload itself, with the cause logged.
+        """
+        if not self.base_folder_id:
+            return False
+        if self._delegated_credentials() is not None:
+            return True
+        return bool(self._impersonation_target()) or self._credential_info() is not None
 
     # ── Drive client ─────────────────────────────────────────────────────────
 
-    def _get_service(self):
-        if self._service is not None:
-            return self._service
+    def _build_credentials(self):
+        """Drive credentials: the connected Google account, else a service account.
+
+        DELEGATED USER (the only route that actually works). A service account
+        OWNS whatever it uploads and has no Drive storage on a consumer account,
+        so every write returns `storageQuotaExceeded` — verified against the real
+        folder on 2026-09-18. The uploader therefore has to be a real account,
+        connected once from `/management/` and stored on
+        `core.models.GoogleDriveCredential`. google-auth refreshes the access
+        token from the refresh token on its own, so this works with no session
+        behind it: the Stripe webhook, the 12 jobs and `backfill_drive_receipts`
+        all file correctly.
+
+        The two service-account routes below are kept and tried only as
+        fallbacks. They cannot work against the academy's consumer Drive, but
+        they are correct code for a Shared Drive or a Workspace tenant, and the
+        impersonation one records why plain ADC cannot reach Drive from Cloud
+        Run at all (`google.auth.default()` yields a `cloud-platform`-scoped
+        token, which Drive refuses on scope).
+        """
+        delegated = self._delegated_credentials()
+        if delegated is not None:
+            return delegated
+
+        target = self._impersonation_target()
+        if target:
+            import google.auth
+            from google.auth import impersonated_credentials
+
+            # The SOURCE must be requested with cloud-platform: it is only being
+            # used to call IAM, and asking the metadata server for the drive
+            # scope here is exactly the thing that does not work.
+            source, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
+            return impersonated_credentials.Credentials(
+                source_credentials=source,
+                target_principal=target,
+                target_scopes=_DRIVE_SCOPES,
+                lifetime=_IMPERSONATION_LIFETIME_SECONDS,
+            )
+
+        from google.oauth2.service_account import Credentials
+
         info = self._credential_info()
         if info is None:
-            raise RuntimeError("Google service account credentials are not configured.")
-        # Late imports: the google-api-client stack is heavy and only needed when
-        # an upload actually runs.
-        from google.oauth2.service_account import Credentials
+            raise RuntimeError("Google Drive credentials are not configured.")
+        return Credentials.from_service_account_info(info, scopes=_DRIVE_SCOPES)
+
+    def _get_service(self):
+        # Deliberately lazy. googleapiclient / google-auth-oauthlib /
+        # google-auth-httplib2 / httplib2 are TRANSITIVE deps (via django-gsheets),
+        # not declared in pyproject.toml — at module level a shift in that tree
+        # turns a degraded Google feature into an app that cannot boot. It also
+        # keeps ~300 ms of Google stack off every cold start for a path most
+        # requests never take. (This comment stood here FIVE times; collapsed.)
+        import google_auth_httplib2
+        import httplib2
         from googleapiclient.discovery import build
 
-        creds = Credentials.from_service_account_info(info, scopes=_DRIVE_SCOPES)
+        if self._service is not None:
+            return self._service
+
+        creds = self._build_credentials()
 
         # An explicit transport, purely to bound the socket — see
         # `_DRIVE_TIMEOUT_SECONDS`. Without it a stalled Drive connection holds
         # the request open forever.
-        import google_auth_httplib2
-        import httplib2
 
         http = google_auth_httplib2.AuthorizedHttp(creds, http=httplib2.Http(timeout=_DRIVE_TIMEOUT_SECONDS))
         # cache_discovery=False: the default file cache warns under non-writable
@@ -344,17 +451,21 @@ class DriveReceiptService:
         distinct failure statuses matter operationally, so each is logged with a
         message aimed at the actual cause (sharing vs. wrong id vs. transient).
         """
+        # Deliberately lazy. googleapiclient / google-auth-oauthlib /
+        # google-auth-httplib2 / httplib2 are TRANSITIVE deps (via django-gsheets),
+        # not declared in pyproject.toml — at module level a shift in that tree
+        # turns a degraded Google feature into an app that cannot boot. It also
+        # keeps ~300 ms of Google stack off every cold start for a path most
+        # requests never take.
+        from googleapiclient.http import MediaInMemoryUpload
+
         # `Payment.receipt_date` — the same property that picks the YEAR of the
         # receipt NUMBER, so a receipt cannot be numbered for one year and filed
         # under another.
         d = payment.receipt_date
-        # The path levels, in order, so the reported `folder_path` and the folders
-        # actually created come from ONE list — a QA upload reported against the
-        # real path would be the whole point of the sandbox lost.
+        # Reported path and created folders come from ONE expression, so what the
+        # result claims and what Drive received cannot disagree.
         levels = [curso_folder_name(d), "Recibos", month_folder_name(d)]
-        sandbox = archive_subfolder()
-        if sandbox:
-            levels.append(sandbox)
         folder_path = "/".join(levels)
 
         # The environment gate FIRST: outside production this must not touch the
@@ -376,8 +487,6 @@ class DriveReceiptService:
                 return DriveUploadResult(
                     success=True, status="skipped_exists", folder_path=folder_path, file_id=existing
                 )
-
-            from googleapiclient.http import MediaInMemoryUpload
 
             media = MediaInMemoryUpload(pdf_bytes, mimetype="application/pdf", resumable=False)
             created = (
@@ -404,6 +513,13 @@ class DriveReceiptService:
 def _describe_error(exc: Exception) -> str:
     """A short, cause-oriented message for the log — no raw exception text to the
     client, and the common Drive failures named so an operator knows what to fix."""
+    # NOT a top-level import: here the import IS the condition. The `except`
+    # binds `HttpError = ()` so the isinstance() below is simply False when
+    # googleapiclient is unavailable — this module's contract is that a Drive
+    # problem never raises into the payment flow, and an error FORMATTER is the
+    # last place that should be able to fail. Hoisting it would also leave an
+    # empty `try:` block. The module's other googleapiclient imports are at the
+    # top; only this fallback pair has to stay.
     try:
         from googleapiclient.errors import HttpError
     except Exception:  # noqa: BLE001
@@ -433,7 +549,6 @@ def _describe_error(exc: Exception) -> str:
 def _service_account_info():
     """Reuse the Sheets integration's credential loader — same service account,
     one place that knows how to read the JSON/file setting."""
-    from core.services.google_sheets_service import _load_service_account_info
 
     return _load_service_account_info()
 

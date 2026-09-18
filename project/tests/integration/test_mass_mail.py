@@ -14,15 +14,32 @@ pins shut rather than the code it happens to touch:
 * the fiscal certificate merged same-named siblings into one subtotal.
 """
 
+import smtplib
 from datetime import date, timedelta
 from decimal import Decimal
 from unittest.mock import patch
 
 import pytest
+from django.contrib.messages import get_messages
+from django.core import mail
+from django.core.mail.backends.locmem import EmailBackend
 from django.urls import reverse
 from reportlab.lib.units import mm
 
+from billing.models import Payment
+from billing.services import pdf_service
+from billing.services.pdf_service import (
+    _FRAME_WIDTH_MM,
+    _fit_widths,
+    generate_payment_receipt,
+    generate_report_pdf,
+    generate_student_payment_history,
+    generate_tax_certificate,
+)
+from comms.services.email_functions import cheque_idioma_fee, send_all_tax_certificates
+from comms.tasks import send_birthday_emails_task
 from core.models import FunFridayScheduledSend, HistoryLog
+from core.views.app_forms import _dedupe_emails, _parent_recipients
 from students.models import Parent, Student, StudentParent
 
 pytestmark = pytest.mark.django_db
@@ -95,8 +112,6 @@ def _addresses(outbox):
 
 class TestWaitingListFamiliesAreExcluded:
     def test_recipient_helper_drops_them(self, student_with_parent, waiting_family):
-        from core.views.app_forms import _parent_recipients
-
         recipients = [r.lower() for r in _parent_recipients()]
         assert "maria@test.com" in recipients
         assert waiting_family.email.lower() not in recipients
@@ -113,7 +128,6 @@ class TestWaitingListFamiliesAreExcluded:
             },
         )
         assert response.status_code == 302
-        from django.core import mail
 
         assert waiting_family.email.lower() not in _addresses(mail.outbox)
         assert "maria@test.com" in _addresses(mail.outbox)
@@ -129,7 +143,6 @@ class TestWaitingListFamiliesAreExcluded:
             },
         )
         assert response.status_code == 302
-        from django.core import mail
 
         assert waiting_family.email.lower() not in _addresses(mail.outbox)
 
@@ -160,7 +173,6 @@ class TestWaitingListFamiliesAreExcluded:
 
     def test_birthday_cron_skips_them(self, group):
         """The daily job and the manual button must agree on who gets a card."""
-        from comms.tasks import send_birthday_emails_task
 
         today = date.today()
         parent = Parent.objects.create(
@@ -188,13 +200,9 @@ class TestWaitingListFamiliesAreExcluded:
 
 class TestAddressDeduplication:
     def test_helper_is_case_insensitive(self):
-        from core.views.app_forms import _dedupe_emails
-
         assert _dedupe_emails([" A@x.com ", "a@X.COM", "", None, "b@x.com"]) == ["A@x.com", "b@x.com"]
 
     def test_shared_mailbox_gets_one_vacation_notice(self, authenticated_client, shared_mailbox_couple):
-        from django.core import mail
-
         response = authenticated_client.post(
             reverse("vacation_closure_form"),
             {
@@ -317,8 +325,6 @@ class TestSmtpConnectionFailureIsReported:
         assert response.status_code == 302
 
     def test_tax_certificates_report_failure_instead_of_raising(self, completed_payment):
-        from comms.services.email_functions import send_all_tax_certificates
-
         with patch("comms.services.email_service.email_service.open_connection", side_effect=OSError("smtp down")):
             results = send_all_tax_certificates(2025)
         assert results["sent"] == 0
@@ -335,6 +341,222 @@ class TestTotalFailureIsRecorded:
         entry = HistoryLog.objects.filter(action="email_sent", message__startswith="Recibos").first()
         assert entry is not None
         assert "fallidos" in entry.message
+
+
+# ---------------------------------------------------------------------------
+# 4b. Every family is reached — not just the first one
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def three_families(db, group):
+    """Three unrelated families, each with one active child.
+
+    Every mass-mail fixture in the suite resolved to exactly ONE reachable
+    address, which is why `len(mail.outbox) == 1` was the strongest count
+    assertion anywhere and why the tests below did not exist. Proven by
+    mutation: `_mass_send` changed to deliver to `jobs[:1]` — one recipient out
+    of N — left the ENTIRE 2,493-test suite green, while delivering to `jobs[:0]`
+    failed 12 tests. The suite could see "nobody was mailed" and could not see
+    "only the first person was mailed", which is the shape of a real partial
+    delivery failure.
+    """
+    made = []
+    for n in range(3):
+        parent = Parent.objects.create(
+            first_name=f"Fam{n}",
+            last_name="Multi",
+            dni=f"MM{n:07d}",
+            phone=f"60000000{n}",
+            email=f"fam{n}@multi.test",
+        )
+        kid = Student.objects.create(
+            first_name=f"Hijo{n}",
+            last_name="Multi",
+            birth_date=date(2015, 3, 3),
+            gdpr_signed=True,
+            group=group,
+            active=True,
+        )
+        StudentParent.objects.create(student=kid, parent=parent)
+        made.append(parent)
+    return made
+
+
+class TestEveryFamilyIsReached:
+    """A mass mail must reach EVERY family, and the test must be able to tell.
+
+    Each case asserts the exact recipient SET, not a count and not a membership
+    check: a count passes when the right number of messages went to the wrong
+    people, and `x in outbox` passes when x was the only one reached.
+    """
+
+    def test_the_payment_reminder_reaches_all_three(self, authenticated_client, three_families):
+        mail.outbox.clear()
+        response = authenticated_client.post(
+            reverse("payment_reminder_form"),
+            {
+                "payment_start_date": "2026-04-01",
+                "payment_end_date": "2026-04-05",
+                "month": "abril",
+                "iban_number": "ES1234567890",
+                "telephone_number_bizum": "600000000",
+            },
+        )
+
+        assert response.status_code == 302
+        assert _addresses(mail.outbox) == sorted(p.email for p in three_families)
+
+    def test_the_vacation_closure_reaches_all_three(self, authenticated_client, three_families):
+        mail.outbox.clear()
+        response = authenticated_client.post(
+            reverse("vacation_closure_form"),
+            {
+                "closure_start_date": "2026-12-23",
+                "closure_end_date": "2027-01-03",
+                "reopening_date": "2027-01-08",
+                "closure_reason": "Navidad",
+            },
+        )
+
+        assert response.status_code == 302
+        assert _addresses(mail.outbox) == sorted(p.email for p in three_families)
+
+    def test_the_newsletter_reaches_all_three(self, authenticated_client, three_families, group):
+        mail.outbox.clear()
+        response = authenticated_client.post(
+            reverse("newsletter_form"),
+            {"group_name": group.group_name, "newsletter_link": "https://canva.com/x", "message": "Hola"},
+        )
+
+        assert response.status_code == 302
+        assert _addresses(mail.outbox) == sorted(p.email for p in three_families)
+
+    def test_the_success_banner_counts_what_was_actually_sent(self, authenticated_client, three_families):
+        """`_mass_send` substitutes the delivered count into the flash message.
+
+        The banner is the only feedback the operator gets, so a send that
+        reached one family while reporting three is worse than one that
+        reported the failure — they would never look again.
+        """
+
+        mail.outbox.clear()
+        response = authenticated_client.post(
+            reverse("vacation_closure_form"),
+            {
+                "closure_start_date": "2026-12-23",
+                "closure_end_date": "2027-01-03",
+                "reopening_date": "2027-01-08",
+                "closure_reason": "Navidad",
+            },
+            follow=True,
+        )
+
+        banners = [str(m) for m in get_messages(response.wsgi_request)]
+        assert any(str(len(mail.outbox)) in text for text in banners), (
+            f"no banner names the {len(mail.outbox)} messages actually sent: {banners}"
+        )
+
+
+class TestAFailureMidBatchDoesNotCostTheRestOfTheBatch:
+    """`_mass_send` opens ONE SMTP session for the whole mass mail.
+
+    Django's SMTP backend never reopens a connection it still holds, so once
+    that socket dies every remaining `send_messages()` on it fails — and Gmail
+    both drops idle sockets and enforces a per-session message cap, so this is
+    the normal case at this academy's size, not an edge one.
+    `EmailService.send_bulk_emails` handles it (it `close()`s the connection and
+    sets it to `None` on any per-message failure, so the rest of the batch opens
+    fresh ones); `_mass_send`, which backs all six mass-mail forms in the UI,
+    does not.
+
+    The suite could not see this: with a socket that dies after one message,
+    three families yield ONE delivery and two silent losses, and every other
+    assertion in the file — the redirect, the HistoryLog entry, `x in outbox` —
+    is satisfied by that outcome.
+    """
+
+    class _SocketDiesAfterOne:
+        """Marker; the real backend is built in the fixture below."""
+
+    @pytest.fixture
+    def dying_socket(self):
+        """A locmem backend whose socket carries one message and then dies.
+
+        The counter is per-INSTANCE on purpose. A class-level one would make
+        every REOPENED connection dead too — that is "the server is down",
+        which both implementations already handle identically and which
+        `TestSmtpConnectionFailureIsReported` above covers. The bug here is
+        specifically that a reconnect would work and is never attempted.
+        """
+
+        class SocketDiesAfterOne(EmailBackend):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                self._sent = 0
+
+            def send_messages(self, email_messages):
+                self._sent += 1
+                if self._sent > 1:
+                    raise smtplib.SMTPServerDisconnected("connection closed by server")
+                return super().send_messages(email_messages)
+
+        return SocketDiesAfterOne
+
+    def test_the_third_family_is_still_reached(self, authenticated_client, three_families, dying_socket):
+        """The socket dies on family 2. Family 3 must still get their email.
+
+        Family 2's own message is legitimately lost — a reconnect-and-retry is
+        deliberately not attempted, because a wasted handshake after a genuine
+        per-recipient failure (a bad address) is the cheaper mistake. What must
+        not happen is family 3 paying for family 2's dead socket.
+        """
+
+        mail.outbox.clear()
+        with patch("core.views.app_forms.email_service.open_connection", side_effect=lambda: dying_socket()):
+            response = authenticated_client.post(
+                reverse("vacation_closure_form"),
+                {
+                    "closure_start_date": "2026-12-23",
+                    "closure_end_date": "2027-01-03",
+                    "reopening_date": "2027-01-08",
+                    "closure_reason": "Navidad",
+                },
+            )
+
+        assert response.status_code == 302
+        reached = _addresses(mail.outbox)
+        assert three_families[2].email in reached, (
+            f"only {reached} was reached of {[p.email for p in three_families]} — "
+            "the dead socket from family 2 was reused for family 3"
+        )
+
+    def test_the_loss_is_at_least_reported_to_the_operator(self, authenticated_client, three_families, dying_socket):
+        """Passes today, and is the reason the bug above is survivable.
+
+        `_mass_send` counts every per-message failure and writes both a
+        `HistoryLog` entry and an amber banner, so the operator is told that N
+        did not go out even though they are not told why. This is what
+        separates F-001 from a silent data-loss bug — and it is exactly what
+        `send_all_tax_certificates` (same defect, annual fiscal mailing) also
+        does.
+        """
+
+        mail.outbox.clear()
+        with patch("core.views.app_forms.email_service.open_connection", side_effect=lambda: dying_socket()):
+            authenticated_client.post(
+                reverse("vacation_closure_form"),
+                {
+                    "closure_start_date": "2026-12-23",
+                    "closure_end_date": "2027-01-03",
+                    "reopening_date": "2027-01-08",
+                    "closure_reason": "Navidad",
+                },
+            )
+
+        entry = HistoryLog.objects.filter(action="email_sent", message__contains="fallidos").first()
+        assert entry is not None, "a partial mass-mail failure left no trace in the activity feed"
+        assert len(mail.outbox) < len(three_families), "the fixture no longer reproduces a partial failure"
 
 
 # ---------------------------------------------------------------------------
@@ -463,8 +685,6 @@ class TestChequeIdiomaUnit:
         assert "€ euros" not in html
 
     def test_an_operator_typed_symbol_is_stripped(self, authenticated_client, student_with_parent):
-        from django.core import mail
-
         response = authenticated_client.post(
             reverse("payment_reminder_form"),
             {
@@ -482,8 +702,6 @@ class TestChequeIdiomaUnit:
         assert "34€ euros" not in body
 
     def test_blank_input_falls_back_to_site_configuration(self, authenticated_client, student_with_parent):
-        from django.core import mail
-
         authenticated_client.post(
             reverse("payment_reminder_form"),
             {
@@ -500,8 +718,6 @@ class TestChequeIdiomaUnit:
         assert "34 euros" in body
 
     def test_helper_tracks_configuration(self, site_config):
-        from comms.services.email_functions import cheque_idioma_fee
-
         site_config.full_time_monthly_fee = Decimal("60.00")
         site_config.language_cheque_discount = Decimal("20.00")
         site_config.save()
@@ -515,7 +731,6 @@ class TestChequeIdiomaUnit:
 
 def _spy_pdf(fn, *args, **kwargs):
     """Run a PDF generator, recording every Table and Paragraph it builds."""
-    from billing.services import pdf_service
 
     tables, paragraphs = [], []
     real_table, real_paragraph = pdf_service.Table, pdf_service.Paragraph
@@ -535,8 +750,6 @@ def _spy_pdf(fn, *args, **kwargs):
 
 
 def _assert_tables_fit(tables):
-    from billing.services.pdf_service import _FRAME_WIDTH_MM
-
     frame = _FRAME_WIDTH_MM * mm
     for table in tables:
         width, _height = table.wrap(frame, 10_000)
@@ -545,15 +758,11 @@ def _assert_tables_fit(tables):
 
 class TestPdfTablesFitThePage:
     def test_payment_history_amount_column_is_not_cut_off(self, student, completed_payment, pending_payment):
-        from billing.services.pdf_service import generate_student_payment_history
-
         pdf, tables, _ = _spy_pdf(generate_student_payment_history, student, [completed_payment, pending_payment])
         assert pdf[:4] == b"%PDF"
         _assert_tables_fit(tables)
 
     def test_report_group_table_fits(self, site_config):
-        from billing.services.pdf_service import generate_report_pdf
-
         report = {
             "current_month": {
                 "income": Decimal("100"),
@@ -587,16 +796,12 @@ class TestPdfTablesFitThePage:
         _assert_tables_fit(tables)
 
     def test_receipt_and_certificate_fit(self, completed_payment, parent):
-        from billing.services.pdf_service import generate_payment_receipt, generate_tax_certificate
-
         _pdf, tables, _ = _spy_pdf(generate_payment_receipt, completed_payment)
         _assert_tables_fit(tables)
         _pdf, tables, _ = _spy_pdf(generate_tax_certificate, parent, 2025)
         _assert_tables_fit(tables)
 
     def test_clamp_keeps_a_too_wide_table_inside_the_frame(self):
-        from billing.services.pdf_service import _FRAME_WIDTH_MM, _fit_widths
-
         widths = _fit_widths([200, 100])
         assert sum(widths) <= _FRAME_WIDTH_MM * mm + 1e-6
 
@@ -605,8 +810,6 @@ class TestTaxCertificateGroupsByStudentId:
     def test_same_named_siblings_are_not_merged(self, parent, group, active_enrollment, student):
         """Grouped by NAME, two siblings called the same thing shared one
         subtotal on a document the family files with the tax authority."""
-        from billing.models import Payment
-        from billing.services.pdf_service import generate_tax_certificate
 
         twin = Student.objects.create(
             first_name=student.first_name,

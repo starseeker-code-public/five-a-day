@@ -2,12 +2,15 @@
 
 from datetime import date
 from decimal import Decimal
+from unittest.mock import patch
 
 import pytest
 from django.test import override_settings
 from django.urls import reverse
 
 from billing.models import Expense
+from billing.services import gcp_cost_service
+from billing.services.gcp_cost_service import GCP_EXPENSE_DESCRIPTION
 
 pytestmark = pytest.mark.django_db
 
@@ -43,10 +46,6 @@ class TestExpensesGcpLiveRow:
     finished months only ever show the archived Expense row."""
 
     def _configured(self, amount):
-        from unittest.mock import patch
-
-        from billing.services import gcp_cost_service
-
         return (
             patch.object(gcp_cost_service, "is_configured", return_value=True),
             patch.object(gcp_cost_service, "month_cost", return_value=amount),
@@ -68,10 +67,6 @@ class TestExpensesGcpLiveRow:
         assert without_live.context["totals"]["net"] - with_live.context["totals"]["net"] == Decimal("2.23")
 
     def test_past_month_never_queries_live(self, authenticated_client):
-        from unittest.mock import patch
-
-        from billing.services import gcp_cost_service
-
         past = date.today().replace(day=1)
         past_month = 12 if past.month == 1 else past.month - 1
         past_year = past.year - 1 if past.month == 1 else past.year
@@ -86,7 +81,6 @@ class TestExpensesGcpLiveRow:
     def test_archived_row_suppresses_live_figure(self, authenticated_client):
         """Once the month is archived, the saved row is the source of truth —
         the live figure must not be added on top of it."""
-        from billing.services.gcp_cost_service import GCP_EXPENSE_DESCRIPTION
 
         Expense.objects.create(
             description=GCP_EXPENSE_DESCRIPTION,

@@ -4,6 +4,7 @@ from datetime import timedelta
 from unittest.mock import patch
 
 import pytest
+from django.contrib.auth import get_user_model
 from django.urls import reverse
 
 from core.services.portal_access_service import PORTAL_TEMPORARY_PASSWORD_COOLDOWN
@@ -155,8 +156,6 @@ class TestPortalPasswordIsNotAStaffLogin:
     auth.User — so a family holding one would hold a staff login."""
 
     def test_no_auth_user_is_created_for_a_parent(self, client, parent):
-        from django.contrib.auth import get_user_model
-
         parent.set_portal_password("Portal-Fam-2026")
         client.post(reverse("parent_portal_login"), {"email": parent.email, "password": "Portal-Fam-2026"})
 

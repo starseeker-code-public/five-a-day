@@ -7,7 +7,7 @@ and group utilisation. Pure query helpers — no HTTP, no rendering, no PDF.
 
 from __future__ import annotations
 
-from datetime import UTC, date, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
 from typing import Any
 
@@ -163,7 +163,6 @@ def retention_snapshot(reference: date | None = None) -> dict[str, Any]:
     active today? Used for the yearly report card, not a rigorous cohort
     analysis.
     """
-    from datetime import datetime, time
 
     today = reference or date.today()
     one_year_ago = today - timedelta(days=365)

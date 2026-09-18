@@ -10,7 +10,10 @@ from __future__ import annotations
 import contextvars
 from typing import Any
 
+from django.apps import apps
 from django.db.models.signals import post_delete, post_save, pre_save
+
+from core.audit_models import AuditLog
 
 # Actor propagated from the middleware. `contextvars.ContextVar` is
 # request-local under WSGI + async-safe under ASGI — safer than threadlocals.
@@ -208,7 +211,6 @@ def _capture_pre_save_snapshot(sender, instance, **kwargs):
 def _record_save(sender, instance, created, **kwargs):
     if not _is_tracked(sender):
         return
-    from core.audit_models import AuditLog
 
     actor = _current_actor.get()
     actor_label = _actor_label(actor)
@@ -241,7 +243,6 @@ def _record_save(sender, instance, created, **kwargs):
 def _record_delete(sender, instance, **kwargs):
     if not _is_tracked(sender):
         return
-    from core.audit_models import AuditLog
 
     actor = _current_actor.get()
     AuditLog.record(
@@ -265,7 +266,6 @@ def connect() -> None:
     object at a time. Connecting per sender keeps the audit trail and leaves
     fast-delete intact for every untracked model.
     """
-    from django.apps import apps
 
     for app_label, object_name in _TRACKED:
         model = apps.get_model(app_label, object_name)

@@ -3,16 +3,20 @@ Testing Tools views — QA dashboard with project info, seeding, backlog, and
 error-reporting toggle.
 """
 
+import csv
+import io
 import json
 import logging
 import os
 import subprocess
 import sys
+from io import StringIO
 from typing import Any
 
 import django
 from django.conf import settings
-from django.core.mail import send_mail
+from django.core.mail import EmailMessage, send_mail
+from django.core.management import call_command
 from django.db.models import Q
 from django.http import HttpResponse, JsonResponse
 from django.shortcuts import render
@@ -20,10 +24,13 @@ from django.utils import timezone
 from django.utils.text import get_valid_filename
 from django.views.decorators.http import require_http_methods
 
+from billing.services.gcp_cost_service import qa_card_amounts
 from core.decorators import qa_access_required
 from core.github_dispatch import notify_github_qa_signoff
 from core.models import BacklogTask, QAConfiguration
+from core.services.drive_service import DriveReceiptService
 from core.utils import csv_safe
+from students.models import Teacher
 
 logger = logging.getLogger(__name__)
 
@@ -127,8 +134,6 @@ def _git_info():
 def testing_tools_view(request):
     """Render the QA testing tools page."""
     # Lazy import — keeps the billing→core direction out of module load order.
-    from billing.services.gcp_cost_service import qa_card_amounts
-    from core.services.drive_service import TESTING_SUBFOLDER, DriveReceiptService
 
     git = _git_info()
     qa_config = QAConfiguration.get_config()
@@ -146,7 +151,6 @@ def testing_tools_view(request):
         # switched the archive on — the toggle is useless without it, and saying
         # so on the card is the difference between "off" and "misconfigured".
         "drive_configured": DriveReceiptService().is_configured(),
-        "drive_testing_subfolder": TESTING_SUBFOLDER,
         "tasks": tasks,
         "app_version": settings.APP_VERSION,
         "environment": settings.ENVIRONMENT,
@@ -164,9 +168,6 @@ def testing_tools_view(request):
 @require_http_methods(["POST"])
 def api_seed_database(request):
     """Run the seed_testdata management command via AJAX."""
-    from io import StringIO
-
-    from django.core.management import call_command
 
     try:
         data = json.loads(request.body)
@@ -248,8 +249,6 @@ def email_backlog_task_created(task, screenshot=None, context_line=""):
     support_email = getattr(settings, "SUPPORT_EMAIL", None)
     if not support_email:
         return
-
-    from django.core.mail import EmailMessage
 
     body = (
         f"Nueva tarea en el backlog de QA\n"
@@ -382,9 +381,6 @@ def export_backlog_tasks(request):
     filename = f"backlog-{scope}-{stamp}"
 
     if export_format == "csv":
-        import csv
-        import io
-
         buffer = io.StringIO()
         fieldnames = list(rows[0].keys()) if rows else ["id", "title", "description", "priority", "status"]
         writer = csv.DictWriter(buffer, fieldnames=fieldnames)
@@ -461,7 +457,6 @@ def api_update_backlog_task(request, task_id):
 
 def _email_task_done(task):
     """Email the admin teachers that a backlog task was completed (testing env)."""
-    from students.models import Teacher
 
     recipients = list(Teacher.objects.filter(admin=True, active=True).values_list("email", flat=True))
     recipients = [e for e in recipients if e]
@@ -517,21 +512,6 @@ def _set_qa_flag(request, field: str):
 def api_toggle_error_email(request):
     """Toggle the QA error email reporting on/off."""
     return _set_qa_flag(request, "error_email_enabled")
-
-
-@qa_access_required
-@require_http_methods(["POST"])
-def api_toggle_drive_uploads(request):
-    """Toggle whether the QA VM archives receipts to Google Drive.
-
-    QA-only and off by default. Production ignores this flag entirely (it always
-    archives) and development can never turn it on — `IS_TESTING_ENV` gates both
-    this endpoint, through `qa_access_required`, and the reader
-    `core.services.drive_service.drive_uploads_allowed`. While it is on, uploads
-    from here land in the month's `testing/` subfolder, never beside the real
-    receipts.
-    """
-    return _set_qa_flag(request, "drive_uploads_enabled")
 
 
 @qa_access_required

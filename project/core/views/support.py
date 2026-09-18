@@ -2,6 +2,7 @@ import json
 import logging
 
 from django.conf import settings
+from django.core.mail import send_mail
 from django.http import JsonResponse
 from django.utils import timezone
 from django.views.decorators.http import require_http_methods
@@ -30,7 +31,6 @@ def submit_support_ticket(request):
     Endpoint API para recibir tickets de soporte.
     Envía un email al SUPPORT_EMAIL con los detalles del ticket.
     """
-    from django.core.mail import send_mail
 
     try:
         data = json.loads(request.body)

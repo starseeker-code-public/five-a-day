@@ -14,6 +14,9 @@ Usage:
 
 from django.core.management.base import BaseCommand
 
+from core.github_dispatch import notify_github_qa_signoff
+from core.models import QAConfiguration
+
 
 class Command(BaseCommand):
     help = "Set or clear the QA 'ready for production' sign-off flag"
@@ -26,9 +29,6 @@ class Command(BaseCommand):
         )
 
     def handle(self, *args, **options):
-        from core.github_dispatch import notify_github_qa_signoff
-        from core.models import QAConfiguration
-
         ready = options["state"] == "on"
         config = QAConfiguration.get_config()
         config.ready_for_prod = ready

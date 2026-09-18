@@ -3,6 +3,7 @@ Middleware — authentication, QA error reporting, and teacher view whitelisting
 """
 
 import logging
+import re
 import secrets
 import time
 import traceback
@@ -11,6 +12,7 @@ from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth import SESSION_KEY as DJANGO_AUTH_SESSION_KEY
 from django.core.mail import send_mail
+from django.http import Http404, JsonResponse
 from django.shortcuts import redirect
 from django.urls import Resolver404, resolve, reverse
 from django.utils import timezone
@@ -25,6 +27,7 @@ from core.logging_utils import (
     set_request_id,
     set_trace_id,
 )
+from core.models import QAConfiguration
 
 logger = logging.getLogger(__name__)
 
@@ -284,7 +287,6 @@ class QAErrorEmailMiddleware:
         preview is usually cut mid-document, so `json.loads` would fail and
         leave the secret in place.
         """
-        import re
 
         def _replace(match: "re.Match[str]") -> str:
             if match.group("key").strip().lower() not in cls.REDACT_KEYS:
@@ -303,7 +305,6 @@ class QAErrorEmailMiddleware:
         closing boundary, so a parser would simply fail and leave the value in
         place. Matches `name="x"` and everything up to the next boundary.
         """
-        import re
 
         def _replace(match: "re.Match[str]") -> str:
             name = match.group("name")
@@ -321,8 +322,6 @@ class QAErrorEmailMiddleware:
 
     def process_exception(self, request, exception):
         try:
-            from core.models import QAConfiguration
-
             # QA instrumentation, so it must never run outside the QA
             # environment. The flag lives in the database, and the middleware
             # used to honour it wherever it was set — including production,
@@ -698,8 +697,6 @@ class SimpleAuthMiddleware:
         # nothing rather than a form that cannot help them. Flip the setting to
         # True to bring the whole portal back; nothing else needs changing.
         if not getattr(settings, "PARENT_PORTAL_ENABLED", False):
-            from django.http import Http404
-
             raise Http404
 
         try:
@@ -717,8 +714,6 @@ class SimpleAuthMiddleware:
         if request.session.get("parent_id"):
             return None
         if url_name in self.PORTAL_JSON_URL_NAMES:
-            from django.http import JsonResponse
-
             return JsonResponse({"success": False, "error": "not authenticated"}, status=401)
         return redirect("parent_portal_login")
 
@@ -758,8 +753,6 @@ class SimpleAuthMiddleware:
                 # AJAX / API endpoints: return a plain 403 JSON response so the
                 # frontend sees a real error instead of an HTML redirect body.
                 if path.startswith("/api/"):
-                    from django.http import JsonResponse
-
                     return JsonResponse(
                         {"success": False, "error": "No tienes permiso para esta acción."},
                         status=403,

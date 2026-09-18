@@ -1,3 +1,5 @@
+from datetime import date
+
 from django import forms
 from django.forms import ModelForm, inlineformset_factory
 
@@ -159,8 +161,6 @@ class StudentForm(GroupCapacityMixin, ModelForm):
         self.fields["last_name"].required = True
 
     def clean_birth_date(self):
-        from datetime import date
-
         birth_date = self.cleaned_data.get("birth_date")
         if birth_date and birth_date > date.today():
             raise forms.ValidationError("La fecha de nacimiento no puede ser futura")
@@ -246,8 +246,6 @@ class WaitingListForm(ModelForm):
         # the age column has something to show. Only the year is meaningful.
         age = self.cleaned_data.get("age")
         if age:
-            from datetime import date
-
             student.birth_date = date(date.today().year - age, 1, 1)
 
         if commit:

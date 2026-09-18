@@ -123,8 +123,6 @@ class TestParentCreateViewExtra:
         assert f"parent_id={parent.id}" in response.url
 
     def test_post_exception_triggers_form_invalid(self, authenticated_client):
-        from students.models import Parent
-
         with patch.object(Parent, "save", side_effect=RuntimeError("db")):
             response = authenticated_client.post(
                 reverse("parent_create"),

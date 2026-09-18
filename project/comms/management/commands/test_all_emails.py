@@ -9,10 +9,14 @@ Uso:
 """
 
 import os
+import time
 from datetime import date, timedelta
 
 from django.conf import settings
 from django.core.management.base import BaseCommand
+
+from billing.services.pricing_service import PricingService
+from comms.services.email_service import email_service
 
 # `core.constants` is THE Spanish calendar (`send_email.py` in this same app
 # already reads it). A private copy here was a second spelling waiting to
@@ -27,7 +31,6 @@ next_friday = today + timedelta(days=(4 - today.weekday()) % 7 or 7)
 
 def get_email_apps():
     """Retorna la lista de apps de email con sus datos de prueba."""
-    from billing.services.pricing_service import PricingService
 
     return [
         {
@@ -253,10 +256,6 @@ class Command(BaseCommand):
         parser.add_argument("--delay", type=float, default=1.0, help="Segundos entre emails")
 
     def handle(self, *args, **options):
-        import time
-
-        from comms.services.email_service import email_service
-
         apps = get_email_apps()
         recipient = options.get("to") or getattr(settings, "SUPPORT_EMAIL", None)
         if not recipient:

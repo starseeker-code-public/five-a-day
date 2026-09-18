@@ -3,6 +3,7 @@
 from datetime import date
 from decimal import Decimal
 
+import openpyxl
 import pytest
 
 from billing.exports import (
@@ -21,8 +22,6 @@ HOSTILE_FORMULA = '=HYPERLINK("http://evil/","x")'
 
 class TestBuildStudentsSheet:
     def test_header_row(self, db):
-        import openpyxl
-
         wb = openpyxl.Workbook()
         ws = wb.active
         build_students_sheet(ws)
@@ -33,8 +32,6 @@ class TestBuildStudentsSheet:
         assert "Tutor - DNI" in headers
 
     def test_includes_student_data(self, student_with_parent):
-        import openpyxl
-
         wb = openpyxl.Workbook()
         ws = wb.active
         build_students_sheet(ws)
@@ -46,8 +43,6 @@ class TestBuildStudentsSheet:
 
 class TestBuildEnrollmentsSheet:
     def test_includes_enrollment_data(self, active_enrollment):
-        import openpyxl
-
         wb = openpyxl.Workbook()
         ws = wb.active
         build_enrollments_sheet(ws)
@@ -57,8 +52,6 @@ class TestBuildEnrollmentsSheet:
         assert ws.cell(row=2, column=5).value == active_enrollment.academic_year
 
     def test_empty_when_no_enrollments(self, db):
-        import openpyxl
-
         wb = openpyxl.Workbook()
         ws = wb.active
         build_enrollments_sheet(ws)
@@ -67,8 +60,6 @@ class TestBuildEnrollmentsSheet:
 
 class TestBuildPaymentsSheet:
     def test_includes_payment_data(self, pending_payment):
-        import openpyxl
-
         wb = openpyxl.Workbook()
         ws = wb.active
         build_payments_sheet(ws)
@@ -100,8 +91,6 @@ class TestXlsxFormulaInjection:
     """
 
     def test_the_guard_neutralises_a_formula_without_altering_the_text(self):
-        import openpyxl
-
         ws = openpyxl.Workbook().active
         xlsx_safe_append(ws, [HOSTILE_FORMULA, "plain", 42])
 

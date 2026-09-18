@@ -1,13 +1,22 @@
 """Tests for the EnrollmentType provisioning service and its management command."""
 
+import importlib
 from datetime import date
 from decimal import Decimal
 from io import StringIO
+from unittest.mock import patch
 
 import pytest
+from django.apps import apps
 from django.core.management import call_command
 
-from billing.models import EnrollmentType, SiteConfiguration
+from billing.models import (
+    Enrollment,
+    EnrollmentType,
+    SiteConfiguration,
+    academic_year_end_date,
+    academic_year_start_date,
+)
 from billing.services.enrollment_service import EnrollmentService
 from billing.services.enrollment_type_service import (
     REQUIRED_ENROLLMENT_TYPES,
@@ -183,11 +192,6 @@ class TestEnrolmentYearRollover:
     """
 
     def test_august_enrolment_starts_in_the_coming_september(self, student):
-        from datetime import date
-        from unittest.mock import patch
-
-        from billing.models import academic_year_end_date, academic_year_start_date
-
         ensure_enrollment_types()
 
         with patch("billing.services.enrollment_service.date") as mock_date:
@@ -214,8 +218,6 @@ class TestCategoryDataMigration:
 
     @staticmethod
     def _migration():
-        import importlib
-
         return importlib.import_module("billing.migrations.0008_enrollment_type_categories")
 
     @staticmethod
@@ -229,8 +231,6 @@ class TestCategoryDataMigration:
 
     @staticmethod
     def _enrollment(student, enrollment_type, academic_year, schedule_type="full_time", status="active"):
-        from billing.models import Enrollment
-
         return Enrollment.objects.create(
             student=student,
             enrollment_type=enrollment_type,
@@ -246,8 +246,6 @@ class TestCategoryDataMigration:
         )
 
     def _run(self):
-        from django.apps import apps
-
         self._migration().migrate_types(apps, None)
 
     def test_a_first_time_enrollment_becomes_new_student(self, student, site_config):

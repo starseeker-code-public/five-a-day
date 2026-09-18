@@ -1,6 +1,9 @@
+import calendar
 import logging
-from datetime import date
+from datetime import date, timedelta
+from datetime import date as _date
 from decimal import Decimal
+from urllib.parse import quote
 
 from django.contrib import messages
 from django.db import transaction
@@ -12,12 +15,18 @@ from django.utils.decorators import method_decorator
 from django.views.decorators.http import require_http_methods
 from django.views.generic import CreateView, DetailView, ListView, UpdateView
 
-from billing.forms import EnrollmentForm
-from billing.models import Enrollment, Payment, SiteConfiguration, relevant_academic_years
+from billing.forms import ENROLLMENT_PLAN_CHOICES, EnrollmentForm
+from billing.models import Enrollment, Payment, SiteConfiguration, enrollment_academic_year, relevant_academic_years
+from billing.services.enrollment_service import EnrollmentService
+from billing.services.payment_service import MONTH_NAMES_ES, PaymentService
+from billing.services.pricing_service import PricingService
+from comms.tasks import send_welcome_email_task
 from core.date_utils import first_day_of_next_month
 from core.decorators import admin_required
 from core.models import FunFridayAttendance, HistoryLog
+from core.schedule_utils import get_group_schedule_lines
 from core.transactions import students_on_the_roll, visible_students_for
+from core.views.waiting_list import discard_waiting_entry, waiting_entry_from_request
 from students.forms import StudentForm
 from students.models import Group, Parent, Student
 
@@ -40,9 +49,6 @@ def _create_enrollment_fee_payment(student, parent, enrollment, enrollment_form)
     a student signed up today for a 1 November start owes the matrícula with
     the November fees. Returns the fee charged.
     """
-    import calendar
-
-    from billing.services.enrollment_service import EnrollmentService
 
     config = SiteConfiguration.get_config()
 
@@ -134,7 +140,6 @@ def _superseding_start(student, current, requested_start, parent=None):
     write-back is how the bulk re-enrol flow leaked one student's effective
     date into the next student's request.
     """
-    from billing.services.enrollment_service import EnrollmentService
 
     return EnrollmentService.supersede_enrollment(
         student, current, requested_start=requested_start or date.today(), parent=parent
@@ -180,7 +185,6 @@ class StudentCreateView(CreateView):
 
     def get_waiting_entry(self):
         """Waiting-list entry this enrollment came from (`?from_waiting=<id>`), if any."""
-        from core.views.waiting_list import waiting_entry_from_request
 
         return waiting_entry_from_request(self.request)
 
@@ -254,8 +258,6 @@ class StudentCreateView(CreateView):
         context["groups"] = Group.objects.filter(active=True)
         context["waiting_entry"] = waiting_entry
 
-        from billing.services.pricing_service import PricingService
-
         config = SiteConfiguration.get_config()
         # Quarterly = 3 * full_time - discount%. Through PricingService — this
         # strike-through widget is what the admin sanity-checks the price against,
@@ -284,8 +286,6 @@ class StudentCreateView(CreateView):
         # First-period proration. A student joining part-way through a month pays
         # only the remaining days OF THAT MONTH, so the first fee differs from the
         # recurring one and the form has to say so before the admin saves.
-        from billing.models import enrollment_academic_year
-        from billing.services.payment_service import MONTH_NAMES_ES, PaymentService
 
         today = date.today()
         # Same year rule the enrollment itself will be stamped with — a 15 May
@@ -325,8 +325,6 @@ class StudentCreateView(CreateView):
         return context
 
     def form_valid(self, form):
-        from comms.tasks import send_welcome_email_task
-
         is_waiting_mode = self._is_waiting_request()
         is_adult_mode = self.request.POST.get("is_adult_mode") == "true"
 
@@ -401,7 +399,6 @@ class StudentCreateView(CreateView):
                 # Issue the period the student joined, prorated for the days
                 # already gone. Later periods are opened by the generate_payments
                 # cron on the 1st; this call is idempotent against it.
-                from billing.services.payment_service import PaymentService
 
                 PaymentService.schedule_academic_year_payments(enrollment, parent)
 
@@ -409,8 +406,6 @@ class StudentCreateView(CreateView):
                 # parent and an enrollment, so drop the placeholder entry.
                 waiting = self.get_waiting_entry()
                 if waiting and waiting.id != student.id:
-                    from core.views.waiting_list import discard_waiting_entry
-
                     discard_waiting_entry(waiting, student)
 
                 HistoryLog.log(
@@ -429,6 +424,11 @@ class StudentCreateView(CreateView):
                 _parent_id = parent.id if parent else None
                 _enrollment_id = enrollment.id
                 _student_id = student.id
+                # Rendered HERE, not in the task: `get_group_schedule_lines`
+                # lives in core and `comms` must not import core (see the
+                # dependency flow in CLAUDE.md). The task is handed the finished
+                # lines and only formats them into the email.
+                _schedule_lines = get_group_schedule_lines(student.group)
 
                 def _queue_welcome():
                     try:
@@ -436,6 +436,7 @@ class StudentCreateView(CreateView):
                             parent_id=_parent_id,
                             student_id=_student_id,
                             enrollment_id=_enrollment_id,
+                            schedule_lines=_schedule_lines,
                         )
                     except Exception:
                         # Never fail the request over email dispatch — but DO
@@ -447,7 +448,6 @@ class StudentCreateView(CreateView):
                 transaction.on_commit(_queue_welcome)
 
                 # Redirect to success page with student info
-                from urllib.parse import quote
 
                 return HttpResponseRedirect(
                     reverse("student_create")
@@ -674,8 +674,6 @@ class StudentUpdateView(UpdateView):
         return bool(start and current.enrollment_date and start != current.enrollment_date)
 
     def form_valid(self, form):
-        from billing.services.enrollment_service import EnrollmentService
-
         # Waiting-list students don't have an active enrollment, so we skip the
         # enrollment form. Once is_waiting is toggled off, a fresh enrollment is
         # created below.
@@ -723,8 +721,6 @@ class StudentUpdateView(UpdateView):
                     # accumulated a new enrollment row per edit, and payments
                     # then attached to whichever one came back first.
                     if current is None or self._enrollment_plan_changed(current, enrollment_form):
-                        from billing.services.payment_service import PaymentService
-
                         parent = student.titular_parent()
                         requested_start = enrollment_form.cleaned_data.get("start_date") or date.today()
                         effective_start = _superseding_start(student, current, requested_start, parent=parent)
@@ -832,8 +828,6 @@ class StudentDetailView(DetailView):
 
 def get_next_friday(from_date=None):
     """Return this week's Friday (today if today is Friday, else next Friday)."""
-    from datetime import date as _date
-    from datetime import timedelta
 
     if from_date is None:
         from_date = _date.today()
@@ -843,7 +837,6 @@ def get_next_friday(from_date=None):
 
 def get_last_friday(from_date=None):
     """Return last week's Friday (7 days before get_next_friday)."""
-    from datetime import timedelta
 
     return get_next_friday(from_date) - timedelta(days=7)
 
@@ -951,8 +944,6 @@ def enroll_student(request, student_id):
     charge_fee = request.POST.get("charge_enrollment_fee") in ("on", "true", "1")
 
     try:
-        from billing.services.payment_service import PaymentService
-
         with transaction.atomic():
             # Resolved BEFORE the supersede, which bills the closing
             # enrollment's unbilled months to the same titular.
@@ -1051,14 +1042,12 @@ def reenroll_old_students(request):
     student is committed in its own transaction so one failure does not lose the
     rest; the response reports how many succeeded and names any that did not.
     """
-    from billing.services.payment_service import PaymentService
 
     if request.method == "GET":
         # The plan list comes from the form that validates the POST, not from a
         # second copy typed into the template — those had already forked on the
         # labels, and a plan added to `ENROLLMENT_PLAN_CHOICES` would never have
         # appeared here.
-        from billing.forms import ENROLLMENT_PLAN_CHOICES
 
         return render(
             request,

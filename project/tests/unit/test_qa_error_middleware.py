@@ -9,6 +9,9 @@ from unittest.mock import MagicMock, patch
 import pytest
 from django.test import RequestFactory, override_settings
 
+from core.middleware import QAErrorEmailMiddleware
+from core.models import QAConfiguration
+
 pytestmark = pytest.mark.django_db
 
 
@@ -20,8 +23,6 @@ class TestQAErrorEmailMiddleware:
         return req
 
     def test_call_passes_through(self):
-        from core.middleware import QAErrorEmailMiddleware
-
         get_response = MagicMock(return_value="response")
         mw = QAErrorEmailMiddleware(get_response)
         result = mw(self._make_request())
@@ -29,8 +30,6 @@ class TestQAErrorEmailMiddleware:
 
     def test_process_exception_disabled_returns_none(self):
         """When QAConfiguration.error_email_enabled is False, middleware no-ops."""
-        from core.middleware import QAErrorEmailMiddleware
-        from core.models import QAConfiguration
 
         config = QAConfiguration.get_config()
         config.error_email_enabled = False
@@ -42,9 +41,6 @@ class TestQAErrorEmailMiddleware:
 
     @override_settings(SUPPORT_EMAIL=None)
     def test_process_exception_no_support_email(self):
-        from core.middleware import QAErrorEmailMiddleware
-        from core.models import QAConfiguration
-
         config = QAConfiguration.get_config()
         config.error_email_enabled = True
         config.save()
@@ -55,9 +51,6 @@ class TestQAErrorEmailMiddleware:
 
     @override_settings(SUPPORT_EMAIL="support@test.local", IS_TESTING_ENV=True)
     def test_process_exception_sends_email(self):
-        from core.middleware import QAErrorEmailMiddleware
-        from core.models import QAConfiguration
-
         config = QAConfiguration.get_config()
         config.error_email_enabled = True
         config.save()
@@ -69,9 +62,6 @@ class TestQAErrorEmailMiddleware:
 
     @override_settings(SUPPORT_EMAIL="support@test.local", IS_TESTING_ENV=True)
     def test_process_exception_send_failure_swallowed(self):
-        from core.middleware import QAErrorEmailMiddleware
-        from core.models import QAConfiguration
-
         config = QAConfiguration.get_config()
         config.error_email_enabled = True
         config.save()

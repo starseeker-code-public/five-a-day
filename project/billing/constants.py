@@ -210,3 +210,16 @@ def get_enrollment_fee(is_adult: bool = False) -> Decimal:
         Importe de matrícula correspondiente
     """
     return ADULT_ENROLLMENT_FEE if is_adult else CHILDREN_ENROLLMENT_FEE
+
+
+#: Everything `generate_payment_receipt` touches off a Payment. It lives in
+#: billing because it describes Payment's own relations, and BOTH receipt
+#: tasks need it — the email one in `comms.tasks`, the Drive one in
+#: `core.tasks` — and each may import billing, while they may not import
+#: each other. The receipt's
+#: discount breakdown reads the enrollment and its matrícula category, and
+#: `enrollment.student` is a separate FK cache from `payment.student` — without
+#: the pair the two receipt tasks each paid 3 extra lazy queries per payment,
+#: which production (eager Celery) spends inside the completion request and the
+#: Drive backfill multiplies by the whole archive.
+RECEIPT_RELATIONS = ("student", "parent", "enrollment", "enrollment__enrollment_type", "enrollment__student")

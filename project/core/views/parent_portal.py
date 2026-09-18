@@ -46,10 +46,11 @@ from django.utils import timezone
 from django.views.decorators.http import require_http_methods
 
 from billing.models import Payment
+from billing.services.pdf_service import generate_payment_receipt, generate_tax_certificate
 from core.rate_limit import rate_limit
 from core.services.portal_access_service import send_portal_temporary_password
 from core.utils import MAX_QUERY_YEAR, MIN_QUERY_YEAR, safe_int
-from students.models import PORTAL_AUTH_PASSWORD, PORTAL_AUTH_TEMPORARY, Parent
+from students.models import PORTAL_AUTH_PASSWORD, PORTAL_AUTH_TEMPORARY, Parent, burn_portal_login_work
 
 logger = logging.getLogger(__name__)
 
@@ -233,7 +234,6 @@ def parent_portal_login(request):
             # Spend the same hashing work a real failed login costs, so an
             # unknown address cannot be told from a known one by response time —
             # the enumeration defence the unified error message assumes.
-            from students.models import burn_portal_login_work
 
             burn_portal_login_work(password)
             matched = None
@@ -345,7 +345,6 @@ def parent_portal_forgot_password(request):
         # unknown branch burned it while the known branch did the real work
         # inline, which under eager Celery made the KNOWN branch the slow one —
         # the oracle simply pointed the other way.)
-        from students.models import burn_portal_login_work
 
         burn_portal_login_work(email)
 
@@ -574,8 +573,6 @@ def parent_portal_receipt(request, payment_id: int):
         payment_status="completed",
     )
 
-    from billing.services.pdf_service import generate_payment_receipt
-
     pdf_bytes = generate_payment_receipt(payment)
     response = HttpResponse(pdf_bytes, content_type="application/pdf")
     response["Content-Disposition"] = f'attachment; filename="recibo-{payment.id}.pdf"'
@@ -589,8 +586,6 @@ def parent_portal_tax_certificate(request):
         return redirect_resp
 
     year = safe_int(request.GET.get("year"), default=date.today().year, low=MIN_QUERY_YEAR, high=MAX_QUERY_YEAR)
-
-    from billing.services.pdf_service import generate_tax_certificate
 
     pdf_bytes = generate_tax_certificate(parent, year)
     response = HttpResponse(pdf_bytes, content_type="application/pdf")

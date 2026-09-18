@@ -9,6 +9,7 @@ functional test in the suite — the app behaved exactly as designed.
 
 import json
 import logging
+import sys
 
 import pytest
 
@@ -200,8 +201,6 @@ class TestCloudLoggingFormatter:
         try:
             raise ValueError("boom")
         except ValueError:
-            import sys
-
             record = make_record(level=logging.ERROR, exc_info=sys.exc_info())
         payload = json.loads(CloudLoggingFormatter().format(record))
         assert "ValueError: boom" in payload["message"]

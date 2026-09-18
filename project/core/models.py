@@ -66,7 +66,7 @@ class FunFridayScheduledSend(models.Model):
     Replaces the old ``apply_async(eta=...)`` approach, which silently sends
     immediately under ``CELERY_TASK_ALWAYS_EAGER=True`` (production on Cloud
     Run has no Celery worker). Rows are drained by
-    ``comms.tasks.send_due_fun_friday_emails_task`` — via Celery Beat in
+    ``core.tasks.send_due_fun_friday_emails_task`` — via Celery Beat in
     dev/testing and via the ``send_due_fun_friday_emails`` management command
     (Cloud Scheduler → Cloud Run Job) in production.
     """
@@ -353,16 +353,6 @@ class QAConfiguration(models.Model):
         default=False,
         verbose_name="Versión lista para producción",
     )
-    # QA's opt-in to exercising the Google Drive receipt archive from the testing
-    # VM. OFF by default and read ONLY on the QA VM: production always archives
-    # and ignores this flag, development never does. When it is on, uploads are
-    # quarantined into a `testing/` subfolder of the month so a QA receipt can
-    # never be mistaken for one the academy filed. See
-    # core.services.drive_service.drive_uploads_allowed().
-    drive_uploads_enabled = models.BooleanField(
-        default=False,
-        verbose_name="Subir recibos a Google Drive (pruebas)",
-    )
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
@@ -384,6 +374,102 @@ class QAConfiguration(models.Model):
         return config
 
 
+class GoogleDriveCredential(models.Model):
+    """The academy's own Google account, consented once, used for every upload.
+
+    A service account CANNOT do this job. Tested against the real folder on
+    2026-09-18: it owns whatever it uploads and has no Drive storage on a
+    consumer account, so every write returns `storageQuotaExceeded`. Google's own
+    error text says to use OAuth delegation instead, and this row is that
+    delegation — one account consents, and the files are owned by the account
+    that already owns the folders.
+
+    It is a SINGLETON on purpose: the archive has one destination, so a second
+    row could only ever mean two halves of it going to different Drives.
+
+    The refresh token is encrypted at rest (`core.token_crypto`) because the
+    documented objection to storing OAuth material here was that it landed in
+    `django_session` unencrypted and rode out in every database backup. Read and
+    write it ONLY through `set_refresh_token()` / `refresh_token`, never the
+    column: assigning the field directly stores a live credential in clear.
+    """
+
+    objects = _SingletonQuerySet.as_manager()
+
+    account_email = models.CharField(
+        max_length=254,
+        blank=True,
+        verbose_name="Cuenta de Google conectada",
+        help_text="La cuenta que autorizó el acceso; es la propietaria de los archivos subidos.",
+    )
+    #: Ciphertext, never the token. See the class docstring.
+    refresh_token_encrypted = models.TextField(blank=True, verbose_name="Token de actualización (cifrado)")
+    connected_by = models.CharField(max_length=254, blank=True, verbose_name="Autorizado por")
+    connected_at = models.DateTimeField(null=True, blank=True, verbose_name="Fecha de autorización")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "google_drive_credential"
+        verbose_name = "Credencial de Google Drive"
+        verbose_name_plural = "Credencial de Google Drive"
+
+    def __str__(self):
+        return f"Google Drive: {self.account_email or 'sin conectar'}"
+
+    def save(self, *args, **kwargs):
+        self.pk = 1
+        super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        """Returns Django's (count, per-model-counts) tuple; see SiteConfiguration."""
+        return (0, {})
+
+    @classmethod
+    def get_config(cls):
+        config, _ = cls.objects.get_or_create(pk=1)
+        return config
+
+    # ── the credential ───────────────────────────────────────────────────────
+
+    def set_refresh_token(self, plaintext: str) -> None:
+        # NOT at module top level, and there is no good reason for it. It is
+        # not a cycle (`core.token_crypto` imports only stdlib, `cryptography`
+        # and `django.conf.settings`), not app-registry timing, and not an
+        # optional dependency — it is simply where it was first written.
+        # Recorded honestly rather than given an invented justification:
+        # hoisting both imports in this class is safe, and nothing in the
+        # tree patches either symbol.
+        from core.token_crypto import encrypt_secret
+
+        self.refresh_token_encrypted = encrypt_secret(plaintext or "")
+
+    @property
+    def refresh_token(self) -> str:
+        """The token, or `""` when absent OR undecryptable (a rotated SECRET_KEY).
+
+        Both cases mean the same thing to every caller — there is no usable
+        credential — so they deliberately look identical here. `token_crypto`
+        logs the difference.
+        """
+        # Deferred for no good reason either — see `set_refresh_token` above.
+        from core.token_crypto import decrypt_secret
+
+        return decrypt_secret(self.refresh_token_encrypted)
+
+    @property
+    def is_connected(self) -> bool:
+        return bool(self.refresh_token)
+
+    def disconnect(self) -> None:
+        """Forget the credential without deleting the singleton row."""
+        self.refresh_token_encrypted = ""
+        self.account_email = ""
+        self.connected_by = ""
+        self.connected_at = None
+        self.save()
+
+
 # Public model surface of this module, including the sibling-module
 # re-export above.
 __all__ = [
@@ -391,6 +477,7 @@ __all__ = [
     "BacklogTask",
     "FunFridayAttendance",
     "FunFridayScheduledSend",
+    "GoogleDriveCredential",
     "HistoryLog",
     "QAConfiguration",
     "ScheduleSlot",

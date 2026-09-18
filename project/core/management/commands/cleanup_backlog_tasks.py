@@ -11,6 +11,8 @@ Usage:
 
 from django.core.management.base import BaseCommand
 
+from core.tasks import cleanup_done_backlog_tasks
+
 
 class Command(BaseCommand):
     help = "Delete QA backlog tasks that have been marked done for more than --days days"
@@ -19,7 +21,5 @@ class Command(BaseCommand):
         parser.add_argument("--days", type=int, default=30, help="Age threshold in days (default 30)")
 
     def handle(self, *args, **options):
-        from core.tasks import cleanup_done_backlog_tasks
-
         result = cleanup_done_backlog_tasks.apply(kwargs={"days": options["days"]}).get()
         self.stdout.write(self.style.SUCCESS(f"Backlog cleanup: {result}"))
