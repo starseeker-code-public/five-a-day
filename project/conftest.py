@@ -1,5 +1,6 @@
 from datetime import date
 from decimal import Decimal
+from pathlib import Path
 
 import pytest
 
@@ -13,6 +14,34 @@ from billing.models import (
 )
 from core.views.dashboard import reset_quote_cache
 from students.models import Group, Parent, Student, StudentParent, Teacher
+
+
+@pytest.fixture(autouse=True)
+def spa_shell(tmp_path, settings):
+    """Guarantee there is an index.html for Django to serve at "/".
+
+    `frontend/dist` is a BUILD ARTEFACT: gitignored, produced by
+    `make frontend-build` locally and by the Dockerfile's node stage in CI. The
+    `Tests` job has no Node, so on a fresh clone and in CI the file is simply
+    absent and every test that GETs a public route 404s — which is exactly what
+    happened on the first two pushes of v1.30.0, green locally and red in CI.
+
+    AUTOUSE and in conftest on purpose: the tests that need it are spread across
+    files (`test_frontend_site.py`, `test_middleware.py`), and the second of
+    those is where it was missed the first time. Any future test that visits "/"
+    now gets it without knowing it exists.
+
+    What those tests are about is Django's serving behaviour — routing, the
+    caching header, the CSRF cookie — not the contents of the bundle, so a stub
+    is the honest subject. It is written to a per-test `tmp_path` and pointed at
+    via the `settings` fixture rather than into the real tree: the suite runs
+    under `xdist -n auto`, and workers sharing one filesystem raced on creating
+    and deleting a shared stub. A real build is used as-is when present.
+    """
+    if (Path(settings.FRONTEND_DIST_DIR) / "index.html").exists():
+        return
+    (tmp_path / "index.html").write_text("<!doctype html><title>stub</title><div id=root></div>", encoding="utf-8")
+    settings.FRONTEND_DIST_DIR = str(tmp_path)
 
 
 @pytest.fixture

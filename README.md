@@ -15,7 +15,7 @@ Built to centralize student records, automate billing cycles, and streamline par
 ### Project Status
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v1.30.1-brightgreen?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-v1.30.2-brightgreen?style=flat-square" alt="Version">
   &nbsp;|&nbsp;
   <a href="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml?query=branch%3Amain"><img src="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml/badge.svg?branch=main&style=flat-square" alt="CI main"></a>
   &nbsp;|&nbsp;
@@ -36,9 +36,9 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 | Version | Date | Description |
 |---------|------|-------------|
-| **v1.30.1** | 2026-09-19 | CI: the new frontend tests no longer depend on a local build |
+| **v1.30.2** | 2026-09-19 | SPA-shell test fixture moved to conftest |
+| v1.30.1 | 2026-09-19 | CI: the new frontend tests no longer depend on a local build |
 | v1.30.0 | 2026-09-19 | Public React site at `/`, app moved to `/app/`, responsive pass |
-| v1.29.12 | 2026-09-18 | QA dashboard cleanup; testing deploy no longer fails silently |
 
 ---
 
@@ -140,8 +140,18 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 ## Version History
 
-<details id="v1301" open>
-<summary><strong>v1.30.1 — CI: the new frontend tests no longer depend on a local build (current)</strong></summary>
+<details id="v1302" open>
+<summary><strong>v1.30.2 — SPA-shell test fixture moved to conftest (current)</strong></summary>
+
+**Testing**
+
+- The v1.30.1 fix covered `test_frontend_site.py` but not `test_middleware.py`, which also GETs `/` and so also 404'd in CI without a build - the same root cause, found by the same CI run.
+- The fixture is now **autouse in `conftest.py`**, so any future test that visits a public route inherits it without knowing it exists. That is the right home: the tests needing it are spread across files, and the second one is where it was missed.
+
+</details>
+
+<details id="v1301">
+<summary><strong>v1.30.1 — CI: the new frontend tests no longer depend on a local build</strong></summary>
 
 **Testing**
 
