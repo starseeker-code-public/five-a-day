@@ -15,7 +15,7 @@ Built to centralize student records, automate billing cycles, and streamline par
 ### Project Status
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v1.29.11-brightgreen?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-v1.29.12-brightgreen?style=flat-square" alt="Version">
   &nbsp;|&nbsp;
   <a href="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml?query=branch%3Amain"><img src="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml/badge.svg?branch=main&style=flat-square" alt="CI main"></a>
   &nbsp;|&nbsp;
@@ -36,9 +36,9 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 | Version | Date | Description |
 |---------|------|-------------|
-| **v1.29.11** | 2026-09-18 | CodeQL: side-effect hoisted out of an assert |
+| **v1.29.12** | 2026-09-18 | QA dashboard cleanup; testing deploy no longer fails silently |
+| v1.29.11 | 2026-09-18 | CodeQL: side-effect hoisted out of an assert |
 | v1.29.10 | 2026-09-18 | Delegated-account Drive archive; end-to-end journeys |
-| v1.29.9 | 2026-09-17 | Top-level imports everywhere, plus two security fixes |
 
 ---
 
@@ -140,8 +140,56 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 ## Version History
 
-<details id="v12911" open>
-<summary><strong>v1.29.11 — A test that proved nothing under `python -O` (current)</strong></summary>
+<details id="v12912" open>
+<summary><strong>v1.29.12 — A blank card, a silent deploy failure, and a consent screen that cannot be published (current)</strong></summary>
+
+**QA dashboard**
+
+- Removing the "Recibos a Drive" toggle in v1.29.10 took its *contents* and left its **wrapper**:
+  an empty `<div class="qa-card">` rendered as a blank card on `/testing/`, above a stale
+  `{% comment %}` still describing the removed feature and a dead
+  `wireToggle('drive-uploads-toggle', …)` call. All three are gone. The JS line was inert —
+  `wireToggle` opens with `if (!toggle || !url) return;` — which is the only reason the rest of
+  the dashboard's buttons kept working; without that guard one unbound element would have aborted
+  the whole script, which is the documented failure mode for this codebase.
+
+**The nightly testing deploy could take the VM down without telling anyone**
+
+- `timeout-minutes` on the deploy job was **45**, and on 2026-09-18 the v1.29.11 build was killed
+  at exactly 45:00 mid-`docker compose up`. The VM was **down for ten minutes** until a retry
+  rebuilt it — and that retry finished in **8 minutes**, because the first attempt had warmed the
+  Docker layer cache. So the cap was sized against the warm case and cut the cold one in half:
+  a base-image bump, a changed `uv.lock` or simply a long gap since the last deploy puts the
+  e2-micro (2 shared vCPU, 1 GB RAM) over it. Raised to **90**, still far below the 6-hour default
+  the cap exists to avoid.
+- Worse than the timeout was the silence. A job killed by `timeout-minutes` is **cancelled**, not
+  failed, so `if: failure()` on the alert mail matched nothing: every reporting step was skipped
+  and the only evidence was a grey run. The nightly runs unattended at 03:00, where "no email"
+  reads exactly like "no deploy was needed". The condition is now `failure() || cancelled()`.
+  A deliberate cancellation now mails too, which is the right trade — someone who cancels on
+  purpose knows why they got it, whereas a silent timeout is indistinguishable from a quiet night.
+- Note this only governs the nightly once it reaches `main`: `on: schedule` always runs the
+  default branch's copy of the workflow file.
+
+**The Drive consent screen cannot be published — reconnecting is routine (docs)**
+
+- `drive` is a **restricted** scope, so publishing the consent screen means Google verification
+  plus a CASA security assessment, which this academy is not undertaking for one internal account.
+  "Testing" is therefore the permanent state, and Google expires every refresh token in it after
+  **7 days** — so the archive stops filing roughly weekly and an admin reconnects from
+  `/management/`. That is the operating procedure, not a defect. This **corrects** the v1.29.10
+  guidance, which said to publish it.
+- It stops **silently**, which is the part that matters: `GoogleDriveCredential.is_connected` is
+  `bool(self.refresh_token)` — it asks whether a decryptable string is stored, not whether Google
+  still honours it. An expired token decrypts perfectly, so the `/management/` dot stays green and
+  the home reconnect dialog never fires. The only signal is `upload_receipt_to_drive_task`
+  returning `error`. After a lapse, `manage.py backfill_drive_receipts` is idempotent by payment
+  id and files everything missed, so the weekly gap is repairable and is not data loss.
+
+</details>
+
+<details id="v12911">
+<summary><strong>v1.29.11 — A test that proved nothing under `python -O`</strong></summary>
 
 **CodeQL `py/side-effect-in-assert`**
 
@@ -5896,6 +5944,16 @@ Admin configuration panel with live editing.
 - **Pricing config** — all fees and discounts from SiteConfiguration. Toggle edit mode → modify values → save via AJAX. Fields: children/adult enrollment fees, full-time / part-time / **infantil** (v1.29.4) / adult monthly fees, 8 discount types.
 - **Teachers** — create via modal (name, email, phone). Validates unique email. Lists active teachers. Since v1.26.8 the new teacher is **emailed a "choose your password" link** on creation (it used to send nothing, so every account looked broken on first login); the toast says whether the mail went out. Teachers created here are **always non-admin** (`create_teacher` hard-codes `admin=False`) — only seeded teachers (`TEACHER_SEED_<N>_ADMIN=True`) and the superuser are admins, and an existing admin promotes others via `/admin/`.
 - **Groups** — create via modal (name, color picker, teacher dropdown). Teacher list populated via AJAX from `/api/teachers/`. Validates unique name.
+- **Conectar Drive (v1.29.10)** — connect or disconnect the Google account that owns the receipt
+  archive, beside the page title with a red/green status dot. Admin-only, and hidden on the QA VM,
+  where the consent cannot complete. **Standing constraint: it must be reconnected roughly every
+  week.** The `drive` scope is *restricted*, and publishing the consent screen out of "Testing"
+  would require Google verification plus a security assessment, which the academy has declined for
+  one internal account — so Google expires the refresh token after **7 days** and the archive stops
+  filing. Nothing announces it: `is_connected` only checks that a decryptable token is *stored*, and
+  an expired one still decrypts, so the dot stays green and the home reconnect dialog never fires.
+  After reconnecting, run `backfill_drive_receipts` (idempotent) to file what was missed — the
+  outage is a delay, not lost receipts. Runbook: `DEPLOYMENT.md` → *Reconnecting the Drive archive*.
 - **Cambiar Contraseña (v1.26.8)** — change your **own** password from a modal (`POST /api/password-change/`, rate-limited 5/5 min/IP). The session survives the change. Self-service, so non-admin teachers get it too; hidden for Google-OAuth sessions and for accounts with no usable password.
 - **Language cheque API** — `GET /api/students/language-cheque/` returns all students with active language cheque for government reporting.
 

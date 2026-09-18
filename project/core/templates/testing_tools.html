@@ -162,17 +162,6 @@
                 </div>
             </div>
 
-            {% comment %}
-              Recibos a Drive — QA's opt-in to exercising the Google Drive receipt
-              archive from this VM. OFF by default and only ever readable here:
-              production always archives and ignores this switch, development
-              never archives at all. While it is on, receipts uploaded from the
-              VM land in the month's "testing" subfolder so they can never be
-              mistaken for one the academy filed.
-            {% endcomment %}
-            <div class="qa-card" style="padding:1.1rem 1.25rem;">
-            </div>
-
             <!-- GitHub · Desarrollos · Correo temporal — one full cell each -->
             <div class="flex gap-4">
                 <a href="https://github.com/starseeker-code-public/five-a-day#five-a-day-evolution"
@@ -447,7 +436,6 @@
     }
 
     wireToggle('error-email-toggle', 'error-email-label', page.dataset.toggleErrorUrl);
-    wireToggle('drive-uploads-toggle', 'drive-uploads-label', page.dataset.toggleDriveUrl);
 
     // ── Datos de prueba ─────────────────────────────
     function seed(reset) {
