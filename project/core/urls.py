@@ -12,7 +12,6 @@ from core.views import (
     api_create_feature_task,
     api_mark_ready,
     api_seed_database,
-    api_toggle_drive_uploads,
     api_toggle_error_email,
     api_update_backlog_task,
     api_update_feature,
@@ -22,6 +21,9 @@ from core.views import (
     create_checkout_link,
     # Todos
     create_todo,
+    drive_oauth_callback,
+    drive_oauth_disconnect,
+    drive_oauth_redirect,
     export_backlog_tasks,
     export_features,
     # Google Sheets export (v1.2)
@@ -80,6 +82,14 @@ urlpatterns = [
     path("logout/", logout_view, name="logout"),
     path("auth/google/", google_oauth_redirect, name="google_oauth_redirect"),
     path("auth/google/callback/", google_oauth_callback, name="google_oauth_callback"),
+    # Drive archive consent. A SEPARATE flow and a SEPARATE callback URI from the
+    # login pair above: sign-in stays identity-only, while this one asks for the
+    # drive scope offline. Admin-only, so deliberately NOT in
+    # NON_ADMIN_ALLOWED_URL_NAMES. The callback path must be registered in the
+    # OAuth client or Google answers redirect_uri_mismatch.
+    path("auth/google/drive/", drive_oauth_redirect, name="drive_oauth_redirect"),
+    path("auth/google/drive/callback/", drive_oauth_callback, name="drive_oauth_callback"),
+    path("auth/google/drive/disconnect/", drive_oauth_disconnect, name="drive_oauth_disconnect"),
     # Password reset (public — accessible without being logged in)
     path("password-reset/", BrandedPasswordResetView.as_view(), name="password_reset"),
     path("password-reset/sent/", BrandedPasswordResetDoneView.as_view(), name="password_reset_done"),
@@ -155,7 +165,6 @@ urlpatterns = [
     ),
     path("api/testing/features/export/", export_features, name="export_features"),
     path("api/testing/error-email/toggle/", api_toggle_error_email, name="api_toggle_error_email"),
-    path("api/testing/drive-uploads/toggle/", api_toggle_drive_uploads, name="api_toggle_drive_uploads"),
     path("api/testing/ready/", api_mark_ready, name="api_mark_ready"),
     # Error test pages
     path("400/", test_error_400, name="test_error_400"),

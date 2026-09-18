@@ -31,11 +31,17 @@ from django.contrib.auth import get_user_model
 from django.shortcuts import redirect, render
 from django.views.decorators.http import require_http_methods
 
+from core.constants import PENDING_2FA_SESSION_KEY
 from core.decorators import admin_required
 from core.rate_limit import rate_limit
 from core.services import two_factor_service as tfs
+from core.views.auth import _finalize_session_login
 
-_PENDING_USER_SESSION_KEY = "_2fa_pending_user_id"
+# Re-exported alias: the value now lives in `core.constants` so that
+# `core.views.auth` can read it WITHOUT importing this module, which is what
+# removed the import cycle. Kept under the old name because it is part of
+# this module's `__all__` and the 2FA view tests import it from here.
+_PENDING_USER_SESSION_KEY = PENDING_2FA_SESSION_KEY
 
 
 def _teacher_for(user):
@@ -190,11 +196,6 @@ def two_factor_verify(request):
     that key is NOT yet logged in (see `SimpleAuthMiddleware` for the
     `is_authenticated` gate).
     """
-    # Lazy: core.views.auth imports this module at top level (for
-    # _PENDING_USER_SESSION_KEY), so a module-level import back into auth
-    # would be a circular import at Django URL-conf load.
-    from core.views.auth import _finalize_session_login
-
     pending_user_id = request.session.get(_PENDING_USER_SESSION_KEY)
     if not pending_user_id:
         # Nothing to verify — bounce back to the login form.

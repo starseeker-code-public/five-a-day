@@ -42,11 +42,16 @@ class TestFolderNames:
     @pytest.mark.parametrize(
         "d,expected",
         [
-            (date(2026, 9, 3), "Curso 2026/2027"),  # September → new course
-            (date(2026, 8, 1), "Curso 2026/2027"),  # August → already the new course
-            (date(2026, 7, 31), "Curso 2025/2026"),  # July → still the old course
-            (date(2027, 1, 10), "Curso 2026/2027"),  # January → same course as prev Sept
-            (date(2027, 6, 30), "Curso 2026/2027"),
+            (date(2026, 9, 3), "Curso 2026/27"),  # September → new course
+            (date(2026, 8, 1), "Curso 2026/27"),  # August → already the new course
+            (date(2026, 7, 31), "Curso 2025/26"),  # July → still the old course
+            (date(2027, 1, 10), "Curso 2026/27"),  # January → same course as prev Sept
+            # Two digits for the second year, matching the academy's own
+            # folders. Four digits built a parallel tree beside the real one and
+            # reported success (caught by a live upload, 2026-09-18).
+            (date(2030, 9, 1), "Curso 2030/31"),
+            (date(2029, 12, 31), "Curso 2029/30"),
+            (date(2027, 6, 30), "Curso 2026/27"),
         ],
     )
     def test_curso_boundary_is_august(self, d, expected):
@@ -77,23 +82,36 @@ class TestReceiptFilename:
 
 
 class TestEnvironmentGate:
-    """`drive_uploads_allowed()` / `archive_subfolder()` — the pair every caller
-    reads. No database: outside the QA VM the answer is decided by the
-    environment alone, so a dev box cannot reach the toggle even in principle."""
+    """`drive_uploads_allowed()` — the one predicate every caller reads.
 
-    def test_production_is_allowed_with_no_sandbox_level(self, settings):
+    Production only, and answered from the environment alone: no database, so a
+    dev box cannot enable it even in principle. The QA opt-in toggle and its
+    `testing/` sandbox were removed in v1.29.10 — the archive authenticates as a
+    delegated Google account, and the QA VM cannot complete that consent at all
+    because Google refuses a plain-HTTP redirect URI on a raw IP.
+    """
+
+    def test_production_is_allowed(self, settings):
         settings.ENVIRONMENT = "production"
         assert drive_service.drive_uploads_allowed() is True
-        assert drive_service.archive_subfolder() == ""
 
     def test_development_is_refused(self, settings):
         settings.ENVIRONMENT = "development"
         settings.IS_TESTING_ENV = False
         assert drive_service.drive_uploads_allowed() is False
 
-    def test_outside_production_the_sandbox_level_is_testing(self, settings):
+    def test_the_qa_vm_is_refused_too(self, settings):
+        """Testing used to be able to opt in. It no longer can, and this is the
+        test that would fail if somebody re-added a back door."""
         settings.ENVIRONMENT = "testing"
-        assert drive_service.archive_subfolder() == drive_service.TESTING_SUBFOLDER
+        settings.IS_TESTING_ENV = True
+        assert drive_service.drive_uploads_allowed() is False
+
+    def test_the_gate_never_touches_the_database(self, settings):
+        """No `django_db` mark here: if this ever needs one, the gate has grown a
+        database read and a DB blip could switch the real archive off."""
+        settings.ENVIRONMENT = "production"
+        assert drive_service.drive_uploads_allowed() is True
 
 
 class TestUploadReceipt:
@@ -113,7 +131,7 @@ class TestUploadReceipt:
         assert result.status == "not_configured"
         assert result.success is False
         # Path is still computed so logs/UX can name the intended location.
-        assert result.folder_path == "Curso 2026/2027/Recibos/Septiembre 26"
+        assert result.folder_path == "Curso 2026/27/Recibos/Septiembre 26"
 
     @patch.object(drive_service, "_service_account_info", return_value={"type": "service_account"})
     def test_uploaded_when_folders_exist(self, _info):
@@ -292,3 +310,111 @@ class TestDescribeError:
 
     def test_non_http_error_returns_type_name(self):
         assert drive_service._describe_error(ValueError("boom")) == "ValueError"
+
+
+class TestCredentialRoute:
+    """How the service authenticates to Drive.
+
+    Plain ADC cannot do this job: Cloud Run's metadata server issues
+    `cloud-platform`-scoped tokens and that scope does NOT cover
+    `https://www.googleapis.com/auth/drive`, so a default credential fails on
+    scope alone. The app therefore has the runtime service account impersonate
+    ITSELF to mint a short-lived drive-scoped token — which is what lets
+    production run with no stored key material, the same call this project made
+    when it stripped OAuth refresh tokens out of the session table.
+    """
+
+    SA = "fiveaday-run@five-a-day-evolution.iam.gserviceaccount.com"
+
+    def test_impersonation_alone_counts_as_configured(self, settings):
+        """No key anywhere, and the feature is still fully configured."""
+        settings.GOOGLE_DRIVE_RECEIPTS_FOLDER_ID = "folder-1"
+        settings.GOOGLE_DRIVE_IMPERSONATE_SA = self.SA
+        settings.GOOGLE_SHEETS_SERVICE_ACCOUNT_JSON = ""
+        settings.GOOGLE_SHEETS_SERVICE_ACCOUNT_FILE = ""
+        assert DriveReceiptService().is_configured() is True
+
+    def test_a_key_alone_still_counts(self, settings):
+        """The fallback must keep working — local runs and anyone who cannot be
+        granted the token-creator role depend on it."""
+        settings.GOOGLE_DRIVE_RECEIPTS_FOLDER_ID = "folder-1"
+        settings.GOOGLE_DRIVE_IMPERSONATE_SA = ""
+        with patch.object(DriveReceiptService, "_credential_info", return_value={"type": "service_account"}):
+            assert DriveReceiptService().is_configured() is True
+
+    def test_neither_is_not_configured(self, settings):
+        settings.GOOGLE_DRIVE_RECEIPTS_FOLDER_ID = "folder-1"
+        settings.GOOGLE_DRIVE_IMPERSONATE_SA = ""
+        with patch.object(DriveReceiptService, "_credential_info", return_value=None):
+            assert DriveReceiptService().is_configured() is False
+
+    def test_a_credential_without_a_folder_is_not_configured(self, settings):
+        """Both halves are required: an impersonation target with nowhere to put
+        the file is not a working archive."""
+        settings.GOOGLE_DRIVE_RECEIPTS_FOLDER_ID = ""
+        settings.GOOGLE_DRIVE_IMPERSONATE_SA = self.SA
+        assert DriveReceiptService().is_configured() is False
+
+    def test_the_source_token_is_requested_with_cloud_platform(self, settings):
+        """The precise trap this design exists around.
+
+        The SOURCE credential is only used to call IAM, so it asks for
+        `cloud-platform`. Asking the metadata server for the drive scope here is
+        exactly what does not work, and doing so would fail at runtime in a way
+        no unit test would otherwise notice.
+        """
+        settings.GOOGLE_DRIVE_RECEIPTS_FOLDER_ID = "folder-1"
+        settings.GOOGLE_DRIVE_IMPERSONATE_SA = self.SA
+        fake_source = MagicMock()
+
+        with (
+            patch("google.auth.default", return_value=(fake_source, "proj")) as mock_default,
+            patch("google.auth.impersonated_credentials.Credentials") as mock_creds,
+        ):
+            DriveReceiptService()._build_credentials()
+
+        assert mock_default.call_args.kwargs["scopes"] == ["https://www.googleapis.com/auth/cloud-platform"]
+        kwargs = mock_creds.call_args.kwargs
+        assert kwargs["target_principal"] == self.SA
+        # ...while the TARGET carries the drive scope, which is the whole point.
+        assert kwargs["target_scopes"] == ["https://www.googleapis.com/auth/drive"]
+        assert kwargs["source_credentials"] is fake_source
+
+    def test_impersonation_wins_when_both_are_set(self, settings):
+        """Production must not silently prefer stored key material."""
+        settings.GOOGLE_DRIVE_RECEIPTS_FOLDER_ID = "folder-1"
+        settings.GOOGLE_DRIVE_IMPERSONATE_SA = self.SA
+
+        with (
+            patch("google.auth.default", return_value=(MagicMock(), "proj")),
+            patch("google.auth.impersonated_credentials.Credentials") as mock_impersonated,
+            patch("google.oauth2.service_account.Credentials.from_service_account_info") as mock_key,
+            patch.object(DriveReceiptService, "_credential_info", return_value={"type": "service_account"}),
+        ):
+            DriveReceiptService()._build_credentials()
+
+        assert mock_impersonated.called
+        assert not mock_key.called, "a stored key must not be preferred over impersonation"
+
+    def test_the_key_path_is_used_when_no_target_is_set(self, settings):
+        settings.GOOGLE_DRIVE_RECEIPTS_FOLDER_ID = "folder-1"
+        settings.GOOGLE_DRIVE_IMPERSONATE_SA = ""
+
+        with (
+            patch("google.oauth2.service_account.Credentials.from_service_account_info") as mock_key,
+            patch.object(DriveReceiptService, "_credential_info", return_value={"type": "service_account"}),
+        ):
+            DriveReceiptService()._build_credentials()
+
+        assert mock_key.call_args.kwargs["scopes"] == ["https://www.googleapis.com/auth/drive"]
+
+    def test_no_credential_at_all_raises_inside_the_guarded_path(self, settings):
+        """`upload_receipt` converts this into an `error` result — it must not
+        escape, but it must not be silent either."""
+        settings.GOOGLE_DRIVE_RECEIPTS_FOLDER_ID = "folder-1"
+        settings.GOOGLE_DRIVE_IMPERSONATE_SA = ""
+        with (
+            patch.object(DriveReceiptService, "_credential_info", return_value=None),
+            pytest.raises(RuntimeError, match="not configured"),
+        ):
+            DriveReceiptService()._build_credentials()

@@ -13,9 +13,9 @@ from django.shortcuts import redirect, render
 from django.urls import reverse
 from django.views.decorators.http import require_http_methods
 
+from core.constants import PENDING_2FA_SESSION_KEY
 from core.log_safe import safe_log
 from core.rate_limit import rate_limit
-from core.views.two_factor import _PENDING_USER_SESSION_KEY
 from students.models import Teacher
 
 # Annotation-only. Deliberately NOT a runtime import: the name is used in type
@@ -138,7 +138,7 @@ def _stage_pending_2fa(request, user):
 
     # Clear any leftover pre-auth state from a previous attempt
     request.session.flush()
-    request.session[_PENDING_USER_SESSION_KEY] = user.id
+    request.session[PENDING_2FA_SESSION_KEY] = user.id
     request.session.set_expiry(300)  # 5 minutes to complete the second factor
 
 

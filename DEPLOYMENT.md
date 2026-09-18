@@ -274,6 +274,82 @@ gcloud services enable \
   dns.googleapis.com
 ```
 
+The Drive receipt archive needs two more, enabled 2026-09-18 while investigating why that
+archive had never filed anything. Neither is needed for the app to boot, and `iamcredentials`
+is no longer on the working path at all - see the note below for why it stays:
+
+```bash
+gcloud services enable drive.googleapis.com iamcredentials.googleapis.com --project=$PROJECT_ID
+```
+
+##### Drive archive: the service-account route does NOT work - it runs on OAuth delegation
+
+`iamcredentials` is what lets the runtime service account mint a **drive-scoped** token for
+ITSELF, which is the only way to reach Drive from Cloud Run: `google.auth.default()` there
+yields a `cloud-platform`-scoped token and Drive refuses that on scope alone. The binding has
+the same account as member AND resource - self-impersonation, not a grant to anybody else:
+
+```bash
+gcloud iam service-accounts add-iam-policy-binding \
+  fiveaday-run@$PROJECT_ID.iam.gserviceaccount.com \
+  --member=serviceAccount:fiveaday-run@$PROJECT_ID.iam.gserviceaccount.com \
+  --role=roles/iam.serviceAccountTokenCreator --project=$PROJECT_ID
+```
+
+That half works and is proven: IAM issues the drive-scoped token and it is accepted by Drive.
+**What fails is the upload.** Tested directly against the academy's receipts folder on
+2026-09-18, with the folder shared to the service account as Editor:
+
+```text
+403 storageQuotaExceeded
+"Service Accounts do not have storage quota. Leverage shared drives, or use OAuth
+ delegation instead."
+```
+
+A service account OWNS what it uploads and has no Drive storage of its own on a consumer
+(gmail.com) account. Creating the file's METADATA succeeded - it is writing BYTES that fails -
+so a test that only creates a folder or an empty file wrongly looks like success. Shared Drives
+would fix it and need Google Workspace, which the academy has declined on cost.
+
+The route that DOES work, and what v1.29.10 ships, is **OAuth delegation**: the academy's own
+Google account consents once, so that account - not a service account - owns the files. There
+is a one-time manual step after the deploy, and until it is done the archive stays silent:
+
+1. An admin opens `/management/` and clicks **Conectar Drive** (the control sits beside the
+   page title, with a red dot while disconnected and a green one once connected). Home also
+   raises a dialog on **every** visit while it is disconnected - deliberately not dismissible
+   for good, because the symptom of a disconnected archive is silence.
+2. Google asks which account to authorise. It must be the account that owns the receipts
+   folder. The app requests the full `drive` scope, not `drive.file`: the academy's folders
+   were created by hand, and `drive.file` cannot see a file it did not create.
+3. The refresh token is stored **encrypted** (Fernet, key derived from `SECRET_KEY`) in the
+   `GoogleDriveCredential` singleton, so a database dump does not yield a usable credential.
+
+Two things to get right BEFORE that click, both outside the repo:
+
+- **The redirect URI must be registered** on the OAuth client in the Cloud console:
+  `https://<domain>/auth/google/drive/callback/`. The view derives it from the request, so
+  `GOOGLE_DRIVE_REDIRECT_URI` only needs setting to override that - but the URI Google sees must
+  match a registered one literally, and a missing trailing slash is a `redirect_uri_mismatch`.
+  Pin the env var if the service answers on more than one hostname, since `build_absolute_uri`
+  would otherwise build whichever one the admin happened to open.
+- **The consent screen must be published ("In production")**, not left in "Testing". In Testing
+  mode Google expires refresh tokens after **7 days**, and the failure is exactly the one this
+  whole feature was built to fix: receipts silently stop being filed, and nothing errors.
+
+The QA VM is deliberately excluded - `drive_connect_available()` is false there, the control is
+absent and all three OAuth endpoints 404 - because Google will not register a redirect URI that
+is plain HTTP on a raw IP, which is what that VM is. Local development keeps it, which is how
+the flow is exercised before it reaches the academy.
+
+The `iamcredentials` API and the token-creator binding are deliberately LEFT IN PLACE even
+though nothing now uses them. They cost nothing, they are the non-obvious half of any future
+design that authenticates as the service account (a Workspace tenant with a Shared Drive would
+make that route work), and re-deriving them from scratch is the hour this note exists to save.
+`GOOGLE_DRIVE_IMPERSONATE_SA` still selects that path and is still tried - but only as a
+fallback, after the delegated account.
+
+
 #### 2. Create Cloud SQL instance
 
 ```bash
@@ -587,16 +663,24 @@ harmless when unset. Add them to the same `gcloud run deploy` invocation:
   # unset, rather than linking Drive's generic home page.
   --set-env-vars="GOOGLE_DRIVE_RECEIPTS_URL=<drive-folder-url>" \
   # Receipt ARCHIVE base folder id (v1.29.0). When set, completed-payment receipts
-  # are uploaded to <folder>/Curso YYYY/YYYY+1/Recibos/<Mes> YY/. The Sheets
-  # service account (GOOGLE_SHEETS_SERVICE_ACCOUNT_JSON) must have EDITOR access to
-  # this folder; it authenticates with the `drive` scope. Best-effort, so a Drive
-  # problem never fails payment completion. Unset = feature disabled.
-  # v1.29.5: uploading is PRODUCTION-ONLY on top of this. Setting the folder id on
-  # the testing VM archives nothing until QA turns on "Recibos a Drive" in /testing/
-  # (off by default), and even then receipts go to <Mes> YY/testing/ — never beside
-  # the real ones. Development never uploads at all. Set it on the JOBS as well as
-  # the service: backfill_drive_receipts runs as a job.
+  # are uploaded to <folder>/Curso YYYY/YY+1/Recibos/<Mes> YY/. Best-effort, so a
+  # Drive problem never fails payment completion. Unset = feature disabled.
+  # Uploading is PRODUCTION-ONLY on top of this (v1.29.5); the QA VM and development
+  # never upload, whatever is set. Set it on the JOBS as well as the service:
+  # backfill_drive_receipts runs as a job.
   --set-env-vars="GOOGLE_DRIVE_RECEIPTS_FOLDER_ID=<drive-folder-id>" \
+  # OAuth callback for the Drive connection (v1.29.10). OPTIONAL — unset, the view
+  # derives it from the request, which is correct behind Cloud Run. Set it only to
+  # override that. The uploader is a DELEGATED Google account, not the service
+  # account: a service account owns what it uploads and has no Drive storage on a
+  # consumer account (403 storageQuotaExceeded). Whatever the URI ends up being, it
+  # must be registered on the OAuth client EXACTLY, trailing slash included. After
+  # deploying, an admin connects the account once from /management/.
+  --set-env-vars="GOOGLE_DRIVE_REDIRECT_URI=https://YOUR_URL/auth/google/drive/callback/" \
+  # Optional FALLBACK, tried only when no account is connected: impersonate a service
+  # account for the drive scope. Kept for a future Workspace/Shared-Drive setup; it
+  # cannot write to a consumer Drive. Leave unset.
+  --set-env-vars="GOOGLE_DRIVE_IMPERSONATE_SA=" \
   # SMTP socket timeout (v1.28.1). Leave at the 20 s default unless you have a reason:
   # smtplib's OS default is minutes and the mass-mail views send inside the request, so
   # one blackholed port 587 parks a Gunicorn worker until it is killed.
@@ -612,7 +696,11 @@ After the first deploy, note the Cloud Run URL (production is `https://fiveaday-
 update:
 - `DJANGO_ALLOWED_HOSTS` with the actual URL
 - `GOOGLE_REDIRECT_URI` with `https://YOUR_URL/auth/google/callback/`
-- Google Cloud Console → OAuth credentials → Authorized redirect URIs (add the callback URL)
+- `GOOGLE_DRIVE_REDIRECT_URI` with `https://YOUR_URL/auth/google/drive/callback/` (optional — only to override what the request implies)
+- Google Cloud Console → OAuth credentials → Authorized redirect URIs (add **both** callback URLs)
+- Google Cloud Console → OAuth consent screen → **publish it ("In production")**. Left in
+  "Testing", Google expires the Drive refresh token every 7 days and the archive stops filing
+  receipts silently.
 
 ### Repairing a single env var
 

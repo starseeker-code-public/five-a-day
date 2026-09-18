@@ -40,8 +40,11 @@ class TestSendWelcomeEmailTask:
                 enrollment_id=active_enrollment.id,
             )
         assert result["status"] == "success"
-        assert result["recipient"] == parent.email
+        assert result["student_id"] == student_with_parent.id
         mock_send.assert_called_once()
+        # Assert on what was actually SENT, not on what the task said it sent:
+        # the return value no longer carries the address, because Celery logs it.
+        assert mock_send.call_args.kwargs["recipients"] == parent.email
 
     def test_success_with_adult_student(self, adult_student, enrollment_type_adults, site_config):
         enr = Enrollment.objects.create(
@@ -65,7 +68,9 @@ class TestSendWelcomeEmailTask:
                 enrollment_id=enr.id,
             )
         assert result["status"] == "success"
-        assert result["recipient"] == adult_student.email
+        assert result["student_id"] == adult_student.id
+        # An adult has no guardian, so the student's own address is the recipient.
+        assert mock_send.call_args.kwargs["recipients"] == adult_student.email
 
     def test_special_enrollment_reports_special_payment_modality(
         self, student_with_parent, parent, enrollment_type_special, site_config
@@ -313,8 +318,9 @@ class TestSendEnrollmentConfirmationTask:
             mock_send.return_value = True
             result = send_enrollment_confirmation_task(enrollment_id=active_enrollment.id)
         assert result["status"] == "success"
-        assert result["recipient"] == parent.email
+        assert result["enrollment_id"] == active_enrollment.id
         mock_send.assert_called_once()
+        assert mock_send.call_args.kwargs["parent_email"] == parent.email
 
     def test_missing_enrollment_returns_error(self):
         result = send_enrollment_confirmation_task(enrollment_id=99999)
@@ -360,3 +366,68 @@ class TestSendEnrollmentConfirmationTask:
         call_kwargs = mock_send.call_args.kwargs
         # Missing file path is silently skipped; attachments list is empty → None
         assert call_kwargs["attachments"] is None
+
+
+class TestNoPersonalDataInTaskReturnValues:
+    """A task's return dict is LOGGED — it must not carry an address or a name.
+
+    Celery writes the return value into its own success record at INFO
+    ("Task comms.tasks.send_payment_receipt_email_task[...] succeeded in 2.08s:
+    {...}"), so a dict carrying `parent.email` published a family's address to
+    Cloud Logging on every single send — and the birthday task added the
+    child's full name beside it. `comms/tasks.py` already carried an explicit
+    note not to log task ARGUMENTS for exactly this reason; the return value was
+    the same leak by another door, and nothing was watching it.
+
+    A source scan rather than a run of every task: the point is to catch the
+    SIXTH task, which by definition has no test yet.
+    """
+
+    #: Dict values that are an address or a person, rather than an id or a count.
+    BANNED_NAMES = {"recipient", "recipient_email", "recipients", "email", "parent_email"}
+
+    def _scan(self, tree):
+        """The real detection, taking a tree so the meta-test can drive it."""
+        import ast
+
+        offences = []
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Return) or not isinstance(node.value, ast.Dict):
+                continue
+            for key, value in zip(node.value.keys, node.value.values, strict=False):
+                label = getattr(key, "value", "?")
+                # `parent.email`, `student.email`, `payment.parent.email`
+                if isinstance(value, ast.Attribute) and value.attr in {"email", "full_name"}:
+                    offences.append(f"line {node.lineno}: {label!r} -> .{value.attr}")
+                # a bare `recipient` / `recipients` variable
+                elif isinstance(value, ast.Name) and value.id in self.BANNED_NAMES:
+                    offences.append(f"line {node.lineno}: {label!r} -> {value.id}")
+        return offences
+
+    def _offending_returns(self):
+        import ast
+        import pathlib
+
+        source = pathlib.Path(__file__).resolve().parents[2] / "comms" / "tasks.py"
+        return self._scan(ast.parse(source.read_text(encoding="utf-8")))
+
+    def test_no_task_returns_an_address_or_a_name(self):
+        offences = self._offending_returns()
+        assert not offences, (
+            "These task return values are logged verbatim by Celery at INFO. "
+            "Return the id instead (student_id / parent_id / payment_id):\n  " + "\n  ".join(offences)
+        )
+
+    def test_the_scan_can_actually_fail(self):
+        """A guard that cannot fail is worse than none — it reads as coverage.
+
+        Drives the REAL scan with the exact shape this rule exists to stop, and
+        with the shape it must let through.
+        """
+        import ast
+
+        offending = ast.parse("def t():\n    return {'status': 'ok', 'recipient': parent.email}\n")
+        assert self._scan(offending), "the scan must flag an address in a return dict"
+
+        clean = ast.parse("def t():\n    return {'status': 'ok', 'parent_id': parent_id}\n")
+        assert not self._scan(clean), "an id must pass"

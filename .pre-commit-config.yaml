@@ -60,6 +60,54 @@ repos:
         pass_filenames: false
         always_run: true
 
+      # Every end-to-end journey in project/tests/e2e/: a family is enrolled,
+      # the year is billed, a payment is collected through the real HTTP
+      # endpoint, the receipt email is produced and the PDF is really uploaded
+      # to Google Drive, then all of it is deleted again. Discovery is by
+      # filename, so adding a journey is adding a file -- nothing to register
+      # here.
+      #
+      # These are NOT pytest tests and cannot be: they run against the DEV
+      # database rather than a throwaway one and they make live Google API
+      # calls. That is also why CI cannot run them -- CI has no Drive
+      # credential (the refresh token is encrypted with a key derived from
+      # SECRET_KEY and lives in the database), and the `drive` scope's refresh
+      # tokens expire every 7 days while the consent screen is in Testing. So
+      # this hook is the only place the Drive half of the flow is ever
+      # exercised before a push; the CI-safe half is pytest'd in
+      # project/tests/integration/test_payment_journey.py.
+      #
+      # STRICT, on purpose. It blocks the commit when a check fails AND when
+      # nothing could be verified -- containers down, no Drive account connected
+      # at /management/, Google unreachable, DJANGO_ENV=production. A gate that
+      # could not run has not passed, and the alternative (exit green when the
+      # environment is wrong) is the failure mode that makes a gate worthless:
+      # it would have been silently green on every machine that never connected
+      # an account. It is allowed to be this strict because the three false reds
+      # it used to have are absorbed at the source -- Google transport errors are
+      # retried, the upload is re-run and its status read, and Drive's
+      # eventually-consistent search index is polled -- so a red here is a real
+      # answer about the commit or a real answer about the box.
+      #
+      # `fail_fast` stops pre-commit here rather than spending three more minutes
+      # on the coverage gate for a commit that is already refused, and keeps the
+      # phase output at the BOTTOM of the terminal where it can be read.
+      #
+      # It also runs on PUSH. `git commit --no-verify` skips every hook and no
+      # config can prevent that -- so the push stage is the backstop that makes a
+      # bypass take two deliberate acts instead of one. It is inert until
+      # `make pre-commit-install` installs the pre-push hook. CI cannot be that
+      # backstop for this one: CI has no Drive credential, and the CI-safe half
+      # is pytest'd in project/tests/integration/test_payment_journey.py.
+      - id: e2e
+        name: end-to-end journeys (real Drive, local only)
+        entry: make e2e
+        language: system
+        pass_filenames: false
+        always_run: true
+        fail_fast: true
+        stages: [pre-commit, pre-push]
+
       # Runs the full pytest suite inside Docker and fails the commit if
       # coverage drops below 75%. Requires `make up` (containers running).
       # Pass --no-verify to git commit if you need to bypass (e.g. docker is

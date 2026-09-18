@@ -2,6 +2,7 @@ import json
 import logging
 from decimal import Decimal
 
+from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db.models import Prefetch
 from django.http import JsonResponse
@@ -13,8 +14,9 @@ from billing.models import Enrollment, SiteConfiguration, current_academic_year,
 from billing.services.enrollment_service import EnrollmentService
 from billing.services.enrollment_type_service import ensure_enrollment_types
 from core.decorators import admin_required
-from core.models import HistoryLog
+from core.models import GoogleDriveCredential, HistoryLog
 from core.transactions import visible_students_for
+from core.views.google_drive import drive_connect_available
 from core.views.password_reset import can_change_own_password, send_password_setup_email
 from core.views.waiting_list import group_capacity_summary
 from students.models import Group, Parent, Student, Teacher
@@ -35,6 +37,10 @@ def gestion_view(request):
     # Same helper `waiting_list_view` and the dashboard use, so the three pages
     # cannot disagree about whether a group is full.
     groups = group_capacity_summary()
+    # A service account cannot file these receipts (it owns what it uploads and
+    # has no Drive storage on a consumer account), so the archive runs on a real
+    # Google account connected here. See core/views/google_drive.py.
+    drive_credential = GoogleDriveCredential.get_config()
 
     context = {
         "config": config,
@@ -44,6 +50,14 @@ def gestion_view(request):
         # sessions (Google owns that identity) and for any account without a
         # usable password (the dev env-var login) — see the helper's docstring.
         "can_change_password": can_change_own_password(request),
+        # Google Drive receipt archive. Admin-only surface, so the template
+        # gates it on `is_admin_user` as well — this only supplies the state.
+        "drive_credential": drive_credential,
+        # Hidden on the QA VM, where the consent round trip cannot complete at
+        # all (Google will not register a plain-HTTP redirect URI on a raw IP).
+        # The views refuse there too — see core.views.google_drive.
+        "drive_connect_available": drive_connect_available(),
+        "drive_folder_configured": bool(getattr(settings, "GOOGLE_DRIVE_RECEIPTS_FOLDER_ID", "")),
     }
     return render(request, "management.html", context)
 

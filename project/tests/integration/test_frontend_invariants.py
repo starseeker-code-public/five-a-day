@@ -703,7 +703,11 @@ def test_modal_dialogs_get_the_shared_focus_management():
 # by construction. Listed rather than guarded so the exemption is a decision on
 # the record instead of an omission.
 AGE_GUARD_EXEMPT = {
-    "core/templates/home.html:141",
+    # NOTE: keyed by LINE NUMBER, so anything inserted above it in home.html
+    # moves the target and fails this test with the card itself untouched
+    # (it moved 141 -> 149 when the Drive warning modal was added). If that
+    # happens, re-point it rather than guarding a value that cannot be None.
+    "core/templates/home.html:149",
 }
 
 

@@ -15,11 +15,11 @@ Built to centralize student records, automate billing cycles, and streamline par
 ### Project Status
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v1.29.9-brightgreen?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-v1.29.10-brightgreen?style=flat-square" alt="Version">
   &nbsp;|&nbsp;
   <a href="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml?query=branch%3Amain"><img src="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml/badge.svg?branch=main&style=flat-square" alt="CI main"></a>
   &nbsp;|&nbsp;
-  <img src="https://img.shields.io/badge/coverage-95.32%25-brightgreen?style=flat-square" alt="Coverage">
+  <img src="https://img.shields.io/badge/coverage-94.44%25-brightgreen?style=flat-square" alt="Coverage">
   &nbsp;|&nbsp;
   <a href="https://github.com/starseeker-code-public/five-a-day/actions/workflows/scorecard.yml"><img src="https://img.shields.io/badge/OpenSSF%20Scorecard-monitored-blueviolet?style=flat-square" alt="OSSF Scorecard"></a>
   &nbsp;|&nbsp;
@@ -36,9 +36,9 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 | Version | Date | Description |
 |---------|------|-------------|
-| **v1.29.9** | 2026-09-17 | Top-level imports everywhere, plus two security fixes |
+| **v1.29.10** | 2026-09-18 | Delegated-account Drive archive; end-to-end journeys |
+| v1.29.9 | 2026-09-17 | Top-level imports everywhere, plus two security fixes |
 | v1.29.8 | 2026-09-15 | App branding aligned to "Five a Day Evolution" |
-| v1.29.7 | 2026-09-14 | Deliberate record deletion, correlated structured logging |
 
 ---
 
@@ -140,8 +140,120 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 ## Version History
 
-<details id="v1299" open>
-<summary><strong>v1.29.9 — Imports say what a module depends on, and two silent bugs are closed (current)</strong></summary>
+<details id="v12910" open>
+<summary><strong>v1.29.10 — The receipt archive works for the first time, as a delegated Google account (current)</strong></summary>
+
+**The archive had never filed a single receipt, and could not have**
+
+- The Drive archive shipped in v1.29.0 authenticating as a **service account**, and that can
+  never work against the academy's Drive. Proven against the real folder on 2026-09-18, shared
+  to the service account as Editor, with a genuinely drive-scoped token: every write returns
+  `403 storageQuotaExceeded` — *"Service Accounts do not have storage quota… use OAuth
+  delegation instead."* A service account **owns** whatever it uploads and has no Drive storage
+  of its own on a consumer (gmail.com) account.
+- Note the shape of that failure before re-testing it: creating the file's **metadata succeeded**
+  and only writing BYTES failed, so a smoke test that creates a folder or an empty file looks
+  like success and proves nothing.
+- Production had been logging `{'status': 'not_configured'}` on every completed payment since the
+  feature shipped. `not_configured` is a deliberate no-op, so nothing errored, nothing alerted,
+  and the accountant's folders stayed empty.
+
+**The fix: an admin connects a real Google account, once**
+
+- `core/views/google_drive.py` — a **separate** OAuth flow from sign-in, admin-only, with its own
+  scopes, callback URI and session keys. Folding `drive` into `_GOOGLE_SCOPES` would ask every
+  teacher for their own Drive on every login to serve one account's archive.
+- It is the one flow that legitimately wants `access_type=offline` **and** `prompt=consent`:
+  Google returns a refresh token only on a first consent unless re-consent is forced, so without
+  it a reconnect-after-revoke silently yields no refresh token and the archive dies an hour later.
+  The callback **refuses** a credential with no refresh token rather than storing one that cannot
+  do the job.
+- `core.models.GoogleDriveCredential` (singleton, migration `core/0017`) stores it, and
+  `core/token_crypto.py` encrypts it with a Fernet key derived (HKDF-SHA256) from `SECRET_KEY` —
+  which lives in Secret Manager and **not** in the database, so the documented objection to
+  storing OAuth material (it sat in `django_session` as plain base64 and rode out in every Cloud
+  SQL backup) does not transfer. A `SECRET_KEY` rotation fails benignly: decrypt returns empty,
+  the UI reports disconnected, an admin reconnects.
+- `DriveReceiptService._delegated_credentials()` is tried ahead of the two service-account routes,
+  which are kept because they are correct for a Shared Drive. Its database read fails closed on
+  any exception, because it runs inside "marcar cobrado" under Celery-eager and that module's
+  contract is that it never raises.
+
+**A folder-naming bug that made the whole feature silent**
+
+- `curso_folder_name()` emitted `Curso 2026/2027`. The academy names them `Curso 2024/25`,
+  `Curso 2025/26`, `Curso 2026/27` — **two digits**. Drive matches folders by name, so
+  find-or-create built a parallel tree beside the real one, filed the receipt into it and
+  reported `success: True`. Nothing errors in that failure. Found only by uploading to the real
+  Drive; two regression cases now pin the two-digit form.
+
+**The QA opt-in is gone (DESTRUCTIVE — `core/0018`)**
+
+- `QAConfiguration.drive_uploads_enabled`, the `/testing/` "Recibos a Drive" toggle, its endpoint,
+  `TESTING_SUBFOLDER` and `archive_subfolder()` were all removed. The consent cannot be completed
+  on the QA VM at all — Google refuses to register a redirect URI that is plain HTTP on a raw IP —
+  and a control nobody can reach is worse than none, because it reads as a supported path.
+- `drive_uploads_allowed()` is now simply `_is_production()` and touches **no database**, so no row
+  and no outage can switch the real archive on or off.
+- Deploying this to production requires the **`ack_destructive`** dispatch input.
+
+**UI**
+
+- The connect control lives in the `/management/` page header with a red/green status dot,
+  admin-only and hidden where the consent cannot complete.
+- Home shows a modal on **every** visit while the archive is disconnected, linking to
+  `/management/`. Rendered already-open by the server, so no JS error can suppress it and no
+  `localStorage` can dismiss it for good — the symptom of the archive being off is silence.
+
+**Imports, tests and tooling**
+
+- `PENDING_2FA_SESSION_KEY` moved to `core/constants.py` (a zero-import leaf), so `core.views.auth`
+  no longer imports `core.views.two_factor` and the CodeQL cyclic-import pair (alerts 601/602 on
+  PR #77) is broken at its source rather than tolerated. The previously-lazy import back into
+  `auth` is now an ordinary top-level one.
+- Five Celery tasks stopped returning recipient addresses — Celery logs a task's return value at
+  INFO, so every send published a family's email to Cloud Logging, and the birthday task added the
+  child's full name. They return ids now, with an AST guard that fails on any future return dict
+  carrying `.email` or `.full_name`.
+- **`project/tests/e2e/` — end-to-end journeys against the REAL Google Drive**, run with
+  `make e2e`. The payment journey is one phased pass through the whole money path: enrol a family
+  → the year is billed → a payment is collected through the real HTTP endpoint → the receipt
+  email is produced → the PDF is really uploaded to Drive → everything is deleted again. They are
+  deliberately **not** pytest tests (`pytest.ini` collects `test_*.py`, so `make test` and CI walk
+  straight past the directory): they run against the DEV database and talk to Google with a live
+  credential. `run.py` is the single entry point and owns the Django bootstrap, the
+  production-refusal and two forced substitutions without which a run is green but hollow —
+  `ENVIRONMENT="production"` (the archive is production-only by design, so otherwise nothing is
+  exercised) and `CELERY_TASK_ALWAYS_EAGER` (this dev stack HAS Redis, so `.delay()` would hand the
+  work to the worker container, where neither substitution is set — which is how an early run
+  archived nothing and reported success). Rows are marked `E2E_BORRAR` and purged at the START of a
+  journey as well as the end, so a run that dies half way leaves the next one runnable rather than
+  failing on the `Parent.dni` unique column.
+- **`project/tests/integration/test_payment_journey.py`** — 17 tests, the CI-safe counterpart of
+  that journey with Google mocked. The split is the point: CI has no `GoogleDriveCredential` row
+  (the refresh token is encrypted with a key derived from `SECRET_KEY`) and `drive` refresh tokens
+  expire weekly while the consent screen is in Testing, so everything up to the Drive call is
+  asserted on every push and the upload itself is asserted by the pre-commit journey. What it adds
+  over the existing suite is the **chain**, not the units — every bug this app has shipped in the
+  money path lived in a seam between them.
+- A **`e2e` pre-commit hook** (`fail_fast`, `pre-commit` **and** `pre-push` stages) runs the
+  journeys on every commit. Deliberately strict: it blocks when a check fails *and* when nothing
+  could be verified — containers down, no Drive account connected, Google unreachable. A gate that
+  could not run has not passed, and exiting green on a wrong environment is what would have made it
+  silently useless on every machine that never connected an account. The three false reds it used
+  to have are absorbed at source (Google transport errors retried, upload status re-read, Drive's
+  eventually-consistent index polled). It runs on push as well because `--no-verify` skips every
+  hook and no config can prevent that — so a bypass now takes two deliberate acts.
+- `make pre-commit-install` now installs the **pre-push** hook as well as the commit one.
+- The two deferred imports in `GoogleDriveCredential` (`core/token_crypto`) carry a comment saying
+  plainly that there is **no good reason** for them — not a cycle, not app-registry timing, not an
+  optional dependency. Recorded honestly rather than given an invented justification.
+- Suite at **2,585 tests, 94.44 % coverage**.
+
+</details>
+
+<details id="v1299">
+<summary><strong>v1.29.9 — Imports say what a module depends on, and two silent bugs are closed</strong></summary>
 
 **The problem: 859 imports were hidden inside function bodies**
 
@@ -455,14 +567,18 @@ Built to centralize student records, automate billing cycles, and streamline par
 - Those folders are the academy's real, permanent archive — the one its accountant opens — and
   nothing in a receipt PDF says which environment produced it. A QA seed run or a developer
   clicking "marcar cobrado" filed fictional receipts beside the genuine ones, unrecoverably.
-- **`drive_service.drive_uploads_allowed()` is the one predicate.** Production: always, decided
-  **without touching the database**, so a DB blip can never switch the real archive off. The QA VM
-  (`IS_TESTING_ENV`): only while the new `/testing/` **"Recibos a Drive"** toggle is on
-  (`QAConfiguration.drive_uploads_enabled`, migration `core/0016`, **off by default**), and then
-  only into a `testing/` **subfolder** of the month (`archive_subfolder()`) — a separate folder
-  rather than a filename prefix, because a human scrolling the month must never see a fake receipt
-  at all. Development, Docker and the test suite: never, whatever the flag says. Fails **closed**
-  on a database error.
+- **`drive_service.drive_uploads_allowed()` is the one predicate**, and since **v1.29.10** it is
+  simply `_is_production()`. Production: always. Everything else — the QA VM, Docker, a developer's
+  machine, the test suite: never. It touches **no database at all**, so neither a row nor a DB
+  outage can switch the real archive on or off. The QA opt-in that used to sit here
+  (`QAConfiguration.drive_uploads_enabled`, the `/testing/` "Recibos a Drive" toggle, and the
+  `testing/` subfolder receipts landed in) was **removed** in v1.29.10, migration `core/0018`. Not
+  for tidiness: the archive now authenticates as a delegated Google account connected from
+  `/management/`, and that consent **cannot be completed on the QA VM at all**, because Google
+  refuses to register a redirect URI that is plain HTTP on a raw IP — which is exactly what that VM
+  is. A control nobody can reach is worse than no control, because it reads as a supported path. To
+  exercise the upload outside production, point a dev instance at a throwaway Google account and
+  folder (`GOOGLE_DRIVE_RECEIPTS_FOLDER_ID` is per-environment) rather than re-adding a gate.
 - Three readers, deliberately: `DriveReceiptService.upload_receipt` (the true enforcement point,
   checked *before* `is_configured()` so a disallowed environment does not even parse the
   credentials), `upload_receipt_to_drive_task` (so it does not render a PDF it will throw away —
@@ -4410,6 +4526,7 @@ All tools configured in `pyproject.toml` — single source of truth.
 | Google Cloud Platform | Production: Cloud Run + Cloud SQL (`europe-southwest1`) + Cloud Scheduler + Secret Manager. Testing: Compute Engine `e2-micro` (always-free tier) |
 | Gmail SMTP | Email sending (app password authentication) |
 | Google OAuth 2.0 | Optional admin authentication |
+| Google Drive API | Receipt archive. Enabled alongside `iamcredentials.googleapis.com`, plus a `roles/iam.serviceAccountTokenCreator` binding from `fiveaday-run` **to itself** so it can mint a drive-scoped token (Cloud Run's default token is `cloud-platform`-scoped, which Drive refuses). Both are in place and the archive still does **not** work: a service account owns what it uploads and has no Drive storage on a consumer account, so writes fail `storageQuotaExceeded`. See [DEPLOYMENT.md](DEPLOYMENT.md) → *Drive archive: the service-account route does NOT work* |
 | Make | 49 targets, 45 of them listed by `make help` (`test-cov-gate`, `check-deploy` and `version` are deliberately unadvertised) |
 
 ### Python Dependencies
@@ -4683,7 +4800,6 @@ erDiagram
     QAConfiguration {
         int id PK
         bool error_email_enabled
-        bool drive_uploads_enabled
         bool ready_for_prod
     }
 
@@ -4983,6 +5099,14 @@ GOOGLE_DRIVE_RECEIPTS_URL=
 # uploaded to <folder>/Curso YYYY/YYYY+1/Recibos/<Mes> YY/. Share that folder
 # with the Sheets service account as Editor. Empty = feature disabled (no-op).
 GOOGLE_DRIVE_RECEIPTS_FOLDER_ID=
+# Redirect URI for the Drive consent flow. Must be registered on the OAuth
+# client, and pinned explicitly in production because the service answers on
+# two hostnames and build_absolute_uri would pick whichever was used.
+GOOGLE_DRIVE_REDIRECT_URI=
+# Optional fallback: a service account to impersonate instead of a connected
+# account. Correct only for a Shared Drive — a service account cannot write
+# to a consumer Drive at all (storageQuotaExceeded).
+GOOGLE_DRIVE_IMPERSONATE_SA=
 
 # ============================================================================
 # GCP BILLING EXPORT  (v1.26.5 — optional, all environments)
@@ -5118,6 +5242,7 @@ Run `make` or `make help` for the full list. Key commands:
 | `make test ARGS='--lf'` | Pass raw pytest flags through |
 | `make test-cov-gate` | Coverage gate — fails if coverage drops below 75% (used by pre-commit) |
 | `make smoke` | End-to-end smoke test (`scripts/docker_smoke_test.py`) — creates a teacher, group, parent, student, enrollment and payment through the real views and prints `SMOKE_OK`. **Dev only**: `.dockerignore` excludes `scripts/`, so it reaches the container via the dev source mount and exists in no built image. Nothing invoked this script before v1.27.1, which is why an `ImportError` in it went unnoticed indefinitely |
+| `make e2e` | Every end-to-end journey in `project/tests/e2e/` against the **real** Google Drive (v1.29.10) — enrol → bill → collect over HTTP → receipt email → a genuine upload → cleanup. Discovery is by filename (`*_journey.py`), so adding a journey is adding a file. `ARGS=--list` names them, `ARGS='--only payment'` runs one, `ARGS=--keep` leaves the evidence behind. Deliberately NOT part of `make test`: these are not pytest tests, they run against the DEV database rather than a throwaway one, and CI cannot run them because it has no Drive credential — the CI-safe half is `project/tests/integration/test_payment_journey.py`. The runner exits `0` all passed / `1` a check failed / `2` nothing could be verified; Make collapses both failures to its own exit 2, so read the SUMMARY block to tell a regression from an unconfigured box |
 | **Payments** | |
 | `make generate-payments` / `make generate-payments-dry` | Generate the current month / preview only |
 | **Celery** | |
@@ -5152,7 +5277,7 @@ Run `make` or `make help` for the full list. Key commands:
 | `make mypy` | Run mypy type checker |
 | `make bandit` / `make audit` | Bandit security linter / `pip-audit` for dependency CVEs |
 | `make coverage-badge` | Regenerate `coverage.svg` from the latest test run |
-| `make pre-commit-install` | Install the git pre-commit hook |
+| `make pre-commit-install` | Install the git **pre-commit and pre-push** hooks. The pre-push stage matters from v1.29.10: `git commit --no-verify` skips every hook and no config can prevent that, so the push stage is the backstop that makes a bypass take two deliberate acts. Until this is run, the `e2e` hook's push half is inert |
 | `make pc-run` | Run pre-commit on all files; on clean pass, offer to auto-bump patch version; auto-stages regenerated `uv.lock` |
 | **Remote** | |
 | `make connect-testing` | SSH into the GCP testing VM (auto-login if needed) |
@@ -5236,7 +5361,9 @@ The table below describes every variable in the [.env template](#env-template) a
 | `GOOGLE_SHEETS_SERVICE_ACCOUNT_FILE` | Filesystem path to a service-account JSON file (alternative to inline) | No | — |
 | `GOOGLE_SHEETS_SPREADSHEET_ID` | Target spreadsheet doc ID; service account must have Editor access | No | — |
 | `GOOGLE_DRIVE_RECEIPTS_URL` | Drive folder holding expense receipts. The "Consultar recibos" buttons are **hidden** when unset, rather than linking Drive's generic home page | No | — (buttons hidden) |
-| `GOOGLE_DRIVE_RECEIPTS_FOLDER_ID` | Base "Five a Day" Drive folder id for the receipt **archive** (v1.29.0). Set + share the folder with the service account (Editor) to auto-upload completed-payment receipts; unset disables the upload | No | — (upload off) |
+| `GOOGLE_DRIVE_RECEIPTS_FOLDER_ID` | Base "Five a Day" Drive folder id for the receipt **archive** (v1.29.0). Needs a Google account connected from `/management/` as well (v1.29.10) — a service account cannot write to a consumer Drive; unset disables the upload | No | — (upload off) |
+| `GOOGLE_DRIVE_REDIRECT_URI` | Callback for the Drive consent flow, e.g. `https://<host>/auth/google/drive/callback/`. Must be registered on the OAuth client. Pin it in production: the service answers on two hostnames, and `build_absolute_uri` would build whichever the admin happened to use, giving `redirect_uri_mismatch` | No | built from the request |
+| `GOOGLE_DRIVE_IMPERSONATE_SA` | Service account to impersonate for Drive instead of a connected account. A fallback for a Shared Drive or Workspace tenant only — against a consumer Drive every upload fails `storageQuotaExceeded` | No | — (delegated account used) |
 | **GCP billing export (v1.26.5)** — optional, real Google Cloud spend from the BigQuery billing export | | | |
 | `GCP_BILLING_EXPORT_TABLE` | Billing-export table id (`project.dataset.gcp_billing_export_v1_XXXXXX`). Unset ⇒ the whole feature is off ("—" in the UI, nothing archived) | No | — |
 | `GCP_BILLING_PROJECT_ID` | Project the BigQuery query job runs under (needs BigQuery Job User) | No | the table's own project |
@@ -5458,7 +5585,12 @@ five-a-day/
 │   │   └── management/commands/  send_email, test_all_emails, plus 4 Beat-task wrappers
 │   │                             (v1.14.2 — birthday, reminders, report, Fun Friday drain)
 │   │
-│   ├── tests/                    pytest suite (2,536 tests, 95.32 % coverage) — unit/ + integration/
+│   ├── tests/                    pytest suite (2,585 tests, 94.44 % coverage) — unit/ + integration/
+│   │   └── e2e/                  End-to-end journeys vs the REAL Google Drive (v1.29.10) — NOT
+│   │                         pytest (`make test` and CI skip them); `make e2e` / the `e2e`
+│   │                         pre-commit hook. run.py (entry point + safety refusal),
+│   │                         _harness.py (report, retries, purge, Drive sandbox),
+│   │                         payment_journey.py
 │   ├── templates/registration/   Password-reset templates (form, done, confirm, complete + email body)
 │   ├── templates/admin/          Django admin overrides (branded theme; v1.29.7:
 │   │                             purge_confirmation.html)
@@ -5530,14 +5662,14 @@ Dashboard, authentication, scheduling, and shared utilities. Owns all views and 
 
 | Component | Details |
 |-----------|---------|
-| **Models** | 9 — TodoItem, HistoryLog (1000-entry cap), FunFridayAttendance, FunFridayScheduledSend, ScheduleSlot, BacklogTask (QA; `verified` is the tester's tick, separate from `status="done"`, v1.20.0; `feature` FK, v1.21.0), Feature (QA epics — no priority, nullable `deadline`, v1.21.0), QAConfiguration (QA — `error_email_enabled`, `ready_for_prod` v1.26.4, `drive_uploads_enabled` v1.29.5), plus AuditLog in `audit_models.py` |
+| **Models** | 9 — TodoItem, HistoryLog (1000-entry cap), FunFridayAttendance, FunFridayScheduledSend, ScheduleSlot, BacklogTask (QA; `verified` is the tester's tick, separate from `status="done"`, v1.20.0; `feature` FK, v1.21.0), Feature (QA epics — no priority, nullable `deadline`, v1.21.0), QAConfiguration (QA — `error_email_enabled`, `ready_for_prod` v1.26.4; `drive_uploads_enabled` was removed in v1.29.10), GoogleDriveCredential (singleton — the delegated Google account the receipt archive uploads as, refresh token encrypted at rest, v1.29.10), plus AuditLog in `audit_models.py` |
 | **Views** | 23 modules: auth, password_reset, dashboard, students, parents, payments, management, app_forms, schedule, fun_friday_attendance, todos, support, errors, testing_tools, features, waiting_list, sheets, expenses, reports, parent_portal, stripe_views, pwa, two_factor |
 | **Services** | 6 — analytics_service, google_sheets_service, two_factor_service, drive_service (v1.29.0 — receipt archive; **production-only** since v1.29.5, gated by the single `drive_uploads_allowed()` predicate), and v1.29.5's `capacity_service` + `portal_access_service`, both moved out of `core/views/` so a model's signal and an admin action stop importing upwards into a view module |
 | **Middleware** | 5 — RequestLogMiddleware (v1.29.7 — first in the stack: binds the `request_id` every log record carries, echoes `X-Request-ID`, and logs one levelled line per request), NoHtmlCacheMiddleware (no-cache on dynamic HTML), QAErrorEmailMiddleware, SimpleAuthMiddleware (session auth public allow-list incl. `/password-reset/` + non-admin teacher URL-name whitelist + the v1.29.4 parent-portal kill switch, which 404s every `/parent/` URL while `PARENT_PORTAL_ENABLED` is off), AuditActorMiddleware |
 | **Templates** | base.html (layout — v1.26.8 renders the global flash-message block and gates the bell / history feed / per-view help on `is_admin_user`), 25 page templates (v1.21.0: `features.html`, `feature_detail.html`) + the shared `qa/_qa_styles.html` partial, 19 email templates + `base_email.html` (v1.28.2: ONE light theme that opts out of client dark-mode, written inline; v1.29.1 factors the shared WhatsApp contact box out of fifteen inline copies into `emails/_contact_box.html`), error pages, plus `templates/registration/` for the password-reset and teacher-activation flows |
 | **Static** | 4 CSS files (app.css, theme.css — which gained the flatpickr dark theme in v1.29.1, admin_custom.css, plus `palette.css` — v1.27.1, the `--primary-*` vars, deliberately separate because only `base.html` loads app.css while theme.css is loaded by three shells) + `vendor-flatpickr-*.css` (v1.28.2); `email.css` was deleted in v1.29.1 (an email template can never use `{% static %}`, so it had no reader). 17 JS behaviour modules (incl. `date-picker.js` — v1.28.2, which exposes `window.setDateValue()` / `window.dateInputElement()` since v1.29.1) + `tailwind-config.js` (v1.27.1 — the shared `tailwind.config`, previously copied inline into three shells and already drifted), `vendor/` (self-hosted Tailwind Play build + flatpickr), images |
 | **Commands** | seed_teachers (Teacher + auth.User from env vars; v1.26.8 optional `USERNAME` login handle), seed_demo_parents (v1.26.8 — the parent-portal demo family, `CommandError` in production), seed_testdata, export_to_sheets, reset_two_factor, cleanup_backlog_tasks, prune_audit_log (v1.15), backup_retention (v1.26.0), purge_sessions (v1.23.0), set_ready_for_prod (v1.26.4; since v1.26.7 `on` also fires the repository_dispatch that arms `Deploy production`) |
-| **URLs** | 55 patterns (v1.29.5: `api_toggle_drive_uploads`): dashboard, auth, password reset + **password change** (v1.26.8), schedule, todos, support, QA (backlog + export, Desarrollos board/detail/API/export), PWA, 2FA, parent portal (login, forgot / change password, dashboard, payments, receipt, tax certificate) |
+| **URLs** | 57 patterns (v1.29.10: `drive_oauth_redirect` / `_callback` / `_disconnect` replace `api_toggle_drive_uploads`): dashboard, auth, password reset + **password change** (v1.26.8), schedule, todos, support, QA (backlog + export, Desarrollos board/detail/API/export), PWA, 2FA, parent portal (login, forgot / change password, dashboard, payments, receipt, tax certificate) |
 
 See [core/README.md](project/core/README.md) for details.
 
@@ -5659,7 +5791,7 @@ Payment management with search, filtering, pagination, and quick-complete.
 - **Search** — real-time filter by student name, parent name, concept, or reference number.
 - **Status filter** — 4-state cycle: all → pending → completed → overdue.
 - **Type filter** — 5-state: all → enrollment → monthly → quarterly → other.
-- **Quick complete** — click a pending status badge → dropdown with 3 payment methods (cash / transfer / card) → one click marks as completed with today's date, logs to history. On completion the receipt PDF is emailed **and** (v1.29.0) archived to Google Drive — best-effort, so neither can fail the payment; the Drive upload is a no-op unless `GOOGLE_DRIVE_RECEIPTS_FOLDER_ID` is configured. Both are fired by one dispatcher (`core.tasks.dispatch_payment_completed`, v1.29.1; moved out of `comms.tasks` in v1.29.9) shared with the Stripe webhook, so a new side effect of completion cannot reach only one of the two paths.
+- **Quick complete** — click a pending status badge → dropdown with 3 payment methods (cash / transfer / card) → one click marks as completed with today's date, logs to history. On completion the receipt PDF is emailed **and** (v1.29.0) archived to Google Drive — best-effort, so neither can fail the payment; the Drive upload is a no-op unless `GOOGLE_DRIVE_RECEIPTS_FOLDER_ID` is configured **and** a Google account has been connected from `/management/` (v1.29.10 — a service account cannot write to a consumer Drive). Both are fired by one dispatcher (`core.tasks.dispatch_payment_completed`, v1.29.1; moved out of `comms.tasks` in v1.29.9) shared with the Stripe webhook, so a new side effect of completion cannot reach only one of the two paths.
 - **Receipts are only issued for collected money (v1.29.1)** — `/payments/<id>/receipt.pdf` 404s on anything but a `completed` payment. Rendering a receipt is what assigns its permanent `YYYY-NNN` number from a sequence continuing the academy's paper books, so a hand-typed URL on a pending row would otherwise issue an official receipt for money never received and leave a permanent gap when that charge was cancelled. The PDF's discount breakdown is shown only when re-pricing the period reproduces the amount to the cent; otherwise it falls back to a bare **Importe** line rather than guessing.
 - **Create payment** — autocomplete student search fills the read-only **Padre/Tutor** field from the same response (v1.20.0 — it used to fire a second request whose failures were swallowed, leaving the field silently blank) → select type, method, amount, due date, concept. An adult student legitimately has no guardian and the submit guard accepts that. **v1.28.2: a created payment is always *Pendiente*** — the "Estado" selector and payment-date field were removed; mark it cobrado from the list (that path stamps the date and emails the receipt).
 - **Detail view** — read-only display of all payment fields.
@@ -5848,6 +5980,7 @@ make test-cov-gate          # Same as make test + fails if coverage < 75%
 
 | Stage | What enforces it | Behavior |
 | --- | --- | --- |
+| Pre-commit **and pre-push** | `e2e` hook in `.pre-commit-config.yaml` → `make e2e` (v1.29.10) | Runs the end-to-end journeys against the real Drive. Not a coverage gate — listed here because it is `fail_fast`, so it stops pre-commit before the three-minute coverage run on a commit that is already refused. Deliberately strict: it blocks on a failed check **and** on nothing having been verified (containers down, no Drive account connected, Google unreachable). A gate that could not run has not passed — exiting green on a wrong environment would have made it silently useless on every machine that never connected an account. |
 | Pre-commit | `pytest-coverage` hook in `.pre-commit-config.yaml` → `make test-cov-gate` | Runs full suite inside Docker; rejects commit if coverage < 75%. Bypass with `git commit --no-verify` if containers are down (CI will still catch it). |
 | CI (GitHub Actions) | `Check coverage threshold` step in `ci.yml` after `Run tests` | Parses `coverage.xml`. **< 75% fails the job** with an `::error::` annotation. **75-89% passes with a `::warning::`** annotation (visible in the PR checks UI). **≥ 90% silent pass.** |
 | Local dev | `pyproject.toml` `[tool.coverage.report].fail_under = 75` | Applies to any tool that reads the coverage config (e.g. `coverage report` standalone). Same 75% floor as the other stages. |
@@ -5863,7 +5996,7 @@ Within each file, related tests are grouped into classes. Where a large file abs
 
 ### Unit Tests
 
-**67 files, 1,111 tests.** Direct-call tests — no HTTP stack, no URL resolver, no template rendering.
+**68 files, 1,152 tests.** Direct-call tests — no HTTP stack, no URL resolver, no template rendering.
 
 | File | Count | Coverage |
 | --- | --- | --- |
@@ -5875,7 +6008,7 @@ Within each file, related tests are grouped into classes. Where a large file abs
 | [`unit/test_gcp_cost_service.py`](project/tests/unit/test_gcp_cost_service.py) | 30 | `GcpCostService` — real GCP spend from the BigQuery billing export: `month_cost` config gate, per-month caching (success TTLs + brief failure caching so a broken export can't slow every render), the credential chain (dedicated JSON/file → Sheets service account → ADC, malformed values falling through), `_query_month` table-id validation, named-parameter payload, response parsing (quantized, NULL sum ⇒ 0.00, incomplete job / transport error ⇒ None), `archive_month` (creates the `software` row on the month's last day, idempotent, zero/unavailable/unconfigured paths), `previous_month` year rollover, `qa_card_amounts` preferring the archived row, and the `archive_gcp_costs` command wrapper (defaults, backfill args, non-zero exit on an unreachable export) |
 | [`unit/test_payment_amounts_and_validation.py`](project/tests/unit/test_payment_amounts_and_validation.py) | 31 | What a payment is worth and what the write paths refuse to store. Each pins a defect verified broken against the running app: adult-student payments crashing search + CSV export, quarterly discounts (sibling, language cheque, June), completed payments with no `payment_date` vanishing from income, non-idempotent quick-complete rewriting financial history, payments attaching to a finished enrollment, unvalidated choice fields, `str(e)` leaking to the browser, cancelled payments inflating "esperado", query strings that used to 500, negative prices, singleton deletion, and the `enrollment_amount` fallback |
 | [`unit/test_services.py`](project/tests/unit/test_services.py) | 27 | `PricingService` (all fee + discount combos), `EnrollmentService` (all plans, language cheque, sibling, both, minimum-amount floor, adult enrollment, edge cases), `PaymentService` (monthly + quarterly amounts, June bonus, academic month/quarter validation, payment completion), service error paths, and the v1.20.0 `PricingService.calculate_sibling_price` / `payment_reminder_fees()` derivations the payment-reminder email prints |
-| [`unit/test_tasks.py`](project/tests/unit/test_tasks.py) | 26 | Celery tasks called synchronously with `email_service` mocked: `send_welcome_email_task` (parent + adult-student + missing + failure paths), `send_birthday_email_task`, `send_birthday_emails_task`, `send_payment_reminders`, `send_generic_email_task`, `send_enrollment_confirmation_task` (success + missing + attachments + failure), and the welcome email reporting "Especial" as the payment modality for a `special` matrícula while a standard enrollment keeps its cadence (v1.20.0) |
+| [`unit/test_tasks.py`](project/tests/unit/test_tasks.py) | 28 | Celery tasks called synchronously with `email_service` mocked: `send_welcome_email_task` (parent + adult-student + missing + failure paths), `send_birthday_email_task`, `send_birthday_emails_task`, `send_payment_reminders`, `send_generic_email_task`, `send_enrollment_confirmation_task` (success + missing + attachments + failure), and the welcome email reporting "Especial" as the payment modality for a `special` matrícula while a standard enrollment keeps its cadence (v1.20.0) |
 | [`unit/test_student_view_internals.py`](project/tests/unit/test_student_view_internals.py) | 7 | `StudentUpdateView` view-object method branches (quarterly, part-time, no enrollment, exception handling) driven through `RequestFactory` to sidestep the missing template. The `handle_student_form` / `update_student` tests were removed in v1.26.0 with the views themselves — both were routed nowhere and superseded by `StudentUpdateView` |
 | [`unit/test_enrollment_type_service.py`](project/tests/unit/test_enrollment_type_service.py) | 25 | `ensure_enrollment_types()` (v1.17.1): the four matrícula categories `_resolve_enrollment_type` asks for, idempotency, label/amount repair, admin-edited fields left alone, matrícula amounts sourced from `SiteConfiguration`, and the empty-table guard. Category resolution independent of the payment plan, returning-student detection, and the `0008` data migration re-pointing enrollments off the retired cadence types |
 | [`unit/test_service_edge_branches.py`](project/tests/unit/test_service_edge_branches.py) | 26 | The service layer's failure branches — the paths only an outage reaches, each test naming the file:line it targets: recurring-expense task, Google Sheets service internals, `SmsService._get_client`, rate-limit edge cases, Stripe view edge cases, expense-form bad input, waiting-list branches, parent-portal edge branches |
@@ -5931,13 +6064,14 @@ Within each file, related tests are grouped into classes. Where a large file abs
 | [`unit/test_audit_pruning.py`](project/tests/unit/test_audit_pruning.py) | 16 | `core.tasks.prune_audit_log` and its Cloud Scheduler command wrapper — the ONLY code path that deletes from `audit_logs`, a table the admin deliberately makes immutable (no add, no change, no delete). It had **zero test references for eight versions** while permanently destroying rows, and `*/admin.py` being coverage-omitted meant nothing else exercised the surrounding rules either. Pins the retention window and its boundary, the floor that refuses a window short enough to erase the course being taught (`--days 0` would have deleted every row, including the entries incriminating whoever ran it), `--dry-run` counting exactly what a real run deletes, and the floor surfacing as a `CommandError` so a Cloud Run Job reports a clean failure instead of a Celery traceback. Rows are backdated with `queryset.update()` because `created_at` is `auto_now_add` |
 | [`unit/test_detect_destructive_migrations.py`](project/tests/unit/test_detect_destructive_migrations.py) | 35 | `scripts/detect_destructive_migrations.py` (v1.29.6), the ONE definition of "destructive" read by five surfaces — the production preflight's Gate 3, the production deploy gate that enforces `ack_destructive`, the release PR body and merge email, the testing-deploy email and the `update-readme` skill. Each Django operation (`DeleteModel` / `RemoveField` / `RenameField` / `RenameModel`) and raw `DROP TABLE|COLUMN` / `TRUNCATE`, matched **case-insensitively** because the shell original was not and a `RunSQL("drop table …")` walked straight past the gate; additive operations staying clean; a missing path being skipped rather than fatal (`git diff --name-only` lists deleted files too). All four render formats, with the rule that **every one is empty when clean** — the workflows branch on `[ -n "$X" ]` — and that `files` alone prints nothing at all, since a friendly "nothing found" line there would mark every clean release destructive. HTML escaping of file content that reaches an inbox unparsed. The three exit codes (`0` clean / `1` found / **`2` the detector itself failed**, which every caller must treat as "assume the worst", because "no output" and "nothing found" are otherwise the same thing). The run-unique `$GITHUB_OUTPUT` delimiter, since the blocks carry text read out of migration files and a fixed delimiter is forgeable. And the tense split: `--applied` for the post-deploy mail, forward-looking wording everywhere else |
 | [`unit/test_detect_non_top_level_imports.py`](project/tests/unit/test_detect_non_top_level_imports.py) | 22 | `scripts/detect_non_top_level_imports.py` (v1.29.9), the ONE definition of "not at module top level" — read by the `update-readme` skill, which reports every hit in the staged files so a human rules on it before it ships. Each shape the detector names: `import-guard` (inside `try/except ImportError`, and `ModuleNotFoundError` too), `type-checking`, `sole-statement` (the import IS the conditional, so hoisting would empty the block), and `deferred` — everything else, the category that is nearly always an accident. The distinction that matters is a `try` which is **error handling** rather than an import guard: that one is `deferred`, because wrapping business logic is not a reason to hide a dependency. `--staged` reads the **index**, not the working tree, so the report describes what is about to be committed. All three render formats, with `files` printing nothing at all when clean (shells branch on `[ -n "$X" ]`, so a friendly "nothing found" line would mark every clean release as deferred). And the three exit codes (`0` clean / `1` found / **`2` the detector itself failed**, which callers must treat as "assume the worst") |
-| [`unit/test_drive_service.py`](project/tests/unit/test_drive_service.py) | 29 | `core.services.drive_service.DriveReceiptService` (v1.29.0) — the folder-path logic (`Curso YYYY/YYYY+1/Recibos/<Mes> YY/`, whose Curso rolls over in **August**, deliberately NOT the billing academic-year boundary), find-or-create at each level, idempotency by the `<paymentID>_` filename prefix so re-completion and `backfill_drive_receipts` never duplicate, and the **never-raises** guarantee: every failure path returns a `DriveUploadResult` with a status (`uploaded` / `skipped_exists` / `disabled` / `not_configured` / `error`) instead of propagating, because the Drive copy is a convenience on top of the `Payment` row and the emailed receipt — an unshared folder or a bad credential must leave payment completion untouched. v1.29.5 pins the **environment gate**: `drive_uploads_allowed()` is true in production without a database read, false in development whatever the flag says, and on the QA VM only while `QAConfiguration.drive_uploads_enabled` is on — in which case `archive_subfolder()` puts the file in the month's `testing/` sandbox and the gate is checked *before* `is_configured()`, so a disallowed environment never parses the credentials. An autouse fixture declares `ENVIRONMENT="production"` for the file, because the suite otherwise runs as development and every upload assertion would be testing the refusal |
+| [`unit/test_drive_service.py`](project/tests/unit/test_drive_service.py) | 40 | `core.services.drive_service.DriveReceiptService` (v1.29.0) — the folder-path logic (`Curso YYYY/YYYY+1/Recibos/<Mes> YY/`, whose Curso rolls over in **August**, deliberately NOT the billing academic-year boundary), find-or-create at each level, idempotency by the `<paymentID>_` filename prefix so re-completion and `backfill_drive_receipts` never duplicate, and the **never-raises** guarantee: every failure path returns a `DriveUploadResult` with a status (`uploaded` / `skipped_exists` / `disabled` / `not_configured` / `error`) instead of propagating, because the Drive copy is a convenience on top of the `Payment` row and the emailed receipt — an unshared folder or a bad credential must leave payment completion untouched. The **environment gate** is now simply `_is_production()` (v1.29.10): the QA opt-in toggle and its `testing/` sandbox were removed, because the OAuth consent the archive now depends on cannot be completed on the QA VM at all, and it touches no database, so no row can switch the real archive on or off. `curso_folder_name` is pinned to the academy's two-digit `Curso YYYY/YY` — the four-digit form built a parallel tree beside the real one and reported success. The **credential route** is pinned too: the delegated account wins over both service-account routes, because a service account authenticates perfectly well and then fails the upload with `storageQuotaExceeded`, which reads like a Drive outage rather than a wiring mistake. An autouse fixture declares `ENVIRONMENT="production"` for the file, because the suite otherwise runs as development and every upload assertion would be testing the refusal |
+| [`unit/test_drive_oauth_connection.py`](project/tests/unit/test_drive_oauth_connection.py) | 28 | The delegated Google account the archive runs on (v1.29.10). A service account cannot file these receipts — it owns what it uploads and has no Drive storage on a consumer account — so the uploader is a real account connected once from `/management/`. Pins the parts that are easy to get wrong and impossible to notice: the refresh token is Fernet-encrypted with a key derived from `SECRET_KEY`, so the column never holds the plaintext and a database dump does not yield it; two encryptions of the same secret differ (the column must not leak equality); an undecryptable value reads as *absent* rather than raising, because the only realistic cause is a rotated `SECRET_KEY` and the honest consequence is "reconnect"; the delegated account beats both service-account routes; the whole control is absent on the QA VM — hidden in the template AND refused by the views, since a hidden button whose URL still works is the failure the whitelist/decorator pairing exists to prevent; and Home nags an admin on **every** visit while the archive is disconnected, never a teacher |
 | [`unit/test_part_time_child_modality.py`](project/tests/unit/test_part_time_child_modality.py) | 12 | The **infantil** band (v1.29.4): `part_time_child` present in `SCHEDULE_TYPE_CHOICES` and `monthly_part_child` in `ENROLLMENT_PLAN_CHOICES`, `monthly_fee_for` / `period_base_amount` / `quarterly_price_from_monthly` resolving it off `SiteConfiguration.part_time_child_monthly_fee`, `EnrollmentService._resolve_plan` returning the right `(amount, schedule_type, modality)` for both the standard and the hand-priced case, and every discount (hermano, cheque idioma, junio) layering on top of it exactly as on full time |
 | [`unit/test_deploy_posture_gate.py`](project/tests/unit/test_deploy_posture_gate.py) | 17 | `POSTURE_ENV_KEYS` in `deploy-production.yml` pinned to the production posture guard in `settings.py` (v1.29.4) — the two are one rule written in two languages and cannot be a shared constant, so the test parses the YAML and loads `settings.py` in isolation under a private module name. A key the guard checks but the gate does not compare is how `CACHE_DB` reached production on the service and on none of the 12 jobs; a key the gate demands but the guard ignores (`DJANGO_ALLOWED_HOSTS`) is a false positive that fails a real deploy. Also asserts `PAUSED_OK_SCHEDULES` is empty and that an empty inventory is fatal |
 
 ### Integration Tests
 
-**51 files, 1,425 tests.** Full HTTP stack through Django's test client.
+**52 files, 1,433 tests.** Full HTTP stack through Django's test client.
 
 | File | Count | Coverage |
 | --- | --- | --- |
@@ -5952,7 +6086,7 @@ Within each file, related tests are grouped into classes. Where a large file abs
 | [`integration/test_localisation_and_expense_editing.py`](project/tests/integration/test_localisation_and_expense_editing.py) | 35 | Everything the user reads in Spanish, plus the expense edit path that did not exist — one class per reported problem: Spanish choice labels (`get_<field>_display()` for every payment type/status and enrollment status), every email template defining its own `{% block title %}`, unfiltered dates rendering `dd/mm/yyyy` via `FORMAT_MODULE_PATH`, `search_students` carrying the parent (and reporting no parent for an adult), `update_expense` (amount raise, cadence change, already-generated rows untouched, weekly-without-weekdays rejected, unknown category coerced, zero amount rejected), the create-expense date default, the surname-free waiting-list form, `waiting_priority` ordering, and `StudentForm` still requiring a surname |
 | [`integration/test_payment_lifecycle_rules.py`](project/tests/integration/test_payment_lifecycle_rules.py) | 30 | What may happen to a `Payment` after it exists, and what may not: the **status transition table** from every direction (a plain `save()` refusing to void collected money, `refunded` only from `completed`, refunded money not cancellable either, reopening clearing the collection date, and `update_fields` without the status costing no check), hard-delete refused for completed / receipt-numbered rows in **both** the view and the admin (row permission and bulk action), `create_checkout_link` 409ing on a dead charge, `update_payment` coherence (changing the student re-points the enrollment; a numbered receipt freezes amount and student), malformed JSON answered 400 not 500, and bulk re-enrolment start dates not drifting |
 | [`integration/test_features.py`](project/tests/integration/test_features.py) | 47 | Desarrollos, the QA epic board (v1.21.0). Model: `deadline` null by default, `is_overdue` only when the date passed **and** the epic is not done, `days_left`, the progress counters, Spanish status labels, and `SET_NULL` keeping the tasks when the epic is deleted. Views: both pages render, done epics sort last, the Jira template reaches the board, non-QA users get 404. Endpoints: create (with / without / invalid deadline), update (status, deadline, clearing it with `null`, title + description, and a status-only payload not clobbering the deadline), break-out-a-task (lands in the backlog linked to its epic, priority default, shows up on `/testing/`), and the JSON/CSV export in both scopes. Emails: creation reaches `SUPPORT_EMAIL`, done notifies the admin teachers exactly once, and a task email names its development |
-| [`integration/test_testing_tools.py`](project/tests/integration/test_testing_tools.py) | 48 | QA dashboard `/testing/` gated by `@qa_access_required` (via `override_settings`): dashboard renders + git failure handled, `api_seed_database` (success + reset + command error 500 + non-QA 404, and since v1.27 that it runs `seed_demo_parents` **after** `seed_testdata` — whose `--reset` wipes every Parent — without letting a failure there fail the QA seed), `api_create_backlog_task` (all branches + screenshot attached to the email but never stored + send/swallow), `api_update_backlog_task` (success + invalid status + 404), the v1.20.0 `verified` QA tick (defaults off, toggles on/off, never touches `status` nor fires the done email, `done` still works alongside it) and the unfinished-first ordering shared by the dashboard and the export, `api_toggle_error_email` (on + off + bad JSON), the v1.29.5 `api_toggle_drive_uploads` switch (off by default, renders unchecked, toggles on and off persistently, leaves the error-email flag alone, 404 outside the QA environment), the v1.26.4 QA sign-off gate — `api_mark_ready` opens the production gate only when the email sends (send failure and missing `SUPPORT_EMAIL` keep it closed, non-QA 404), `ready_for_prod` rides `/health/?deep=1` only and only in the testing environment, and `set_ready_for_prod on|off` toggles the flag (unknown state rejected). v1.26.7: the sign-off also fires the `repository_dispatch` that arms `Deploy production` — dispatched only after the email went out, a dispatch failure never fails the sign-off (`deploy_dispatched: false`, HTTP 200), `set_ready_for_prod on` dispatches and `off` never does. The Proyecto card's "Gastos GCP" line renders placeholders when the billing export is unconfigured and the archived previous-month Expense row when one exists |
+| [`integration/test_testing_tools.py`](project/tests/integration/test_testing_tools.py) | 42 | QA dashboard `/testing/` gated by `@qa_access_required` (via `override_settings`): dashboard renders + git failure handled, `api_seed_database` (success + reset + command error 500 + non-QA 404, and since v1.27 that it runs `seed_demo_parents` **after** `seed_testdata` — whose `--reset` wipes every Parent — without letting a failure there fail the QA seed), `api_create_backlog_task` (all branches + screenshot attached to the email but never stored + send/swallow), `api_update_backlog_task` (success + invalid status + 404), the v1.20.0 `verified` QA tick (defaults off, toggles on/off, never touches `status` nor fires the done email, `done` still works alongside it) and the unfinished-first ordering shared by the dashboard and the export, `api_toggle_error_email` (on + off + bad JSON), the v1.26.4 QA sign-off gate — `api_mark_ready` opens the production gate only when the email sends (send failure and missing `SUPPORT_EMAIL` keep it closed, non-QA 404), `ready_for_prod` rides `/health/?deep=1` only and only in the testing environment, and `set_ready_for_prod on|off` toggles the flag (unknown state rejected). v1.26.7: the sign-off also fires the `repository_dispatch` that arms `Deploy production` — dispatched only after the email went out, a dispatch failure never fails the sign-off (`deploy_dispatched: false`, HTTP 200), `set_ready_for_prod on` dispatches and `off` never does. The Proyecto card's "Gastos GCP" line renders placeholders when the billing export is unconfigured and the archived previous-month Expense row when one exists |
 | [`integration/test_waiting_list_views.py`](project/tests/integration/test_waiting_list_views.py) | 29 | Waiting List & Group Capacity views (v1.1): waiting-list page, `assign_from_waiting_list` (capacity checks, and since v1.17.2 a redirect into the normal parent-then-student flow rather than an in-place promotion), `add_to_waiting_list`, student list excludes waiting students, dashboard waiting widget. v1.20.0 adds the short create form (no surname asked for, entry created without one, `waiting_priority` off by default, saved when ticked, flagged in the history line), the priority ordering (`-waiting_priority` first, FIFO within each band) and `StudentForm` still demanding a surname |
 | [`integration/test_student_views.py`](project/tests/integration/test_student_views.py) | 36 | `StudentListView` (search, exclude inactive, context), `StudentDetailView` (parents visible, 404), `StudentCreateView` (form + adult mode + success + full POST + error paths including invalid parent, existing-parent mode, create_sibling flag, email-task swallow), `search_students` JSON endpoint (results + short-query empty), and the v1.20.0 pricing surface: `price_config` exposing `quarterly_gross`, both hand-set prices reaching the payments, the matrícula falling back to the standard fee when left blank, and a special matrícula fee rejected without "Precio especial" ticked. v1.22.0 adds the first-period proration the creation form previews, asserting the context fraction comes from the same `PaymentService` helper the generator bills with. v1.26.0 adds the 500-row list cap. v1.28.2: the special pricing tests now drive `customize_recurring`, plus a matrícula-only special that keeps the standard cuota |
 | [`integration/test_management_views.py`](project/tests/integration/test_management_views.py) | 27 | `gestion_view` + `update_site_config` (all fields + bad JSON), `create_teacher` (success + duplicate + missing field + bad JSON), `create_group` (success + missing fields + duplicate + nonexistent teacher + bad JSON), `api_get_teachers`, `update_enrollment_modality` (success + invalid + no enrollment + student not found), `language_cheque_students` |
@@ -5990,7 +6124,8 @@ Within each file, related tests are grouped into classes. Where a large file abs
 | [`integration/test_email_connection_and_export_limits.py`](project/tests/integration/test_email_connection_and_export_limits.py) | 5 | One SMTP session per mass mail instead of a TLS+AUTH handshake per recipient, a timeout on it so a stalled server cannot wedge the request, and a bounded Excel export so a growing roll cannot turn one download into an unbounded one |
 | [`integration/test_receipts_and_reenrolment.py`](project/tests/integration/test_receipts_and_reenrolment.py) | 15 | Receipt numbering and its breakdown — a fiscal document whose `YYYY-NNN` continues the paper books — plus bulk re-enrolment: manual payments born pending, waiting-list removal (delete + 404 on a real student), bulk "antiguo estudiante" re-enrolment (reactivates + returning-student type, and since v1.29.1 routed through `supersede_enrollment` so the closing plan's uninvoiced months are billed before the hand-over), receipt numbering (`2026-633` seed, January restart, idempotent, and never assigned to a payment that is not `completed`), and the **reconstruct-or-say-nothing** discount breakdown — shown only when re-pricing the period reproduces the amount to the cent, so the June stub, a re-download after a price change and a negotiated matrícula fall back to the bare `Importe` line instead of inventing a "Prorrateo" / "Ajuste" / "Descuento antiguo alumno" |
 | [`integration/test_qa_pickup_receipts_and_reminders.py`](project/tests/integration/test_qa_pickup_receipts_and_reminders.py) | 38 | v1.29.3 QA fixes: the receipt's **Cheque idioma line is whole cheques** (−20,00 € on a prorated September month, `(3 meses)` −60,00 € on a quarter, cheque before proration in the line order, and the total unchanged to the cent by the reordering); the **"Enviar prueba" recipient fallback** (`EMAIL_TEST_*` → the logged-in teacher's address → `SUPPORT_EMAIL` → a refusal naming all three, threaded through every form); `Student.pickup_authorized` on the form, the create view, the children-only create page, the ficha, the update view and the admin fieldsets; and the **September / June / April reminder emails** — `payment_reminder_special` figures equal the generator's own for each month, the start-day override and its validation, the previews' wording and figures, the mass send picking the special template and subject, and `test_all_emails` previewing the three variants. v1.29.4 adds `SEPTEMBER_CLASSES_START_DAY = 16` billing exactly half of a 30-day September, the Cheque Idioma box being **absent** from the September and June variants (present in April and in the ordinary template), and the media-jornada-infantil sub-line appearing in all four |
-| [`integration/test_drive_receipts.py`](project/tests/integration/test_drive_receipts.py) | 19 | The dispatch half of the Drive archive (v1.29.0) — `_queue_payment_receipt` and the Stripe webhook queue the upload in their **own** `try/except`, separate from the receipt email, so neither can take the other down; the task is a no-op unless `GOOGLE_DRIVE_RECEIPTS_FOLDER_ID` is set; and it is NOT a Beat task, so nothing expects a Cloud Scheduler entry for it. v1.29.5 adds the environment gate end to end: the task short-circuits on `drive_uploads_allowed()` before it loads the payment or renders the PDF (production runs eager, so that work would happen inside the "marcar cobrado" request), `backfill_drive_receipts` raises `CommandError` naming the `/testing/` switch rather than reporting one refusal per payment, and the QA path reports the `testing/` sandbox in its own output |
+| [`integration/test_drive_receipts.py`](project/tests/integration/test_drive_receipts.py) | 16 | The dispatch half of the Drive archive (v1.29.0) — `_queue_payment_receipt` and the Stripe webhook queue the upload in their **own** `try/except`, separate from the receipt email, so neither can take the other down; the task is a no-op unless `GOOGLE_DRIVE_RECEIPTS_FOLDER_ID` is set; and it is NOT a Beat task, so nothing expects a Cloud Scheduler entry for it. v1.29.5 adds the environment gate end to end: the task short-circuits on `drive_uploads_allowed()` before it loads the payment or renders the PDF (production runs eager, so that work would happen inside the "marcar cobrado" request), `backfill_drive_receipts` raises `CommandError` naming the `/testing/` switch rather than reporting one refusal per payment, and the QA path reports the `testing/` sandbox in its own output |
+| [`integration/test_payment_journey.py`](project/tests/integration/test_payment_journey.py) | 17 | The whole money path in ONE test, Google mocked (v1.29.10) — the CI-safe counterpart of `project/tests/e2e/payment_journey.py`, which runs the same journey against a REAL Drive and therefore cannot run here (CI has no `GoogleDriveCredential` row, the refresh token is encrypted from `SECRET_KEY`, and `drive` refresh tokens expire weekly while the consent screen is in Testing). The pieces were already well covered; what was not is the **chain** — that enrolling a family through `EnrollmentService` produces a payment `quick-complete` will accept, that completing it assigns a receipt number AND emails a PDF AND dispatches the archive, and that doing it twice changes nothing. Every bug this app has shipped in the money path lived in a seam like that, not inside a unit. Shaped against two things that have already turned this suite red with no code change behind them: no money literal is asserted (the first period is prorated by join date, so `35.00` only ever held on the 1st) and the enrollment is anchored to `current_course_year()`; and every `mail.outbox` assertion goes through `django_capture_on_commit_callbacks(execute=True)`, without which `dispatch_payment_completed_on_commit` never fires and the test passes vacuously |
 | [`integration/test_parent_portal_disabled.py`](project/tests/integration/test_parent_portal_disabled.py) | 10 | The parent-portal **kill switch** (v1.29.4). `settings_test` turns `PARENT_PORTAL_ENABLED` **on** so the rest of the suite keeps proving the feature works; this is the one module that overrides it back off, via an autouse fixture (a module-level `override_settings` in `pytestmark` is not a Mark and fails at collection). Asserts every `/parent/` URL 404s including the public login and recovery pages, that none of the three senders queues an access email, and that `Parent.portal_invite_sent_at` is **not** stamped — so re-enabling the portal later still invites every family exactly once |
 
 ### Coverage Report
@@ -6008,7 +6143,7 @@ Within each file, related tests are grouped into classes. Where a large file abs
 | `comms/services/email_functions.py` | 92 | 6 | 93% | 555, 580-584, 594-595 |
 | `comms/services/email_service.py` | 81 | 5 | 94% | 181-190, 227-229 |
 | `comms/services/sms_service.py` | 50 | 3 | 94% | 58, 69-70 |
-| `comms/tasks.py` | 215 | 2 | 99% | 543, 650 |
+| `comms/tasks.py` | 215 | 2 | 99% | 552, 660 |
 | `core/apps.py` | 12 | 2 | 83% | 33-34 |
 | `core/audit_signals.py` | 102 | 9 | 91% | 119, 125, 141, 152-153, 158, 195, 213, 245 |
 | `core/context_processors.py` | 43 | 1 | 98% | 73 |
@@ -6016,32 +6151,34 @@ Within each file, related tests are grouped into classes. Where a large file abs
 | `core/decorators.py` | 34 | 2 | 94% | 64-65 |
 | `core/logging_utils.py` | 82 | 4 | 95% | 212, 214, 246-247 |
 | `core/middleware.py` | 242 | 13 | 95% | 293, 339, 350-355, 415, 421, 578, 590, 633, 704-710, 748-750 |
-| `core/models.py` | 179 | 2 | 99% | 336, 379 |
+| `core/models.py` | 217 | 3 | 99% | 336, 369, 418 |
 | `core/services/capacity_service.py` | 11 | 1 | 91% | 30 |
-| `core/services/drive_service.py` | 162 | 3 | 98% | 447-448, 475 |
+| `core/services/drive_service.py` | 183 | 2 | 99% | 525-526 |
 | `core/services/google_sheets_service.py` | 101 | 7 | 93% | 75-77, 132-135 |
 | `core/services/portal_access_service.py` | 37 | 1 | 97% | 100 |
 | `core/tasks.py` | 122 | 14 | 89% | 145-147, 167-171, 175-176, 208, 329-330, 371-375, 380 |
 | `core/transactions.py` | 23 | 2 | 91% | 67, 72 |
-| `core/views/app_forms.py` | 586 | 33 | 94% | 253, 323-328, 357, 443-444, 533, 624-626, 638-641, 647-648, 781-782, 802-803, 840-842, 1090, 1279, 1294-1298, 1426, 1618-1624, 1642-1645 |
-| `core/views/auth.py` | 200 | 11 | 94% | 72, 75-77, 259, 283, 330, 349, 404, 487-488 |
-| `core/views/dashboard.py` | 145 | 1 | 99% | 212 |
+| `core/views/app_forms.py` | 586 | 32 | 95% | 253, 323-328, 357, 443-444, 624-626, 638-641, 647-648, 781-782, 802-803, 840-842, 1090, 1279, 1294-1298, 1426, 1618-1624, 1642-1645 |
+| `core/views/auth.py` | 200 | 11 | 94% | 72, 75-77, 259, 282, 329, 348, 403, 486-487 |
+| `core/views/dashboard.py` | 159 | 4 | 97% | 212, 355-357 |
 | `core/views/expenses.py` | 135 | 11 | 92% | 30-31, 160, 183-184, 217-219, 252-254 |
 | `core/views/features.py` | 173 | 20 | 88% | 139, 163-164, 214-218, 276-282, 329-333 |
-| `core/views/management.py` | 153 | 5 | 97% | 349, 386, 420-422 |
+| `core/views/google_drive.py` | 113 | 76 | 33% | 98-101, 109-125, 134-165, 174-239, 248-252 |
+| `core/views/management.py` | 156 | 5 | 97% | 363, 400, 434-436 |
 | `core/views/parent_portal.py` | 193 | 5 | 97% | 109, 394, 512, 567, 586 |
 | `core/views/parents.py` | 60 | 1 | 98% | 51 |
 | `core/views/password_reset.py` | 74 | 2 | 97% | 141, 143 |
 | `core/views/payments.py` | 375 | 22 | 94% | 292-293, 389-390, 402-411, 560, 633-634, 668, 676-684, 834-836, 1099 |
 | `core/views/schedule.py` | 68 | 1 | 99% | 111 |
-| `core/views/students.py` | 436 | 41 | 91% | 303-305, 442-447, 594, 618, 643, 645, 656, 665, 670, 700, 712, 736, 769-775, 784, 963, 990-993, 1066-1067, 1081-1083, 1099-1101, 1111-1112, 1136-1137, 1155-1157, 1162, 1164 |
-| `core/views/testing_tools.py` | 236 | 20 | 92% | 79-80, 84-86, 252, 314, 321, 323, 341-343, 449-453, 465, 483-487 |
-| `core/views/two_factor.py` | 98 | 8 | 92% | 44, 55-56, 206-208, 213-214 |
-| `students/forms.py` | 100 | 2 | 98% | 320-321 |
+| `core/views/students.py` | 436 | 41 | 91% | 303-305, 441-446, 593, 617, 642, 644, 655, 664, 669, 698, 710, 734, 767-773, 782, 961, 988-991, 1064-1065, 1079-1081, 1097-1099, 1109-1110, 1134-1135, 1153-1155, 1160, 1162 |
+| `core/views/testing_tools.py` | 232 | 20 | 91% | 79-80, 84-86, 251, 313, 320, 322, 340-342, 448-452, 464, 482-486 |
+| `core/views/two_factor.py` | 99 | 8 | 92% | 50, 61-62, 207-209, 214-215 |
+| `students/forms.py` | 100 | 2 | 98% | 319-320 |
 | `students/models.py` | 334 | 9 | 97% | 162-163, 485, 569-570, 772-775 |
 
-**53 files** have 100% coverage (skipped above). Total coverage: **95.32%** across 7,505 statements. Coverage is **very good**. Coverage is enforced at three levels: pre-commit hook (≥ 75%), CI hard floor (≥ 75%), and CI warning (< 90%).
+**54 files** have 100% coverage (skipped above). Total coverage: **94.44%** across 7,718 statements. Coverage is **good**. Coverage is enforced at three levels: pre-commit hook (≥ 75%), CI hard floor (≥ 75%), and CI warning (< 90%).
 
+The one number worth reading here is `core/views/google_drive.py` at **33%** — the v1.29.10 OAuth consent flow, and the reason the total moved down from 95.32%. Its uncovered lines are the Google round trip itself: building the flow, exchanging the code, verifying the id token. What *is* covered is everything that decides behaviour without talking to Google — the environment gate, the admin gate, the refusal of a credential with no refresh token, and the encrypted storage. The round trip was instead verified live, against the real OAuth client and the real Drive, by `project/tests/e2e/payment_journey.py`, which `make e2e` and the `e2e` pre-commit hook run on every commit — so the consent flow is exercised before every push, just not by pytest.
 ---
 
 ## Migrations
@@ -6101,6 +6238,8 @@ All migrations were regenerated from scratch during the v1.0.0 multi-app split.
 | `core` | `0014_alter_auditlog_action_alter_backlogtask_priority_and_more` | Spanish choice **labels** on `AuditLog.action` and `BacklogTask.priority` / `status` — keys unchanged, so no data moves (v1.28.1) | `core.0013` |
 | `core` | `0015_historylog_modality_changed_action` | Adds `modality_changed` to `HistoryLog.action`, so a payment-cadence switch leaves a trace (v1.28.1) | `core.0014` |
 | `core` | `0016_qaconfiguration_drive_uploads_enabled` | `QAConfiguration.drive_uploads_enabled` — QA's opt-in to exercising the Google Drive receipt archive from the testing VM. **Off by default**, read only under `IS_TESTING_ENV`, and while it is on uploads go to the month's `testing/` subfolder (v1.29.5) | `core.0015` |
+| `core` | `0017_googledrivecredential` | `GoogleDriveCredential` — singleton holding the Google account the receipt archive uploads as. The refresh token is Fernet-encrypted with a key derived from `SECRET_KEY`, which is in Secret Manager and not in the database, so a dump does not yield it (v1.29.10) | `core.0016` |
+| `core` | `0018_remove_qaconfiguration_drive_uploads_enabled` | **Destructive** — drops `QAConfiguration.drive_uploads_enabled`. The QA opt-in and its `testing/` sandbox are gone: the archive now authenticates as a delegated Google account, and that consent cannot be completed on the QA VM at all, because Google refuses a redirect URI that is plain HTTP on a raw IP. A control nobody can reach reads as a supported path. Needs the `ack_destructive` dispatch input — not `force` (v1.29.10) | `core.0017` |
 | `comms` | — | (no models) | — |
 
 ```bash
@@ -6361,11 +6500,6 @@ Here is a quick checklist of things to try. If anything does not work, take note
 - **Testing Tools** (the blue "info" icon at the bottom of the sidebar) — This is your QA control panel:
   - **Project Info** — shows the current software version, last commit, server status, and (v1.26.5) the **Gastos GCP** line: the project's real Google Cloud spend, previous month | current month ("—" until the billing export is configured)
   - **Error Reporting toggle** — turn this ON so every server error is automatically emailed to the development team with full details
-  - **Recibos a Drive toggle** (v1.29.5) — **off by default**, and off is the normal state. Turn it on only when you are
-    specifically testing the Google Drive receipt archive: while it is on, receipts generated from this VM are uploaded
-    into a `testing/` subfolder of the month (never beside the academy's real receipts), and the card tells you whether
-    Drive is configured on this environment at all. Production always archives and ignores this switch; a developer's
-    machine never archives, whatever it says
   - **Database Seeding** — click to populate the database with test data, or wipe and start fresh
   - **QA Backlog** — report bugs and suggestions directly from this page; each new task is emailed to the development team.
     Unfinished tickets are listed first (a done one used to hold its slot among live work and, with the list capped at 50,
@@ -6425,7 +6559,7 @@ The testing environment mirrors production:
 | `seed_testdata` command | Populates the database with realistic fake data |
 | `seed_teachers` command | Idempotently creates Teacher rows + linked `auth.User` accounts from `TEACHER_SEED_*` env vars; runs automatically on container start |
 | `HTTPS.md` | Full guide for HTTPS setup with Docker (Nginx + self-signed cert) and GCP Cloud Run |
-| `/testing/` | In-app QA dashboard with project info, seeding, backlog, the error-reporting toggle and (v1.29.5) the **Recibos a Drive** toggle |
+| `/testing/` | In-app QA dashboard with project info, seeding, backlog and the error-reporting toggle |
 | `core/decorators.py` | `qa_access_required` decorator — reusable access gate for QA-only views |
 
 #### Access control for `/testing/`

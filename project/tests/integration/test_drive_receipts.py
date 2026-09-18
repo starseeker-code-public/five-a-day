@@ -21,13 +21,10 @@ from django.core.management.base import CommandError
 from django.test import override_settings
 
 from billing.models import Payment
-from core.models import QAConfiguration
 from core.services import drive_service
 from core.services.drive_service import (
-    TESTING_SUBFOLDER,
     DriveReceiptService,
     DriveUploadResult,
-    archive_subfolder,
     drive_uploads_allowed,
 )
 from core.tasks import upload_receipt_to_drive_task
@@ -94,7 +91,7 @@ class TestUploadTask:
             svc = get_service.return_value
             svc.is_configured.return_value = True
             svc.upload_receipt.return_value = DriveUploadResult(
-                success=True, status="uploaded", folder_path="Curso 2026/2027/Recibos/Septiembre 26", file_id="F"
+                success=True, status="uploaded", folder_path="Curso 2026/27/Recibos/Septiembre 26", file_id="F"
             )
             result = upload_receipt_to_drive_task.apply(args=[p.id]).get()
         assert result["status"] == "uploaded"
@@ -174,42 +171,25 @@ class TestEnvironmentGate:
     @PRODUCTION
     def test_production_always_archives(self):
         assert drive_uploads_allowed() is True
-        # No sandbox level: production files receipts straight into the month.
-        assert archive_subfolder() == ""
 
-    @PRODUCTION
-    def test_production_ignores_the_qa_toggle(self):
-        """The flag is QA's, not a production kill switch — production must keep
-        archiving whatever the row on the QA database happens to say."""
-
-        config = QAConfiguration.get_config()
-        config.drive_uploads_enabled = False
-        config.save()
-        assert drive_uploads_allowed() is True
-
-    def test_development_never_archives_even_with_the_flag_on(self):
-        config = QAConfiguration.get_config()
-        config.drive_uploads_enabled = True
-        config.save()
+    def test_development_never_archives(self):
         assert drive_uploads_allowed() is False
 
     @QA_VM
-    def test_qa_vm_is_off_by_default(self):
+    def test_the_qa_vm_never_archives(self):
+        """QA could opt in through a `/testing/` toggle until v1.29.10. The
+        toggle is gone: the archive now authenticates as a delegated Google
+        account, and that consent cannot be completed on the QA VM at all —
+        Google refuses a redirect URI that is plain HTTP on a raw IP. A control
+        nobody can reach is worse than none, because it reads as supported.
+        """
         assert drive_uploads_allowed() is False
 
     @QA_VM
-    def test_qa_vm_archives_into_the_sandbox_when_the_toggle_is_on(self):
-        config = QAConfiguration.get_config()
-        config.drive_uploads_enabled = True
-        config.save()
-        assert drive_uploads_allowed() is True
-        assert archive_subfolder() == TESTING_SUBFOLDER
-
-    @QA_VM
-    def test_a_database_error_fails_closed(self):
-        """The archive is best-effort and never raises, so an unreadable toggle
-        must mean "do not write to the academy's archive", not "assume yes"."""
-
+    def test_the_gate_does_not_read_the_database_at_all(self):
+        """It used to, and fail closed on error. Now there is nothing to read —
+        which is strictly safer: no database state can turn the real archive on
+        or off."""
         with patch("core.models.QAConfiguration.get_config", side_effect=RuntimeError("db down")):
             assert drive_service.drive_uploads_allowed() is False
 
@@ -241,27 +221,13 @@ class TestSandboxPath:
         p = _completed_payment(student_with_parent, student_with_parent.parents.first(), active_enrollment)
         svc = self._service()
         result, levels, api = self._upload(svc, p)
-        assert levels == ["Curso 2026/2027", "Recibos", "Septiembre 26"]
-        assert result.folder_path == "Curso 2026/2027/Recibos/Septiembre 26"
+        assert levels == ["Curso 2026/27", "Recibos", "Septiembre 26"]
+        assert result.folder_path == "Curso 2026/27/Recibos/Septiembre 26"
         assert result.status == "uploaded"
         assert api.created_parents == ["id:Septiembre 26"]
 
     @QA_VM
-    def test_qa_path_ends_in_the_testing_folder(self, student_with_parent, active_enrollment, site_config):
-        config = QAConfiguration.get_config()
-        config.drive_uploads_enabled = True
-        config.save()
-
-        p = _completed_payment(student_with_parent, student_with_parent.parents.first(), active_enrollment)
-        svc = self._service()
-        result, levels, api = self._upload(svc, p)
-        assert levels == ["Curso 2026/2027", "Recibos", "Septiembre 26", "testing"]
-        assert result.folder_path == "Curso 2026/2027/Recibos/Septiembre 26/testing"
-        # And the file is created in the sandbox folder, not the month folder.
-        assert api.created_parents == ["id:testing"]
-
-    @QA_VM
-    def test_qa_toggle_off_uploads_nothing(self, student_with_parent, active_enrollment, site_config):
+    def test_the_qa_vm_uploads_nothing(self, student_with_parent, active_enrollment, site_config):
         p = _completed_payment(student_with_parent, student_with_parent.parents.first(), active_enrollment)
         svc = self._service()
         with patch.object(svc, "_get_service") as get_service:

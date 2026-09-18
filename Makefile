@@ -6,7 +6,7 @@
 .PHONY: help setup build up down restart stop start rebuild dev logs \
         ps stats shell bash migrate makemigrations createsuperuser \
         collectstatic check dbshell backup restore reset-db \
-        test test-cov-gate smoke \
+        test test-cov-gate smoke e2e \
         clean clean-all health url generate-payments generate-payments-dry \
         sync lint format pre-commit-install pc-run \
         mypy bandit audit coverage-badge check-deploy \
@@ -102,6 +102,9 @@ help:
 	@echo "    make test K=<keyword>   Filter by keyword  (e.g. K=payment)"
 	@echo "    make test ARGS='...'    Pass raw pytest flags through"
 	@echo "    make smoke              End-to-end smoke test vs the running stack (local dev only)"
+	@echo "    make e2e                All end-to-end journeys vs the REAL Drive (local dev only)"
+	@echo "    make e2e ARGS=--list    List the journeys"
+	@echo "    make e2e ARGS='--only payment'   Run one of them"
 	@echo ""
 	@echo "  Payments:"
 	@echo "    make generate-payments          Generate current month"
@@ -385,6 +388,26 @@ smoke:
 	$(COMPOSE) exec -e PYTHONPATH=/app web \
 	  python project/manage.py shell -c "from scripts.docker_smoke_test import run; run()"
 
+# Every end-to-end journey in project/tests/e2e/: enrol -> bill -> collect
+# over HTTP -> receipt email -> a REAL upload to Google Drive. Discovery is
+# by filename (`*_journey.py`), so adding a journey is adding a file.
+#
+# Deliberately NOT part of `make test`: these are not pytest tests (pytest.ini
+# collects test_*.py only), they run against the DEV database rather than a
+# throwaway one, and they talk to Google with a live credential. CI cannot run
+# them for that last reason -- the CI-safe half of the payment journey lives in
+# project/tests/integration/test_payment_journey.py. The `e2e` pre-commit hook
+# is what runs these on every commit.
+#
+# The runner exits 0 all passed / 1 a check failed / 2 nothing could be
+# verified (no Drive credential connected, Google unreachable, or
+# DJANGO_ENV=production). Make collapses both failures to its own exit 2,
+# which is fine for a gate -- 'could not verify' is not a pass -- so read the
+# SUMMARY block, not the exit code, to tell a regression from an unconfigured
+# box.
+e2e:
+	$(COMPOSE) exec -T -e LOG_LEVEL=WARNING web python project/tests/e2e/run.py $(ARGS)
+
 # ============================================================================
 # PAYMENTS
 # ============================================================================
@@ -541,8 +564,13 @@ coverage-badge:
 	@rm -f .coverage
 	@echo "coverage.svg updated - commit it to the repo"
 
+# Both hook types. The pre-push one is the backstop for the `e2e` hook: a
+# `git commit --no-verify` skips every commit hook and nothing in the config can
+# stop it, so without this a single bypass ships code no journey ever ran
+# against. CI cannot cover that gap -- it has no Google Drive credential.
 pre-commit-install:
 	uv run --no-project pre-commit install
+	uv run --no-project pre-commit install --hook-type pre-push
 
 pc-run:
 	@if uv run --no-project pre-commit run --all-files; then \

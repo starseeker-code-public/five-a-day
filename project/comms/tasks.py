@@ -155,7 +155,13 @@ def send_welcome_email_task(
             logger.error("Failed to send welcome email for student_id=%d", student_id)
             raise RuntimeError("Fallo en el envio del email")
 
-        return {"status": "success", "recipient": recipient_email}
+        # NO ADDRESS IN A RETURN VALUE. Celery logs a task's return dict at INFO
+        # ("Task ... succeeded in 2.08s: {...}"), so every one of these put a
+        # family's email into Cloud Logging on every send — the args were
+        # guarded by the note above and the return value was not. The id is the
+        # correlation key everywhere else here, and it resolves to the address
+        # for anyone who is entitled to it.
+        return {"status": "success", "student_id": student_id}
 
     except (Parent.DoesNotExist, Student.DoesNotExist, Enrollment.DoesNotExist):
         # Fixed message, not str(e): the DoesNotExist repr names the model and
@@ -235,7 +241,10 @@ def send_birthday_email_task(self, student_id: int):
         raise RuntimeError("Fallo en el envio del email")
 
     logger.info("Birthday email sent for student_id=%d to %d recipient(s)", student_id, successes)
-    return {"status": "success", "recipients": recipients, "student": student.full_name}
+    # A COUNT, not the list — and no `student.full_name`: this return value is
+    # logged at INFO by Celery, so it was publishing a child's name beside their
+    # guardians' addresses. See the note in `send_welcome_email_task`.
+    return {"status": "success", "recipients": len(recipients), "student_id": student_id}
 
 
 @shared_task(name="comms.tasks.send_birthday_emails_task", bind=True)
@@ -600,7 +609,8 @@ def send_parent_temporary_password_task(self, parent_id: int, login_url: str = "
     )
     # Never log the password itself, and never return it — the result backend
     # keeps task return values.
-    return {"status": "success" if success else "failed", "recipient": parent.email}
+    # No address — Celery logs this dict at INFO. See `send_welcome_email_task`.
+    return {"status": "success" if success else "failed", "parent_id": parent_id}
 
 
 @shared_task(
@@ -648,7 +658,8 @@ def send_payment_receipt_email_task(self, payment_id: int):
     )
     if not success:
         raise RuntimeError(f"send_email returned False for payment {payment_id}")
-    return {"status": "success", "recipient": recipient, "payment_id": payment_id}
+    # No address — Celery logs this dict at INFO. See `send_welcome_email_task`.
+    return {"status": "success", "payment_id": payment_id}
 
 
 @shared_task(
@@ -768,7 +779,8 @@ def send_enrollment_confirmation_task(self, enrollment_id: int, attachments_path
 
         if success:
             logger.info("Enrollment confirmation sent for enrollment_id=%d", enrollment_id)
-            return {"status": "success", "recipient": parent.email}
+            # No address — Celery logs this dict at INFO. See `send_welcome_email_task`.
+            return {"status": "success", "enrollment_id": enrollment_id}
         else:
             raise RuntimeError("Fallo en envio de confirmacion de matricula")
 
