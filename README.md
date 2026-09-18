@@ -272,6 +272,10 @@ Built to centralize student records, automate billing cycles, and streamline par
 - Home shows a modal on **every** visit while the archive is disconnected, linking to
   `/management/`. Rendered already-open by the server, so no JS error can suppress it and no
   `localStorage` can dismiss it for good — the symptom of the archive being off is silence.
+  **It does not cover the weekly token expiry**, though: it fires on `not config.is_connected`,
+  and `is_connected` is `bool(self.refresh_token)` — a token Google has already expired still
+  decrypts fine, so the dot stays green and no dialog appears. It catches "never connected" and
+  "disconnected", not "expired". See v1.29.12.
 
 **Imports, tests and tooling**
 

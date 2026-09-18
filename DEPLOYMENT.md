@@ -318,7 +318,10 @@ is a one-time manual step after the deploy, and until it is done the archive sta
 1. An admin opens `/management/` and clicks **Conectar Drive** (the control sits beside the
    page title, with a red dot while disconnected and a green one once connected). Home also
    raises a dialog on **every** visit while it is disconnected - deliberately not dismissible
-   for good, because the symptom of a disconnected archive is silence.
+   for good, because the symptom of a disconnected archive is silence. Note this covers "never
+   connected" and "disconnected" only: it fires on `not config.is_connected`, which asks whether
+   a decryptable token is STORED, so the weekly expiry below leaves the dot green and raises
+   nothing.
 2. Google asks which account to authorise. It must be the account that owns the receipts
    folder. The app requests the full `drive` scope, not `drive.file`: the academy's folders
    were created by hand, and `drive.file` cannot see a file it did not create.
@@ -732,9 +735,12 @@ update:
 - `GOOGLE_REDIRECT_URI` with `https://YOUR_URL/auth/google/callback/`
 - `GOOGLE_DRIVE_REDIRECT_URI` with `https://YOUR_URL/auth/google/drive/callback/` (optional — only to override what the request implies)
 - Google Cloud Console → OAuth credentials → Authorized redirect URIs (add **both** callback URLs)
-- Google Cloud Console → OAuth consent screen → **publish it ("In production")**. Left in
-  "Testing", Google expires the Drive refresh token every 7 days and the archive stops filing
-  receipts silently.
+- Google Cloud Console → OAuth consent screen → **leave it in "Testing". Do NOT try to publish
+  it.** `drive` is a restricted scope, so publishing means Google verification plus a CASA
+  security assessment (see *The consent screen stays in "Testing"* above). The cost is that
+  Google expires the Drive refresh token every 7 days and the archive stops filing **silently** —
+  reconnecting from `/management/` is a routine, not an incident, and
+  `manage.py backfill_drive_receipts` files whatever was missed.
 
 ### Repairing a single env var
 
