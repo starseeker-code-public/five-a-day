@@ -15,7 +15,7 @@ Built to centralize student records, automate billing cycles, and streamline par
 ### Project Status
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v1.29.10-brightgreen?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-v1.29.11-brightgreen?style=flat-square" alt="Version">
   &nbsp;|&nbsp;
   <a href="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml?query=branch%3Amain"><img src="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml/badge.svg?branch=main&style=flat-square" alt="CI main"></a>
   &nbsp;|&nbsp;
@@ -36,9 +36,9 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 | Version | Date | Description |
 |---------|------|-------------|
-| **v1.29.10** | 2026-09-18 | Delegated-account Drive archive; end-to-end journeys |
+| **v1.29.11** | 2026-09-18 | CodeQL: side-effect hoisted out of an assert |
+| v1.29.10 | 2026-09-18 | Delegated-account Drive archive; end-to-end journeys |
 | v1.29.9 | 2026-09-17 | Top-level imports everywhere, plus two security fixes |
-| v1.29.8 | 2026-09-15 | App branding aligned to "Five a Day Evolution" |
 
 ---
 
@@ -140,8 +140,28 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 ## Version History
 
-<details id="v12910" open>
-<summary><strong>v1.29.10 — The receipt archive works for the first time, as a delegated Google account (current)</strong></summary>
+<details id="v12911" open>
+<summary><strong>v1.29.11 — A test that proved nothing under `python -O` (current)</strong></summary>
+
+**CodeQL `py/side-effect-in-assert`**
+
+- `test_the_singleton_cannot_be_deleted` called the thing it was testing **inside** its own
+  assertion — `assert config.delete() == (0, {})`. `python -O` strips `assert` statements outright,
+  so under it the delete would never run and a test named for the guard would pass having never
+  exercised it. pytest does not use `-O`, so it worked; the point is that it was one flag away from
+  being vacuous, which is the failure mode this suite has been bitten by before. The call is now
+  hoisted to its own statement with the reason written at the line.
+- Flagged on PR #77 as alert 603, the only one of the three CodeQL comments on that PR that was
+  real: 601 and 602 (the `core.views.auth` ↔ `core.views.two_factor` import cycle) were already
+  fixed by v1.29.10 and were stale, posted against the v1.29.9 head.
+- Shipped as its own version rather than folded into v1.29.10 because `testing` is protected
+  against force-push — correctly — so amending a release already merged there is not possible, and
+  a merge on top of it needs a version of its own.
+
+</details>
+
+<details id="v12910">
+<summary><strong>v1.29.10 — The receipt archive works for the first time, as a delegated Google account</strong></summary>
 
 **The archive had never filed a single receipt, and could not have**
 

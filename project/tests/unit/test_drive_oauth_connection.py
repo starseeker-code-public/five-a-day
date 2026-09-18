@@ -98,7 +98,12 @@ class TestGoogleDriveCredential:
         """Same guard as SiteConfiguration: overriding delete() alone leaves
         `objects.all().delete()` open, which is how a whole config row once went."""
         config = GoogleDriveCredential.get_config()
-        assert config.delete() == (0, {})
+        # The call is deliberately NOT inside the assert: `python -O` strips
+        # assert statements outright, so `assert config.delete() == ...` would
+        # mean this test never attempts a delete and passes having proved
+        # nothing about the guard it is named for (CodeQL py/side-effect-in-assert).
+        deleted = config.delete()
+        assert deleted == (0, {})
         assert GoogleDriveCredential.objects.count() == 1
 
 
