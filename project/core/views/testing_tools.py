@@ -28,7 +28,7 @@ from billing.services.gcp_cost_service import qa_card_amounts
 from core.decorators import qa_access_required
 from core.github_dispatch import notify_github_qa_signoff
 from core.models import BacklogTask, QAConfiguration
-from core.services.drive_service import TESTING_SUBFOLDER, DriveReceiptService
+from core.services.drive_service import DriveReceiptService
 from core.utils import csv_safe
 from students.models import Teacher
 
@@ -151,7 +151,6 @@ def testing_tools_view(request):
         # switched the archive on — the toggle is useless without it, and saying
         # so on the card is the difference between "off" and "misconfigured".
         "drive_configured": DriveReceiptService().is_configured(),
-        "drive_testing_subfolder": TESTING_SUBFOLDER,
         "tasks": tasks,
         "app_version": settings.APP_VERSION,
         "environment": settings.ENVIRONMENT,
@@ -513,21 +512,6 @@ def _set_qa_flag(request, field: str):
 def api_toggle_error_email(request):
     """Toggle the QA error email reporting on/off."""
     return _set_qa_flag(request, "error_email_enabled")
-
-
-@qa_access_required
-@require_http_methods(["POST"])
-def api_toggle_drive_uploads(request):
-    """Toggle whether the QA VM archives receipts to Google Drive.
-
-    QA-only and off by default. Production ignores this flag entirely (it always
-    archives) and development can never turn it on — `IS_TESTING_ENV` gates both
-    this endpoint, through `qa_access_required`, and the reader
-    `core.services.drive_service.drive_uploads_allowed`. While it is on, uploads
-    from here land in the month's `testing/` subfolder, never beside the real
-    receipts.
-    """
-    return _set_qa_flag(request, "drive_uploads_enabled")
 
 
 @qa_access_required

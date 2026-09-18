@@ -39,3 +39,19 @@ SCHEDULED_APPS = [
     {"name": "Recibos", "url_name": "receipts_form", "frequency": "quarterly", "active": True},
     {"name": "Matrículas", "url_name": "enrollment_form", "frequency": "on_enrollment", "active": True},
 ]
+
+# ============================================================================
+# SESSION KEYS
+# ============================================================================
+# Lives here, in a module that imports NOTHING, because it is the only thing
+# `core.views.auth` ever needed from `core.views.two_factor` — and that single
+# import was the whole of a CodeQL-reported import cycle (alerts 601/602 on
+# PR #77): auth imported two_factor at module level for this string, and
+# two_factor had to import auth back lazily to avoid a circular import at
+# URL-conf load. One shared constant in a leaf breaks the cycle at its source
+# instead of tolerating it, the same reasoning as `billing/money.py` and
+# `core/date_utils.py`.
+#
+# A session with only this key set is NOT logged in — it is mid-2FA. The
+# `is_authenticated` gate in SimpleAuthMiddleware is what says otherwise.
+PENDING_2FA_SESSION_KEY = "_2fa_pending_user_id"

@@ -3,6 +3,27 @@
  * Requires: data-create-todo-url on <body>
  */
 document.addEventListener('DOMContentLoaded', function () {
+    // Google Drive archive warning. FIRST in this callback on purpose: the
+    // handlers below it call getElementById(...).addEventListener(...) without
+    // null guards, so the day any of those elements becomes admin-gated, every
+    // listener registered after the throw stops binding — and the symptom is a
+    // dialog that renders and cannot be closed. The modal is rendered ALREADY
+    // OPEN by the server, so it needs no JS to appear; only to dismiss.
+    // It returns on every visit to Home while Drive is disconnected: the server
+    // decides, not localStorage, so closing is per-visit only, by design.
+    const driveWarning = document.getElementById('drive-warning-modal');
+    const driveWarningClose = document.getElementById('drive-warning-close-btn');
+    const closeDriveWarning = () => { if (driveWarning) driveWarning.style.display = 'none'; };
+    if (driveWarningClose) driveWarningClose.addEventListener('click', closeDriveWarning);
+    if (driveWarning) {
+        driveWarning.addEventListener('click', (e) => {
+            if (e.target === driveWarning) closeDriveWarning();
+        });
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') closeDriveWarning();
+        });
+    }
+
     const todoText = document.getElementById('todoText');
     const addTodoBtn = document.getElementById('addTodoBtn');
     const todoList = document.getElementById('todoList');

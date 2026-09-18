@@ -835,6 +835,19 @@ GOOGLE_SHEETS_SPREADSHEET_ID = os.getenv("GOOGLE_SHEETS_SPREADSHEET_ID", "")
 # upload entirely and everything else keeps working — the archive is best-effort.
 GOOGLE_DRIVE_RECEIPTS_FOLDER_ID = os.getenv("GOOGLE_DRIVE_RECEIPTS_FOLDER_ID", "")
 
+# The service account the app IMPERSONATES to reach Drive, e.g.
+# `fiveaday-run@<project>.iam.gserviceaccount.com`. Set this and no key material
+# is needed anywhere: Cloud Run's own identity mints a short-lived, drive-scoped
+# token for itself. It exists because plain ADC cannot do this job — the
+# metadata server issues `cloud-platform`-scoped tokens and that scope does NOT
+# cover `https://www.googleapis.com/auth/drive`, so a Drive call with a default
+# credential fails on scope alone.
+# Requires `roles/iam.serviceAccountTokenCreator` ON ITSELF (member and resource
+# are the same SA) and the Drive folder shared with this address.
+# Takes PRECEDENCE over GOOGLE_SHEETS_SERVICE_ACCOUNT_JSON: a downloadable key
+# is the fallback for local use, not the thing production should rely on.
+GOOGLE_DRIVE_IMPERSONATE_SA = os.getenv("GOOGLE_DRIVE_IMPERSONATE_SA", "")
+
 # ============================================================================
 # GCP BILLING EXPORT — OPTIONAL
 # ============================================================================

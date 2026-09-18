@@ -65,7 +65,6 @@
      data-seed-url="{% url 'api_seed_database' %}"
      data-backlog-create-url="{% url 'api_create_backlog_task' %}"
      data-toggle-error-url="{% url 'api_toggle_error_email' %}"
-     data-toggle-drive-url="{% url 'api_toggle_drive_uploads' %}"
      data-ready-url="{% url 'api_mark_ready' %}">
 
     <div class="mb-8">
@@ -172,32 +171,6 @@
               mistaken for one the academy filed.
             {% endcomment %}
             <div class="qa-card" style="padding:1.1rem 1.25rem;">
-                <div class="flex items-center justify-between">
-                    <div class="flex items-center gap-3">
-                        <div class="qa-card-icon bg-emerald-100" style="width:2.5rem;height:2.5rem;">
-                            <span class="material-symbols-outlined text-emerald-600">cloud_upload</span>
-                        </div>
-                        <div>
-                            <h2 class="text-sm font-bold text-neutral-800">Recibos a Drive</h2>
-                            <p class="text-xs text-neutral-500">
-                                {% if drive_configured %}
-                                    Sube los recibos a <code>.../&lt;Mes&gt;/{{ drive_testing_subfolder }}</code>
-                                {% else %}
-                                    Drive no configurado en este entorno
-                                {% endif %}
-                            </p>
-                        </div>
-                    </div>
-                    <div class="flex items-center gap-2">
-                        <span class="text-xs font-medium text-neutral-500" id="drive-uploads-label">
-                            {{ qa_config.drive_uploads_enabled|yesno:"Activo,Inactivo" }}
-                        </span>
-                        <label class="toggle-switch">
-                            <input type="checkbox" id="drive-uploads-toggle" {% if qa_config.drive_uploads_enabled %}checked{% endif %}>
-                            <span class="toggle-slider"></span>
-                        </label>
-                    </div>
-                </div>
             </div>
 
             <!-- GitHub · Desarrollos · Correo temporal — one full cell each -->

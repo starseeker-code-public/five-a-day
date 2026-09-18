@@ -67,6 +67,13 @@ from core.views.fun_friday_attendance import (
     toggle_fun_friday_this_week,
 )
 
+# Google Drive archive consent (separate from the identity-only login flow)
+from core.views.google_drive import (
+    drive_oauth_callback,
+    drive_oauth_disconnect,
+    drive_oauth_redirect,
+)
+
 # Management & enrollment API
 from core.views.management import (
     api_get_teachers,
@@ -157,7 +164,6 @@ from core.views.testing_tools import (
     api_create_backlog_task,
     api_mark_ready,
     api_seed_database,
-    api_toggle_drive_uploads,
     api_toggle_error_email,
     api_update_backlog_task,
     export_backlog_tasks,

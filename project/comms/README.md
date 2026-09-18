@@ -161,6 +161,20 @@ can be coerced (an integer id) or simply left out of the record, prefer that.
 
 All tasks have retry logic (3 retries, exponential backoff):
 
+> **A task's return value is a LOG RECORD — v1.29.10 took the addresses out of five of them.**
+> Celery logs `Task ... succeeded ... : <return value>`, so in production (eager, on Cloud Run)
+> every returned dict is written verbatim to Cloud Logging, which is a different retention and a
+> different audience from the database the data lives in. `send_welcome_email_task` returned the
+> child's `full_name` and `send_birthday_email_task`, `send_payment_reminder_sms_task`,
+> `send_parent_temporary_password_task` and `send_payment_receipt_email_task` returned the family's
+> email addresses — none of it read by any caller, all of it landing in a log the academy never
+> asked to keep. They now return the **id** (`student_id` / `parent_id` / `payment_id` /
+> `enrollment_id`) and `recipients: len(...)`, which answers the operational question ("did it go,
+> and to how many?") without naming anybody. A unit test walks the module's AST and fails on a
+> return value carrying an address or a name, because the next task to be added is where this comes
+> back. Same rule as `EmailService` logging `template_name` rather than the subject line.
+
+
 **Payment-completion dispatch moved to `core/tasks.py` in v1.29.9.**
 `dispatch_payment_completed(payment_id)` and `dispatch_payment_completed_on_commit(payment_id)`
 are still the one statement of *what happens when money lands* — the receipt email and the Drive

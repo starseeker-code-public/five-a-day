@@ -60,7 +60,9 @@ class TestSendParentTemporaryPasswordTask:
         # ...and it must not come back out in the return value either, which the
         # result backend stores.
         assert "temporary_password" not in result
-        assert set(result) == {"status", "recipient"}
+        # Nor the address: Celery logs the return dict at INFO, so an email in
+        # here is an email in Cloud Logging on every send.
+        assert set(result) == {"status", "parent_id"}
 
     def test_an_existing_password_keeps_working(self, parent):
         """Recovery is unauthenticated, so issuing a temporary password must not
