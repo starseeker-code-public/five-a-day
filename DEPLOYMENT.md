@@ -333,9 +333,43 @@ Two things to get right BEFORE that click, both outside the repo:
   match a registered one literally, and a missing trailing slash is a `redirect_uri_mismatch`.
   Pin the env var if the service answers on more than one hostname, since `build_absolute_uri`
   would otherwise build whichever one the admin happened to open.
-- **The consent screen must be published ("In production")**, not left in "Testing". In Testing
-  mode Google expires refresh tokens after **7 days**, and the failure is exactly the one this
-  whole feature was built to fix: receipts silently stop being filed, and nothing errors.
+- **The consent screen stays in "Testing", and that is PERMANENT (decided 2026-09-18).**
+  Publishing an app that requests a restricted scope - which `drive` is - puts it through Google
+  verification plus a CASA security assessment, and the academy is not undertaking that for one
+  internal account. The consequence is not cosmetic: **in Testing mode Google expires every
+  refresh token after 7 days**, so the archive stops filing roughly weekly.
+
+  That makes reconnecting a ROUTINE, not an incident. See *Reconnecting the Drive archive* below.
+
+#### Reconnecting the Drive archive (roughly weekly)
+
+Because the consent screen cannot leave "Testing" (above), the stored refresh token dies about
+every 7 days and the archive stops. Three things to know before relying on a dashboard:
+
+1. **Nothing tells you.** `GoogleDriveCredential.is_connected` is `bool(self.refresh_token)` - it
+   asks whether a decryptable string is stored, not whether Google still honours it. An expired
+   token decrypts perfectly, so the `/management/` status dot stays GREEN and the home reconnect
+   dialog (which fires on `not config.is_connected`) never appears. The only signal is
+   `upload_receipt_to_drive_task` returning `error` in the logs:
+
+   ```bash
+   gcloud logging read 'resource.type="cloud_run_revision" AND jsonPayload.message:"upload_receipt_to_drive_task"' --project=five-a-day-evolution --limit=20 --freshness=7d --format="value(severity, jsonPayload.message)"
+   ```
+
+2. **Reconnecting is the fix.** `/management/` -> **Conectar Drive**, re-consent as the account
+   that owns the receipts folder. `prompt=consent` is already forced, so a fresh refresh token is
+   always issued rather than silently omitted.
+
+3. **Then repair the gap.** Receipts completed while the token was dead were never filed, and
+   nothing retries them:
+
+   ```bash
+   gcloud run jobs execute fiveaday-migrate --args=backfill_drive_receipts --region=europe-southwest1
+   ```
+
+   It is idempotent (keyed on the `<paymentID>_` filename prefix), so running it after every
+   reconnect is safe and is the recommended habit. The weekly outage is therefore a filing DELAY,
+   not lost receipts - the `Payment` row and the emailed receipt are unaffected either way.
 
 The QA VM is deliberately excluded - `drive_connect_available()` is false there, the control is
 absent and all three OAuth endpoints 404 - because Google will not register a redirect URI that

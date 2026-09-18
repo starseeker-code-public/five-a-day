@@ -280,10 +280,22 @@ jobs:
     needs: check
     if: needs.check.outputs.should_deploy == 'true'
     runs-on: ubuntu-latest
-    # The e2-micro rebuild plus the 10-min /health/ wait fits in ~25 min; 45
-    # is the cap that turns a wedged `docker compose up` into a red run with a
-    # failure email instead of a runner held for the 6-hour default.
-    timeout-minutes: 45
+    # 90, raised from 45 on 2026-09-18 after the v1.29.11 deploy was killed at
+    # exactly 45:00 mid-`docker compose up` and took the VM DOWN for ten minutes
+    # (see the `cancelled()` note on the failure mail below).
+    #
+    # The old comment claimed the rebuild "fits in ~25 min". That holds only
+    # with a WARM Docker layer cache: the retry minutes later finished in 8.
+    # From a cold-ish cache — a base-image bump, a changed uv.lock, or simply a
+    # long gap since the last deploy — the e2-micro (2 shared vCPU, 1 GB RAM)
+    # had not finished building at 45 minutes. So the cap was sized against the
+    # cheap case and cut the expensive one in half.
+    #
+    # 90 is still far below the 6-hour default this exists to avoid, and a
+    # wedged deploy now fails loudly (see below) rather than silently, so the
+    # cost of the extra headroom is runner minutes on a job that already only
+    # runs when a version actually changed.
+    timeout-minutes: 90
     environment:
       name: testing
       # Hard-coded literal: the `secrets` context is not allowed in
@@ -582,8 +594,17 @@ jobs:
               </p>
             </div>
 
+      # `cancelled()` as well as `failure()`. A job killed by `timeout-minutes`
+      # is CANCELLED, not failed, so `failure()` alone sent NOTHING on the one
+      # outcome that leaves the VM half-deployed: on 2026-09-18 the 45-minute
+      # cap fired mid-`docker compose up`, every reporting step was skipped,
+      # and the only evidence was a grey run nobody was looking at. The nightly
+      # runs unattended at 03:00, so "no email" reads exactly like "no deploy
+      # was needed". A manual cancellation now also mails, which is the right
+      # trade: a human who cancels on purpose knows why they got the mail,
+      # whereas a silent timeout is indistinguishable from a quiet night.
       - name: Notify failure
-        if: failure()
+        if: failure() || cancelled()
         uses: dawidd6/action-send-mail@03a02a49409134de07636216fb379a026c52991e  # v21
         with:
           server_address: smtp.gmail.com
