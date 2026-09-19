@@ -1,0 +1,174 @@
+/* ═══════════════════════════════════════════════════════════════
+   FIVE A DAY — Custom Styles
+   ───────────────────────────────────────────────────────────────
+   This is the main styles file for the Five a Day website.
+   Edit here to change colors, fonts, shadows, and animations.
+
+   SECTIONS:
+     1. Brand colors       — the purple palette and accent colors
+     2. Third-party colors — WhatsApp, Facebook, Instagram, contact
+     3. Fonts              — swap typefaces site-wide
+     4. Base styles        — scroll behavior, body font defaults
+     5. Animations         — floating blobs on the hero section
+     6. Drop shadows       — image shadow helpers
+     7. Gradient text      — founder quote green gradient
+     8. Dividers           — decorative fade lines on founder page
+     9. Social backgrounds — Instagram and Facebook brand colors
+    10. WhatsApp popup     — slide-in animation classes
+   ═══════════════════════════════════════════════════════════════ */
+
+@theme {
+
+  /* ── 1. Brand colors ──────────────────────────────────────────
+     These are the main purple shades used across the whole site.
+     Change a hex value here and it updates every button, heading,
+     and background that uses that color automatically.           */
+
+  --color-primary:        #8b5cd4;   /* main bright purple        */
+  --color-primary-light:  #b899e8;   /* lighter purple tint       */
+  --color-primary-dark:   #5e3490;   /* darker purple (nav, footer)*/
+  --color-primary-darker: #311858;   /* deepest purple (text)      */
+
+  /* Accent colors — used for highlights, buttons, and banners    */
+  --color-accent-green:      #bcffb9;  /* light mint green         */
+  --color-accent-green-dark: #7ed957;  /* darker green (buttons)   */
+  --color-accent-yellow:     #feeb85;  /* warm yellow banner       */
+  --color-accent-orange:     #fca21a;  /* orange highlight         */
+  --color-accent-blue:       #38b6ff;  /* decorative blue blob     */
+  --color-accent-pink:       #d4a8f0;  /* footer heart color       */
+
+  /* Neutral / warm page backgrounds                              */
+  --color-warm:      #f8f4ff;  /* very light purple-tinted white  */
+  --color-warm-dark: #ede4f8;  /* slightly darker warm background */
+
+  /* Legacy aliases kept for backwards compatibility              */
+  --color-accent:      #8b5cd4;
+  --color-accent-dark: #5e3490;
+
+  /* ── 2. Third-party and section colors ───────────────────────
+     Specific brand colors for social platforms and page sections.
+     Change these if you need to update branding.                 */
+
+  --color-contact:       #6b3d96;  /* contact section background  */
+  --color-whatsapp:      #25D366;  /* WhatsApp green              */
+  --color-whatsapp-dark: #1ebe5d;  /* WhatsApp green (hover)      */
+  --color-facebook:      #1877F2;  /* Facebook blue               */
+  --color-mint:          #e8f5e0;  /* founder photo panel bg      */
+  --color-mint-light:    #e6f7f0;  /* about page intro panel bg   */
+  --color-forest:        #5d8060;  /* founder quote divider green */
+
+  /* ── 3. Fonts ────────────────────────────────────────────────
+     Change the font names here to swap typefaces across the site.
+     Make sure to also update the Google Fonts link in index.html
+     if you switch to a different font family.                    */
+
+  --font-title:   'Imprima', sans-serif;             /* section & page titles     */
+  --font-special: 'Arima', sans-serif;               /* founder names & accents   */
+  --font-sans:    'Trebuchet MS', Arial, sans-serif;  /* default body text         */
+  --font-heading: 'Trebuchet MS', Arial, sans-serif;  /* headings and nav labels   */
+  --font-body:    'Trebuchet MS', Arial, sans-serif;  /* body copy                 */
+}
+
+/* ── 4. Base styles ─────────────────────────────────────────────
+   Global defaults applied to every page.                        */
+
+html {
+  scroll-behavior: smooth;
+}
+
+blockquote::before,
+blockquote::after {
+  content: none;
+}
+
+body {
+  font-family: var(--font-sans);
+}
+
+/* ── 5. Animations ──────────────────────────────────────────────
+   The floating blob shapes on the home page hero section use
+   these keyframe animations. Adjust timing or transform values
+   to change how they move.                                       */
+
+@keyframes blobFloat {
+  0%, 100% { transform: translateY(0)     scale(1);    }
+  50%       { transform: translateY(-12px) scale(1.05); }
+}
+@keyframes blobFloatAlt {
+  0%, 100% { transform: translateY(0)    scale(1);    }
+  50%       { transform: translateY(10px) scale(0.96); }
+}
+
+.animate-blob {
+  animation: blobFloat 7s ease-in-out infinite;
+}
+.animate-blob-slow {
+  animation: blobFloat 10s ease-in-out 1.5s infinite;
+}
+.animate-blob-alt {
+  animation: blobFloatAlt 8s ease-in-out 3s infinite;
+}
+
+/* ── 6. Drop shadows ────────────────────────────────────────────
+   CSS filter-based drop shadows used on logo and contact images.
+   Unlike box-shadow, drop-shadow follows the shape of the image
+   including transparent areas.                                   */
+
+.shadow-logo {
+  filter: drop-shadow(0 0 6px rgba(0, 0, 0, 0.5));
+}
+
+.shadow-image {
+  filter: drop-shadow(0 4px 5px rgba(0, 0, 0, 0.4));
+}
+
+/* ── 7. Gradient text ───────────────────────────────────────────
+   Green gradient applied to the founder quotes on the
+   "Quiénes somos" page.                                          */
+
+.quote-text-gradient {
+  background: linear-gradient(135deg, #3d6b40 0%, #6ec44a 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* ── 8. Dividers ────────────────────────────────────────────────
+   Decorative fade lines flanking the quote ornament dot on the
+   founder page. The left line fades right; the right fades left. */
+
+.divider-fade-right {
+  background: linear-gradient(to right, transparent, rgba(93, 128, 96, 0.35));
+}
+
+.divider-fade-left {
+  background: linear-gradient(to left, transparent, rgba(93, 128, 96, 0.35));
+}
+
+/* ── 9. Social brand backgrounds ───────────────────────────────
+   Used for the Instagram and Facebook icon tiles in the contact
+   form footer row.                                               */
+
+.bg-instagram {
+  background: linear-gradient(135deg, #833AB4 0%, #FD1D1D 50%, #FCB045 100%);
+}
+
+/* ── 10. WhatsApp popup ─────────────────────────────────────────
+   The popup slides up from the bottom-right corner.
+   .popup sets the hidden starting state with a CSS transition.
+   Adding .popup-visible brings it into view.                     */
+
+.popup-width {
+  max-width: min(22rem, calc(100vw - 3rem));
+}
+
+.popup {
+  opacity: 0;
+  transform: translateY(1.5rem);
+  transition: opacity 0.35s ease, transform 0.35s ease;
+}
+
+.popup-visible {
+  opacity: 1;
+  transform: translateY(0);
+}

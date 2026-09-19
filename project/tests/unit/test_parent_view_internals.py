@@ -26,7 +26,7 @@ pytestmark = pytest.mark.django_db
 def _request_with_messages():
     """A POST request carrying the session + message storage that
     `messages.info()` / `messages.error()` require."""
-    request = RequestFactory().post("/parents/create/")
+    request = RequestFactory().post("/app/parents/create/")
     SessionMiddleware(lambda r: None).process_request(request)
     request.session.save()
     MessageMiddleware(lambda r: None).process_request(request)
@@ -70,7 +70,7 @@ class TestFormValidExistingDni:
         response = view.form_valid(form)
 
         assert response.status_code == 302
-        assert response.url == f"/students/create/?parent_id={existing.id}"
+        assert response.url == f"/app/students/create/?parent_id={existing.id}"
         assert view.object == existing
         assert Parent.objects.count() == before, "must reuse the existing parent, not create another"
 
@@ -84,4 +84,4 @@ class TestFormValidExistingDni:
         )
         view = _bound_view(_request_with_messages())
         view.object = existing
-        assert view.get_success_url() == f"/students/create/?parent_id={existing.id}"
+        assert view.get_success_url() == f"/app/students/create/?parent_id={existing.id}"

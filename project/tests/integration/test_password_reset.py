@@ -70,7 +70,7 @@ class TestPasswordResetFlow:
         assert msg.to == ["reset.me@example.com"]
         assert "Five a Day" in msg.subject
         # Plain-text body contains the reset link
-        assert "/password-reset/confirm/" in msg.body
+        assert "/app/password-reset/confirm/" in msg.body
         # HTML alternative is attached (from emails/password_reset.html)
         html_alt = next((c for c in msg.alternatives if c[1] == "text/html"), None)
         assert html_alt is not None

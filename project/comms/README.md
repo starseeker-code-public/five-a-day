@@ -6,7 +6,7 @@ The `comms` app owns all outbound communication: the EmailService class, the Twi
 
 ## Who a mass mail reaches (v1.27.1)
 
-Every batch send in the project — the ten `/apps/` mail forms, the Beat tasks and the `send_email`
+Every batch send in the project — the ten `/app/apps/` mail forms, the Beat tasks and the `send_email`
 command — resolves its recipients the same way now. The rules, and the bug each one closes:
 
 - **Waiting-list families are excluded** (`children__is_waiting=False`). A waiting-list entry taken
@@ -139,7 +139,7 @@ render per family), a failed `open()` reported as "all pending certificates fail
 raised at the calling view, and a per-parent exception that never aborts the batch. Parents with no
 address are counted as `skipped`.
 
-The **newsletter** and **enrollment receipt** templates do not have dedicated convenience functions — they are triggered directly from the `/apps/newsletter/` and receipt form views in `core/views/app_forms.py`, which call `email_service.send_email()` inline with per-recipient context.
+The **newsletter** and **enrollment receipt** templates do not have dedicated convenience functions — they are triggered directly from the `/app/apps/newsletter/` and receipt form views in `core/views/app_forms.py`, which call `email_service.send_email()` inline with per-recipient context.
 
 ## Logging Helper (`comms/log_safe.py`)
 

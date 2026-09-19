@@ -156,7 +156,7 @@ jobs:
                 <tr><td><strong>Archivos cambiados</strong></td><td>${{ steps.info.outputs.files_changed }}</td></tr>
                 <tr><td><strong>Deploy production</strong></td><td><a href="${{ github.server_url }}/${{ github.repository }}/actions/workflows/deploy-production.yml">workflow (aprobar aquí cuando se arme)</a></td></tr>
                 <tr><td><strong>Actions</strong></td><td><a href="${{ github.server_url }}/${{ github.repository }}/actions">todas las ejecuciones</a></td></tr>
-                <tr><td><strong>Testing</strong></td><td><a href="${{ secrets.TESTING_URL || 'http://34.26.130.187:8000' }}">abrir</a> · <a href="${{ secrets.TESTING_URL || 'http://34.26.130.187:8000' }}/health/?deep=1">health deep</a> · <a href="${{ secrets.TESTING_URL || 'http://34.26.130.187:8000' }}/testing/">panel QA</a></td></tr>
+                <tr><td><strong>Testing</strong></td><td><a href="${{ secrets.TESTING_URL || 'http://34.26.130.187:8000' }}">abrir</a> · <a href="${{ secrets.TESTING_URL || 'http://34.26.130.187:8000' }}/health/?deep=1">health deep</a> · <a href="${{ secrets.TESTING_URL || 'http://34.26.130.187:8000' }}/app/testing/">panel QA</a></td></tr>
                 <tr><td><strong>Producción</strong></td><td><a href="${{ secrets.PRODUCTION_URL || 'https://fiveaday-332600671945.europe-southwest1.run.app' }}">abrir</a> · <a href="${{ secrets.PRODUCTION_URL || 'https://fiveaday-332600671945.europe-southwest1.run.app' }}/health/">health</a></td></tr>
                 <tr><td><strong>Repo</strong></td><td><a href="${{ github.server_url }}/${{ github.repository }}">${{ github.repository }}</a> · <a href="${{ github.server_url }}/${{ github.repository }}/tree/main">rama main</a></td></tr>
               </table>

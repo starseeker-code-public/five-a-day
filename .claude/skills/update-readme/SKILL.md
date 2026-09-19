@@ -1,6 +1,6 @@
 ---
 name: update-readme
-description: Use when the user says their work is done and they want the project documentation updated to reflect the staged changes. Despite the name, this skill updates the full documentation set — the top-level README.md, every per-app README, CLAUDE.md, DEPLOYMENT.md, and every file under docs/. Runs the sync-branches skill FIRST so main, testing and development are level and the version the docs are written against is the real one, then inspects the staged diff, routes changes to the correct docs, applies per-file checklists, and sweeps for stale references across all of them.
+description: Use when the user says their work is done and they want the project documentation updated to reflect the staged changes. Despite the name, this skill updates the full documentation set — the top-level README.md, every per-app README, CLAUDE.md, DEPLOYMENT.md, and every file under docs/. Levels development with main FIRST — usually via the sync-branches skill, or by deferring that merge when the staged work collides with it — so the version the docs are written against is the real one, then inspects the staged diff, routes changes to the correct docs, applies per-file checklists, and sweeps for stale references across all of them.
 ---
 
 # update-readme
@@ -31,36 +31,91 @@ Everything under `.venv/`, `.pytest_cache/`, `node_modules/`, `.git/` is **out o
 
 ---
 
-## Step 0 — Sync every branch with main FIRST
-
-Before reading a single diff, run the **`sync-branches`** skill
-(`.claude/skills/sync-branches/SKILL.md`) end to end.
+## Step 0 — Get `development` level with `main` FIRST
 
 Documentation is written against a version, and the version lives in files —
 `pyproject.toml`, the README badge, the Recent Versions table, `uv.lock` — that change
 in *every* release and are exactly the files a stale branch disagrees about. Writing
 the docs on a `development` that is behind `main` means writing them against last
 release's numbers, and the mistake only surfaces later as a conflicted release PR.
-Syncing first also puts the user's work in progress fully **staged**, which is precisely
-the input this skill's Step 1 reads.
 
-What that skill does, in short: stashes the work in progress, fast-forwards `main`,
-`testing` and `development` from origin, merges `main` into `testing` and `development`,
-pushes both, returns to `development` and restores the stash staged.
+The usual way to do that is the **`sync-branches`** skill
+(`.claude/skills/sync-branches/SKILL.md`), which stashes the work in progress,
+fast-forwards `main`, `testing` and `development` from origin, merges `main` into
+`testing` and `development`, pushes both, and returns to `development` with the stash
+restored **staged** — which is precisely the input Step 1 reads.
 
-Then, before continuing:
+**But it is not always the right way, and running it blind can cost you the working
+tree.** Its stash-and-pop conflicts when the staged work touches the same files `main`
+changed. Decide with the three commands below before running anything.
 
-- **It stopped and asked something** → answer it (or relay it to the user) and let it
-  finish. Do **not** start documenting on an unsynced tree.
-- **It reported nothing to do** → fine, carry on to Step 1.
+### 0a. Snapshot, then measure
+
+Always snapshot first. A staged-but-uncommitted tree has no commit behind it, and every
+branch operation from here can lose it:
+
+```bash
+git tag -f snapshot-pre-docs $(git commit-tree $(git write-tree) -p HEAD -m "SNAPSHOT: staged work before docs sync")
+git diff --stat snapshot-pre-docs --cached      # empty output = the snapshot holds the index exactly
+```
+
+Then measure the two things that decide the route:
+
+```bash
+git fetch --all --quiet
+
+# 1. Does main carry commits development lacks?
+git log --oneline development..origin/main
+
+# 2. Do any of them touch a file you have staged? (the stash-pop hazard)
+comm -12 <(git diff --name-only development...origin/main | sort)          <(git diff --cached --name-only | sort)
+
+# 3. Does main carry a VERSION development lacks? (the reason this step exists)
+git diff development...origin/main -- pyproject.toml | grep '^[-+]version'
+```
+
+### 0b. Route
+
+| main is ahead? | Overlap with staged files? | Version moved on main? | Do this |
+|---|---|---|---|
+| No | — | — | Nothing to sync. Go to Step 1. |
+| Yes | No | Either | Run **`sync-branches`** end to end, as before. |
+| Yes | **Yes** | **No** | **Do NOT stash.** Document now, commit, then merge `main` down explicitly afterwards (see 0c). |
+| Yes | **Yes** | **Yes** | Stop and tell the user. Documenting against the wrong version and popping a conflicting stash are both bad; the way out is theirs to choose (usually: commit the staged work first, then merge, then document). |
+
+The third row is the common one when the release is large. It is safe precisely because
+the condition that makes the sync *mandatory* — a version on `main` that `development`
+lacks — is absent: hotfixes to workflows, CVE bumps in `uv.lock` and the like do not move
+the version, so the numbers you are about to write are already correct.
+
+### 0c. When you deferred the sync
+
+Merge `main` down **after** the release commit, not before:
+
+```bash
+git merge origin/main --no-edit        # resolve conflicts here, in a real merge
+grep -m1 '^version' pyproject.toml     # confirm the version did not move under you
+make test && make frontend-test        # uv.lock may have moved; re-run before pushing
+```
+
+This is the repo's own pattern — see `Merge main back into development after the
+vX.Y.Z release` in the history. Say in your Step 6 report that you took this route and
+why, so the deviation is visible rather than silent.
+
+### 0d. Whichever route you took
+
+- **`sync-branches` stopped and asked something** → answer it (or relay it to the user)
+  and let it finish. Do **not** start documenting on an unsynced tree.
 - **The version moved during the sync** → re-read `pyproject.toml` in Step 1 rather
-  than trusting anything you noted before the sync.
-- **`testing` has commits `development` lacks** → surface it to the user before
-  documenting. Something bypassed the release path and the docs would describe a tree
+  than trusting anything you noted before it.
+- **`testing` has commits `development` lacks** → check whether they are already in
+  `origin/main` (`git branch -r --contains <sha>`). If they are, this is the ordinary
+  release flow and nothing is wrong. If they are **not**, surface it to the user before
+  documenting: something bypassed the release path and the docs would describe a tree
   nobody is going to ship.
 
-This is the one sanctioned exception to "never stage files yourself": staging is
-inherent to the stash-and-restore, and the user asked for that behaviour when they
+Staging in this step is the one sanctioned exception to "never stage files yourself":
+it is inherent to the stash-and-restore, and the user asked for that behaviour when they
 invoked a skill that begins with it.
 
 ---
@@ -592,9 +647,11 @@ If the scan exited 0, say so in one line — it is a positive result worth stati
 ## Guarantees
 
 - **Never commit.** The user may want to amend, combine, or review before committing.
-- **Never stage files** yourself without user confirmation — *except* in Step 0, where
-  the `sync-branches` skill stages everything in order to stash it and restores it
-  staged afterwards. That is the whole point of the step, not an incidental side effect.
+- **Never stage files** yourself without user confirmation — *except* in Step 0 **when
+  you take the `sync-branches` route**, where that skill stages everything in order to
+  stash it and restores it staged afterwards. That is the whole point of the step, not
+  an incidental side effect. On the deferred-merge route (0c) nothing is stashed, so the
+  ordinary rule applies and the index stays exactly as the user left it.
 - **Never read `.env*` files** — they contain secrets.
 - **Never invent work** — if the staged diff is purely a bug fix with no documentation implications, say "no doc changes needed" and stop.
 - **Never fabricate counts** — run the grep/wc command to get the real test count, view count, etc.

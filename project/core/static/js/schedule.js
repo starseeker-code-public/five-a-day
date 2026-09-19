@@ -134,7 +134,7 @@ document.addEventListener('DOMContentLoaded', function () {
         // left the grid showing the new group, so the timetable emailed to
         // parents reflected an assignment the server never stored. Surface the
         // failure and tell the user their change did not save.
-        return window.apiFetch('/api/schedule/slot/save/', {
+        return window.apiFetch(`${window.APP_PREFIX}/api/schedule/slot/save/`, {
             method: 'POST',
             body: JSON.stringify({ row, day, col, group_id: groupId }),
         })

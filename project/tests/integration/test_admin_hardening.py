@@ -398,7 +398,7 @@ class TestPaymentBulkActions:
         return PaymentAdmin(Payment, AdminSite())
 
     def _request(self, rf):
-        request = rf.post("/admin/")
+        request = rf.post("/app/admin/")
         request._messages = _SilentMessages()
         return request
 
@@ -504,7 +504,7 @@ class TestRecordsCanBeRemovedDeliberately:
         """`get_actions` already hides it, so this branch is unreachable over
         HTTP — it is what keeps the rule true if a future ModelAdmin lists the
         action without the filter, or calls it directly."""
-        request = rf.post("/admin/")
+        request = rf.post("/app/admin/")
         request.user = User.objects.create_user("staff-direct", "s@example.com", "unused")
         request._messages = _SilentMessages()
 

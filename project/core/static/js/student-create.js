@@ -19,7 +19,7 @@
     if (!countdownEl || !successOverlay) return;
 
     const cfg = window.STUDENT_CREATE_CONFIG || {};
-    const studentsListUrl = cfg.studentsListUrl || '/students/';
+    const studentsListUrl = cfg.studentsListUrl || `${window.APP_PREFIX}/students/`;
 
     let sec = 4;
     const timer = setInterval(() => {
