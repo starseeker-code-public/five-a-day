@@ -24,7 +24,7 @@ class TestAuthMiddleware:
     def test_unauthenticated_redirects_to_login(self, client):
         response = client.get(reverse("home"))
         assert response.status_code == 302
-        assert "/login/" in response.url
+        assert "/app/login/" in response.url
 
     def test_login_page_accessible(self, client):
         response = client.get(reverse("login"))

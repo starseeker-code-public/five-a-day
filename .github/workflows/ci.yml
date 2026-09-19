@@ -61,6 +61,54 @@ jobs:
           dockerfile: Dockerfile
 
   # ============================================================
+  # JOB 1b: Frontend — the public React site (frontend/)
+  # ============================================================
+  # Separate from the Python jobs because it needs Node and nothing else: no
+  # database, no uv, no Django. It is NOT folded into `Tests` because that job
+  # can only prove Django served the SHELL — the same shell it serves for every
+  # public route — so whether React then renders a page or throws on mount is
+  # invisible to it. A component that throws is a blank white page with a 200.
+  frontend:
+    name: Frontend
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Install Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+
+      # `ci`, not `install`: builds from package-lock.json exactly, the same
+      # rule `uv sync --frozen` applies on the Python side.
+      - name: Install dependencies
+        run: npm ci
+
+      - name: ESLint
+        run: npm run lint
+
+      - name: Vitest
+        run: npm test
+
+      # The Dockerfile's node stage runs this too, but failing here names the
+      # frontend as the cause instead of surfacing as a failed image build.
+      - name: Build
+        run: npm run build
+
+      # Fails the build on a fixable HIGH/CRITICAL in anything that SHIPS
+      # (--omit=dev), matching what pip-audit and the Trivy gate do for Python.
+      # Dev-only tooling is reported but not gated: it never reaches a user.
+      - name: npm audit — production dependencies
+        run: npm audit --omit=dev --audit-level=high
+
+      - name: npm audit — dev dependencies (advisory)
+        continue-on-error: true
+        run: npm audit --audit-level=high
+
+  # ============================================================
   # JOB 2: Type check — mypy (no DB needed)
   # ============================================================
   typecheck:
@@ -249,7 +297,7 @@ jobs:
     name: Publish image & scan
     runs-on: ubuntu-latest
     timeout-minutes: 40
-    needs: [test, docker-build]
+    needs: [test, frontend, docker-build]
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/testing')
     permissions:
       contents: read

@@ -10,7 +10,7 @@ function addFunFriday() {
     const inp = document.getElementById('ff-new-date');
     const d = inp.value;
     if (!d) return;
-    window.apiFetch(`/api/students/${STUDENT_ID}/fun-friday/add/`, {
+    window.apiFetch(`${window.APP_PREFIX}/api/students/${STUDENT_ID}/fun-friday/add/`, {
         method: 'POST',
         body: JSON.stringify({date: d}),
     }).then(data => {
@@ -21,7 +21,7 @@ function addFunFriday() {
 
 function removeFunFriday(d) {
     if (!confirm('\u00bfEliminar esta fecha?')) return;
-    window.apiFetch(`/api/students/${STUDENT_ID}/fun-friday/remove/`, {
+    window.apiFetch(`${window.APP_PREFIX}/api/students/${STUDENT_ID}/fun-friday/remove/`, {
         method: 'POST',
         body: JSON.stringify({date: d}),
     }).then(data => {
@@ -39,7 +39,7 @@ document.querySelectorAll('.modality-toggle-btn').forEach(btn => {
 
         if (!confirm(`\u00bfCambiar modalidad de pago a ${newModality === 'monthly' ? 'Mensual' : 'Trimestral'}?`)) return;
 
-        window.apiFetch(`/api/students/${studentId}/enrollment/modality/`, {
+        window.apiFetch(`${window.APP_PREFIX}/api/students/${studentId}/enrollment/modality/`, {
             method: 'POST',
             body: JSON.stringify({payment_modality: newModality}),
         }).then(data => {

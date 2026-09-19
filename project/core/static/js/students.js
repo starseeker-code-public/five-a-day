@@ -96,7 +96,7 @@ document.addEventListener('DOMContentLoaded', function () {
     document.querySelectorAll('.ff-toggle-btn').forEach(btn => {
         btn.addEventListener('click', function() {
             const studentId = this.dataset.studentId;
-            window.apiFetch(`/api/students/${studentId}/fun-friday/toggle/`, {
+            window.apiFetch(`${window.APP_PREFIX}/api/students/${studentId}/fun-friday/toggle/`, {
                 method: 'POST',
                 body: '{}',
             }).then(data => {
@@ -302,7 +302,7 @@ document.addEventListener('DOMContentLoaded', function () {
             // apiFetch keeps the FormData body untouched (no Content-Type, so
             // the browser sets the multipart boundary) and turns a 400 into a
             // rejection carrying the server's own message.
-            fetch(`/api/students/${enrollStudentId}/enroll/`, {
+            fetch(`${window.APP_PREFIX}/api/students/${enrollStudentId}/enroll/`, {
                 method: 'POST',
                 headers: { 'X-CSRFToken': window.CSRF_TOKEN },
                 body: new FormData(enrollForm),

@@ -73,14 +73,14 @@ class TestAdultStudentPaymentsDoNotCrash:
         )
 
     def test_search_payments_handles_missing_parent(self, adult_payment, adult_student):
-        response = _client().get(f"/api/search/payments/?q={adult_student.last_name}")
+        response = _client().get(f"/app/api/search/payments/?q={adult_student.last_name}")
         assert response.status_code == 200
         results = response.json()["results"]
         assert results, "the adult student's payment should still be findable"
         assert results[0]["parent_name"] == ""
 
     def test_csv_export_handles_missing_parent(self, adult_payment):
-        response = _client().get("/payments/export/")
+        response = _client().get("/app/payments/export/")
         assert response.status_code == 200
         assert "Mensualidad adulto" in response.content.decode("utf-8")
 
@@ -195,7 +195,7 @@ class TestCompletedPaymentAlwaysHasADate:
             concept="probe",
         )
         response = _client().post(
-            f"/payments/{payment.id}/update/",
+            f"/app/payments/{payment.id}/update/",
             data=json.dumps({"payment_status": "completed"}),
             content_type="application/json",
         )
@@ -228,7 +228,7 @@ class TestQuickCompleteIsIdempotent:
             concept="probe",
         )
         response = _client().post(
-            f"/api/payments/{payment.id}/quick-complete/",
+            f"/app/api/payments/{payment.id}/quick-complete/",
             data=json.dumps({"payment_method": "transfer"}),
             content_type="application/json",
         )
@@ -271,7 +271,7 @@ class TestPaymentAttachesToTheActiveEnrollment:
         )
 
         _client().post(
-            "/payments/create/",
+            "/app/payments/create/",
             data={
                 "student_id": student_with_parent.id,
                 "parent_id": parent.id,
@@ -294,7 +294,7 @@ class TestPaymentChoiceValidation:
 
     def test_invalid_choices_fall_back_to_defaults(self, student_with_parent, parent):
         _client().post(
-            "/payments/create/",
+            "/app/payments/create/",
             data={
                 "student_id": student_with_parent.id,
                 "parent_id": parent.id,
@@ -337,7 +337,7 @@ class TestCreatePaymentDoesNotLeakInternals:
             "concept": "probe-leak",
         }
         payload[field] = value
-        response = _client().post("/payments/create/", data=payload, follow=True)
+        response = _client().post("/app/payments/create/", data=payload, follow=True)
         shown = " ".join(str(m.message) for m in response.context["messages"])
         assert leak not in shown, f"internal detail leaked to the user: {shown}"
 
@@ -368,7 +368,7 @@ class TestCancelledPaymentsAreNotExpectedRevenue:
             due_date=date.today(),
             concept="duplicado",
         )
-        _client().post(f"/payments/{payment.id}/deactivate/")
+        _client().post(f"/app/payments/{payment.id}/deactivate/")
         payment.refresh_from_db()
         assert payment.payment_status == "cancelled"
         return payment
@@ -378,10 +378,10 @@ class TestCancelledPaymentsAreNotExpectedRevenue:
         assert collection_rate(today.month, today.year)["expected"] == Decimal("0.00")
 
     def test_dashboard_expected_revenue_excludes_it(self, cancelled):
-        assert _client().get("/").context["expected_revenue"] == Decimal("0.00")
+        assert _client().get("/app/").context["expected_revenue"] == Decimal("0.00")
 
     def test_payments_list_expected_total_excludes_it(self, cancelled):
-        context = _client().get("/payments/").context
+        context = _client().get("/app/payments/").context
         assert context["expected_payments_total"] == Decimal("0.00")
 
     def test_all_three_views_agree(self, cancelled):
@@ -390,8 +390,8 @@ class TestCancelledPaymentsAreNotExpectedRevenue:
         today = date.today()
         assert (
             collection_rate(today.month, today.year)["expected"]
-            == _client().get("/").context["expected_revenue"]
-            == _client().get("/payments/").context["expected_payments_total"]
+            == _client().get("/app/").context["expected_revenue"]
+            == _client().get("/app/payments/").context["expected_payments_total"]
         )
 
 
@@ -406,14 +406,14 @@ class TestHandEditedQueryStringsDoNotCrash:
     @pytest.mark.parametrize(
         "url",
         [
-            "/api/history/?offset=-1",  # ValueError: negative slicing
-            "/reports/?year=-1",  # ValueError: year -1 is out of range
-            "/reports/?year=999999999999",  # OverflowError
-            "/reports/?year=abc",
-            "/reports/download.pdf?year=-1",
-            "/students/create/?parent_id=abc",  # int() on a non-numeric id
-            "/expenses/?month=13",
-            "/payments/?month=99&year=abc",
+            "/app/api/history/?offset=-1",  # ValueError: negative slicing
+            "/app/reports/?year=-1",  # ValueError: year -1 is out of range
+            "/app/reports/?year=999999999999",  # OverflowError
+            "/app/reports/?year=abc",
+            "/app/reports/download.pdf?year=-1",
+            "/app/students/create/?parent_id=abc",  # int() on a non-numeric id
+            "/app/expenses/?month=13",
+            "/app/payments/?month=99&year=abc",
         ],
     )
     def test_no_server_error(self, url, site_config):
@@ -421,7 +421,7 @@ class TestHandEditedQueryStringsDoNotCrash:
 
     def test_over_long_todo_is_rejected_not_crashed(self):
         response = _client().post(
-            "/api/todos/create/",
+            "/app/api/todos/create/",
             data=json.dumps({"text": "x" * 600, "due_date": "2026-12-31"}),
             content_type="application/json",
         )
@@ -436,7 +436,7 @@ class TestSiteConfigRejectsInvalidPrices:
 
     def test_negative_fee_is_rejected(self, site_config):
         response = _client().post(
-            "/api/config/update/",
+            "/app/api/config/update/",
             data=json.dumps({"full_time_monthly_fee": "-50.00"}),
             content_type="application/json",
         )
@@ -445,7 +445,7 @@ class TestSiteConfigRejectsInvalidPrices:
 
     def test_valid_change_still_works(self, site_config):
         response = _client().post(
-            "/api/config/update/",
+            "/app/api/config/update/",
             data=json.dumps({"full_time_monthly_fee": "58.00"}),
             content_type="application/json",
         )

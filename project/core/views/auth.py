@@ -220,7 +220,7 @@ def logout_view(request):
     """Log out of both Django auth and the custom session flag.
 
     POST only. A logout reachable by GET is a one-click CSRF: any page a
-    teacher visits can embed `<img src="/logout/">` and end their session
+    teacher visits can embed `<img src="<prefix>/logout/">` and end their session
     mid-task, and a prefetching browser or link scanner can do it by accident.
     It is only a nuisance — nothing is destroyed — but the fix costs one
     decorator and a `<form>`, so there is no reason to carry it. The sidebar

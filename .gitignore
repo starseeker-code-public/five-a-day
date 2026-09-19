@@ -243,3 +243,24 @@ logs/
 # parents, DNIs, payment records, password hashes). Access to this script is a
 # deliberate decision, not a repo default. See DEPLOYMENT.md for what it does.
 scripts/export_prod_db.sh
+
+# ============================================================================
+# Frontend (Vite + React, in frontend/)
+# ============================================================================
+# Sources are tracked; the build output is not — it is produced by
+# `make frontend-build` locally and by the node stage of the Dockerfile in CI.
+node_modules/
+frontend/dist/
+.vite/
+
+# Responsive audit artefacts (tools/responsive_audit.py). The harness is
+# tracked; its output is not — screenshots are large and the JSON is a
+# measurement of one moment, not a fact about the code.
+responsive-shots/
+# Named by run, not just "-audit": the first pass used public-audit.json and a
+# later one public-final.json, and only the former matched — so two snapshots
+# of a single afternoon's measurements were committed.
+*-audit.json
+*-after.json
+*-final.json
+tools/.session_cookie

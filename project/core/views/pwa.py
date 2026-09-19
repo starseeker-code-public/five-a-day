@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from django.conf import settings
 from django.http import HttpResponse, JsonResponse
+from django.urls import reverse
 from django.views.decorators.cache import cache_control
 from django.views.decorators.http import require_http_methods
 
@@ -19,8 +20,12 @@ def web_manifest(request):
         "name": "Five a Day",
         "short_name": "Five a Day",
         "description": "Gestión de estudiantes para la academia Five a Day.",
-        "start_url": "/",
-        "scope": "/",
+        # The app is mounted under settings.APP_PATH_PREFIX and "/" now belongs
+        # to the public React site, so an installed PWA must open — and stay
+        # inside — the app. A scope of "/" would make the installed window
+        # swallow the marketing site too.
+        "start_url": f"{settings.APP_PATH_PREFIX}/",
+        "scope": f"{settings.APP_PATH_PREFIX}/",
         "display": "standalone",
         "orientation": "portrait",
         "background_color": "#f8fafc",
@@ -41,18 +46,19 @@ def web_manifest(request):
             },
         ],
         "shortcuts": [
-            {"name": "Panel", "url": "/", "short_name": "Panel"},
-            {"name": "Estudiantes", "url": "/students/", "short_name": "Alumnos"},
-            {"name": "Pagos", "url": "/payments/", "short_name": "Pagos"},
+            {"name": "Panel", "url": f"{settings.APP_PATH_PREFIX}/", "short_name": "Panel"},
+            {"name": "Estudiantes", "url": f"{settings.APP_PATH_PREFIX}/students/", "short_name": "Alumnos"},
+            {"name": "Pagos", "url": f"{settings.APP_PATH_PREFIX}/payments/", "short_name": "Pagos"},
         ],
     }
     return JsonResponse(manifest)
 
 
 # The service worker itself is a small, static-ish JS file we ship inline
-# rather than routing through the static-files pipeline. Keeping it here
-# means it's always at /sw.js (a fixed origin path — service workers can't
-# be served from arbitrary paths without extra headers) and can reference
+# rather than routing through the static-files pipeline. Keeping it here means
+# it sits at the app mount point's own root (<prefix>/sw.js), which is what
+# gives it the whole app as its default scope — a worker served from
+# /static/js/ could only ever control /static/ — and it can reference
 # APP_VERSION for cache-busting.
 _SW_TEMPLATE = """// Five a Day — service worker (v1.12)
 //
@@ -75,9 +81,10 @@ const CACHE_NAME = "fiveaday-v%(cache_key)s";
 // matching script stays stale — a new button renders and clicking it does
 // nothing, and the server is serving the right file the whole time.
 const DEV = %(dev)s;
+const MANIFEST_URL = "%(manifest_url)s";
 const STATIC_SHELL = [
     "/static/images/logo_white_bg.png",
-    "/manifest.webmanifest",
+    MANIFEST_URL,
 ];
 
 self.addEventListener("install", (event) => {
@@ -104,7 +111,7 @@ function isCacheable(url) {
     // makes optimal.
     if (path.startsWith("/static/") || path.startsWith("/media/")) return !DEV;
     // Manifest is public and identical for every user.
-    if (path === "/manifest.webmanifest") return true;
+    if (path === MANIFEST_URL) return true;
     // NOTE: /login/ is deliberately NOT cached. It looks public, but it embeds
     // a CSRF token, and Django rotates the CSRF secret on login. Serving the
     // page cache-first handed back a token minted against an old secret, so the
@@ -141,21 +148,23 @@ self.addEventListener("fetch", (event) => {
 
 @require_http_methods(["GET"])
 def service_worker(request):
-    """Serve /sw.js. Cached client-side for 1 hour; the version key inside the
-    file itself invalidates the client cache on each deploy."""
+    """Serve <prefix>/sw.js. Cached client-side for 1 hour; the version key
+    inside the file itself invalidates the client cache on each deploy."""
 
     version = getattr(settings, "APP_VERSION", "1.0")
     body = _SW_TEMPLATE % {
         "cache_key": version,
         "dev": "true" if settings.DEBUG else "false",
+        "manifest_url": reverse("web_manifest"),
     }
     response = HttpResponse(body, content_type="application/javascript")
     response["Cache-Control"] = "public, max-age=3600"
-    # Service workers must be served with a "Service-Worker-Allowed: /" header
-    # if you want them to control the whole origin. Ours is at /sw.js which
-    # implicitly scopes to /, so this header is really about future-proofing
-    # if we ever move the file.
-    response["Service-Worker-Allowed"] = "/"
+    # A service worker's default scope is the directory it is served from, so
+    # this file — now at <prefix>/sw.js — already scopes to the app and the
+    # header merely states it. It is deliberately NOT "/" any more: the origin
+    # root belongs to the public React site, and a worker claiming the whole
+    # origin would intercept its requests too.
+    response["Service-Worker-Allowed"] = f"{settings.APP_PATH_PREFIX}/"
     return response
 
 

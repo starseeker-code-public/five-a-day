@@ -471,7 +471,7 @@ def parent_portal_logout(request):
     """POST only.
 
     A logout on GET is a one-click CSRF: any page the family visits can embed
-    `<img src="/parent/logout/">` and end their session, and a prefetching
+    `<img src="<prefix>/parent/logout/">` and end their session, and a prefetching
     browser can do it by accident. Only a nuisance — nothing is destroyed — but
     the fix is a decorator and a `<form>`. The "Salir" link in
     `parent_portal/base_portal.html` has to become a POST form with

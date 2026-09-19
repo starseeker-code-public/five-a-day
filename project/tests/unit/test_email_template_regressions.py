@@ -404,7 +404,7 @@ class TestVacationClosureCrossMonth:
         end month from the closure END date."""
 
         req = RequestFactory().post(
-            "/apps/vacation-closure/",
+            "/app/apps/vacation-closure/",
             {
                 "action": "preview",
                 "closure_start_date": "2026-12-23",

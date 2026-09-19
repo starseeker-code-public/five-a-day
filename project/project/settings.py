@@ -392,6 +392,59 @@ MIDDLEWARE = [
 
 ROOT_URLCONF = "project.urls"
 
+# ============================================================================
+# APP MOUNT POINT
+# ============================================================================
+# The management app is served under a prefix so that "/" is free for the
+# public React site (five-a-day-frontend), which becomes the academy's home
+# page. Everything the four apps route — dashboard, login, students, payments,
+# the parent portal and /admin/ — hangs off this one prefix.
+#
+# It is a CONSTANT, not an env var, on purpose: the Google OAuth callback URIs
+# are registered per environment in the Google console, and the Stripe webhook
+# URL in Stripe's dashboard. A prefix that could differ between environments
+# would let those silently disagree with the paths the app actually serves,
+# and the failure (redirect_uri_mismatch, an unreceived webhook) shows up in
+# production rather than in a test.
+#
+# Three things deliberately stay at the ORIGIN ROOT and must not move here:
+#   /health/   — the deploy pipeline, the QA sign-off gate and the uptime
+#                checks all poll it; ~25 references across the workflows.
+#   /static/   — STATIC_URL, served by WhiteNoise.
+#   /media/    — MEDIA_URL.
+APP_URL_PREFIX = "app"  # no slashes; used as f"{APP_URL_PREFIX}/" in the URLconf
+APP_PATH_PREFIX = f"/{APP_URL_PREFIX}"  # leading slash, no trailing; for path comparisons
+
+# ============================================================================
+# PUBLIC FRONTEND (Vite + React, in frontend/)
+# ============================================================================
+# The academy's public site. Built by `make frontend-build` into
+# frontend/dist/; `core.views.frontend` serves the index.html and WhiteNoise
+# serves everything beside it.
+#
+# BASE_DIR is /app/project (the Django package), so the repo root — where
+# frontend/ lives beside it — is one level up.
+FRONTEND_DIR = BASE_DIR.parent / "frontend"
+FRONTEND_DIST_DIR = FRONTEND_DIR / "dist"
+
+# WhiteNoise serves this directory at the ORIGIN ROOT, which is what makes
+# /assets/index-<hash>.js, /images/logo.png and /videos/video.mp4 resolve at
+# the same absolute paths the React sources already hard-code. Serving them
+# under /static/ instead would mean rewriting every one of those references
+# AND would put them through collectstatic, which re-hashes files Vite has
+# already hashed and that index.html names literally.
+#
+# It only ever answers for paths that exist as files in there, so /app/…,
+# /health/ and /static/ are untouched. A missing dist/ (a dev box that has not
+# run the build) makes it a no-op rather than an error.
+WHITENOISE_ROOT = str(FRONTEND_DIST_DIR)
+
+# index.html is deliberately NOT served by WhiteNoise as a directory index:
+# Django serves it so NoHtmlCacheMiddleware can mark it no-cache. Vite
+# content-hashes the bundle, so a cached shell pins the PREVIOUS deploy's
+# asset hashes — the exact failure that middleware exists to prevent.
+WHITENOISE_INDEX_FILE = False
+
 TEMPLATES = [
     {
         "BACKEND": "django.template.backends.django.DjangoTemplates",
@@ -404,6 +457,7 @@ TEMPLATES = [
                 "django.contrib.messages.context_processors.messages",
                 "core.context_processors.today_notifications",
                 "core.context_processors.csp_nonce",
+                "core.context_processors.app_prefix",
             ],
         },
     },
@@ -495,9 +549,9 @@ else:
 # Django's ModelBackend is the only backend — Teachers authenticate via their
 # linked auth.User (email as username + hashed password). Dev environment and
 # Google OAuth also go through this backend via get_or_create User + login().
-LOGIN_URL = "/login/"
-LOGIN_REDIRECT_URL = "/"
-LOGOUT_REDIRECT_URL = "/login/"
+LOGIN_URL = f"{APP_PATH_PREFIX}/login/"
+LOGIN_REDIRECT_URL = f"{APP_PATH_PREFIX}/"
+LOGOUT_REDIRECT_URL = f"{APP_PATH_PREFIX}/login/"
 
 AUTH_PASSWORD_VALIDATORS = [
     {
@@ -765,6 +819,13 @@ EMAIL_USE_TLS = os.getenv("EMAIL_USE_TLS", "True").lower() in ("true", "1", "t")
 EMAIL_HOST_USER = os.getenv("EMAIL_HOST_USER", "")
 EMAIL_HOST_PASSWORD = os.getenv("EMAIL_SECRET", "")
 DEFAULT_FROM_EMAIL = EMAIL_HOST_USER
+
+# Where the public site's "Contacta con nosotras" form delivers. It is the
+# ACADEMY's own inbox, not SUPPORT_EMAIL: these are prospective families
+# asking about classes, which is the academy's business, while SUPPORT_EMAIL
+# is the developer's channel for QA tickets and error alerts. Defaults to the
+# address the app already sends as, so no environment needs a new variable.
+CONTACT_FORM_RECIPIENT = os.getenv("CONTACT_FORM_RECIPIENT") or DEFAULT_FROM_EMAIL
 # From address for error mail (AdminEmailHandler). Django's default is
 # "root@localhost", which Gmail's SMTP refuses outright — so the alerting would
 # have looked configured and delivered nothing.
