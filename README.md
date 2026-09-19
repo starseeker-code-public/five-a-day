@@ -15,7 +15,7 @@ Built to centralize student records, automate billing cycles, and streamline par
 ### Project Status
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v1.30.2-brightgreen?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-v1.30.3-brightgreen?style=flat-square" alt="Version">
   &nbsp;|&nbsp;
   <a href="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml?query=branch%3Amain"><img src="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml/badge.svg?branch=main&style=flat-square" alt="CI main"></a>
   &nbsp;|&nbsp;
@@ -36,9 +36,9 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 | Version | Date | Description |
 |---------|------|-------------|
-| **v1.30.2** | 2026-09-19 | SPA-shell test fixture moved to conftest |
+| **v1.30.3** | 2026-09-19 | Skills: route around the sync-branches stash on a collision |
+| v1.30.2 | 2026-09-19 | SPA-shell test fixture moved to conftest |
 | v1.30.1 | 2026-09-19 | CI: the new frontend tests no longer depend on a local build |
-| v1.30.0 | 2026-09-19 | Public React site at `/`, app moved to `/app/`, responsive pass |
 
 ---
 
@@ -140,12 +140,24 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 ## Version History
 
-<details id="v1302" open>
-<summary><strong>v1.30.2 — SPA-shell test fixture moved to conftest (current)</strong></summary>
+<details id="v1303" open>
+<summary><strong>v1.30.3 — Skills: route around the sync-branches stash on a collision (current)</strong></summary>
+
+**Developer tooling**
+
+- `update-readme`'s Step 0 ran `sync-branches` unconditionally. That skill stashes the work in progress, and the pop conflicts when the staged files overlap the files `main` changed — the normal case for a large release: v1.30.0 had 124 staged files with both of `main`'s hotfix files among them.
+- Step 0 now measures **three** things first — is `main` ahead, does it overlap the staged files, and did the version move — and routes on the answer. When they collide **without** a version change it defers the merge (document, commit, then `git merge origin/main`), which is safe precisely because the condition making the sync mandatory is what is absent. When both collide it stops and asks.
+- `sync-branches` gained the same collision check **before** it creates the stash, so invoking it directly has the hazard surfaced rather than discovered at pop time with uncommitted work as one side of the conflict.
+- Both now snapshot the index as a tagged `commit-tree` first: a staged-but-uncommitted tree has no commit behind it.
+
+</details>
+
+<details id="v1302">
+<summary><strong>v1.30.2 — SPA-shell test fixture moved to conftest</strong></summary>
 
 **Testing**
 
-- The v1.30.1 fix covered `test_frontend_site.py` but not `test_middleware.py`, which also GETs `/` and so also 404'd in CI without a build - the same root cause, found by the same CI run.
+- The v1.30.1 fix covered `test_frontend_site.py` but not `test_middleware.py`, which also GETs `/` and so also 404'd in CI without a build — the same root cause, found by the same CI run.
 - The fixture is now **autouse in `conftest.py`**, so any future test that visits a public route inherits it without knowing it exists. That is the right home: the tests needing it are spread across files, and the second one is where it was missed.
 
 </details>
@@ -155,8 +167,8 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 **Testing**
 
-- The v1.30.0 frontend tests passed locally and failed in CI for two environment reasons, both mine: `CONTACT_FORM_RECIPIENT` resolves to `DEFAULT_FROM_EMAIL` -> `EMAIL_HOST_USER`, which is empty in CI (the endpoint correctly answered 503), and `frontend/dist/index.html` is a gitignored build artefact the `Tests` job has no Node to produce.
-- The recipient is now pinned with the `settings` fixture, and the SPA shell is stubbed into a per-test `tmp_path` - a shared on-disk stub raced between `xdist` workers.
+- The v1.30.0 frontend tests passed locally and failed in CI for two environment reasons, neither of them a code fault: `CONTACT_FORM_RECIPIENT` resolves to `DEFAULT_FROM_EMAIL` → `EMAIL_HOST_USER`, which is empty in CI (the endpoint correctly answered 503), and `frontend/dist/index.html` is a gitignored build artefact the `Tests` job has no Node to produce.
+- The recipient is now pinned with the `settings` fixture, and the SPA shell is stubbed into a per-test `tmp_path` — a shared on-disk stub raced between `xdist` workers.
 - Verified by deleting `frontend/dist` and running the whole suite, which is the check that should have run before the first push.
 
 </details>
@@ -6156,7 +6168,7 @@ Public flow at `/app/password-reset/...` that lets a teacher recover access with
 | **Dependency audit** | pip-audit for CVE scanning |
 | **Linting** | Ruff (check + format) via pre-commit hooks |
 | **Settings** | `project/settings_test.py` |
-| **Fixtures** | `conftest.py` — 18 shared fixtures |
+| **Fixtures** | `conftest.py` — 21 shared fixtures, one of them autouse: `spa_shell` stubs `frontend/dist/index.html` into a per-test `tmp_path` when no real build is present, so a test that GETs a public route does not depend on a build artefact CI has no Node to produce |
 
 ```bash
 make test                   # Inside Docker (PostgreSQL, parallel, with coverage)
