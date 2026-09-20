@@ -1,0 +1,145 @@
+{% comment %}
+Delivered to settings.PORTFOLIO_CONTACT_RECIPIENT when somebody fills in the
+contact form on the owner's personal portfolio (joaquin-hm.com). Rendered by
+core/views/portfolio.py — see that module for why this relay lives in the
+academy's deployment at all.
+
+IT DELIBERATELY DOES NOT EXTEND base_email.html.
+That base is the ACADEMY's stationery: a "Five a Day English Academy" signature
+block with the school's postal address and phone number, its Instagram and
+Facebook buttons, and an AVISO LEGAL naming the academy's data controller. All
+of it would be false on this message. A recruiter writing to a backend engineer
+would receive a GDPR notice from a children's English school, complete with an
+address to post an identity document to — which is worse than unbranded, because
+every word of it is a claim about who processed their data.
+
+The email RULES from the base still apply and are reproduced here on purpose:
+
+  * inline style="" only. Gmail and Outlook strip <link>, and Outlook's Word
+    engine ignores most of a <style> block — the <style> here carries nothing
+    the message depends on;
+  * no static-tag call anywhere. The Celery worker container never runs
+    collectstatic, so under ManifestStaticFilesStorage that raises "Missing
+    staticfiles manifest entry" and kills the send outright;
+  * color-scheme LIGHT only, with no prefers-color-scheme variant. Outlook takes
+    dark mode from the OS theme rather than its own toggle, so an adaptive
+    variant still rendered dark and wrong. See the email gotcha in CLAUDE.md.
+
+Palette is the portfolio's indigo (#4f46e5), not the academy's purple, for the
+same reason as everything above: this message is not from the academy.
+
+NOTE ON COMMENT SYNTAX: every explanatory comment in this file is a
+{% templatetag openblock %} comment {% templatetag closeblock %} block, never a multi-line
+{% templatetag openbrace %}#{% templatetag closebrace %} one. Django's hash form is SINGLE-LINE
+only — spread it across lines and it is not stripped at all, it is RENDERED, and
+the reasoning above ships inside the email. That is not hypothetical: it is what
+this file did on first write, and the give-away was a 19 KB message body.
+{% endcomment %}<!DOCTYPE html>
+{% comment %}lang="en": the portfolio and this message are written in English, and this is
+the attribute a client reads before offering to translate it.{% endcomment %}
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="color-scheme" content="light">
+    <meta name="supported-color-schemes" content="light">
+    <title>New message from the portfolio</title>
+    <style>
+        :root { color-scheme: light; supported-color-schemes: light; }
+        /* Backstop for clients that reset <p> to black (Outlook Word engine);
+           the inline styles below win over these. */
+        body, p, li, td, th, span { color: #1f2430; }
+        h1, h2, h3, a { color: #4f46e5; }
+
+        /* Bump the text on phones so it is comfortable without zooming; the
+           fluid-hybrid layout below is what stops clients scaling the whole
+           message down to fit a fixed width. Desktop is untouched. */
+        @media screen and (max-width: 600px) {
+            .email-content { padding: 22px 18px !important; }
+            .email-content p,
+            .email-content span,
+            .email-content td { font-size: 17px !important; line-height: 1.6 !important; }
+            .email-content h1 { font-size: 24px !important; }
+        }
+    </style>
+</head>
+<body style="margin: 0; padding: 0; background-color: #eef2ff; color-scheme: light; font-family: 'Trebuchet MS', Arial, sans-serif; font-size: 16px; line-height: 1.6; color: #1f2430;">
+    <!-- Fluid-hybrid scaffold: a max-width div so phones render at device width,
+         plus an MSO-only fixed table because Outlook's Word engine ignores
+         max-width and would otherwise go full-bleed. -->
+    <div style="background-color: #eef2ff; padding: 16px 8px;">
+        <!--[if mso]><table role="presentation" width="600" align="center" cellpadding="0" cellspacing="0" border="0"><tr><td><![endif]-->
+        <div style="max-width: 600px; margin: 0 auto;">
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+                <tr>
+                    <td class="email-content" style="background-color: #ffffff; color: #1f2430; border: 1px solid #d5d8f0; border-radius: 12px; padding: 30px 24px;">
+
+                        <h1 style="color: #4f46e5; font-size: 24px; margin: 0 0 6px 0;">
+                            &#128233; New message from the portfolio
+                        </h1>
+                        <p style="font-size: 15px; color: #4a4a57; line-height: 1.6; margin: 0 0 24px 0;">
+                            <strong style="color: #1f2430;">{{ sender_name }}</strong> used the contact form on
+                            <a href="https://joaquin-hm.com/" style="color: #4f46e5;">joaquin-hm.com</a>.
+                        </p>
+
+                        {% comment %}The sender's own words first and given room of their own: it is
+                        the part worth reading, and the last row of a table is where it hides.{% endcomment %}
+                        <div style="background-color: #eef2ff; border-left: 4px solid #4f46e5; padding: 16px 18px; border-radius: 6px; margin: 0 0 24px 0;">
+                            <p style="margin: 0 0 8px 0; font-size: 12px; font-weight: 700; color: #4f46e5; letter-spacing: .04em; text-transform: uppercase;">
+                                Message
+                            </p>
+                            {% comment %}pre-line keeps the line breaks they typed. Django autoescapes
+                            the value, so markup in it is shown as text rather than rendered — this
+                            endpoint is reachable by anyone and the reader is my own mail client.{% endcomment %}
+                            <p style="margin: 0; font-size: 16px; color: #1f2430; line-height: 1.6; white-space: pre-line;">{{ message }}</p>
+                        </div>
+
+                        <p style="margin: 0 0 10px 0; font-size: 12px; font-weight: 700; color: #4f46e5; letter-spacing: .04em; text-transform: uppercase;">
+                            Details
+                        </p>
+                        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"
+                               style="border-collapse: collapse; margin: 0 0 24px 0;">
+                            {% for label, value in rows %}
+                            <tr>
+                                <td style="padding: 9px 12px 9px 0; font-size: 14px; color: #4a4a57; vertical-align: top; white-space: nowrap; border-bottom: 1px solid #eef2ff;">
+                                    {{ label }}
+                                </td>
+                                <td style="padding: 9px 0; font-size: 15px; color: #1f2430; font-weight: 600; vertical-align: top; border-bottom: 1px solid #eef2ff; word-break: break-word;">
+                                    {% if label == "Email" %}
+                                        <a href="mailto:{{ value }}" style="color: #4f46e5; text-decoration: none;">{{ value }}</a>
+                                    {% else %}
+                                        {{ value }}
+                                    {% endif %}
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </table>
+
+                        {% if reply_to %}
+                        {% comment %}The message carries a Reply-To header, so plain Reply already
+                        reaches the sender. This button is the fallback for clients that ignore it —
+                        the From address is the SMTP account, which is not this person.{% endcomment %}
+                        <div style="text-align: center; margin: 0 0 8px 0;">
+                            <a href="mailto:{{ reply_to }}"
+                               style="display: inline-block; background-color: #4f46e5; color: #ffffff; text-decoration: none; padding: 12px 28px; border-radius: 8px; font-weight: 600; font-size: 15px;">
+                                Reply to {{ sender_name }}
+                            </a>
+                        </div>
+                        <p style="font-size: 13px; color: #4a4a57; text-align: center; margin: 0;">
+                            Or write directly to <a href="mailto:{{ reply_to }}" style="color: #4f46e5;">{{ reply_to }}</a>
+                        </p>
+                        {% endif %}
+
+                    </td>
+                </tr>
+                <tr>
+                    <td style="padding: 16px 20px 24px; text-align: center; font-size: 12px; color: #6b7280;">
+                        Sent by the contact form on joaquin-hm.com.
+                    </td>
+                </tr>
+            </table>
+        </div>
+        <!--[if mso]></td></tr></table><![endif]-->
+    </div>
+</body>
+</html>

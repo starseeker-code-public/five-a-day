@@ -826,6 +826,31 @@ DEFAULT_FROM_EMAIL = EMAIL_HOST_USER
 # is the developer's channel for QA tickets and error alerts. Defaults to the
 # address the app already sends as, so no environment needs a new variable.
 CONTACT_FORM_RECIPIENT = os.getenv("CONTACT_FORM_RECIPIENT") or DEFAULT_FROM_EMAIL
+
+# ---------------------------------------------------------------------------
+# PORTFOLIO CONTACT RELAY
+# ---------------------------------------------------------------------------
+# A SECOND, unrelated site — the owner's personal portfolio (joaquin-hm.com, a
+# static build on Netlify) — posts its contact form to `/api/portfolio/contact/`
+# here, because this service already holds a working SMTP account and Netlify
+# Forms does not come free. It is a deliberate second tenant of this deployment,
+# not an academy feature: nothing in the academy's own flows reads either value.
+#
+# BOTH are REQUIRED for the endpoint to answer, and neither has a fallback. That
+# is the point in each case:
+#
+#   TOKEN      an unset shared secret must never be read as "no authentication
+#              needed" — the endpoint refuses with 503 rather than becoming an
+#              open mail relay. Provisioned in Secret Manager, the same shape as
+#              HEALTH_PROBE_TOKEN above; see DEPLOYMENT.md.
+#   RECIPIENT  deliberately NO `or DEFAULT_FROM_EMAIL`, unlike
+#              CONTACT_FORM_RECIPIENT directly above. That default resolves to
+#              the ACADEMY's inbox, so a missing variable would quietly deliver a
+#              stranger's message about backend consulting to the academy's staff
+#              instead of to the portfolio's owner.
+PORTFOLIO_CONTACT_TOKEN = os.getenv("PORTFOLIO_CONTACT_TOKEN", "")
+PORTFOLIO_CONTACT_RECIPIENT = os.getenv("PORTFOLIO_CONTACT_RECIPIENT", "")
+
 # From address for error mail (AdminEmailHandler). Django's default is
 # "root@localhost", which Gmail's SMTP refuses outright — so the alerting would
 # have looked configured and delivered nothing.

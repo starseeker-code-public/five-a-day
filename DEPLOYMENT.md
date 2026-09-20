@@ -478,6 +478,63 @@ curl -s -H "X-Probe-Token: $TOKEN" \
   "https://fiveaday-332600671945.europe-southwest1.run.app/health/?deep=1"
 ```
 
+**`PORTFOLIO_CONTACT_TOKEN` + `PORTFOLIO_CONTACT_RECIPIENT`.** **Not configured yet** — the endpoint
+answers `503` until both are set, deliberately. They power `POST /api/portfolio/contact/`, which
+relays the contact form on the owner's personal portfolio (`joaquin-hm.com`, a static build on
+Netlify) to a human inbox. It is a **second tenant** of this deployment, not an academy feature —
+see `project/core/views/portfolio.py`. Only a Netlify Function ever calls it: the token is held
+server-side there and never reaches a browser, which is also why the endpoint needs no CORS setup.
+
+The **recipient** is a plain env var (an address, not a secret); the **token** is a Secret Manager
+secret, the same shape as `HEALTH_PROBE_TOKEN` above:
+
+```bash
+PROJECT=five-a-day-evolution
+REGION=europe-southwest1
+RUN_SA=fiveaday-run@five-a-day-evolution.iam.gserviceaccount.com
+
+# Generate ONCE and keep the value — the same string has to go into Netlify.
+openssl rand -hex 32 | tee /dev/tty | gcloud secrets create PORTFOLIO_CONTACT_TOKEN \
+  --data-file=- --replication-policy=automatic --project=$PROJECT
+
+# REQUIRED, for the same reason as HEALTH_PROBE_TOKEN: the runtime service
+# account has NO project-wide secretAccessor, so a secret without its own
+# binding cannot be read — the revision never becomes ready and traffic
+# silently stays on the old one.
+gcloud secrets add-iam-policy-binding PORTFOLIO_CONTACT_TOKEN \
+  --member=serviceAccount:$RUN_SA \
+  --role=roles/secretmanager.secretAccessor --project=$PROJECT
+
+# Both flags are ADDITIVE merges. NEVER --set-env-vars here: it would drop the
+# other ~36 vars and 7 secret refs. Verify the counts before and after.
+gcloud run services update fiveaday --region=$REGION --project=$PROJECT \
+  --update-secrets=PORTFOLIO_CONTACT_TOKEN=PORTFOLIO_CONTACT_TOKEN:latest \
+  --update-env-vars=PORTFOLIO_CONTACT_RECIPIENT=proyecto_noether@outlook.com
+```
+
+Then set the **same token** on the portfolio site in Netlify (Site configuration → Environment
+variables) as `PORTFOLIO_CONTACT_TOKEN`, with `PORTFOLIO_CONTACT_ENDPOINT` pointing at this
+service. Netlify reads them at function runtime, so a redeploy is needed after adding them.
+
+Confirm it took effect. The unauthenticated probe is the one worth keeping in a runbook — a `401`
+proves the endpoint is live *and* that the guard is on, and it sends no mail:
+
+```bash
+BASE=https://fiveaday-332600671945.europe-southwest1.run.app
+curl -s -o /dev/null -w '%{http_code}\n' -X POST "$BASE/api/portfolio/contact/" \
+  -H 'Content-Type: application/json' -d '{}'          # expect 401  (503 = not configured)
+
+TOKEN=$(gcloud secrets versions access latest --secret=PORTFOLIO_CONTACT_TOKEN --project=$PROJECT)
+curl -s -X POST "$BASE/api/portfolio/contact/" \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"name":"Deploy check","email":"you@example.com","message":"Smoke test."}'
+# expect {"success": true} — and a real email, so use it sparingly
+```
+
+**Rotating the token is two-sided and the ORDER matters**: add a new secret version, update Netlify,
+redeploy the portfolio, and only then disable the old version. The reverse order breaks the form for
+as long as the redeploy takes.
+
 **Cloud Run startup + liveness probes on `/health/`.** Without these the service runs on the
 implicit default probe only — a TCP check on port 8000 and **no liveness probe at all** — so a
 container that binds the port but can no longer serve HTTP is never restarted, and startup is

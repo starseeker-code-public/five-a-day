@@ -130,6 +130,9 @@ from core.views.payments import (
     validate_student_parent,
 )
 
+# Portfolio contact relay — a second tenant, not an academy feature
+from core.views.portfolio import submit_portfolio_contact
+
 # PWA (v1.12)
 from core.views.pwa import service_worker, web_manifest
 

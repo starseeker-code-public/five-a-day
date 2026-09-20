@@ -77,6 +77,7 @@ class EmailService:
         attachments: list | None = None,
         inline_images: dict[str, str] | None = None,
         connection=None,
+        reply_to: list[str] | None = None,
     ) -> bool:
         """
         Envia un email usando un template HTML
@@ -97,6 +98,12 @@ class EmailService:
                         session for every message in a mass send instead of one
                         per recipient — the difference between N handshakes and 1
                         on the payment-reminder / tax-certificate loops.
+            reply_to: Cabecera Reply-To. Por defecto None, que deja el mensaje
+                      exactamente como estaba: sin cabecera, y Responder va a
+                      `from_email`. Se anadio para el relay del portfolio, donde
+                      quien escribe NO es el remitente SMTP — sin esto, pulsar
+                      Responder contesta a la cuenta de la academia en vez de a
+                      la persona que rellena el formulario.
 
         Returns:
             True si se envio correctamente, False en caso contrario
@@ -133,6 +140,7 @@ class EmailService:
                 cc=cc,
                 bcc=bcc,
                 connection=connection,
+                reply_to=reply_to,
             )
             email.attach_alternative(html_content, "text/html")
 

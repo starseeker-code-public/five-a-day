@@ -7,6 +7,7 @@ from core.views import (
     frontend_index,
     health_check,
     submit_contact_form,
+    submit_portfolio_contact,
 )
 from core.views import (
     handler400 as h400,
@@ -57,6 +58,13 @@ urlpatterns = [
     # The public contact form ("Contacta con nosotras"). Public and
     # rate-limited; it emails the academy.
     path("api/contact/", submit_contact_form, name="submit_contact_form"),
+    # The owner's PERSONAL PORTFOLIO posts its contact form here — a second
+    # tenant of this deployment, not an academy feature. Server-to-server only
+    # (a Netlify Function holds the bearer token), which is why it needs no CORS
+    # headers: no browser ever calls it directly. At the ORIGIN ROOT rather than
+    # under the app prefix, so SimpleAuthMiddleware passes it through instead of
+    # answering a token-authenticated POST with a redirect to the staff login.
+    path("api/portfolio/contact/", submit_portfolio_contact, name="submit_portfolio_contact"),
     # THE APP
     path(f"{_APP}admin/", admin.site.urls),
     path(_APP, include("students.urls")),

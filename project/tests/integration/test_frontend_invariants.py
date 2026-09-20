@@ -138,22 +138,55 @@ def test_messages_are_rendered_once():
 # ───────────────────────────────────────────────────────────────────────────────
 
 
+# Templates that are deliberately NOT Spanish, with the language each must
+# declare. Everything the ACADEMY renders is Spanish and stays under the rule
+# below; this list exists because the deployment gained a second tenant whose
+# output is not the academy's.
+#
+# An entry here is not an exemption from declaring a language — it still has to
+# declare one, just a different one. Getting that wrong is the same bug in the
+# other direction: a screen reader reading English with Spanish phonetics, and a
+# translate banner over mail that is already in the reader's language.
+NON_SPANISH_TEMPLATES = {
+    # The portfolio contact relay (core/views/portfolio.py). English site,
+    # English sender, English reader — and no academy branding either.
+    "core/templates/emails/portfolio_contact.html": "en",
+}
+
+
 def test_every_html_element_declares_spanish():
-    """The whole UI (and every email) is Spanish, so `lang` must say so.
+    """Everything the academy renders is Spanish, so `lang` must say so.
 
     base.html and emails/base_email.html — the two widest-cascading templates in
     the project — both shipped `lang="en"`, which makes a screen reader
     pronounce every page with English phonetics and makes the browser offer to
     translate the academy's own mail.
+
+    `NON_SPANISH_TEMPLATES` above carries the handful that are legitimately
+    another language, and they are checked against their declared one rather
+    than skipped — an allowlist that stops checking is how a file ends up with
+    no `lang` at all.
     """
     offenders = []
     for path in _templates():
+        expected = NON_SPANISH_TEMPLATES.get(_rel(path).replace("\\", "/"), "es")
         for match in re.finditer(r"<html\b[^>]*>", _read(path)):
             tag = match.group(0)
             lang = re.search(r'lang="([^"]*)"', tag)
-            if lang is None or not lang.group(1).lower().startswith("es"):
-                offenders.append(f"{_rel(path)} -> {tag}")
-    assert not offenders, f'<html> without lang="es": {offenders}'
+            if lang is None or not lang.group(1).lower().startswith(expected):
+                offenders.append(f'{_rel(path)} -> {tag} (expected lang="{expected}")')
+    assert not offenders, f"<html> with the wrong lang: {offenders}"
+
+
+def test_the_non_spanish_allowlist_has_no_stale_entries():
+    """A path that no longer exists silently stops meaning anything.
+
+    Worse than useless: the entry reads as "this file is deliberately English"
+    long after the file was renamed and the real one fell back to the Spanish
+    default without anybody noticing.
+    """
+    known = {_rel(path).replace("\\", "/") for path in _templates()}
+    assert set(NON_SPANISH_TEMPLATES) <= known, f"stale: {set(NON_SPANISH_TEMPLATES) - known}"
 
 
 # ───────────────────────────────────────────────────────────────────────────────
