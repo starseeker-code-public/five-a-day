@@ -23,7 +23,11 @@ export const siteConfig = {
   taglineEs: "Estamos aquí para aprender y ayudar a nuestros cerebros a fortalecerse.",
   copyright:  "© 2026 Joaquín, Sílvia and Penélope — Built with great care, love and the best intentions",
   email: "hellofiveaday@gmail.com",
+  // Mobile number used for WhatsApp and displayed as the main contact.
   phone: "613 48 11 41",
+  // Landline for the academy. Used as the primary phone in the Google
+  // listing data, and must match the number on Google Business Profile.
+  landline: "967 04 90 96",
   whatsapp: "https://wa.me/34613481141",
   mapsUrl: "https://maps.app.goo.gl/1JMh9yrg4pPKtfJW9",
   mapsEmbedUrl: "https://maps.google.com/maps?q=38.9939218,-1.8668769&z=17&output=embed",
@@ -33,6 +37,12 @@ export const siteConfig = {
     postalCode: "02004",
     city: "Albacete",
     country: "España",
+  },
+  // Exact map coordinates of the academy. Google uses these to place
+  // us on the map for searches like "academia de inglés cerca de mí".
+  geo: {
+    latitude: 38.9939218,
+    longitude: -1.8668769,
   },
   hours: {
     phone: "Por teléfono: mañanas de 12:00 a 13:30",
@@ -56,6 +66,11 @@ export const navigation = [
 export const heroContent = {
   title: "Welcome to",
   highlight: "Five a Day!",
+  // Second line of the main heading. This is the single most important
+  // piece of text on the site for Google: it is what tells the search
+  // engine what we are and where we are. Keep the words
+  // "academia de inglés" and "Albacete" in it.
+  subtitle: "Academia de inglés en Albacete",
   description:
     "En Five a Day los estudiantes adquieren el inglés de manera natural y significativa mediante 5 rutinas divertidas enfocadas en la lectoescritura.",
   descriptionExtended:
@@ -100,7 +115,10 @@ export const foundersPage = {
   // visible page heading — the design opens straight into the founder panels —
   // but a document still needs exactly one h1 for search engines and for anyone
   // navigating by headings with a screen reader.
-  title: "Quiénes somos",
+  // Carries the town and the trade deliberately: it is the one <h1> on the
+  // page, so it is what Google reads as the page's subject. "Quiénes somos"
+  // alone said nothing a search engine could rank.
+  title: "Quiénes somos: las maestras de Five a Day English Academy en Albacete",
   aboutLabel: "Sobre mí",
   experienceLabel: "Experiencia profesional",
 };
@@ -114,7 +132,7 @@ export const founders = [
       "As long as I know that I am doing my best, I can accept the fact that I am not always going to get it right.",
     quoteEs:
       "Mientras sepa que lo estoy haciendo lo mejor posible, puedo aceptar el hecho de que no siempre voy a hacerlo bien.",
-    image: "/images/penelope.png",
+    image: "/images/penelope.webp",
     about:
       "Me considero una persona metódica y emprendedora, que siempre ha sentido gran pasión por los idiomas, la educación y las artes. De este modo, doy lo mejor de mí para promocionar una educación de calidad a través de un aprendizaje activo, lúdico, significativo y cooperativo. Adopto una aptitud positiva y de mejora continua afirmando que \"estamos en continuo crecimiento y los errores se convierten en una valiosa oportunidad de aprendizaje\". En cuanto a mi carrera profesional, he tenido la gran oportunidad de trabajar como maestra de inglés en diferentes colegios internacionales en Malta, República Checa, Irlanda y Países Bajos. Sin duda alguna, estas experiencias me han proporcionado la habilidad de aceptar retos y adaptarme rápidamente a nuevos contextos y culturas.",
     experience: [
@@ -132,7 +150,7 @@ export const founders = [
       "You must actively shape your own destiny, and the destiny of the world.",
     quoteEs:
       "Debes forjar activamente tu propio destino, y el destino del mundo.",
-    image: "/images/silvia.png",
+    image: "/images/silvia.webp",
     about:
       "En cuanto finalicé mis estudios de Educación Primaria Bilingüe en 2019, me mudé a Bélgica para trabajar en el Colegio Internacional de Lovaina como maestra de primaria en inglés. Durante los más de cuatro años que estuve residiendo en Bélgica, aprendí y consolidé por mi cuenta la metodología 5 a Day para enseñar de manera rápida y efectiva el inglés a estudiantes de diferentes procedencias, edades y niveles de inglés. Al mismo tiempo, me formé como Defensora de las Escuelas Globales de la ONU para integrar la Educación para el Desarrollo Sostenible en mis lecciones. Tanto yo como mis antiguos estudiantes hemos sido testigos de primera mano del éxito de la metodología 5 a Day y, sin lugar a dudas, hubo un gran antes y después tras implantar esta metodología en mis clases de inglés. Los numerosos beneficios de la metodología 5 a Day fueron tan evidentes que el profesorado y la dirección del colegio sintieron gran inspiración tras mi trabajo y decidieron usar a su vez este método en sus propias clases de inglés. Actualmente, estoy entusiasmada de estar de vuelta en España y de poder ayudar a más alumnas y alumnos a aprender inglés con esta metodología tan efectiva e innovadora.",
     experience: [

@@ -17,6 +17,14 @@ Env var contract (N starts at 1, iteration stops at the first missing FIRST_NAME
                                     an email lookup when the handle does not match.
     TEACHER_SEED_<N>_PHONE          optional
     TEACHER_SEED_<N>_ADMIN          optional, default False  ("True"/"1"/"yes")
+    TEACHER_SEED_<N>_TESTER         optional, default False — marks the PUBLIC
+                                    tester account (testing only). Set ADMIN to
+                                    False alongside it: the role sits between a
+                                    teacher and an admin, widened by
+                                    TESTER_ALLOWED_URL_NAMES, and never reaches
+                                    /admin/ or the QA tools. Its PASSWORD is
+                                    re-applied on every run, unlike every other
+                                    block.
     TEACHER_SEED_<N>_PASSWORD       optional — if set, the linked User is activated
                                     with this password; if absent, the user gets an
                                     unusable password and must use /password-reset/.
@@ -28,6 +36,7 @@ the password on subsequent runs (unless the user still has no usable password).
 
 import os
 
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.management.base import BaseCommand
 from django.db import transaction
@@ -65,6 +74,13 @@ class Command(BaseCommand):
             phone = os.getenv(f"{prefix}PHONE", "").strip()
             login_username = os.getenv(f"{prefix}USERNAME", "").strip()
             is_admin = _env_bool(os.getenv(f"{prefix}ADMIN"))
+            # REFUSED OUTSIDE TESTING, so the flag cannot even be written to a
+            # production row by an env var copied between `.env` files. The
+            # reach hooks are already inert there (`_is_tester_teacher` is gated
+            # on the same setting), but this also removes the one residual: a
+            # tester block re-applies its PASSWORD on every boot, and that
+            # should never describe a real account.
+            is_tester = _env_bool(os.getenv(f"{prefix}TESTER")) and settings.IS_TESTING_ENV
             password = os.getenv(f"{prefix}PASSWORD") or None
 
             with transaction.atomic():
@@ -76,6 +92,7 @@ class Command(BaseCommand):
                         "phone": phone,
                         "active": True,
                         "admin": is_admin,
+                        "tester": is_tester,
                     },
                 )
 
@@ -93,6 +110,14 @@ class Command(BaseCommand):
                     if teacher.admin != is_admin:
                         teacher.admin = is_admin
                         dirty = True
+                    if teacher.tester != is_tester:
+                        # Re-asserted on every boot, in BOTH directions. Clearing
+                        # the env var has to actually demote the account: a stale
+                        # `tester=True` would be a silently un-demotable row, and
+                        # a stale `tester=False` would quietly hand the published
+                        # credential the ordinary admin mirror on the next save.
+                        teacher.tester = is_tester
+                        dirty = True
                     if not teacher.active:
                         teacher.active = True
                         dirty = True
@@ -102,9 +127,19 @@ class Command(BaseCommand):
                 # Only set the password on first creation, or if the linked user
                 # still has no usable password. Re-running the command should not
                 # silently reset a password an admin changed later.
+                #
+                # THE TESTER ACCOUNT IS THE ONE EXCEPTION, and it inverts the
+                # rule: its password is published on a public web page, so the env
+                # is the source of truth and a changed one is damage to repair,
+                # not a choice to respect. Without this the credential is
+                # unrecoverable by any automated path —
+                # `reset_tester_environment` calls this command precisely to undo
+                # a visitor who changed it. (`change_password` is also absent from
+                # TESTER_ALLOWED_URL_NAMES; this is the backstop for every other
+                # way a password can move.)
                 set_pw = None
                 if password:
-                    if teacher.user_id is None:
+                    if is_tester or teacher.user_id is None:
                         set_pw = password
                     elif not teacher.user.has_usable_password():
                         set_pw = password

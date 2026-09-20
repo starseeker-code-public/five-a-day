@@ -23,7 +23,9 @@ export default function QuienesSomos() {
               <div className="md:w-1/2 bg-mint relative min-h-105 md:min-h-125 overflow-hidden flex items-end justify-center">
                 <img
                   src={founder.image}
-                  alt={founder.name}
+                  alt={`${founder.name}, ${founder.role} en Five a Day English Academy, Albacete`}
+                  loading="lazy"
+                  decoding="async"
                   className="relative z-10 h-[95%] max-h-120 w-auto object-contain object-bottom transition-transform duration-700 hover:scale-[1.02]"
                 />
               </div>
@@ -31,9 +33,9 @@ export default function QuienesSomos() {
               {/* Text panel — white */}
               <div className={`md:w-1/2 bg-white flex flex-col justify-center py-12 px-10 ${isEven ? "md:pl-20 md:pr-28" : "md:pr-20 md:pl-28"}`}>
                 <Reveal>
-                  <p className="font-special text-lg font-semibold text-gray-800 mb-0.5">
+                  <h2 className="font-special text-lg font-semibold text-gray-800 mb-0.5">
                     {founder.name}
-                  </p>
+                  </h2>
                   <p className="font-heading text-base text-primary mb-8">
                     {founder.role}
                   </p>

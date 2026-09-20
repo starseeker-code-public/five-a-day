@@ -6,7 +6,9 @@ site). It used to deploy to Netlify on its own domain; it is now built into
 marketing site at "/" and the management app under `settings.APP_URL_PREFIX`.
 
 HOW THE TWO PIECES ARE SERVED
-    index.html   this module, for "/" and for every route in SPA_ROUTES.
+    index.html   this module, for "/" and for every route in SPA_ROUTES —
+                 the per-route file from `frontend/scripts/generate-seo.mjs`
+                 when it exists, otherwise the shared shell.
     everything   WhiteNoise, straight from `settings.WHITENOISE_ROOT`
     else         (= frontend/dist), so /assets/…, /images/… and /videos/…
                  resolve at the same absolute paths the sources already use.
@@ -50,18 +52,39 @@ SPA_ROUTES = (
 )
 
 
-def _index_path() -> Path:
-    return Path(settings.FRONTEND_DIST_DIR) / "index.html"
+def _index_path(route: str = "") -> Path:
+    """The built HTML for one route, or the shared shell when `route` is empty.
+
+    `frontend/scripts/generate-seo.mjs` writes one real file per page —
+    `dist/faq/index.html` and so on — each carrying its own `<title>`,
+    description, canonical URL and JSON-LD. Before that every route was served
+    the identical document, so Google saw seven pages with one title between
+    them and could rank none of them for its own subject.
+
+    On Netlify the static server picked those files up for free. Django has to
+    go looking, which is why this function exists and why the lookup is by
+    ROUTE NAME rather than by `request.path`: the caller has already matched a
+    URL pattern, so the value is one of `SPA_ROUTES` and never user input. A
+    path joined from the request would be a directory-traversal question; this
+    is not one.
+    """
+    base = Path(settings.FRONTEND_DIST_DIR)
+    return base / route / "index.html" if route else base / "index.html"
 
 
 @require_http_methods(["GET", "HEAD"])
 @ensure_csrf_cookie
-def frontend_index(request):
-    """Return the built SPA shell for "/" and every route in SPA_ROUTES.
+def frontend_index(request, route: str = ""):
+    """Return the built HTML for "/" and every route in SPA_ROUTES.
 
-    React Router reads the path from the URL bar, so all of them are served the
-    same document and the client picks the page — the same rewrite Netlify did
-    with `/* -> /index.html`.
+    `route` is supplied by the URL conf as a static extra kwarg, never parsed
+    from the request — see `_index_path`.
+
+    Each route is served its OWN built document when one exists, carrying that
+    page's title, description, canonical URL and structured data; React Router
+    then reads the path from the URL bar and renders the matching page. Before
+    the SEO generator these were all the identical file, which is what made
+    every page of the site compete for one title in Google.
 
     `ensure_csrf_cookie` is what lets the contact form POST at all. This view
     returns a FILE, not a rendered template, so nothing here would otherwise
@@ -77,7 +100,16 @@ def frontend_index(request):
     missing step. In production the image cannot be built without it, so this
     branch means the Docker build skipped the node stage — worth an ERROR.
     """
-    index = _index_path()
+    # The per-route file when the SEO generator produced one, else the shared
+    # shell. The FALLBACK is not a nicety: `frontend/dist` is gitignored, the
+    # test suite stubs a bare `index.html` (conftest's `spa_shell`), and a
+    # developer who has run `vite build` without the generator has no per-route
+    # files either. In all three cases the site must still serve every route —
+    # just with the homepage's metadata, which costs SEO and breaks nothing.
+    index = _index_path(route)
+    if route and not index.is_file():
+        index = _index_path()
+
     try:
         html = index.read_text(encoding="utf-8")
     except OSError:

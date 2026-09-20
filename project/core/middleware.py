@@ -515,6 +515,168 @@ NON_ADMIN_ALLOWED_URL_NAMES = frozenset(
 )
 
 
+#: Shown to a tester session that reaches something outside its allowlist, and
+#: by `core.decorators.tester_forbidden`. One string so the middleware and the
+#: view-level mirror cannot word the same refusal differently.
+TESTER_BLOCKED_MESSAGE = "Esta acción no está disponible en la cuenta de pruebas."
+
+# URL names a TESTER session may reach — a SUPERSET of
+# `NON_ADMIN_ALLOWED_URL_NAMES` above, and the complete definition of the role.
+#
+# The tester is a public, shared credential (its password is published on an
+# external portfolio site) on a sandbox rebuilt every night. It sits
+# deliberately BETWEEN the two existing roles: `Teacher.admin` is False, so it is
+# not an administrator in the database, cannot reach `/admin/`, and is excluded
+# from the QA tools by `may_use_qa_tools` — but a plain teacher's whitelist shows
+# almost nothing of what this application does, which makes that role useless as
+# a demonstration.
+#
+# WHY AN ALLOWLIST AND NOT A DENYLIST. Both were on the table. An allowlist fails
+# in the cosmetic direction (a feature added later is invisible to the demo until
+# somebody adds it here) while a denylist fails in the security direction (a view
+# added later is reachable by a credential anyone on the internet holds). For an
+# anonymous, PUBLISHED login that trade is not close, and it is the same argument
+# `NON_ADMIN_ALLOWED_URL_NAMES` above is already built on.
+#
+# TWO ABSENCES ARE LOAD-BEARING, because both are PRESENT in the non-admin
+# whitelist this set otherwise extends — i.e. they are things an ordinary teacher
+# may do and the tester may not, which is the one direction a reader will not
+# expect. A test asserts they stay out:
+#
+#   change_password        would let one visitor change a password printed on a
+#                          public page, locking out everyone who reads it next.
+#                          The nightly job repairs it, but not before the
+#                          portfolio link has been dead all evening.
+#   submit_support_ticket  delivers straight to SUPPORT_EMAIL, a real person's
+#                          inbox, with nothing worth the name standing between it
+#                          and an anonymous crowd.
+#
+# Also absent, and merely unsurprising: `create_teacher` (creates a real
+# auth.User and mails an activation link), `export_to_sheets` and the three
+# `drive_oauth_*` views (write to third-party accounts we own), and both 2FA
+# management endpoints (a second factor enrolled on a shared account locks out
+# everybody at once). The QA dashboard is not here either; it is refused one step
+# earlier, by `may_use_qa_tools`.
+TESTER_ALLOWED_URL_NAMES = frozenset(
+    (
+        NON_ADMIN_ALLOWED_URL_NAMES
+        - {
+            "change_password",
+            "submit_support_ticket",
+        }
+    )
+    | {
+        # Dashboard + shell. `history_list` and the notifications bell are
+        # admin-only for a plain teacher; a tester renders the full shell, so the
+        # endpoints behind it have to answer.
+        "all_info",
+        "history_list",
+        "web_manifest",
+        "service_worker",
+        # Students, parents and enrolment — read-only for a plain teacher since
+        # v1.26.8. This is the core of what the application actually does.
+        "student_create",
+        "student_update",
+        "parent_create",
+        "enroll_student",
+        "reenroll_old_students",
+        "search_parents",
+        "validate_student_parent",
+        # Waiting list — both doors out of it, which a plain teacher is denied.
+        "assign_from_waiting_list",
+        "add_to_waiting_list",
+        "remove_from_waiting_list",
+        # Fun Friday, which left the non-admin whitelist entirely in v1.29.4.
+        "fun_friday_view",
+        "toggle_fun_friday_this_week",
+        "add_fun_friday_attendance",
+        "remove_fun_friday_attendance",
+        # Schedule editing (a plain teacher gets the read-only grid).
+        "save_schedule_slot",
+        # Money. The most interesting part of the app to demonstrate, and the
+        # part a plain teacher deliberately sees none of.
+        "payments_list",
+        "create_payment",
+        "payment_detail_view",
+        "payment_receipt_pdf",
+        "student_payments_pdf",
+        "update_payment",
+        "delete_payment",
+        "deactivate_payment",
+        "quick_complete_payment",
+        "update_enrollment_modality",
+        "search_payments",
+        "get_payment_details",
+        "export_payments",
+        "export_database_excel",
+        # Expenses — the month's P&L.
+        "expenses_list",
+        "create_expense",
+        "update_expense",
+        "delete_expense",
+        # Reports.
+        "reports_view",
+        "reports_pdf",
+        # Management writes, MINUS `create_teacher`. Editing the price list is
+        # deliberately allowed: it is the clearest demonstration of
+        # SiteConfiguration being the single source of truth for every fee, and
+        # `reset_tester_environment` puts the prices back each night.
+        "update_site_config",
+        "create_group",
+        # The ten mail forms. Reaching the PAGE is allowed and so is rendering a
+        # preview; actually sending is refused inside `_preview_or_test` and
+        # `_mass_send`, because these URL names serve both and the difference is
+        # a POST field (`action`), not a path.
+        "apps",
+        "fun_friday_form",
+        "payment_reminder_form",
+        "vacation_closure_form",
+        "tax_certificate_form",
+        "monthly_report_form",
+        "welcome_form",
+        "birthday_form",
+        "receipts_form",
+        "enrollment_form",
+        "newsletter_form",
+    }
+)
+
+
+def _is_tester_teacher(request) -> bool:
+    """True when this session belongs to the public tester account.
+
+    Lives here rather than in `core.decorators` because that module already
+    imports from this one; the reverse would invert a dependency for a
+    three-line predicate. `core.decorators` (both `admin_required` and
+    `tester_forbidden`), `core.context_processors` and
+    `core.transactions.visible_students_for` all read THIS function, so the URL
+    gate, the view-level mirror, the UI and the row-level scoping cannot
+    disagree about who is a tester.
+
+    Answers False for anything that is not a resolved, tester-flagged Teacher.
+    That is the safe direction here: this predicate only ever WIDENS reach, so
+    failing to resolve means failing to widen, and the session falls back to
+    whatever the ordinary controls make of it.
+
+    GATED ON `IS_TESTING_ENV`, which makes the entire role structurally inert
+    anywhere else. The account exists for one public demonstration on one QA VM,
+    and every hook that reads this predicate is a widening — so rather than rely
+    on "no production row will ever have `tester=True`", the environment check
+    means that even if one did (a restored dump, a hand-edited row, a seed block
+    copied between `.env` files), production and development would resolve it to
+    an ordinary non-admin teacher and apply the plain whitelist. Nothing to
+    reason about: outside testing this function is a constant `False`, so every
+    caller takes exactly the branch it took before the role existed.
+    """
+    if not settings.IS_TESTING_ENV:
+        return False
+    user = getattr(request, "user", None)
+    if user is None or not getattr(user, "is_authenticated", False):
+        return False
+    teacher = getattr(user, "teacher", None)
+    return bool(teacher is not None and teacher.tester)
+
+
 def _session_has_django_identity(request) -> bool:
     """True when this session was opened by a real `django.contrib.auth.login`.
 
@@ -799,23 +961,39 @@ class SimpleAuthMiddleware:
             messages.error(request, "❌ Tu sesión ya no es válida. Vuelve a iniciar sesión.")
             return redirect("login")
 
-        # Layer 2: non-admin teacher whitelist
+        # Layer 2: restricted sessions are confined to an allowlist.
+        #
+        # WHICH allowlist depends on the role. A tester is `admin=False`, so
+        # `_is_non_admin_teacher` answers True for it too and it would otherwise
+        # be held to the plain-teacher set — the very thing the role exists to
+        # widen. Tester is therefore resolved FIRST and picks one set; the two
+        # are never combined at the call site, so a session has exactly one
+        # answer.
         if not is_public and _is_non_admin_teacher(request):
+            is_tester = _is_tester_teacher(request)
+            allowed = TESTER_ALLOWED_URL_NAMES if is_tester else NON_ADMIN_ALLOWED_URL_NAMES
             try:
                 url_name = resolve(path).url_name
             except Resolver404:
                 # See the portal gate above — narrowed for the same reason.
                 url_name = None
 
-            if url_name not in NON_ADMIN_ALLOWED_URL_NAMES:
+            if url_name not in allowed:
+                message = TESTER_BLOCKED_MESSAGE if is_tester else "No tienes permiso para esta acción."
                 # AJAX / API endpoints: return a plain 403 JSON response so the
                 # frontend sees a real error instead of an HTML redirect body.
                 if path.startswith(self.API_URL_PREFIX):
-                    return JsonResponse(
-                        {"success": False, "error": "No tienes permiso para esta acción."},
-                        status=403,
-                    )
-                messages.error(request, "❌ No tienes permiso para acceder a esa sección.")
+                    return JsonResponse({"success": False, "error": message}, status=403)
+                # The tester's wording deliberately differs. The plain-teacher
+                # message is vague on purpose, so a probing caller cannot tell
+                # which control refused — but a tester is not being probed. They
+                # are standing in front of a banner saying this is a test
+                # account, where "no tienes permiso" reads as a broken app
+                # rather than an intentional boundary.
+                if is_tester:
+                    messages.warning(request, f"🔒 {message}")
+                else:
+                    messages.error(request, "❌ No tienes permiso para acceder a esa sección.")
                 return redirect("home")
 
         return self.get_response(request)

@@ -54,6 +54,7 @@ from comms.tasks import _dispatch
 from core.constants import DIAS_ES, MESES_ES
 from core.decorators import admin_required
 from core.log_safe import safe_log
+from core.middleware import TESTER_BLOCKED_MESSAGE, _is_tester_teacher
 from core.models import FunFridayScheduledSend, HistoryLog
 from core.tasks import send_due_fun_friday_emails_task
 from core.utils import MAX_QUERY_YEAR, MIN_QUERY_YEAR, safe_int
@@ -300,6 +301,19 @@ def _preview_or_test(request, action: str, template_name: str, context: dict, su
     if action == "preview":
         return JsonResponse({"html": render_to_string(f"emails/{template_name}.html", context)})
 
+    # Everything past this point actually puts a message on the wire, so the
+    # tester account stops here. `preview` above is deliberately still allowed:
+    # rendering the template is the whole point of showing these ten forms off,
+    # and it touches nothing outside the request.
+    #
+    # Note WHICH action is refused. "Enviar prueba" reads harmless, but
+    # `_test_send_recipients` falls back to the logged-in teacher and then to
+    # SUPPORT_EMAIL — so on the tester account the fallback IS the maintainer's
+    # inbox, and a visitor clicking it repeatedly is a mail flood aimed at one
+    # person.
+    if _is_tester_teacher(request):
+        return JsonResponse({"success": False, "message": f"🔒 {TESTER_BLOCKED_MESSAGE}"})
+
     recipients = _test_send_recipients(request)
     if not recipients:
         return JsonResponse(
@@ -401,6 +415,28 @@ def _mass_send(request, jobs: list[dict], sender, *, log_label: str, success_tex
         return 0, 0
 
     view_name = request.resolver_match.url_name if request.resolver_match else "app_forms"
+
+    # The tester account may build a batch and see exactly how many families it
+    # would reach — that number is the interesting part of these six forms — but
+    # it never opens the connection. Reported as its own outcome rather than
+    # silently returning (0, 0), which is the shape of a total mail outage and
+    # would read as a broken app.
+    #
+    # `EmailService`'s recipient allowlist is the real backstop (it also covers
+    # the Celery paths this cannot see). This guard exists so the UI is HONEST:
+    # without it the operator is told "N enviados" for messages the allowlist
+    # then dropped.
+    if _is_tester_teacher(request):
+        messages.warning(
+            request,
+            f"🔒 Modo demostración: no se ha enviado ningún email. Fuera de la demo se habrían enviado {len(jobs)}.",
+        )
+        HistoryLog.log(
+            "email_sent",
+            f"{log_label}: 0 enviados ({len(jobs)} simulados en la cuenta de pruebas)",
+            icon="mail",
+        )
+        return 0, 0
 
     try:
         connection = email_service.open_connection()

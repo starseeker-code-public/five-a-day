@@ -13,7 +13,10 @@ export default function Home() {
           <div className="md:w-1/2 relative">
             <img
               src="/images/home_1.jpg"
-              alt="Students at Five a Day"
+              width="640"
+              height="480"
+              fetchPriority="high"
+              alt="Alumnos en clase de inglés en Five a Day English Academy, Albacete"
               className="w-full h-full min-h-87.5 object-cover rounded-l-2xl md:rounded-l-2xl rounded-t-2xl md:rounded-tr-none"
             />
             {/* Subtle gradient bridging image into green panel */}
@@ -30,6 +33,9 @@ export default function Home() {
             <h1 className="font-title text-3xl md:text-4xl font-bold text-primary-darker leading-tight mb-4 relative z-10">
               {heroContent.title}{" "}
               <span className="text-primary">{heroContent.highlight}</span>
+              <span className="block font-heading text-lg md:text-xl font-semibold text-primary-darker/80 mt-2">
+                {heroContent.subtitle}
+              </span>
             </h1>
             <p className="text-primary-darker/90 text-base leading-relaxed mb-4 relative z-10 text-justify">
               {heroContent.description}

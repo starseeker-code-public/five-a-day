@@ -125,6 +125,55 @@ VM reboot — no manual intervention needed.
 
 On the QA VM the two admins have **two accounts each**: the EMAIL logins (`lope.carlin@gmail.com`, `mocasylvia@gmail.com`, seeds #1-#2) are the admin accounts, and the HANDLE logins (`claudia`, `silvia`, seeds #4-#5, `@fiveaday.test` addresses) are non-admin accounts for the same people, so the ordinary-teacher view can be checked without giving up an admin session. `TEACHER_SEED_<N>_USERNAME` sets the handle; the email still works as a login either way.
 
+**Public TESTER account (testing VM only)** — the role behind the portfolio demo at
+<https://joaquin-hm.com>. It is an ordinary seed block with `TEACHER_SEED_<N>_TESTER=True` and
+`TEACHER_SEED_<N>_ADMIN=False`, and it is the **only** block whose `PASSWORD` is re-applied on
+every run of `seed_teachers` — the credential is published on a public web page, so the env is
+the source of truth and a changed one is damage to repair, not a choice to respect.
+
+It is a third role sitting between the two that already existed: a plain teacher sees almost
+nothing of the application, and an admin sees everything including `/admin/`. The tester is
+`admin=False` — so no `is_staff`, no `is_superuser`, no Django admin, and no QA dashboard
+(`may_use_qa_tools` excludes it) — and is widened by exactly one list,
+`core.middleware.TESTER_ALLOWED_URL_NAMES`, which both the middleware and `@admin_required`
+read. Add a page to the demo by adding its URL name there; there is nowhere else to change.
+
+Two endpoints an **ordinary teacher may use** are deliberately denied to the tester, which is
+the one direction that surprises people: `change_password` (one visitor could lock out everyone
+who reads the published password next) and `submit_support_ticket` (delivers straight to a real
+inbox). Both also carry `@tester_forbidden` at the view, because neither has `@admin_required`
+in front of it and a single-layer control on a public credential is not enough.
+
+Three env vars support it, all testing-only and all no-ops when unset:
+
+| Var | What it does |
+|---|---|
+| `TEACHER_SEED_<N>_TESTER` | marks the block as the tester account (pair with `ADMIN=False`) |
+| `EMAIL_ALLOWED_RECIPIENTS` | comma-separated addresses and/or `@domain` suffixes. **Set this on the VM.** When non-empty, `EmailService` drops every other recipient before the message reaches the backend |
+| `TESTER_LOGIN_NOTICE` | free text shown above the login form, so a stranger arriving from the portfolio knows what they are signing into before they type |
+
+`EMAIL_ALLOWED_RECIPIENTS` is the only containment that reaches **transactional** mail. The view
+guards in `core/views/app_forms.py` cover the ten mail forms (preview is allowed, sending is
+refused), but creating a student queues a welcome email, completing a payment queues a receipt,
+and a Fun Friday announcement is drained by Beat at 14:30 — hours after the request ended. No
+request-scoped check can reach those. It is also worth setting for QA's own sake: the seed data
+invents ~180 `@fiveaday.test` and `@test.com` addresses, which resolve nowhere and bounce
+against the academy's Gmail reputation. **Unset means pass-through, not block** — production
+never sets this var, and a fail-closed default would silently stop real mail.
+
+The sandbox is rebuilt nightly by `reset_tester_environment` (Beat, 07:30 — see the schedule
+table below, and note it must never be provisioned in production). Besides re-seeding, it
+repairs the four things `seed_testdata --reset` does not touch: the tester's password and second
+factor, the price list (a tester IS allowed to edit prices — it is the clearest demonstration of
+`SiteConfiguration` being the single source of truth), unsent `FunFridayScheduledSend` rows, and
+the tester's own sessions. Run it by hand with `--skip-seed` to fix a locked-out login mid-day
+without wiping data somebody is looking at.
+
+**Before publishing the credentials**, check four things on the VM that no code can enforce: the
+database holds only synthetic seed data (never a production dump — real families, including
+minors); `EMAIL_ALLOWED_RECIPIENTS` is set; `PARENT_PORTAL_ENABLED` is still false; and the
+Google OAuth email allow-list is populated, since that callback get-or-creates a **superuser**.
+
 **Enrollment-type seeding (every environment)** — `entrypoint.sh` also runs `manage.py seed_enrollment_types` on container start. It provisions the `EnrollmentType` reference table (`monthly`, `quarterly`, `adults`, `special`) from `SiteConfiguration`. This is **not** optional test data: nothing else creates these rows, and without them `EnrollmentService` raises and no student can be enrolled. The command is idempotent, so it is a no-op once the rows exist.
 
 **Parent-portal demo family (never production)** — `entrypoint.sh` runs `manage.py seed_demo_parents` when `DJANGO_ENV` is not `production`, and the QA dashboard's "Seed database" button runs it after `seed_testdata`. It reads `DEMO_PARENT_<N>_*` (`USERNAME`, `PASSWORD`, `EMAIL` required; `CHILDREN` a comma-separated list of first names), creates the parent, their children, enrollments and payments, and sets `PASSWORD` as the parent's real portal password (stored **hashed** on the `Parent` row). The demo family then signs in through the ordinary `/app/parent/login/` form — since v1.27 there is no demo-only login mode, so what QA exercises is exactly what a real family runs. On the VM the block is `fernando`; log in with `DEMO_PARENT_1_EMAIL`, not the username. **The command raises `CommandError` when `DJANGO_ENV=production`** and production's env has no `DEMO_PARENT_*` var in the first place. Do not add one — it would plant a fake family in the academy's real roll holding a password that also lives in the env set. Real families are emailed a **temporary password** once, when their record is created (`send_portal_invitation_once`, guarded by `Parent.portal_invite_sent_at` so a family with three children still gets exactly one invitation), and log in with it through the same ordinary form — there is no single-use link and no token table; `ParentSessionToken` was deleted in v1.27 precisely because an expiring link was the thing being removed. Logging in with a temporary password forces an immediate change. `¿Has olvidado tu contraseña?` issues a new temporary password into a **second** column, never over the family's real one, so an unauthenticated request cannot lock a family out of their own payment history; since v1.27.1 it is also rate-limited to 3 per 15 minutes and coalesces repeat requests inside a 15-minute cooldown, so replaying the form cannot keep rotating a credential the family is trying to type.
@@ -948,8 +997,22 @@ run inline):
 | `cleanup_done_backlog_tasks` | `cleanup_backlog_tasks` | QA/testing env only — skip in production | — |
 | `prune_audit_log` | `prune_audit_log` | weekly, Sunday 03:00 | `0 3 * * 0` |
 | `purge_expired_sessions` | `purge_sessions` | daily, 03:30 | `30 3 * * *` |
+| `reset_tester_environment_task` | `reset_tester_environment` | daily, 07:30 — **TESTING VM ONLY, never provision in production** | — |
 | — (ops only, no Beat task) | `backup_retention --apply` | daily, 05:30 | `30 5 * * *` |
 
+> **`reset_tester_environment` is the one entry in this table that must NEVER get a Cloud
+> Run Job or a Cloud Scheduler entry.** It wipes every Student, Parent, Payment, Enrollment,
+> Group and Expense, and it exists to rebuild the public tester sandbox on the QA VM each
+> morning. Two independent guards keep it there: the command raises `CommandError` under
+> `DJANGO_ENV=production`, and the Beat task returns early unless `IS_TESTING_ENV`. The
+> second one is not redundant — Celery Beat also runs in **development**, where an ungated
+> nightly entry would quietly wipe each developer's local database at 07:30. Production has
+> no Beat process at all, so absence of a Scheduler entry is what keeps it unreachable there.
+>
+> 07:30 is chosen around three things: the nightly testing deploy owns 01:00–05:59 and a
+> reset landing mid-migration would race it; the 06:00–07:00 Beat cluster should have
+> finished; and birthday emails go at 08:00, so the roll is rebuilt before anything reads it.
+>
 > **Provisioning status (verified 2026-09-13).** 12 Cloud Run Jobs, 11 Cloud Scheduler
 > entries, **all of them ENABLED**. `fiveaday-migrate` has no schedule by design
 > (deploy-time only). The three "create it PAUSED until its release ships" notes below are

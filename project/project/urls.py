@@ -47,14 +47,18 @@ urlpatterns = [
     # stay reachable while logged out — SimpleAuthMiddleware passes every
     # non-app path through for exactly that reason.
     path("", frontend_index, name="public_home"),
-    # The site's own client-side routes. Each is served the SAME shell and
-    # React picks the page — the rewrite Netlify did with `/* -> /index.html`.
+    # The site's own client-side routes. Each is served its OWN built document
+    # when the SEO generator produced one (`dist/<route>/index.html`, carrying
+    # that page's title and structured data), else the shared shell; React
+    # picks the page either way. The route is passed as a STATIC extra kwarg
+    # rather than read from `request.path`, so the file lookup can only ever
+    # name one of the values below.
     # ENUMERATED rather than a catch-all so an unknown path is still a real
     # 404; see SPA_ROUTES in core/views/frontend.py.
     # No trailing slash: these are registered exactly as React Router and the
     # site's own nav links spell them ("/quienes-somos"). Adding one would make
     # every direct load and refresh cost an APPEND_SLASH redirect first.
-    *[path(route, frontend_index, name=f"public_{route.replace('-', '_')}") for route in SPA_ROUTES],
+    *[path(route, frontend_index, {"route": route}, name=f"public_{route.replace('-', '_')}") for route in SPA_ROUTES],
     # The public contact form ("Contacta con nosotras"). Public and
     # rate-limited; it emails the academy.
     path("api/contact/", submit_contact_form, name="submit_contact_form"),

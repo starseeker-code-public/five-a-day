@@ -60,11 +60,62 @@ class TestServingTheShell:
         assert response.status_code == 200
         assert response["Content-Type"].startswith("text/html")
 
-    def test_every_route_returns_the_SAME_document(self, client):
-        """React reads the path from the URL bar; the server sends one shell."""
-        home = client.get("/").content
+    def test_each_route_gets_its_OWN_document_when_the_build_made_one(self, client, tmp_path, settings):
+        """Per-route HTML is the whole point of `frontend/scripts/generate-seo.mjs`.
+
+        This test used to assert the OPPOSITE — that every route returned a
+        byte-identical shell — which was the correct contract under the Netlify
+        rewrite and is the bug the SEO work exists to fix: seven pages sharing
+        one `<title>` gave Google nothing to rank any of them by.
+
+        A hand-built dist rather than the real one, because `frontend/dist` is
+        gitignored and CI has no Node (see the `spa_shell` fixture): asserting
+        against a real build would pass locally and be skipped-or-red in CI,
+        which is how the v1.30.0 route tests went wrong.
+        """
+        dist = tmp_path / "dist"
+        (dist / "faq").mkdir(parents=True)
+        (dist / "index.html").write_text("<title>HOME</title>", encoding="utf-8")
+        (dist / "faq" / "index.html").write_text("<title>FAQ</title>", encoding="utf-8")
+        settings.FRONTEND_DIST_DIR = str(dist)
+
+        assert b"FAQ" in client.get("/faq").content
+        assert b"HOME" in client.get("/").content
+
+    def test_a_route_with_no_generated_file_falls_back_to_the_shell(self, client, tmp_path, settings):
+        """The fallback is load-bearing, not politeness.
+
+        Three real situations have only `dist/index.html`: a developer who ran
+        `vite build` without the generator, the `spa_shell` stub every CI run
+        uses, and any future route added to `SPA_ROUTES` before `src/seo.js`.
+        In all of them the page must still be served — just with the homepage's
+        metadata, which costs ranking and breaks nothing.
+        """
+        dist = tmp_path / "dist"
+        dist.mkdir()
+        (dist / "index.html").write_text("<title>SHELL</title>", encoding="utf-8")
+        settings.FRONTEND_DIST_DIR = str(dist)
+
         for route in SPA_ROUTES:
-            assert client.get(f"/{route}").content == home
+            response = client.get(f"/{route}")
+            assert response.status_code == 200
+            assert b"SHELL" in response.content
+
+    def test_the_route_served_is_the_url_conf_kwarg_not_the_request_path(self, client, tmp_path, settings):
+        """The file lookup may only ever name a value from `SPA_ROUTES`.
+
+        `_index_path` joins its argument onto `FRONTEND_DIST_DIR`, so if that
+        argument came from `request.path` it would be a directory-traversal
+        question. It comes from a static extra kwarg in the URL conf instead,
+        and this pins that: a traversal attempt matches no pattern at all.
+        """
+        dist = tmp_path / "dist"
+        dist.mkdir()
+        (dist / "index.html").write_text("<title>SHELL</title>", encoding="utf-8")
+        settings.FRONTEND_DIST_DIR = str(dist)
+
+        assert client.get("/../etc/passwd").status_code == 404
+        assert client.get("/faq/../../etc/passwd").status_code == 404
 
     def test_routes_carry_no_trailing_slash(self, client):
         """They are registered exactly as React and the nav links spell them.
@@ -93,6 +144,59 @@ class TestServingTheShell:
     def test_the_app_and_health_are_untouched(self, client):
         assert client.get("/health/").status_code == 200
         assert client.get("/app/").status_code == 302
+
+
+class TestSeoMetadataCoversEveryPage:
+    """`frontend/src/seo.js` is a third hand-kept list of the site's pages.
+
+    `App.jsx` declares the routes, `SPA_ROUTES` serves them, and `seo.js` gives
+    each one a title, description and canonical URL. All three have to agree,
+    and the failure is silent in the usual direction: a page missing from
+    `seo.js` still renders perfectly, it just gets the homepage's `<title>` and
+    a canonical tag pointing at the homepage — which asks Google to treat it as
+    a duplicate and drop it from the index.
+    """
+
+    def _seo_paths(self) -> set[str]:
+        source = _frontend_source("src", "seo.js")
+        # The `path:` key of each entry in `pagesSeo`.
+        paths = set(re.findall(r'^\s*path:\s*"([^"]+)"', source, re.MULTILINE))
+        assert paths, "parsed no paths out of seo.js — has its shape changed?"
+        return paths
+
+    def test_every_served_route_has_its_own_seo_entry(self):
+        expected = {"/"} | {f"/{route}" for route in SPA_ROUTES}
+        assert self._seo_paths() == expected, (
+            f"seo.js and SPA_ROUTES disagree. Only in seo.js: {self._seo_paths() - expected}; "
+            f"missing from seo.js: {expected - self._seo_paths()}"
+        )
+
+    def test_the_shell_keeps_the_markers_the_generator_writes_between(self):
+        """`generate-seo.mjs` throws without these, so the build fails loudly —
+        but only once somebody runs it. Failing here makes a stray edit to
+        `frontend/index.html` cheap to find."""
+        shell = _frontend_source("index.html")
+        assert "<!-- SEO:START -->" in shell
+        assert "<!-- SEO:END -->" in shell
+
+    def test_titles_and_descriptions_stay_within_what_google_shows(self):
+        """Google truncates around 60 characters of title and 155 of
+        description. Over the limit is not an error, just words nobody reads —
+        worth a nudge while the text is being written rather than after."""
+        source = _frontend_source("src", "seo.js")
+        titles = re.findall(r'^\s*title:\s*"([^"]+)"', source, re.MULTILINE)
+        assert titles, "parsed no titles out of seo.js"
+        too_long = [t for t in titles if len(t) > 65]
+        assert not too_long, f"titles Google will truncate: {too_long}"
+
+    def test_the_canonical_host_is_the_public_domain(self):
+        """Every canonical, og:url and sitemap entry derives from SITE_URL. If
+        it ever names the Cloud Run host or a QA address, Google is told the
+        real pages live somewhere they do not."""
+        source = _frontend_source("src", "seo.js")
+        site_url = re.search(r'export const SITE_URL = "([^"]+)"', source)
+        assert site_url, "SITE_URL not found in seo.js"
+        assert site_url.group(1) == "https://fiveadayenglish.com"
 
 
 class TestContactForm:

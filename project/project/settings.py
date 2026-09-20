@@ -820,6 +820,54 @@ EMAIL_HOST_USER = os.getenv("EMAIL_HOST_USER", "")
 EMAIL_HOST_PASSWORD = os.getenv("EMAIL_SECRET", "")
 DEFAULT_FROM_EMAIL = EMAIL_HOST_USER
 
+# ---------------------------------------------------------------------------
+# RECIPIENT ALLOWLIST  (non-production containment)
+# ---------------------------------------------------------------------------
+# Comma-separated list of addresses and/or "@domain" suffixes. When it is
+# NON-EMPTY, `EmailService` drops every recipient that does not match before a
+# message reaches the backend.
+#
+# WHY THIS EXISTS AND NOT JUST THE BACKEND SWITCH ABOVE. Setting
+# EMAIL_BACKEND=console on the QA VM neutralises the hazard by turning off ALL
+# mail, which QA cannot live with — they need to receive the real thing. This is
+# the middle setting: real SMTP, real rendering, real delivery to the handful of
+# people who should get it, and silence for the ~180 synthetic `@fiveaday.test`
+# / `@test.com` addresses the seed data invents, which resolve nowhere and bounce
+# against the academy's Gmail reputation.
+#
+# It is also the ONLY layer that can contain the public tester account's mail. The
+# view-level guards in `core/views/app_forms.py` cover the ten mail forms, but
+# the sends worth demonstrating are transactional and dispatched to Celery —
+# `send_welcome_email_task` from student creation, the receipt from completing a
+# payment, and the Fun Friday row that Beat drains at 14:30, hours after the
+# request that created it ended. No request-scoped check can reach those.
+#
+# UNSET MEANS PASS-THROUGH, deliberately, and this is the one place in this file
+# that resolves an empty secret permissively (contrast PORTFOLIO_CONTACT_TOKEN).
+# The reasoning differs because the failure directions differ: an unset TOKEN
+# defaulting to "open" makes a public endpoint an open relay, whereas an unset
+# allowlist defaulting to "block everything" would silently stop the academy's
+# real mail — payment reminders, receipts, invitations — in PRODUCTION, where
+# this variable will never be set. Silence is the worse failure here, so the
+# containment depends on the VM actually setting it; DEPLOYMENT.md says so, and
+# `EmailService` logs a warning on first use when a non-production environment
+# has left it empty.
+EMAIL_ALLOWED_RECIPIENTS = [
+    entry.strip().lower() for entry in os.getenv("EMAIL_ALLOWED_RECIPIENTS", "").split(",") if entry.strip()
+]
+
+# Free text shown above the staff login form when non-empty. Exists for the
+# public tester account: its credentials are published on an external portfolio
+# site, so a stranger arrives at `/app/login/` with no idea whether they are
+# about to sign into somebody's real business. The in-app tester banner cannot
+# help — it is keyed on the SESSION, which does not exist yet at the login page.
+#
+# A plain env string rather than a query for "does a tester Teacher exist": that
+# question costs a database round trip on every render of an unauthenticated
+# page, and the answer would be wrong for the QA VM's own testers, who share
+# this login form and are not the audience for the notice.
+TESTER_LOGIN_NOTICE = os.getenv("TESTER_LOGIN_NOTICE", "").strip()
+
 # Where the public site's "Contacta con nosotras" form delivers. It is the
 # ACADEMY's own inbox, not SUPPORT_EMAIL: these are prospective families
 # asking about classes, which is the academy's business, while SUPPORT_EMAIL

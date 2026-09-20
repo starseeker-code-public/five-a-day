@@ -146,6 +146,8 @@ html.dark .text-red-700,
 html.dark .text-red-800 { color: #fca5a5; }
 html.dark .text-amber-700,
 html.dark .text-amber-800,
+/* -900 added with the tester banner (base.html) and the `warning` flash style. */
+html.dark .text-amber-900,
 html.dark .text-yellow-700,
 html.dark .text-yellow-800 { color: #fcd34d; }
 html.dark .text-blue-700,
@@ -158,6 +160,8 @@ html.dark .border-emerald-200 { border-color: #1f5133; }
 html.dark .border-red-200 { border-color: #5a2a35; }
 html.dark .border-amber-100,
 html.dark .border-amber-200,
+/* -300 added with the tester banner (base.html). */
+html.dark .border-amber-300,
 html.dark .border-yellow-200 { border-color: #574012; }
 html.dark .border-blue-200 { border-color: #2a4166; }
 

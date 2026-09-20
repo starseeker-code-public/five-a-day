@@ -115,7 +115,9 @@ export default function SobreLaAcademia() {
           <div className="md:w-1/2 overflow-hidden group">
             <img
               src={sobreAcademiaPage.image}
-              alt="Sobre la academia"
+              alt="Interior de Five a Day English Academy, Albacete en C/ Hermanos Jiménez 25"
+              loading="lazy"
+              decoding="async"
               className="w-full h-64 md:h-full object-cover transition-transform duration-700 group-hover:scale-105"
             />
           </div>
