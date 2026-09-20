@@ -439,7 +439,7 @@ class TestRateLimiterCacheOutage:
             patch("core.rate_limit.cache.add", side_effect=ConnectionError("cache is down")),
             patch("core.rate_limit.logger") as mock_logger,
         ):
-            response = view(rf.post("/login/"))
+            response = view(rf.post("/app/login/"))
 
         assert response.status_code == 200, "a cache outage must not lock the academy out"
         mock_logger.error.assert_called_once()

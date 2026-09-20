@@ -30,7 +30,7 @@ function updateFFIcon(btn, isThis, isLast) {
 document.querySelectorAll('.ff-toggle-btn').forEach(btn => {
     btn.addEventListener('click', function() {
         const studentId = this.dataset.studentId;
-        window.apiFetch(`/api/students/${studentId}/fun-friday/toggle/`, {
+        window.apiFetch(`${window.APP_PREFIX}/api/students/${studentId}/fun-friday/toggle/`, {
             method: 'POST',
             body: '{}',
         }).then(data => {

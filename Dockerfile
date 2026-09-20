@@ -4,7 +4,31 @@
 # Multi-stage build: builder installs dependencies with UV, runtime is lean.
 
 # ============================================================================
-# STAGE 1: Builder - Install dependencies with UV
+# STAGE 1: Frontend - Build the public React site with Vite
+# ============================================================================
+# frontend/ is the academy's public site; Django serves the build output at "/"
+# (see core/views/frontend.py). It is built HERE rather than committed, so the
+# image can never ship a dist/ that disagrees with the sources beside it.
+#
+# `npm ci` — not `install` — so the image is built from package-lock.json
+# exactly, the same rule `uv sync --frozen` applies on the Python side.
+# Digest-pinned for the same reason as the Python base.
+FROM node:22-slim@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5 AS frontend
+
+WORKDIR /build
+
+# Lockfile first: this layer is cached until the dependencies actually change,
+# so an edit to a .jsx file does not re-install node_modules.
+COPY package.json package-lock.json ./
+RUN npm ci
+
+# Config lives at the repo root, sources in frontend/.
+COPY vite.config.js ./
+COPY frontend ./frontend
+RUN npm run build
+
+# ============================================================================
+# STAGE 2: Builder - Install dependencies with UV
 # ============================================================================
 # Digest-pinned: the tag is mutable, so a rebuild could silently pick up a
 # different image. Dependabot's docker ecosystem keeps this digest current.
@@ -35,7 +59,7 @@ ENV UV_COMPILE_BYTECODE=1 \
 RUN uv sync --frozen --no-dev --no-install-project
 
 # ============================================================================
-# STAGE 2: Runtime - Lean production image
+# STAGE 3: Runtime - Lean production image
 # ============================================================================
 FROM python:3.14-slim@sha256:cad9a2c871761c413caa6fdd6441c783451e740a48aaeba60ae62a8b53525ef6
 
@@ -154,6 +178,12 @@ COPY --from=builder --chown=django:django /app/.venv /app/.venv
 
 # Copy application code
 COPY --chown=django:django . .
+
+# The built public site. AFTER `COPY . .` on purpose: .dockerignore excludes
+# frontend/dist so a developer's local build cannot be copied in, and this line
+# is what puts the image's OWN build at the path settings.FRONTEND_DIST_DIR
+# points to. Reversing the two would let `COPY . .` delete it.
+COPY --from=frontend --chown=django:django /build/frontend/dist /app/frontend/dist
 
 # Copy and set permissions on entrypoint
 COPY --chown=django:django entrypoint.sh /app/entrypoint.sh

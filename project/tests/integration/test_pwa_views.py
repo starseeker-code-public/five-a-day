@@ -15,7 +15,7 @@ class TestWebManifest:
         data = json.loads(response.content)
         assert data["name"] == "Five a Day"
         assert data["display"] == "standalone"
-        assert data["scope"] == "/"
+        assert data["scope"] == "/app/"
         assert len(data["icons"]) >= 1
         assert data["theme_color"].startswith("#")
 
@@ -44,7 +44,7 @@ class TestServiceWorker:
 
     def test_service_worker_allowed_header(self, client):
         response = client.get(reverse("service_worker"))
-        assert response["Service-Worker-Allowed"] == "/"
+        assert response["Service-Worker-Allowed"] == "/app/"
 
     def test_version_in_cache_key(self, client, settings):
         settings.APP_VERSION = "9.9.9"

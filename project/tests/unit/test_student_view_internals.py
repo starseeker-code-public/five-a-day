@@ -97,7 +97,7 @@ class TestStudentUpdateView:
     def test_success_url(self, student_with_parent):
         view = StudentUpdateView()
         view.object = student_with_parent
-        assert "/students/" in str(view.get_success_url())
+        assert "/app/students/" in str(view.get_success_url())
 
     def test_form_valid_invalid_enrollment_returns_form_invalid(self, student_with_parent, active_enrollment):
         """Invalid enrollment form → form_invalid path. Mock render to avoid missing template."""

@@ -1675,11 +1675,11 @@ jobs:
               <h2 style="color:#b91c1c;">⚠️ Despliegue a producción no armado</h2>
               <table cellpadding="6" style="border-collapse:collapse; font-family:sans-serif; font-size:13px;">
                 <tr><td><strong>Situación</strong></td><td><code>main</code> lleva una versión que producción no sirve, pero el preflight falló — <strong>no hay despliegue esperando aprobación</strong>; producción intacta</td></tr>
-                <tr><td><strong>Causa más probable</strong></td><td>falta el visto bueno de QA — botón <em>¿Listo para desplegar?</em> en <a href="${{ env.TEST_URL }}/testing/">/testing/</a> (al pulsarlo, el workflow se re-arma solo)</td></tr>
+                <tr><td><strong>Causa más probable</strong></td><td>falta el visto bueno de QA — botón <em>¿Listo para desplegar?</em> en <a href="${{ env.TEST_URL }}/app/testing/">/testing/</a> (al pulsarlo, el workflow se re-arma solo)</td></tr>
                 <tr><td><strong>Otras causas</strong></td><td>pruebas sirve otra versión o no responde · la versión llegó a <code>main</code> fuera de la PR de release (sin tag <code>testing-vX.Y.Z</code>) · CI en rojo o check obligatorio sin ejecutar · CI no terminó en 45 min</td></tr>
                 <tr><td><strong>Run fallido</strong></td><td><a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">logs</a></td></tr>
                 <tr><td><strong>Workflow</strong></td><td><a href="${{ github.server_url }}/${{ github.repository }}/actions/workflows/deploy-production.yml">Deploy production</a> · <a href="${{ github.server_url }}/${{ github.repository }}/actions">Actions</a></td></tr>
-                <tr><td><strong>Testing</strong></td><td><a href="${{ env.TEST_URL }}">${{ env.TEST_URL }}</a> · <a href="${{ env.TEST_URL }}/health/?deep=1">health deep</a> · <a href="${{ env.TEST_URL }}/testing/">panel QA</a></td></tr>
+                <tr><td><strong>Testing</strong></td><td><a href="${{ env.TEST_URL }}">${{ env.TEST_URL }}</a> · <a href="${{ env.TEST_URL }}/health/?deep=1">health deep</a> · <a href="${{ env.TEST_URL }}/app/testing/">panel QA</a></td></tr>
                 <tr><td><strong>Producción</strong></td><td><a href="${{ env.PROD_URL }}">${{ env.PROD_URL }}</a> · <a href="${{ env.PROD_URL }}/health/">health</a></td></tr>
                 <tr><td><strong>Repo</strong></td><td><a href="${{ github.server_url }}/${{ github.repository }}">${{ github.repository }}</a> · <a href="${{ github.server_url }}/${{ github.repository }}/tree/main">rama main</a></td></tr>
               </table>

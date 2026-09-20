@@ -44,7 +44,7 @@ class TestPublicPaths:
         assert response.status_code == 200
 
     def test_login_page_public(self, client):
-        response = client.get("/login/")
+        response = client.get("/app/login/")
         assert response.status_code == 200
 
 
@@ -52,26 +52,70 @@ class TestProtectedPaths:
     """Verify that unauthenticated requests are redirected to login."""
 
     def test_home_redirects_to_login(self, client):
-        response = client.get("/")
+        response = client.get("/app/")
         assert response.status_code == 302
-        assert "/login/" in response["Location"]
+        assert "/app/login/" in response["Location"]
 
     def test_students_redirects_to_login(self, client):
-        response = client.get("/students/")
+        response = client.get("/app/students/")
         assert response.status_code == 302
-        assert "/login/" in response["Location"]
+        assert "/app/login/" in response["Location"]
 
     def test_api_endpoint_redirects_to_login(self, client):
-        response = client.get("/api/history/")
+        response = client.get("/app/api/history/")
         assert response.status_code == 302
-        assert "/login/" in response["Location"]
+        assert "/app/login/" in response["Location"]
+
+
+class TestTheOriginRootIsPublic:
+    """The app moved under /app/ so "/" can serve the public React site.
+
+    These pin the boundary, because getting it wrong is silent in one
+    direction: if SimpleAuthMiddleware keeps guarding the whole origin, the
+    marketing site bounces every logged-out visitor — i.e. every visitor —
+    into a staff login form, and nothing errors.
+    """
+
+    def test_root_serves_the_public_page_while_logged_out(self, client):
+        response = client.get("/")
+        assert response.status_code == 200
+        assert "text/html" in response["Content-Type"]
+
+    def test_root_does_not_redirect_to_login(self, client):
+        """The specific regression: "/" must never bounce to the app's login."""
+        response = client.get("/", follow=False)
+        assert response.status_code != 302
+
+    def test_root_stays_public_even_with_a_session(self, authenticated_client):
+        """Being logged in must not change what the public page is."""
+        assert authenticated_client.get("/").status_code == 200
+
+    def test_health_is_still_at_the_origin_root(self, client):
+        """~25 references across the deploy workflows poll this path."""
+        assert client.get("/health/").status_code == 200
+
+    def test_an_unknown_public_path_is_a_404_not_a_login_redirect(self, client):
+        """An unknown public path must 404, never 302 to the staff login.
+
+        A redirect would mean the middleware still owns paths it does not
+        serve — which is what broke the public site when the app first moved.
+        (The site's real routes are covered in test_frontend_site.py.)
+        """
+        response = client.get("/no-such-public-page")
+        assert response.status_code == 404
+
+    def test_the_app_prefix_without_a_slash_is_still_guarded(self, client):
+        """ "/app" is the app, slash or no slash — APPEND_SLASH runs later."""
+        response = client.get("/app")
+        assert response.status_code == 302
+        assert "/app/login/" in response["Location"]
 
 
 class TestAuthenticatedAccess:
     """Verify that authenticated requests pass through the middleware."""
 
     def test_authenticated_home_loads(self, authenticated_client):
-        response = authenticated_client.get("/")
+        response = authenticated_client.get("/app/")
         assert response.status_code == 200
 
     def test_session_without_auth_flag_redirects(self, client):
@@ -79,16 +123,16 @@ class TestAuthenticatedAccess:
         session = client.session
         session["username"] = "someone"
         session.save()
-        response = client.get("/")
+        response = client.get("/app/")
         assert response.status_code == 302
-        assert "/login/" in response["Location"]
+        assert "/app/login/" in response["Location"]
 
 
 class TestNoHtmlCacheMiddleware:
     """Dynamic HTML must be no-cache so browsers always load current asset hashes."""
 
     def test_html_response_is_no_cache(self, auth_client):
-        response = auth_client.get("/")
+        response = auth_client.get("/app/")
         assert response.status_code == 200
         assert response["Content-Type"].startswith("text/html")
         assert "no-cache" in response["Cache-Control"]
@@ -125,23 +169,23 @@ class TestRequestLogMiddleware:
     def test_response_carries_the_id(self, client):
         """Echoed back so a user reporting a problem can quote one string that
         finds every record the request produced."""
-        response = client.get("/login/")
+        response = client.get("/app/login/")
         assert response["X-Request-ID"]
 
     def test_inbound_id_is_honoured(self, client):
-        response = client.get("/login/", HTTP_X_REQUEST_ID="upstream-123")
+        response = client.get("/app/login/", HTTP_X_REQUEST_ID="upstream-123")
         assert response["X-Request-ID"] == "upstream-123"
 
     def test_hostile_inbound_id_is_replaced(self, client):
         """The header is client-controlled; a newline in it forges log lines."""
-        response = client.get("/login/", HTTP_X_REQUEST_ID="abc\nERROR forged")
+        response = client.get("/app/login/", HTTP_X_REQUEST_ID="abc\nERROR forged")
         assert "\n" not in response["X-Request-ID"]
         assert response["X-Request-ID"] != "abc\nERROR forged"
 
     def test_cloud_trace_context_wins_and_the_span_is_dropped(self, client):
         """Cloud Run sets this on the way in; reusing the trace id is what lets
         Cloud Logging nest our entries under its own request log."""
-        response = client.get("/login/", HTTP_X_CLOUD_TRACE_CONTEXT="105445aa7843bc8b/1;o=1")
+        response = client.get("/app/login/", HTTP_X_CLOUD_TRACE_CONTEXT="105445aa7843bc8b/1;o=1")
         assert response["X-Request-ID"] == "105445aa7843bc8b"
 
     def test_cloud_trace_is_bound_for_records_written_during_the_request(self):
@@ -170,7 +214,7 @@ class TestRequestLogMiddleware:
     def test_a_malformed_trace_header_is_dropped_not_invented(self, client):
         """A fabricated trace would file our records under another request."""
 
-        response = client.get("/login/", HTTP_X_CLOUD_TRACE_CONTEXT="not-a-trace/1;o=1")
+        response = client.get("/app/login/", HTTP_X_CLOUD_TRACE_CONTEXT="not-a-trace/1;o=1")
         assert get_trace_id() == ""
         # The request id still exists — it is ours and never optional.
         assert response["X-Request-ID"]
@@ -179,7 +223,7 @@ class TestRequestLogMiddleware:
         """An id left bound leaks onto the next request the worker serves —
         Gunicorn reuses threads, so this is a real mix-up, not a tidy-up."""
 
-        client.get("/login/")
+        client.get("/app/login/")
         assert get_request_id() == ""
 
     def test_5xx_returned_by_a_view_is_an_error(self):
@@ -227,7 +271,7 @@ class TestRequestLogMiddleware:
         """`request.path` is attacker-controlled free text (CodeQL
         py/log-injection) and groups badly; the resolved URL name is a fixed
         vocabulary that aggregates."""
-        _response, mock_logger = self._run(path="/login/?next=/%20INJECTED")
+        _response, mock_logger = self._run(path="/app/login/?next=/%20INJECTED")
         assert "INJECTED" not in str(mock_logger.log.call_args)
 
     def test_the_url_name_is_logged(self):

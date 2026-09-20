@@ -25,6 +25,65 @@
         (document.querySelector('[name=csrfmiddlewaretoken]') || {}).value ||
         getCookie('csrftoken') || '';
 
+    /* ── App mount point ──────────────────────────────────────────────────── */
+    // The app is served under a prefix ("/app") so that "/" can serve the
+    // public React site. Every hand-built URL in these modules is written as
+    // `${window.APP_PREFIX}/api/...`, reading the prefix from the one place
+    // Django renders it, rather than each file carrying its own copy — a
+    // string with no single owner drifts silently, and here the symptom would
+    // be a fetch that 404s on one page and works on the next. Paths produced
+    // by `{% url %}` (data-* attributes, config objects) already carry the
+    // prefix and must NOT be prefixed again.
+    window.APP_PREFIX = document.body.dataset.appPrefix || '';
+
+    /* ── Off-canvas sidebar (below lg) ─────────────────────────────────────── */
+    // The sidebar is a fixed 7.5rem column at lg and up and a drawer below it,
+    // where a permanent column would take 38% of a 320px phone. Everything here
+    // is a no-op at lg+: the button is display:none there, so nothing binds a
+    // second time and the desktop layout is untouched.
+    (function sidebarDrawer() {
+        const sidebar = document.getElementById('main-sidebar');
+        const toggle = document.getElementById('sidebar-toggle');
+        const backdrop = document.getElementById('sidebar-backdrop');
+        if (!sidebar || !toggle || !backdrop) return;
+
+        function setOpen(open) {
+            // `-translate-x-full` is the closed state; removing it slides the
+            // drawer in. Toggling a class rather than inline styles keeps the
+            // lg: overrides in the template authoritative.
+            sidebar.classList.toggle('-translate-x-full', !open);
+            backdrop.classList.toggle('hidden', !open);
+            toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+            toggle.setAttribute('aria-label', open ? 'Cerrar menú' : 'Abrir menú');
+            // Stops the page behind the drawer scrolling under a thumb drag.
+            document.body.classList.toggle('overflow-hidden', open);
+            document.body.classList.toggle('lg:overflow-auto', open);
+        }
+        const isOpen = () => !sidebar.classList.contains('-translate-x-full');
+
+        toggle.addEventListener('click', function () { setOpen(!isOpen()); });
+        backdrop.addEventListener('click', function () { setOpen(false); });
+
+        document.addEventListener('keydown', function (e) {
+            if (e.key === 'Escape' && isOpen()) { setOpen(false); toggle.focus(); }
+        });
+
+        // Navigating closes it. Without this the drawer is still open behind
+        // the next page's paint on a slow connection, which reads as a stuck
+        // overlay.
+        sidebar.addEventListener('click', function (e) {
+            if (e.target.closest('a')) setOpen(false);
+        });
+
+        // Crossing the lg breakpoint with the drawer open would otherwise leave
+        // `overflow-hidden` on the body and the backdrop visible over a layout
+        // that no longer needs either.
+        const wide = window.matchMedia('(min-width: 1024px)');
+        const sync = function () { if (wide.matches) setOpen(false); };
+        if (wide.addEventListener) wide.addEventListener('change', sync);
+        else if (wide.addListener) wide.addListener(sync);  // older Safari
+    })();
+
     /* ── HTML escaping ────────────────────────────────────────────────────── */
     // History messages embed user-supplied text (todo titles, student names,
     // payment concepts). They are rendered with innerHTML below, so they must
@@ -198,7 +257,7 @@
     const entriesContainer = document.getElementById('history-entries');
     const loadMoreContainer = document.getElementById('history-load-more');
     const loadMoreBtn = document.getElementById('history-more-btn');
-    const historyUrl = document.body.dataset.historyUrl || '/api/history/';
+    const historyUrl = document.body.dataset.historyUrl || `${window.APP_PREFIX}/api/history/`;
 
     if (historyBtn && historyDropdown) {
         let offset = 0;

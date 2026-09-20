@@ -87,6 +87,38 @@ Then decide:
 
 ---
 
+## Step 1b — Check the stash for collisions BEFORE creating it
+
+The stash is this skill's one genuinely dangerous moment: it is popped in Step 5 on top
+of a tree that `main` has just been merged into, so if the work in progress touches the
+same files `main` changed, the pop conflicts — with the user's uncommitted work as one
+side of it. The larger the work in progress, the likelier that is.
+
+```bash
+comm -12 <(git diff --name-only development...origin/main | sort)          <(git status --porcelain --untracked-files=no | awk '{print $2}' | sort)
+```
+
+- **Empty** → carry on to Step 2, nothing to think about.
+- **Non-empty** → say so and offer the choice before stashing. Both ways out are fine
+  and neither is yours to pick:
+  - **Commit first, then sync.** The work becomes a real commit, `git merge origin/main`
+    resolves in a proper merge with both sides committed, and nothing is ever stashed.
+    This is usually the right answer for a release-sized change.
+  - **Defer the sync.** If `main` carries no version change
+    (`git diff development...origin/main -- pyproject.toml | grep '^[-+]version'` is
+    empty), the merge can simply happen after the user's next commit. `update-readme`'s
+    Step 0 does exactly this and documents why.
+
+Whichever is chosen, snapshot the index first — a staged-but-uncommitted tree has no
+commit behind it:
+
+```bash
+git tag -f snapshot-pre-sync $(git commit-tree $(git write-tree) -p HEAD -m "SNAPSHOT: before sync-branches")
+git diff --stat snapshot-pre-sync --cached    # empty = the snapshot holds the index exactly
+```
+
+---
+
 ## Step 2 — Stash the work in progress
 
 Only if `git status --porcelain` was non-empty in Step 1. Otherwise skip to Step 3 and

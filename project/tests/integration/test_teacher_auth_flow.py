@@ -113,28 +113,28 @@ class TestNonAdminTeacherMiddleware:
         return client
 
     def test_non_admin_blocked_from_payments(self, non_admin_client):
-        response = non_admin_client.get("/payments/")
+        response = non_admin_client.get("/app/payments/")
         # Middleware should redirect them to home with an error message
         assert response.status_code == 302
         assert response.url == reverse("home")
 
     def test_non_admin_can_access_schedule(self, non_admin_client):
         # Non-admin teachers may VIEW the schedule (save_schedule_slot stays admin-only).
-        response = non_admin_client.get("/schedule/")
+        response = non_admin_client.get("/app/schedule/")
         assert response.status_code == 200
 
     def test_non_admin_blocked_from_all_info(self, non_admin_client):
-        response = non_admin_client.get("/database/")
+        response = non_admin_client.get("/app/database/")
         assert response.status_code == 302
 
     def test_non_admin_blocked_from_apps(self, non_admin_client):
-        response = non_admin_client.get("/apps/")
+        response = non_admin_client.get("/app/apps/")
         assert response.status_code == 302
 
     def test_non_admin_api_endpoint_returns_403(self, non_admin_client):
         """API endpoints (/api/...) should return 403 JSON, not an HTML redirect."""
         response = non_admin_client.post(
-            "/api/teachers/create/",
+            "/app/api/teachers/create/",
             data="{}",
             content_type="application/json",
         )
@@ -142,11 +142,11 @@ class TestNonAdminTeacherMiddleware:
         assert response.json()["success"] is False
 
     def test_non_admin_can_access_dashboard(self, non_admin_client):
-        response = non_admin_client.get("/")
+        response = non_admin_client.get("/app/")
         assert response.status_code == 200
 
     def test_non_admin_can_access_management_view_only(self, non_admin_client):
-        response = non_admin_client.get("/management/")
+        response = non_admin_client.get("/app/management/")
         assert response.status_code == 200
         # is_admin_user flag should be False in context
         assert response.context["is_admin_user"] is False
@@ -154,7 +154,7 @@ class TestNonAdminTeacherMiddleware:
     def test_non_admin_blocked_from_fun_friday(self, non_admin_client):
         """Fun Friday is admin-only: the page lists the WHOLE roll, and choosing
         who comes on a Friday is the academy's call, not a teacher's."""
-        response = non_admin_client.get("/fun-friday/")
+        response = non_admin_client.get("/app/fun-friday/")
         assert response.status_code == 302
         assert response.url == reverse("home")
 
@@ -170,7 +170,7 @@ class TestNonAdminTeacherMiddleware:
         assert response.status_code == 403
 
     def test_non_admin_can_access_students_list(self, non_admin_client):
-        response = non_admin_client.get("/students/")
+        response = non_admin_client.get("/app/students/")
         assert response.status_code == 200
 
     def test_non_admin_can_open_the_ficha_of_their_own_student(
@@ -195,16 +195,16 @@ class TestNonAdminTeacherMiddleware:
     def test_the_roll_shows_only_their_own_students(
         self, non_admin_client, non_admin_teacher, group, student, active_enrollment
     ):
-        page = non_admin_client.get("/students/")
+        page = non_admin_client.get("/app/students/")
         assert list(page.context["students"]) == []
 
         group.teacher = non_admin_teacher
         group.save(update_fields=["teacher"])
-        page = non_admin_client.get("/students/")
+        page = non_admin_client.get("/app/students/")
         assert [s.id for s in page.context["students"]] == [student.id]
 
     def test_an_admin_sees_every_student(self, admin_client, student, active_enrollment):
-        page = admin_client.get("/students/")
+        page = admin_client.get("/app/students/")
         assert [s.id for s in page.context["students"]] == [student.id]
 
     def test_search_is_scoped_too(self, non_admin_client, non_admin_teacher, group, student):
@@ -263,7 +263,7 @@ class TestNonAdminTeacherMiddleware:
 
     def test_non_admin_header_hides_history_and_notifications(self, non_admin_client):
         """The bell and the history feed must not render for a non-admin."""
-        response = non_admin_client.get("/")
+        response = non_admin_client.get("/app/")
         html = response.content.decode()
         assert 'id="history-btn"' not in html
         assert 'id="notif-btn"' not in html
@@ -271,31 +271,31 @@ class TestNonAdminTeacherMiddleware:
         assert response.context["notifications_count"] == 0
 
     def test_admin_header_shows_history_and_notifications(self, admin_client):
-        html = admin_client.get("/").content.decode()
+        html = admin_client.get("/app/").content.decode()
         assert 'id="history-btn"' in html
         assert 'id="notif-btn"' in html
 
     def test_non_admin_has_no_per_view_help_modal(self, non_admin_client):
         """The help texts walk through admin-only workflows, so the "?" button
         is not rendered for a non-admin teacher on any page."""
-        for path in ("/", "/students/", "/students/waiting/", "/schedule/"):
+        for path in ("/app/", "/app/students/", "/app/students/waiting/", "/app/schedule/"):
             html = non_admin_client.get(path).content.decode()
             assert 'id="view-help-btn"' not in html, path
             assert 'id="view-help-modal"' not in html, path
 
     def test_admin_still_has_the_per_view_help_modal(self, admin_client):
-        html = admin_client.get("/students/").content.decode()
+        html = admin_client.get("/app/students/").content.decode()
         assert 'id="view-help-btn"' in html
         assert 'id="view-help-modal"' in html
 
     def test_admin_sees_payments(self, admin_client):
-        response = admin_client.get("/payments/")
+        response = admin_client.get("/app/payments/")
         # Admin bypasses the non-admin check — whatever status the view returns
         # it won't be redirected by the middleware to /.
         assert response.status_code != 302 or response.url != reverse("home")
 
     def test_admin_sees_is_admin_user_true(self, admin_client):
-        response = admin_client.get("/")
+        response = admin_client.get("/app/")
         assert response.context["is_admin_user"] is True
 
 

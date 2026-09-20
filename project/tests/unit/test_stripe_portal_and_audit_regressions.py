@@ -142,7 +142,7 @@ class TestPortalCredentialEmailAsync:
         # Second is the absolute login URL. The PASSWORD is deliberately absent:
         # it is generated inside the task so the plaintext never reaches the
         # broker or Celery's task log.
-        assert "/parent/login/" in args[1]
+        assert "/app/parent/login/" in args[1]
         assert not any("password" in str(a).lower() for a in args[2:])
 
     def test_change_password_is_rate_limited(self, client, parent):
@@ -392,8 +392,8 @@ class TestPwaCacheExclusions:
 
         static_shell = re.search(r"const STATIC_SHELL = \[(.*?)\];", body, re.DOTALL).group(1)
         assert '"/",' not in static_shell
-        assert '"/students/",' not in static_shell
-        assert '"/payments/",' not in static_shell
+        assert '"/app/students/",' not in static_shell
+        assert '"/app/payments/",' not in static_shell
 
     def test_isCacheable_scoping(self, client):
         response = client.get(reverse("service_worker"))
@@ -401,10 +401,10 @@ class TestPwaCacheExclusions:
         assert "function isCacheable" in body
         # Only session-free paths are cacheable.
         assert '"/static/"' in body
-        assert '"/manifest.webmanifest"' in body
+        assert '"/app/manifest.webmanifest"' in body
 
     def test_login_page_is_not_cached(self, client):
-        """/login/ must NOT be cache-first.
+        """/app/login/ must NOT be cache-first.
 
         It looks public, but it carries a CSRF token and Django rotates the CSRF
         secret on login — a cached copy hands back a token minted against the
@@ -413,7 +413,7 @@ class TestPwaCacheExclusions:
         """
         body = client.get(reverse("service_worker")).content.decode()
         cacheable = body.split("function isCacheable")[1].split("}")[0]
-        assert 'path === "/login/"' not in cacheable
+        assert 'path === "/app/login/"' not in cacheable
 
 
 # ── Report PDF service extraction ───────────────────────────────────────────

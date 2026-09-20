@@ -95,12 +95,12 @@ class TestOffboardedSessionIsRejected:
     def test_deactivating_the_teacher_ends_the_session(self, client):
         teacher = _make_teacher(email="off1@fiveaday.test")
         _logged_in(client, teacher)
-        assert client.get("/students/").status_code == 200
+        assert client.get("/app/students/").status_code == 200
 
         teacher.active = False
         teacher.save()
 
-        response = client.get("/students/")
+        response = client.get("/app/students/")
         assert response.status_code == 302
         assert response.url == reverse("login")
         assert not client.session.get("is_authenticated"), "the session must be flushed, not merely redirected"
@@ -112,7 +112,7 @@ class TestOffboardedSessionIsRejected:
         teacher.active = False
         teacher.save()
 
-        for path in ("/payments/", "/database/", "/management/", "/expenses/"):
+        for path in ("/app/payments/", "/app/database/", "/app/management/", "/app/expenses/"):
             response = client.get(path)
             assert response.status_code == 302, path
             assert response.url == reverse("login"), path
@@ -122,7 +122,7 @@ class TestOffboardedSessionIsRejected:
         _logged_in(client, teacher)
         teacher.delete()
 
-        response = client.get("/students/")
+        response = client.get("/app/students/")
         assert response.status_code == 302
         assert response.url == reverse("login")
 
@@ -131,7 +131,7 @@ class TestOffboardedSessionIsRejected:
         _logged_in(client, teacher)
         User.objects.filter(pk=teacher.user_id).update(is_active=False)
 
-        assert client.get("/students/").url == reverse("login")
+        assert client.get("/app/students/").url == reverse("login")
 
     def test_a_superuser_with_no_teacher_still_works(self, client):
         """The dev env-var login and every OAuth session are free-standing
@@ -142,12 +142,12 @@ class TestOffboardedSessionIsRejected:
         session["is_authenticated"] = True
         session.save()
 
-        assert client.get("/payments/").status_code == 200
+        assert client.get("/app/payments/").status_code == 200
 
     def test_an_active_admin_teacher_is_untouched(self, client):
         teacher = _make_teacher(email="ok@fiveaday.test", admin=True)
         _logged_in(client, teacher)
-        assert client.get("/payments/").status_code == 200
+        assert client.get("/app/payments/").status_code == 200
 
     def test_the_legacy_session_shape_is_left_alone(self, client):
         """A session flagged authenticated with NO Django identity cannot be
@@ -159,11 +159,11 @@ class TestOffboardedSessionIsRejected:
         session.save()
 
         assert _session_identity_revoked_for(client) is False
-        assert client.get("/payments/").status_code == 200
+        assert client.get("/app/payments/").status_code == 200
 
 
 def _session_identity_revoked_for(client):
-    request = RequestFactory().get("/payments/")
+    request = RequestFactory().get("/app/payments/")
     request.session = client.session
     return _session_identity_revoked(request)
 
@@ -173,7 +173,7 @@ class TestNonAdminDeterminationFailsClosed:
     unrestricted one."""
 
     def _request(self, user=None, session=None):
-        request = RequestFactory().get("/payments/")
+        request = RequestFactory().get("/app/payments/")
         request.user = user if user is not None else AnonymousUser()
         request.session = session if session is not None else {}
         return request
@@ -190,7 +190,7 @@ class TestNonAdminDeterminationFailsClosed:
         teacher.active = False
         teacher.save()
 
-        request = RequestFactory().get("/payments/")
+        request = RequestFactory().get("/app/payments/")
         request.user = User.objects.get(pk=teacher.user_id)
         request.session = {}  # type: ignore[assignment]
         assert _is_non_admin_teacher(request) is True
@@ -258,7 +258,9 @@ class TestExceptionReporterRedaction:
     which none of this app's hand-rolled auth views do."""
 
     def test_post_secrets_are_cleansed(self):
-        request = RequestFactory().post("/login/", data={"username": "ana", "password": "hunter2", "code": "123456"})
+        request = RequestFactory().post(
+            "/app/login/", data={"username": "ana", "password": "hunter2", "code": "123456"}
+        )
         cleansed = RedactingExceptionReporterFilter().get_post_parameters(request)
 
         assert "hunter2" not in str(cleansed)
@@ -266,7 +268,7 @@ class TestExceptionReporterRedaction:
         assert cleansed["username"] == "ana", "non-credential fields stay readable"
 
     def test_the_live_request_is_not_mutated(self):
-        request = RequestFactory().post("/login/", data={"password": "hunter2"})
+        request = RequestFactory().post("/app/login/", data={"password": "hunter2"})
         RedactingExceptionReporterFilter().get_post_parameters(request)
         assert request.POST["password"] == "hunter2"
 
@@ -308,7 +310,7 @@ class TestStripeCheckoutUsesTheSharedGuard:
 # ─────────────────────────────────────────────────────────────────────────────
 class TestPortalUrlsAreNotBlanketPublic:
     def test_the_blanket_prefix_is_gone(self):
-        assert "/parent/" not in SimpleAuthMiddleware.PUBLIC_PREFIXES
+        assert "/app/parent/" not in SimpleAuthMiddleware.PUBLIC_PREFIXES
 
     def test_only_login_and_recovery_are_public(self):
         assert SimpleAuthMiddleware.PORTAL_PUBLIC_URL_NAMES == {
@@ -390,7 +392,7 @@ class TestRecoveryCannotBeUsedToDenyRecovery:
     def test_an_admin_reissue_ignores_the_cooldown(self, client, parent, rf):
         """An admin on the phone with a family must be able to reissue now."""
 
-        request = rf.get("/admin/")
+        request = rf.get("/app/admin/")
         with patch("comms.services.email_service.EmailService.send_email", return_value=True) as send:
             assert send_portal_temporary_password(request, parent, reset=True) is True
             first = send.call_args[1]["context"]["temporary_password"]
@@ -587,12 +589,12 @@ class TestAdminRequiredDecorator:
         return request
 
     def test_an_unauthenticated_caller_is_sent_to_login(self):
-        response = self._wrapped()(self._request("/payments/"))
+        response = self._wrapped()(self._request("/app/payments/"))
         assert response.status_code == 302
         assert response.url == reverse("login")
 
     def test_an_unauthenticated_api_caller_gets_403_json(self):
-        response = self._wrapped()(self._request("/api/config/update/"))
+        response = self._wrapped()(self._request("/app/api/config/update/"))
         assert response.status_code == 403
         # The decorator is invoked directly here, so this is a bare
         # JsonResponse — `.json()` is a helper the test CLIENT adds to the
@@ -601,7 +603,7 @@ class TestAdminRequiredDecorator:
 
     def test_a_non_admin_teacher_is_refused(self, rf):
         teacher = _make_teacher(email="dec@fiveaday.test", admin=False)
-        request = rf.get("/api/config/update/")
+        request = rf.get("/app/api/config/update/")
         request.user = User.objects.get(pk=teacher.user_id)
         request.session = {"is_authenticated": True}
 
@@ -610,7 +612,7 @@ class TestAdminRequiredDecorator:
 
     def test_an_admin_teacher_is_allowed(self, rf):
         teacher = _make_teacher(email="dec2@fiveaday.test", admin=True)
-        request = rf.get("/payments/")
+        request = rf.get("/app/payments/")
         request.user = User.objects.get(pk=teacher.user_id)
         request.session = {"is_authenticated": True}
 
@@ -623,7 +625,7 @@ class TestIsAdminUserFailsClosed:
         session at all, so any page rendered to an anonymous visitor claimed
         admin in its context."""
 
-        request = RequestFactory().get("/login/")
+        request = RequestFactory().get("/app/login/")
         request.session = {}  # type: ignore[assignment]
         context = today_notifications(request)
 
@@ -632,7 +634,7 @@ class TestIsAdminUserFailsClosed:
     def test_a_logged_in_admin_still_is_one(self, client):
         teacher = _make_teacher(email="ctx@fiveaday.test", admin=True)
         _logged_in(client, teacher)
-        assert client.get("/").context["is_admin_user"] is True
+        assert client.get("/app/").context["is_admin_user"] is True
 
 
 class TestNonAdminLedger:
@@ -764,11 +766,11 @@ def test_a_client_can_still_log_in_and_out_end_to_end(client):
     with patch("core.views.auth._is_dev_env", return_value=False):
         response = client.post(reverse("login"), {"username": "e2e@fiveaday.test", "password": "e2e-pass-1234"})
     assert response.url == reverse("home")
-    assert client.get("/payments/").status_code == 200
+    assert client.get("/app/payments/").status_code == 200
     assert client.post(reverse("logout")).status_code == 302
-    assert client.get("/payments/").url == reverse("login")
+    assert client.get("/app/payments/").url == reverse("login")
 
 
 def test_a_fresh_client_is_unaffected_by_the_portal_gate(client):
     """`/parents/create/` must not be caught by the `/parent/` prefix."""
-    assert Client().get("/parents/create/").url == reverse("login")
+    assert Client().get("/app/parents/create/").url == reverse("login")

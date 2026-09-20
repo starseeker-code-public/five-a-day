@@ -54,7 +54,11 @@ def admin_required(view_func):
         session = getattr(request, "session", None)
         authenticated = bool(session is not None and session.get("is_authenticated"))
         if not authenticated or _is_non_admin_teacher(request):
-            if request.path.startswith("/api/"):
+            # Built from the setting, exactly as SimpleAuthMiddleware builds
+            # its API_URL_PREFIX: the two layers must answer a blocked caller
+            # identically, and a hand-typed second copy of the mount point is
+            # how they would drift apart.
+            if request.path.startswith(f"{settings.APP_PATH_PREFIX}/api/"):
                 return JsonResponse(
                     {"success": False, "error": "No tienes permiso para esta acción."},
                     status=403,

@@ -89,6 +89,63 @@
     text-align: left;
 }
 
+/* ── Sidebar as an off-canvas drawer (below lg) ───────────────────────────── */
+/* The sidebar is a 7.5rem icon rail at lg and up, where hovering it expands to
+   show the labels (.expandable-sidebar above). There is no hover on a touch
+   screen, so inside the drawer that rail would be unlabelled icons with no way
+   to find out what they mean — which is worse than the fixed rail it replaced.
+   Below lg the drawer is therefore wide and always labelled.
+
+   Keyed on the same 1024px boundary as the `lg:` utilities in base.html; the
+   two must move together or the drawer and the layout disagree about where it
+   stops being a drawer. Written here rather than as `max-lg:` utilities on the
+   markup because the labels are twelve separate spans and the width comes from
+   a {% block %} three templates override. */
+@media (max-width: 1023px) {
+    #main-sidebar {
+        width: 16rem;
+    }
+
+    #main-sidebar .sidebar-title,
+    #main-sidebar .sidebar-subtitle,
+    #main-sidebar .sidebar-text {
+        display: block !important;
+    }
+
+    #main-sidebar .sidebar-link {
+        padding-left: 1rem;
+        padding-right: 1rem;
+        justify-content: flex-start;
+    }
+
+    #main-sidebar .sidebar-icon {
+        margin-left: 0 !important;
+        margin-right: 0 !important;
+    }
+
+    #main-sidebar .sidebar-text {
+        text-align: left;
+    }
+
+    /* Back into normal flow. `.sidebar-fixed-links` is `position: fixed; top:
+       50%` so the icon rail sits centred on a tall desktop screen; inside the
+       drawer that took it out of flow and it rendered ON TOP of the "Five a
+       Day" heading above it. A drawer is a scrollable panel, not a centred
+       rail, so the links simply stack. */
+    #main-sidebar .sidebar-fixed-links {
+        position: static;
+        transform: none;
+        width: auto;
+        padding: 0;
+    }
+
+    /* The hover-expand is a pointer affordance and must not fire inside the
+       drawer: it would widen an already-wide panel on a stray touch. */
+    #main-sidebar.expandable-sidebar:hover .sidebar-fixed-links {
+        width: auto;
+    }
+}
+
 /* ── Sidebar links ────────────────────────────────────────────────────────── */
 .sidebar-link {
     text-decoration: none !important;
