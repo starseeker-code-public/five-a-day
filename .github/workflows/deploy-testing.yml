@@ -544,7 +544,7 @@ jobs:
 
       - name: Notify success
         if: success()
-        uses: dawidd6/action-send-mail@03a02a49409134de07636216fb379a026c52991e  # v21
+        uses: dawidd6/action-send-mail@67ce3558d613188179559c61d3565140cf389968  # v22
         with:
           server_address: smtp.gmail.com
           server_port: 465
@@ -605,7 +605,7 @@ jobs:
       # whereas a silent timeout is indistinguishable from a quiet night.
       - name: Notify failure
         if: failure() || cancelled()
-        uses: dawidd6/action-send-mail@03a02a49409134de07636216fb379a026c52991e  # v21
+        uses: dawidd6/action-send-mail@67ce3558d613188179559c61d3565140cf389968  # v22
         with:
           server_address: smtp.gmail.com
           server_port: 465
@@ -657,7 +657,7 @@ jobs:
             exit 1
           fi
           echo "alert recipient resolved"
-      - uses: dawidd6/action-send-mail@03a02a49409134de07636216fb379a026c52991e  # v21
+      - uses: dawidd6/action-send-mail@67ce3558d613188179559c61d3565140cf389968  # v22
         with:
           server_address: smtp.gmail.com
           server_port: 465
