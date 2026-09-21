@@ -30,6 +30,58 @@ def _is_dev_env() -> bool:
     return getattr(settings, "ENVIRONMENT", "development") == "development"
 
 
+#: The login page's cross-environment hop: current environment -> the OTHER
+#: deployment. Each entry is (settings name holding that origin, Material
+#: Symbols icon, link text).
+#:
+#: A two-entry map rather than an if/else because the set of environments that
+#: have a sibling IS the rule — development is absent, so it gets no link, and
+#: adding a third deployment is a row here rather than a branch somewhere.
+_SIBLING_ENVIRONMENTS = {
+    "production": ("TESTING_SITE_URL", "science", "Ir al entorno de pruebas"),
+    "testing": ("PRODUCTION_SITE_URL", "rocket_launch", "Ir a producción"),
+}
+
+
+def sibling_environment_link() -> dict[str, str] | None:
+    """The other live deployment, as a link, or `None` when there isn't one.
+
+    Production offers testing and testing offers production; DEVELOPMENT OFFERS
+    NEITHER. That is not an oversight: a developer's machine is not one of the
+    two deployments, so there is no "other one" to point at, and rendering both
+    would make the control mean something locally that it means nowhere it
+    ships. It also keeps the QA VM's address off every developer's screen for a
+    feature only two hosts can use.
+
+    Keyed on `settings.ENVIRONMENT`, NOT `IS_TESTING_ENV`. The two differ by
+    `and not DEBUG`, which is the right extra condition for `IS_TESTING_ENV`'s
+    real job — gating the QA tools, which reset the database — and the wrong
+    one here. This decides which of two ADDRESSES to print; a navigation link
+    is not a privilege, and a testing host running with DEBUG on is still the
+    testing host.
+
+    The path is `reverse("login")`, never a typed "/app/login/": it derives
+    from `settings.APP_URL_PREFIX` exactly as every in-app URL does, so the
+    prefix cannot be hand-written wrong here (the failure the
+    `test_no_hand_written_url_misses_the_app_mount_prefix` invariant exists to
+    catch). Both deployments run this same codebase, so the prefix resolved
+    locally is the prefix the sibling serves.
+
+    An empty origin yields `None` rather than a link to `"" + /app/login/`,
+    which would be a same-origin link claiming to be the other environment.
+    """
+    entry = _SIBLING_ENVIRONMENTS.get(getattr(settings, "ENVIRONMENT", "development"))
+    if not entry:
+        return None
+
+    setting_name, icon, label = entry
+    origin = (getattr(settings, setting_name, "") or "").rstrip("/")
+    if not origin:
+        return None
+
+    return {"url": f"{origin}{reverse('login')}", "icon": icon, "label": label}
+
+
 def _ensure_dev_user(username: str, password: str | None = None) -> "User":
     """
     Dev basic-auth path: get-or-create a Django superuser that matches the
@@ -211,6 +263,11 @@ def login_view(request):
             # Password reset only makes sense when Teacher-based auth is in use
             # (testing/production). In dev the password lives in .env.development.
             "password_reset_available": not _is_dev_env(),
+            # The other deployment, or None in development. Passed from the view
+            # rather than a context processor because the login page is the only
+            # page that renders it, and the processor already returns its dict
+            # from two places that would each need the key.
+            "sibling_environment": sibling_environment_link(),
         },
     )
 

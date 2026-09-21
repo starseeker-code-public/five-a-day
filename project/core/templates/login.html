@@ -331,6 +331,22 @@
             color: #a78bfa;
         }
 
+        /* Cross-environment hop. Rendered only on the two DEPLOYED hosts —
+           production links to testing, testing links to production — so it is
+           never seen in development. Deliberately quiet: it is an operator
+           shortcut, not a call to action, and it must not compete with the
+           login button. */
+        .env-hop { text-align: center; margin-top: 1.4rem; font-size: 0.75rem; }
+        .env-hop a {
+            display: inline-flex; align-items: center; gap: .35rem;
+            padding: .3rem .7rem; border-radius: 999px;
+            color: #7c3aed; text-decoration: none;
+            background: rgba(237,233,254,0.6); border: 1px solid #ddd6fe;
+            transition: background .18s ease, border-color .18s ease;
+        }
+        .env-hop a:hover { background: #ede9fe; border-color: #a78bfa; }
+        .env-hop .material-symbols-outlined { font-size: 15px; }
+
         @keyframes fadeUp {
             from { opacity: 0; transform: translateY(16px); }
             to   { opacity: 1; transform: translateY(0); }
@@ -394,6 +410,12 @@
         }
         html.dark .btn-login:hover { background: #382d59; border-color: #7c3aed; }
         html.dark .footer { color: #918bab; }
+        html.dark .env-hop a {
+            color: #c4b5fd;
+            background: rgba(42,35,64,0.8);
+            border-color: #3f3559;
+        }
+        html.dark .env-hop a:hover { background: rgba(56,45,89,0.95); border-color: #6d28d9; }
         html.dark .theme-toggle {
             background: rgba(42,35,64,0.8);
             border-color: #3f3559;
@@ -503,6 +525,26 @@
         </p>
         {% endif %}
     </div>
+
+    {% comment %}
+       The OTHER deployment: production offers testing, testing offers
+       production, development offers neither (see
+       `core.views.auth.sibling_environment_link`). The URL is built there from
+       `reverse("login")`, so the app-mount prefix is never hand-written here.
+
+       `rel="noopener noreferrer"` because this is the one cross-origin link on
+       the page and it opens a tab: without `noopener` the opened document can
+       reach back through `window.opener` and navigate this one, which on a
+       login page means replacing it with a copy that harvests the password.
+    {% endcomment %}
+    {% if sibling_environment %}
+    <p class="env-hop">
+        <a href="{{ sibling_environment.url }}" target="_blank" rel="noopener noreferrer">
+            <span class="material-symbols-outlined" aria-hidden="true">{{ sibling_environment.icon }}</span>
+            {{ sibling_environment.label }}
+        </a>
+    </p>
+    {% endif %}
 
     <p class="footer">Five a Day © 2026 · Todos los derechos reservados</p>
 </div>

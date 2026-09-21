@@ -37,10 +37,22 @@ def spa_shell(tmp_path, settings):
     via the `settings` fixture rather than into the real tree: the suite runs
     under `xdist -n auto`, and workers sharing one filesystem raced on creating
     and deleting a shared stub. A real build is used as-is when present.
+
+    THE STUB MUST CARRY A `<head>`. `_inject_csrf_meta` publishes the CSRF token
+    by replacing `</head>`, and a document without one is served token-less —
+    which is the v1.31.1 bug restated, so it is the last thing this stub should
+    simulate. The original stub was a bare `<title>` written before that view
+    existed, and the drift was invisible LOCALLY (a developer has a real
+    `frontend/dist`, which has a `<head>`) and red in CI, where this stub is the
+    only shell there is: exactly the failure mode the docstring above describes,
+    one release later and in the other direction.
     """
     if (Path(settings.FRONTEND_DIST_DIR) / "index.html").exists():
         return
-    (tmp_path / "index.html").write_text("<!doctype html><title>stub</title><div id=root></div>", encoding="utf-8")
+    (tmp_path / "index.html").write_text(
+        '<!doctype html><html lang="es"><head><title>stub</title></head><body><div id=root></div></body></html>',
+        encoding="utf-8",
+    )
     settings.FRONTEND_DIST_DIR = str(tmp_path)
 
 

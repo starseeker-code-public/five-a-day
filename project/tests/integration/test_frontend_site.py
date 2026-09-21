@@ -28,6 +28,28 @@ def client():
     return Client()
 
 
+@pytest.fixture(autouse=True)
+def contact_recipient(settings):
+    """Pin the contact form's recipient instead of inheriting the environment.
+
+    `CONTACT_FORM_RECIPIENT` falls back to `DEFAULT_FROM_EMAIL`, which is
+    `EMAIL_HOST_USER`, which is EMPTY in CI — so without this the endpoint
+    correctly answers 503 and every test that posts the form fails for a reason
+    unrelated to the code under test. Same shape as the `_test_send_recipients`
+    gotcha in CLAUDE.md: a test inheriting half its configuration from the
+    developer's own `.env` passes locally and fails in CI, or the reverse.
+
+    MODULE-LEVEL and autouse because it had been written out per class and the
+    fourth class to need it did not get a copy: `TestTheCsrfTokenReachesTheReactBundle`
+    posts a real form to prove the published token satisfies CsrfViewMiddleware,
+    and in CI that POST answered 503 before CSRF was ever consulted — a green
+    local run, a red CI one, and a failure message about the token that had
+    nothing to do with the token. Nothing in this file tests the unset-recipient
+    path, so there is no case this fixture takes away.
+    """
+    settings.CONTACT_FORM_RECIPIENT = "academia@example.com"
+
+
 def _frontend_source(*parts: str) -> str:
     return (Path(settings.FRONTEND_DIR).joinpath(*parts)).read_text(encoding="utf-8")
 
@@ -209,10 +231,6 @@ class TestTheEmailIsValidatedBeforeAnythingIsSent:
     refusal offers a way round — the family it turns away is usually real.
     """
 
-    @pytest.fixture(autouse=True)
-    def _recipient(self, settings):
-        settings.CONTACT_FORM_RECIPIENT = "academia@example.com"
-
     @staticmethod
     def _payload(email):
         return {
@@ -304,7 +322,6 @@ class TestTheCooldownFollowsASentMessage:
     @pytest.fixture(autouse=True)
     def _throttled(self, settings):
         settings.RATELIMIT_ENABLE = True
-        settings.CONTACT_FORM_RECIPIENT = "academia@example.com"
         cache.clear()
         yield
         cache.clear()
@@ -424,19 +441,6 @@ class TestContactForm:
     looked identical to one that worked — and nobody follows up on a message
     they believe was delivered.
     """
-
-    @pytest.fixture(autouse=True)
-    def _recipient(self, settings):
-        """Pin the recipient instead of inheriting it from the environment.
-
-        It defaults to DEFAULT_FROM_EMAIL, which is EMAIL_HOST_USER, which is
-        empty in CI — so without this the endpoint correctly answers 503 and
-        every test below fails for a reason unrelated to the code under test.
-        Same shape as the `_test_send_recipients` gotcha in CLAUDE.md: a test
-        that inherits half its configuration from the developer's own `.env`
-        passes locally and fails in CI, or the reverse.
-        """
-        settings.CONTACT_FORM_RECIPIENT = "academia@example.com"
 
     @staticmethod
     def _payload(**overrides):

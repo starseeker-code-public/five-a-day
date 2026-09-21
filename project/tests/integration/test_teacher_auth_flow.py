@@ -85,6 +85,96 @@ class TestTeacherLoginFlow:
         assert response.context["password_reset_available"] is False
 
 
+class TestTheLoginPageLinksToTheOtherEnvironment:
+    """Production offers testing, testing offers production, dev offers neither.
+
+    A convenience for the two people who move between the QA VM and production
+    all day, and the only part worth pinning is the ABSENCE in development:
+    that is the case with no obvious right answer (a dev box is neither
+    deployment, so neither sibling is "the other one"), which makes it the case
+    a later change is most likely to get wrong by being helpful.
+    """
+
+    #: Matches the MARKUP only. A bare "env-hop" also matches the stylesheet,
+    #: which login.html renders unconditionally — so asserting on the class name
+    #: alone is true in every environment and proves nothing.
+    MARKUP = '<p class="env-hop">'
+
+    @staticmethod
+    def _link(client):
+        return client.get(reverse("login")).context["sibling_environment"]
+
+    def test_production_offers_the_testing_vm(self, client, settings):
+        settings.ENVIRONMENT = "production"
+        settings.TESTING_SITE_URL = "http://qa.example"
+
+        link = self._link(client)
+        assert link["url"].startswith("http://qa.example")
+        assert link["icon"] == "science"
+
+    def test_testing_offers_production(self, client, settings):
+        settings.ENVIRONMENT = "testing"
+        settings.PRODUCTION_SITE_URL = "https://prod.example"
+
+        link = self._link(client)
+        assert link["url"].startswith("https://prod.example")
+        assert link["icon"] == "rocket_launch"
+
+    def test_development_offers_neither(self, client, settings):
+        """The rule with no obvious default, so the one most worth pinning.
+
+        A developer's machine is not one of the two deployments. Rendering both
+        links would make the control mean something locally that it means
+        nowhere it ships, and would put the QA VM's address on every dev screen
+        for a shortcut only two hosts can use.
+        """
+        settings.ENVIRONMENT = "development"
+        assert self._link(client) is None
+        assert self.MARKUP not in client.get(reverse("login")).content.decode()
+
+    def test_the_path_comes_from_reverse_not_a_typed_prefix(self, client, settings):
+        """The sibling runs this same codebase, so its login path is ours.
+
+        Pinned because writing "/app/login/" by hand here would be the exact
+        mistake `test_no_hand_written_url_misses_the_app_mount_prefix` exists to
+        catch — invisible until APP_URL_PREFIX changes, at which point the link
+        silently 404s on the far side where nobody is watching.
+        """
+        settings.ENVIRONMENT = "production"
+        settings.TESTING_SITE_URL = "http://qa.example"
+
+        assert self._link(client)["url"] == f"http://qa.example{reverse('login')}"
+        assert reverse("login").startswith(f"/{settings.APP_URL_PREFIX}/")
+
+    def test_an_unset_origin_yields_no_link_at_all(self, client, settings):
+        """Not a link to `"" + /app/login/`, which is THIS origin wearing the
+        other environment's label — a button that looks like a hop and reloads
+        the page you are already on."""
+        settings.ENVIRONMENT = "production"
+        settings.TESTING_SITE_URL = ""
+        assert self._link(client) is None
+
+    def test_a_trailing_slash_on_the_origin_does_not_double_up(self, client, settings):
+        settings.ENVIRONMENT = "production"
+        settings.TESTING_SITE_URL = "http://qa.example/"
+        assert "//app" not in self._link(client)["url"].removeprefix("http://")
+
+    def test_the_rendered_link_cannot_reach_back_through_window_opener(self, client, settings):
+        """It opens a tab and is the one cross-origin link on this page.
+
+        Without `noopener` the opened document can navigate its opener — and
+        the opener here is a login form, so the attack is replacing it with a
+        copy that harvests the password.
+        """
+        settings.ENVIRONMENT = "production"
+        settings.TESTING_SITE_URL = "http://qa.example"
+
+        html = client.get(reverse("login")).content.decode()
+        start = html.index(self.MARKUP)
+        anchor = html[start : html.index("</p>", start)]
+        assert 'rel="noopener noreferrer"' in anchor
+
+
 class TestNonAdminTeacherMiddleware:
     """Verify the non-admin whitelist blocks admin-only routes."""
 

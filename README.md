@@ -15,11 +15,11 @@ Built to centralize student records, automate billing cycles, and streamline par
 ### Project Status
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v1.31.1-brightgreen?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-v1.31.2-brightgreen?style=flat-square" alt="Version">
   &nbsp;|&nbsp;
   <a href="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml?query=branch%3Amain"><img src="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml/badge.svg?branch=main&style=flat-square" alt="CI main"></a>
   &nbsp;|&nbsp;
-  <img src="https://img.shields.io/badge/coverage-94.22%25-brightgreen?style=flat-square" alt="Coverage">
+  <img src="https://img.shields.io/badge/coverage-94.23%25-brightgreen?style=flat-square" alt="Coverage">
   &nbsp;|&nbsp;
   <a href="https://github.com/starseeker-code-public/five-a-day/actions/workflows/scorecard.yml"><img src="https://img.shields.io/badge/OpenSSF%20Scorecard-monitored-blueviolet?style=flat-square" alt="OSSF Scorecard"></a>
   &nbsp;|&nbsp;
@@ -36,9 +36,9 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 | Version | Date | Description |
 |---------|------|-------------|
-| **v1.31.1** | 2026-09-21 | Contact form hardening, QA links fixed after the `/app` move |
+| **v1.31.2** | 2026-09-21 | CI fixes: CodeQL pin coherence, CSRF test shell; login environment link |
+| v1.31.1 | 2026-09-21 | Contact form hardening, QA links fixed after the `/app` move |
 | v1.31.0 | 2026-09-20 | Public tester role, per-page SEO for the public site |
-| v1.30.4 | 2026-09-20 | Token-authenticated contact relay for the owner's portfolio |
 
 ---
 
@@ -140,8 +140,37 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 ## Version History
 
-<details id="v1311" open>
-<summary><strong>v1.31.1 — Contact form hardening, QA links fixed after the `/app` move (current)</strong></summary>
+<details id="v1312" open>
+<summary><strong>v1.31.2 — CI fixes: CodeQL pin coherence, CSRF test shell; login environment link (current)</strong></summary>
+
+**CodeQL stopped analysing anything, and the rule that prevents it was documentation only**
+
+- Dependabot bumped `github/codeql-action/init`, `/autobuild` and `/upload-sarif` to v4.38.1 and left `/analyze` on v4.38.0 — it opens one PR per step, and no PR was ever raised for the fourth. The steps share a state file that carries its version, so every run failed at `analyze` with *"Loaded a configuration file for version '4.38.1', but running version '4.38.0'"*. No analysis ran; the Security tab simply stopped being updated.
+- **This was the second time.** PR #53 did the same thing in v1.27.x, taking `init` to v4.37.9 while `autobuild` and `analyze` stayed on the v3 SHA. The rule — all `github/codeql-action/*` steps share ONE SHA — was written into `CLAUDE.md` after the first occurrence and enforced by nothing, so the second occurrence was found the same way as the first: a red run after the merge.
+- All five pins across three workflows now carry the same SHA, and new [`test_codeql_action_pins.py`](project/tests/unit/test_codeql_action_pins.py) fails the suite if they ever diverge again. It also asserts the comment names an **exact** version rather than a bare major (`# v4`), because Dependabot only rewrites pins it can resolve to one — a bare-major comment freezes that line while its siblings advance, which is the mechanism behind both incidents. The check cannot live in the workflow: a mismatched pin breaks the very job that would have to do the checking.
+
+**Seven test failures that only ever appeared in CI**
+
+- Both had the same shape, and it is the shape the `spa_shell` fixture's own docstring warns about: a test inheriting part of its setup from the developer's machine passes locally and fails in CI.
+- **The stubbed SPA shell had no `<head>`.** `frontend/dist` is gitignored and CI has no Node, so conftest stubs a shell — and that stub was written before `_inject_csrf_meta` existed. The v1.31.1 CSRF work publishes the token by replacing `</head>`, so on the stub it published nothing and all six public-route assertions failed. Locally every developer has a real build, which has a `<head>`, so the gap was invisible. The stub is now a minimal but complete document.
+- **The contact-form recipient came from the developer's `.env`.** `CONTACT_FORM_RECIPIENT` falls back to `DEFAULT_FROM_EMAIL` → `EMAIL_HOST_USER`, which is empty in CI, so the end-to-end CSRF POST was answered **503 before CSRF was ever consulted** — a failure message about the token that had nothing to do with the token. Three test classes already pinned the recipient for exactly this reason and the fourth did not get a copy; it is now one module-level autouse fixture, so the next class cannot miss it.
+
+**A link to the other environment on the staff login page**
+
+- `/app/login/` now carries a small link at the foot pointing at the *other* deployment: production offers the QA VM (a flask icon, "Ir al entorno de pruebas"), testing offers production (a rocket, "Ir a producción").
+- **Development shows neither**, which is the only part of the rule with no obvious answer and therefore the part pinned by a test: a developer's machine is not one of the two deployments, so there is no "other one" to point at, and rendering both would make the control mean something locally that it means nowhere it ships.
+- The path comes from `reverse("login")`, never a typed `/app/login/`, so it derives from `APP_URL_PREFIX` like every other app URL — both deployments run this codebase, so the prefix resolved here is the prefix the sibling serves. The two origins are `TESTING_SITE_URL` / `PRODUCTION_SITE_URL`, defaulted so that no environment needs a new variable: adding one to the Cloud Run line is another chance to drop the ~30 already there, since `--set-env-vars` replaces the whole set.
+- It is the one cross-origin link on the page and it opens a tab, so it carries `rel="noopener noreferrer"` — without it the opened document can navigate its opener, and the opener here is a login form.
+
+**Testing**
+
+- Suite at **2,834 tests, 94.23 % coverage**. New [`unit/test_codeql_action_pins.py`](project/tests/unit/test_codeql_action_pins.py) (3); [`integration/test_teacher_auth_flow.py`](project/tests/integration/test_teacher_auth_flow.py) gains the seven cross-environment link cases.
+- Both CI failures were reproduced locally before being fixed — the real `frontend/dist` moved aside and the mail env blanked — which turned exactly the seven failures CI reported, and the fixes verified against the same conditions.
+
+</details>
+
+<details id="v1311">
+<summary><strong>v1.31.1 — Contact form hardening, QA links fixed after the `/app` move</strong></summary>
 
 **Two URLs left behind when the app moved under `/app/`**
 
@@ -5400,6 +5429,14 @@ GOOGLE_REDIRECT_URI=              # http(s)://YOUR_HOST/auth/google/callback/
 # where somebody arriving from the portfolio needs telling what this is.
 # TESTER_LOGIN_NOTICE=
 
+# Origins of the OTHER deployment, for the small cross-environment link at the
+# foot of /app/login/. Production shows the testing one, testing shows the
+# production one, development shows NEITHER. Both are defaulted in settings.py,
+# so neither needs setting anywhere — override only if an address changes.
+# ORIGIN ONLY, no path: the path comes from reverse("login").
+# TESTING_SITE_URL=
+# PRODUCTION_SITE_URL=
+
 # Set EMAIL_ALLOWED_RECIPIENTS above before publishing the credentials, and
 # check the three things no code can enforce: the database holds only synthetic
 # seed data (never a production dump), PARENT_PORTAL_ENABLED is still false, and
@@ -5818,6 +5855,8 @@ The table below describes every variable in the [.env template](#env-template) a
 | `PORTFOLIO_CONTACT_RECIPIENT` | Where that relay delivers. Deliberately has **no fallback** — the value it would inherit is the *academy's* inbox, so a missing variable would quietly send a stranger's message to the academy's staff | No | — (relay disabled) |
 | `EMAIL_ALLOWED_RECIPIENTS` | Comma-separated addresses and/or `@domain` suffixes. When **non-empty**, `EmailService` drops every other recipient before the message reaches the backend — the only containment that also covers the Celery-dispatched transactional mail (welcome, receipt, Fun Friday). **Unset means pass-through**, deliberately: production never sets it, and a fail-closed default would silently stop the academy's real mail. Set it on the QA VM (v1.31.0) | No | — (send to everyone) |
 | `TESTER_LOGIN_NOTICE` | Free text shown above the staff login form when non-empty. Exists for the public tester account, whose credentials are published externally — the in-app tester banner is keyed on the session, which does not exist yet at the login page (v1.31.0) | No | — (no notice) |
+| `TESTING_SITE_URL` | Origin of the QA VM, used for the login page's cross-environment link (v1.31.2). Rendered only when `DJANGO_ENV=production`; the path is appended from `reverse("login")`, so this is an origin with no path | No | `http://34.26.130.187:8000` |
+| `PRODUCTION_SITE_URL` | Origin of the Cloud Run service, the same link in the other direction — rendered only when `DJANGO_ENV=testing`. Development renders neither (v1.31.2) | No | `https://fiveaday-332600671945.europe-southwest1.run.app` |
 | `TEACHER_SEED_<N>_TESTER` | Marks a `seed_teachers` block as the **public tester account** (pair with `ADMIN=False`). Written only when `IS_TESTING_ENV`, and the one block whose `PASSWORD` is re-applied on every run (v1.31.0) | No | `False` |
 | **Test suite only** (read by `project/settings_test.py`) | | | |
 | `TEST_DB_HOST` | Postgres host for the test database — `make test` sets `db` inside Docker | No | `localhost` |
@@ -6002,7 +6041,7 @@ five-a-day/
 │   │   └── management/commands/  send_email, test_all_emails, plus 4 Beat-task wrappers
 │   │                             (v1.14.2 — birthday, reminders, report, Fun Friday drain)
 │   │
-│   ├── tests/                    pytest suite (2,824 tests, 94.22 % coverage) — unit/ + integration/
+│   ├── tests/                    pytest suite (2,834 tests, 94.23 % coverage) — unit/ + integration/
 │   │   └── e2e/                  End-to-end journeys vs the REAL Google Drive (v1.29.10) — NOT
 │   │                         pytest (`make test` and CI skip them); `make e2e` / the `e2e`
 │   │                         pre-commit hook. run.py (entry point + safety refusal),
@@ -6401,9 +6440,9 @@ Public flow at `/app/password-reset/...` that lets a teacher recover access with
 
 | Metric | Value |
 |--------|-------|
-| **Total tests** | 2,824 (Python) + 141 (frontend, Vitest) |
+| **Total tests** | 2,834 (Python) + 141 (frontend, Vitest) |
 | **Test files** | 124 (69 unit + 55 integration) + 4 Vitest files |
-| **Coverage** | 94% (94.22% — 8,029 statements, 464 uncovered) |
+| **Coverage** | 94% (94.23% — 8,039 statements, 464 uncovered) |
 | **Coverage thresholds** | **≥ 90%** (target, no warning) / **75-89%** (CI warning, pre-commit still blocks below 75) / **< 75%** (CI fails, pre-commit rejects the commit) |
 | **Runtime** | ~220 seconds (parallel workers via `pytest-xdist -n auto`) |
 | **Database** | PostgreSQL (same as production) — **always use `make test`** |
@@ -6451,7 +6490,7 @@ Within each file, related tests are grouped into classes. Where a large file abs
 
 ### Unit Tests
 
-**69 files, 1,209 tests.** Direct-call tests — no HTTP stack, no URL resolver, no template rendering.
+**70 files, 1,212 tests.** Direct-call tests — no HTTP stack, no URL resolver, no template rendering.
 
 | File | Count | Coverage |
 | --- | --- | --- |
@@ -6523,11 +6562,12 @@ Within each file, related tests are grouped into classes. Where a large file abs
 | [`unit/test_drive_service.py`](project/tests/unit/test_drive_service.py) | 40 | `core.services.drive_service.DriveReceiptService` (v1.29.0) — the folder-path logic (`Curso YYYY/YYYY+1/Recibos/<Mes> YY/`, whose Curso rolls over in **August**, deliberately NOT the billing academic-year boundary), find-or-create at each level, idempotency by the `<paymentID>_` filename prefix so re-completion and `backfill_drive_receipts` never duplicate, and the **never-raises** guarantee: every failure path returns a `DriveUploadResult` with a status (`uploaded` / `skipped_exists` / `disabled` / `not_configured` / `error`) instead of propagating, because the Drive copy is a convenience on top of the `Payment` row and the emailed receipt — an unshared folder or a bad credential must leave payment completion untouched. The **environment gate** is now simply `_is_production()` (v1.29.10): the QA opt-in toggle and its `testing/` sandbox were removed, because the OAuth consent the archive now depends on cannot be completed on the QA VM at all, and it touches no database, so no row can switch the real archive on or off. `curso_folder_name` is pinned to the academy's two-digit `Curso YYYY/YY` — the four-digit form built a parallel tree beside the real one and reported success. The **credential route** is pinned too: the delegated account wins over both service-account routes, because a service account authenticates perfectly well and then fails the upload with `storageQuotaExceeded`, which reads like a Drive outage rather than a wiring mistake. An autouse fixture declares `ENVIRONMENT="production"` for the file, because the suite otherwise runs as development and every upload assertion would be testing the refusal |
 | [`unit/test_drive_oauth_connection.py`](project/tests/unit/test_drive_oauth_connection.py) | 28 | The delegated Google account the archive runs on (v1.29.10). A service account cannot file these receipts — it owns what it uploads and has no Drive storage on a consumer account — so the uploader is a real account connected once from `/app/management/`. Pins the parts that are easy to get wrong and impossible to notice: the refresh token is Fernet-encrypted with a key derived from `SECRET_KEY`, so the column never holds the plaintext and a database dump does not yield it; two encryptions of the same secret differ (the column must not leak equality); an undecryptable value reads as *absent* rather than raising, because the only realistic cause is a rotated `SECRET_KEY` and the honest consequence is "reconnect"; the delegated account beats both service-account routes; the whole control is absent on the QA VM — hidden in the template AND refused by the views, since a hidden button whose URL still works is the failure the whitelist/decorator pairing exists to prevent; and Home nags an admin on **every** visit while the archive is disconnected, never a teacher |
 | [`unit/test_part_time_child_modality.py`](project/tests/unit/test_part_time_child_modality.py) | 12 | The **infantil** band (v1.29.4): `part_time_child` present in `SCHEDULE_TYPE_CHOICES` and `monthly_part_child` in `ENROLLMENT_PLAN_CHOICES`, `monthly_fee_for` / `period_base_amount` / `quarterly_price_from_monthly` resolving it off `SiteConfiguration.part_time_child_monthly_fee`, `EnrollmentService._resolve_plan` returning the right `(amount, schedule_type, modality)` for both the standard and the hand-priced case, and every discount (hermano, cheque idioma, junio) layering on top of it exactly as on full time |
+| [`unit/test_codeql_action_pins.py`](project/tests/unit/test_codeql_action_pins.py) | 3 | Every `github/codeql-action/*` step across all three workflows must share ONE SHA (v1.31.2). The steps exchange a state file carrying their version, so a run whose `init` is v4.38.1 and whose `analyze` is v4.38.0 dies with a version-mismatch error and analyses nothing — silently, since the only symptom is a Security tab that stops updating. It has happened twice, both times because Dependabot bumps each step as a separate dependency in a separate PR. Also asserts each pin's comment names an **exact** version rather than a bare major, because Dependabot only rewrites pins it can resolve to one — a `# v4` comment freezes that line while its siblings advance, which is the mechanism behind both incidents. Cannot be enforced in the workflow: a mismatched pin breaks the very job that would do the checking. The fixture asserts it parsed something, so a `uses:` syntax change cannot make all three pass vacuously |
 | [`unit/test_deploy_posture_gate.py`](project/tests/unit/test_deploy_posture_gate.py) | 17 | `POSTURE_ENV_KEYS` in `deploy-production.yml` pinned to the production posture guard in `settings.py` (v1.29.4) — the two are one rule written in two languages and cannot be a shared constant, so the test parses the YAML and loads `settings.py` in isolation under a private module name. A key the guard checks but the gate does not compare is how `CACHE_DB` reached production on the service and on none of the 12 jobs; a key the gate demands but the guard ignores (`DJANGO_ALLOWED_HOSTS`) is a false positive that fails a real deploy. Also asserts `PAUSED_OK_SCHEDULES` is empty and that an empty inventory is fatal |
 
 ### Integration Tests
 
-**55 files, 1,615 tests.** Full HTTP stack through Django's test client.
+**55 files, 1,622 tests.** Full HTTP stack through Django's test client.
 
 | File | Count | Coverage |
 | --- | --- | --- |
@@ -6548,7 +6588,7 @@ Within each file, related tests are grouped into classes. Where a large file abs
 | [`integration/test_student_views.py`](project/tests/integration/test_student_views.py) | 36 | `StudentListView` (search, exclude inactive, context), `StudentDetailView` (parents visible, 404), `StudentCreateView` (form + adult mode + success + full POST + error paths including invalid parent, existing-parent mode, create_sibling flag, email-task swallow), `search_students` JSON endpoint (results + short-query empty), and the v1.20.0 pricing surface: `price_config` exposing `quarterly_gross`, both hand-set prices reaching the payments, the matrícula falling back to the standard fee when left blank, and a special matrícula fee rejected without "Precio especial" ticked. v1.22.0 adds the first-period proration the creation form previews, asserting the context fraction comes from the same `PaymentService` helper the generator bills with. v1.26.0 adds the 500-row list cap. v1.28.2: the special pricing tests now drive `customize_recurring`, plus a matrícula-only special that keeps the standard cuota |
 | [`integration/test_management_views.py`](project/tests/integration/test_management_views.py) | 27 | `gestion_view` + `update_site_config` (all fields + bad JSON), `create_teacher` (success + duplicate + missing field + bad JSON), `create_group` (success + missing fields + duplicate + nonexistent teacher + bad JSON), `api_get_teachers`, `update_enrollment_modality` (success + invalid + no enrollment + student not found), `language_cheque_students` |
 | [`integration/test_dev_teacher_login.py`](project/tests/integration/test_dev_teacher_login.py) | 14 | Development login now reaches Teacher auth (v1.26.8): the env-var admin path still works and still mints a superuser, a seeded **non-admin** Teacher logs in by handle *and* by email, that session is not granted admin, missing `LOGIN_USERNAME`/`LOGIN_PASSWORD` no longer blocks Teacher auth, and an email matching two `auth.User` rows is refused rather than resolved arbitrarily |
-| [`integration/test_teacher_auth_flow.py`](project/tests/integration/test_teacher_auth_flow.py) | 41 | Login dispatcher branches (dev env-var vs `auth.User`-backed Teacher login), OAuth user creation/Teacher-linking, `_finalize_session_login` setting both `_auth_user_id` and `is_authenticated`, `SimpleAuthMiddleware` whitelist behaviour for non-admin Teachers (allowed routes, 403 JSON for `/api/*`, dashboard redirect with flash for HTML), template gating (sidebar swap, read-only management). v1.29.4 adds the per-teacher student scope — the roll, the ficha (404 on another teacher's student), the autocomplete and the language-cheque endpoint all narrowed by `visible_students_for`, waiting-list placeholders still visible, a restricted session with no Teacher row seeing nothing, admins unaffected — and Fun Friday being admin-only at both layers |
+| [`integration/test_teacher_auth_flow.py`](project/tests/integration/test_teacher_auth_flow.py) | 48 | Login dispatcher branches (dev env-var vs `auth.User`-backed Teacher login), OAuth user creation/Teacher-linking, `_finalize_session_login` setting both `_auth_user_id` and `is_authenticated`, `SimpleAuthMiddleware` whitelist behaviour for non-admin Teachers (allowed routes, 403 JSON for `/api/*`, dashboard redirect with flash for HTML), template gating (sidebar swap, read-only management). v1.29.4 adds the per-teacher student scope — the roll, the ficha (404 on another teacher's student), the autocomplete and the language-cheque endpoint all narrowed by `visible_students_for`, waiting-list placeholders still visible, a restricted session with no Teacher row seeing nothing, admins unaffected — and Fun Friday being admin-only at both layers. v1.31.2 adds the login page's cross-environment link: production offering testing and testing offering production with the right icon each way, **development offering neither** (the case with no obvious default, so the one most likely to be 'helpfully' broken later), the path coming from `reverse("login")` rather than a typed prefix, an unset origin yielding no link at all rather than a same-origin one wearing the other environment's label, and the rendered anchor carrying `rel="noopener noreferrer"` |
 | [`integration/test_password_management.py`](project/tests/integration/test_password_management.py) | 17 | The two authenticated password entry points (v1.26.8). `change_password`: the happy path (session survives via `update_session_auth_hash`, an `AuditLog` row is written), wrong current password, mismatched confirmation, Django's validators, a non-object JSON body, GET refused, the 5/5 min rate limit, and the 403 for Google-OAuth sessions and accounts with no usable password. `send_password_setup_email`: `create_teacher` mails the activation link, the message says which of the two outcomes happened, a dead SMTP hop still keeps the Teacher, and the link actually sets a password on an account Django's stock `PasswordResetForm` would have skipped |
 | [`integration/test_two_factor_views.py`](project/tests/integration/test_two_factor_views.py) | 19 | 2FA views and the login gate (v1.13): setup page (QR + secret), manage page (disable, rotate backup codes), the login gate flow (TOTP accepted, backup code accepted, wrong code rejected), and the `reset_two_factor` management command |
 | [`integration/test_dashboard_views.py`](project/tests/integration/test_dashboard_views.py) | 15 | `home` view quote-cookie branches (valid cookie, corrupt cookie -> API, API failure, API empty, `[AUTH]` placeholder filtered, with pending payments), `all_info` sort variants (default, first_name, last_name, id_asc, payments_sort=student_asc) |
@@ -6620,11 +6660,11 @@ Within each file, related tests are grouped into classes. Where a large file abs
 | `core/tasks.py` | 133 | 18 | 86% | 77-80, 181-183, 203-207, 211-212, 244, 365-366, 407-411, 416 |
 | `core/transactions.py` | 23 | 2 | 91% | 73, 78 |
 | `core/views/app_forms.py` | 593 | 36 | 94% | 254, 337-342, 371, 430-439, 479-480, 569, 660-662, 674-677, 683-684, 817-818, 838-839, 876-878, 1126, 1315, 1330-1334, 1462, 1654-1660, 1678-1681 |
-| `core/views/auth.py` | 200 | 11 | 94% | 72, 75-77, 259, 282, 329, 348, 403, 486-487 |
+| `core/views/auth.py` | 210 | 11 | 95% | 124, 127-129, 316, 339, 386, 405, 460, 543-544 |
 | `core/views/dashboard.py` | 159 | 4 | 97% | 212, 355-357 |
 | `core/views/expenses.py` | 135 | 11 | 92% | 30-31, 160, 183-184, 217-219, 252-254 |
 | `core/views/features.py` | 173 | 20 | 88% | 139, 163-164, 214-218, 276-282, 329-333 |
-| `core/views/frontend.py` | 83 | 9 | 89% | 163-170, 318-319, 353 |
+| `core/views/frontend.py` | 83 | 9 | 89% | 163-170, 316-317, 351 |
 | `core/views/google_drive.py` | 113 | 76 | 33% | 98-101, 109-125, 134-165, 174-239, 248-252 |
 | `core/views/management.py` | 156 | 5 | 97% | 363, 400, 434-436 |
 | `core/views/parent_portal.py` | 193 | 5 | 97% | 109, 394, 512, 567, 586 |
@@ -6639,7 +6679,7 @@ Within each file, related tests are grouped into classes. Where a large file abs
 | `students/forms.py` | 100 | 2 | 98% | 319-320 |
 | `students/models.py` | 338 | 9 | 97% | 190-191, 513, 597-598, 800-803 |
 
-**53 files** have 100% coverage (skipped above). Total coverage: **94.22%** across 8,029 statements. Coverage is **good**. Coverage is enforced at three levels: pre-commit hook (≥ 75%), CI hard floor (≥ 75%), and CI warning (< 90%).
+**53 files** have 100% coverage (skipped above). Total coverage: **94.23%** across 8,039 statements. Coverage is **good**. Coverage is enforced at three levels: pre-commit hook (≥ 75%), CI hard floor (≥ 75%), and CI warning (< 90%).
 
 ---
 
@@ -7307,7 +7347,7 @@ make up                        # Start Docker (PostgreSQL + Redis + Django + Cel
 1. Work on `development` (or a short-lived branch off `development`)
 2. Make changes following the conventions below
 3. Run `make pc-run` — Ruff + mypy + bandit all pass, offers to auto-bump the patch version on success, and auto-stages `uv.lock` if regenerated
-4. Run `make test` — all 2,824 tests must pass (PostgreSQL via Docker, parallel, with coverage) — and `make frontend-test` for the 141 Vitest ones if you touched `frontend/`
+4. Run `make test` — all 2,834 tests must pass (PostgreSQL via Docker, parallel, with coverage) — and `make frontend-test` for the 141 Vitest ones if you touched `frontend/`
 5. `git commit` with a message like `v1.14.7 — Short description` (version first, em dash — matches every other release commit in the project)
 6. `git push origin development`
 7. CI runs automatically on your push (see [CI/CD](#cicd--github-actions))
