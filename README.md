@@ -15,11 +15,11 @@ Built to centralize student records, automate billing cycles, and streamline par
 ### Project Status
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v1.31.0-brightgreen?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-v1.31.1-brightgreen?style=flat-square" alt="Version">
   &nbsp;|&nbsp;
   <a href="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml?query=branch%3Amain"><img src="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml/badge.svg?branch=main&style=flat-square" alt="CI main"></a>
   &nbsp;|&nbsp;
-  <img src="https://img.shields.io/badge/coverage-94.25%25-brightgreen?style=flat-square" alt="Coverage">
+  <img src="https://img.shields.io/badge/coverage-94.22%25-brightgreen?style=flat-square" alt="Coverage">
   &nbsp;|&nbsp;
   <a href="https://github.com/starseeker-code-public/five-a-day/actions/workflows/scorecard.yml"><img src="https://img.shields.io/badge/OpenSSF%20Scorecard-monitored-blueviolet?style=flat-square" alt="OSSF Scorecard"></a>
   &nbsp;|&nbsp;
@@ -36,9 +36,9 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 | Version | Date | Description |
 |---------|------|-------------|
-| **v1.31.0** | 2026-09-20 | Public tester role, per-page SEO for the public site |
+| **v1.31.1** | 2026-09-21 | Contact form hardening, QA links fixed after the `/app` move |
+| v1.31.0 | 2026-09-20 | Public tester role, per-page SEO for the public site |
 | v1.30.4 | 2026-09-20 | Token-authenticated contact relay for the owner's portfolio |
-| v1.30.3 | 2026-09-19 | Skills: route around the sync-branches stash on a collision |
 
 ---
 
@@ -140,8 +140,60 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 ## Version History
 
-<details id="v1310" open>
-<summary><strong>v1.31.0 — Public tester role, per-page SEO for the public site (current)</strong></summary>
+<details id="v1311" open>
+<summary><strong>v1.31.1 — Contact form hardening, QA links fixed after the `/app` move (current)</strong></summary>
+
+**Two URLs left behind when the app moved under `/app/`**
+
+- v1.30.0 mounted the management app under `settings.APP_URL_PREFIX` and gave `/` to the public React site. Two hand-written paths did not move with it: the QA dashboard's backlog buttons posted to `/api/testing/backlog/<id>/update/` and the Desarrollos board linked rows to `/testing/features/<id>/`. Both 404.
+- The symptom is what made this expensive to diagnose: a 404 body is **HTML**, and `apiFetch` can only report an unparseable body as the generic *"El servidor ha devuelto un error"*. Two buttons therefore blamed the server for a release and a half, and every investigation started in the wrong place. The Desarrollos links failed the same way, one click later.
+- Both now come from `{% url %}` with a `0` placeholder that JS swaps the id into — the same pattern `expenses.html` already used, so Django owns the whole path including the prefix.
+- **A guard replaces the two fixes**: `test_no_hand_written_url_misses_the_app_mount_prefix` reads every template and JS module and fails on any quoted `/api/…`, `/students/…` or `/testing/…` literal that is neither `{% url %}`-derived nor prefixed with `${window.APP_PREFIX}`. It found all three offenders before they were fixed. It skips comments, because several of them legitimately quote an example path while explaining the rule.
+
+**The public contact form could not submit at all outside development**
+
+- `CSRF_COOKIE_HTTPONLY` is `True` whenever `DEBUG` is off, so on the testing VM and in production JavaScript cannot read the `csrftoken` cookie. The React form read it anyway, sent an empty `X-CSRFToken`, and every submission was refused with a **403** whose HTML body the handler cannot parse — so it fell through to "no hemos podido enviar el mensaje", which reads as a mail outage and sends the investigation to the SMTP layer.
+- It worked in development for the one reason that lets this class of bug reach production: with `DEBUG=True` the cookie is not HttpOnly.
+- The fix keeps the app's existing rule rather than inventing a second one. Every other page takes the token from markup Django rendered — the hidden input in `base.html`, read by `base.js`. A built file has no `{% csrf_token %}` tag, so `frontend_index` now injects the equivalent: a **`<meta name="csrf-token">`** tag, published per request into the shell it already serves.
+- The alternatives were worse and are recorded as refused: disabling `CSRF_COOKIE_HTTPONLY` weakens every page in the app to fix one form, and `@csrf_exempt` would be the fourth such view where the three that exist each justify it the same way — the caller is a **server** carrying its own credential, which a public browser POST cannot claim.
+
+**Reply on a contact enquiry answered the academy itself**
+
+- The visitor's address was passed as template *context* only, so it rendered as a `mailto:` button in the body while the message carried no `Reply-To` header. `From:` is the academy's own SMTP account and cannot be anything else, so pressing Reply answered the academy's own inbox — the academy writing to itself — and the family never heard back.
+- `EmailService.send_email` gained `reply_to` in v1.30.4 for exactly this, and `submit_portfolio_contact` uses it. The academy's own form, which runs every day, did not.
+
+**The acknowledgement is a dialog now**
+
+- The success state used to **replace** the form, so a family sending a correction or asking about a second child had no way back except reloading. [`ContactSuccessDialog`](frontend/src/components/ContactSuccessDialog.jsx) sits on top and the form is cleared underneath it.
+- It is a real dialog, not styled text: `role="dialog"` + `aria-modal`, an accessible name, focus moved in on open and restored to the trigger on close, Escape, backdrop click, a tab loop and a body scroll lock. A modal that only *looks* modal tells a screen reader nothing happened and leaves a keyboard user tabbing through a form they can no longer see.
+- **Clearing it with `form.reset()` was wrong and fails invisibly.** React keeps its own tracker of each input's last value; a native reset changes the DOM without going through React, so the tracker still holds the old text and the next keystroke replays it — typing "Ana" into a visibly empty box yields "AnaAna", and the doubled email then fails HTML validation so the next message is never sent at all. The fields are **controlled** instead, which also revives `formData`: state the component wrote on every keystroke and never read.
+- Three floating layers were all `z-50` (navbar, WhatsApp popup, dialog), so DOM order decided and the popup — rendered last by `Layout` — painted over the dialog, landing squarely on its buttons on a phone. The dialog is `z-[60]`. Only a screenshot showed it.
+
+**A validation policy for addresses typed by the public**
+
+- [`core/email_policy.py`](project/core/email_policy.py) is a leaf module that answers with an error **code**, so the wording stays in the view — the academy's site is Spanish and the portfolio relay's is English, and both can reuse the rule.
+- Deliberately **stricter than Django's `EmailValidator`**, which accepts forms no family types and each of which is a hazard downstream: a quoted local part can hide an `@` or a comma (`"ana@evil.test"@gmail.com`), an address literal (`ana@[192.168.0.1]`) has no domain to check at all, and a non-ASCII address is legal but cannot be relied on to route through this academy's Gmail — taking an enquiry we then fail to answer is worse than refusing it plainly. Tests assert *both* halves, so they fail if a future Django tightens up and the justification quietly stops being true.
+- RFC length caps are checked **first**, so the work is bounded on hostile input; whitespace is refused anywhere in the address, because a newline is the shape header injection takes.
+- **A 40-domain allowlist** covering the global consumer providers with their `.es` spellings, the privacy providers, and the Spanish ISPs where long-standing family addresses still live. Membership, not suffix matching — `endswith` would accept `gmail.com.evil.test`.
+- **The cost is stated rather than hidden**: an allowlist refuses real people as a side effect of refusing throwaway addresses. So the refusal names another provider, WhatsApp *and* the academy's address; it is a different message from a syntax error (telling somebody who mistyped that their *provider* is unacceptable sends them off to create an account they did not need); and each refusal logs the **domain only**, never the address, which is both the privacy-safe half and the actionable one — those lines are the evidence for what to add to the list.
+
+**A cooldown that does not punish a typo**
+
+- `core.rate_limit` gained `cooldown_active` / `begin_cooldown`, and the contact form starts a 60-second wait **after a message is actually sent**.
+- It is deliberately not a second `@rate_limit` decorator, and that distinction is the whole point: a decorator claims its slot **before** the view runs, so a submission the view then refuses would still spend it. The commonest refusal here is a mistyped email — the family would be told to correct the address and then refused for a minute when they did, the site appearing to break at the exact moment they fixed their own mistake. The existing 5-per-10-minutes window still counts every attempt, which is what bounds abuse.
+- The cooldown answers **JSON**, unlike the limiter's own `text/plain` 429, so the form shows the academy's wording instead of blaming the send for a wait. The button counts the same number down, and a test pins the two copies of that number against drift.
+- The helpers honour `RATELIMIT_ENABLE` like the decorator: the cache is shared across the suite and every test client is `127.0.0.1`, so a cooldown left set would throttle an unrelated test. The tests that exercise it switch it on explicitly — without that they would pass vacuously, proving only that the control is off.
+
+**Testing**
+
+- New [`test_email_policy.py`](project/tests/unit/test_email_policy.py) covering every refusal branch, the Django-parity assertions, and a property check that every domain on the allowlist is actually reachable by the validator (a typo in the list is invisible: the entry simply never matches).
+- [`test_frontend_site.py`](project/tests/integration/test_frontend_site.py) gained the CSRF-meta end-to-end assertion under `enforce_csrf_checks`, the `Reply-To` pin, the refuse-then-correct cooldown sequence and the cooldown drift check; [`test_frontend_invariants.py`](project/tests/integration/test_frontend_invariants.py) gained the app-prefix guard.
+- The existing contact tests submitted `ana@example.com`, which the allowlist correctly refuses — those fixtures now use a real provider.
+
+</details>
+
+<details id="v1310">
+<summary><strong>v1.31.0 — Public tester role, per-page SEO for the public site</strong></summary>
 
 **A third role: the public tester account**
 
@@ -311,7 +363,7 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 **Frontend testing**
 
-- **Vitest + React Testing Library in jsdom** (`frontend/src/test/`, 132 tests): every route
+- **Vitest + React Testing Library in jsdom** (`frontend/src/test/`, 141 tests): every route
   renders, one `<h1>` per page, alt text, root-absolute `src`, `rel=noopener`; the contact form's
   success and failure paths; the navbar; and `data.js` integrity — every asset path must exist on
   disk and every internal link must be a real route.
@@ -4778,7 +4830,7 @@ All tools configured in `pyproject.toml` — single source of truth.
 | Vanilla JavaScript | 18 static modules for the **management app** — zero build tools, no framework |
 | [React](https://react.dev/) 19 + [React Router](https://reactrouter.com/) 7 | The **public site** at `/` (`frontend/`). A separate stack from the app, which stays server-rendered Django templates |
 | [Vite](https://vite.dev/) 8 + [Tailwind CSS](https://tailwindcss.com/) 4 | Public-site build. Content-hashed output in `frontend/dist`, served by Django + WhiteNoise — `base: '/'`, because the sources reference `/images/...` as absolute paths |
-| [Vitest](https://vitest.dev/) 5 + React Testing Library + jsdom | 132 component tests (`make frontend-test`) |
+| [Vitest](https://vitest.dev/) 5 + React Testing Library + jsdom | 141 component tests (`make frontend-test`) |
 
 ### Infrastructure & Deployment
 
@@ -5584,7 +5636,7 @@ Run `make` or `make help` for the full list. Key commands:
 | `make e2e` | Every end-to-end journey in `project/tests/e2e/` against the **real** Google Drive (v1.29.10) — enrol → bill → collect over HTTP → receipt email → a genuine upload → cleanup. Discovery is by filename (`*_journey.py`), so adding a journey is adding a file. `ARGS=--list` names them, `ARGS='--only payment'` runs one, `ARGS=--keep` leaves the evidence behind. Deliberately NOT part of `make test`: these are not pytest tests, they run against the DEV database rather than a throwaway one, and CI cannot run them because it has no Drive credential — the CI-safe half is `project/tests/integration/test_payment_journey.py`. The runner exits `0` all passed / `1` a check failed / `2` nothing could be verified; Make collapses both failures to its own exit 2, so read the SUMMARY block to tell a regression from an unconfigured box |
 | **Frontend** (public React site) | |
 | `make frontend-build` | Build `frontend/` into `frontend/dist`. Django serves it at `/`; until this has run once, `/` answers 404 with a message saying so |
-| `make frontend-test` | Vitest component tests in jsdom (132). Covers what `make test` structurally cannot - Django returning 200 for `/faq` only proves it served the SHELL |
+| `make frontend-test` | Vitest component tests in jsdom (141). Covers what `make test` structurally cannot - Django returning 200 for `/faq` only proves it served the SHELL |
 | `make frontend-dev` | Vite dev server on `:6001` with HMR, proxying `/app`, `/static`, `/media`, `/api` and `/health` to Django, so both halves are reachable from the ONE origin they share in production |
 | `make frontend-lint` | ESLint over the React sources |
 | `make frontend-install` | `npm ci` (the three above run it for you when `node_modules` is missing) |
@@ -5831,7 +5883,14 @@ five-a-day/
 │   │   │                         FunFridayScheduledSend (v1.14.2)
 │   │   ├── audit_models.py       AuditLog (v1.10 — immutable per-model change trail)
 │   │   ├── audit_signals.py      Signal receivers + AuditActorMiddleware (contextvar-based actor)
-│   │   ├── rate_limit.py         Cache-backed IP rate limiter (v1.10)
+│   │   ├── rate_limit.py         Cache-backed IP rate limiter (v1.10) + cooldown_active /
+│   │   │                         begin_cooldown (v1.31.1 — a wait AFTER a successful
+│   │   │                         action; a decorator would spend its slot on a
+│   │   │                         submission the view then refuses)
+│   │   ├── email_policy.py       v1.31.1 — validation for an address typed by the PUBLIC:
+│   │   │                         stricter than EmailValidator, plus a 40-domain
+│   │   │                         allowlist. Leaf module, returns an error CODE so the
+│   │   │                         wording stays with the caller
 │   │   ├── log_safe.py           safe_log() — CR/LF-stripping log sanitizer (v1.14.4)
 │   │   ├── github_dispatch.py    notify_github_qa_signoff() — repository_dispatch that arms
 │   │   │                         Deploy production on QA's sign-off (v1.26.7, fail-soft)
@@ -5943,7 +6002,7 @@ five-a-day/
 │   │   └── management/commands/  send_email, test_all_emails, plus 4 Beat-task wrappers
 │   │                             (v1.14.2 — birthday, reminders, report, Fun Friday drain)
 │   │
-│   ├── tests/                    pytest suite (2,742 tests, 94.25 % coverage) — unit/ + integration/
+│   ├── tests/                    pytest suite (2,824 tests, 94.22 % coverage) — unit/ + integration/
 │   │   └── e2e/                  End-to-end journeys vs the REAL Google Drive (v1.29.10) — NOT
 │   │                         pytest (`make test` and CI skip them); `make e2e` / the `e2e`
 │   │                         pre-commit hook. run.py (entry point + safety refusal),
@@ -5960,7 +6019,7 @@ five-a-day/
 │   ├── index.html                SPA shell (served by core.views.frontend, not WhiteNoise,
 │   │                             so NoHtmlCacheMiddleware can mark it no-cache). Carries the
 │   │                             SEO:START / SEO:END markers the generator rewrites between
-│   ├── src/                      pages/ components/ hooks/ data.js + test/ (Vitest, 132 tests)
+│   ├── src/                      pages/ components/ hooks/ data.js + test/ (Vitest, 141 tests)
 │   │   ├── seo.js                v1.31.0 — THE single source for every page title,
 │   │   │                         description, canonical URL and JSON-LD schema. Read by
 │   │   │                         both the build generator and the useSeo() hook
@@ -6342,9 +6401,9 @@ Public flow at `/app/password-reset/...` that lets a teacher recover access with
 
 | Metric | Value |
 |--------|-------|
-| **Total tests** | 2,742 (Python) + 132 (frontend, Vitest) |
-| **Test files** | 123 (68 unit + 55 integration) + 4 Vitest files |
-| **Coverage** | 94% (94.25% — 7,942 statements, 457 uncovered) |
+| **Total tests** | 2,824 (Python) + 141 (frontend, Vitest) |
+| **Test files** | 124 (69 unit + 55 integration) + 4 Vitest files |
+| **Coverage** | 94% (94.22% — 8,029 statements, 464 uncovered) |
 | **Coverage thresholds** | **≥ 90%** (target, no warning) / **75-89%** (CI warning, pre-commit still blocks below 75) / **< 75%** (CI fails, pre-commit rejects the commit) |
 | **Runtime** | ~220 seconds (parallel workers via `pytest-xdist -n auto`) |
 | **Database** | PostgreSQL (same as production) — **always use `make test`** |
@@ -6392,7 +6451,7 @@ Within each file, related tests are grouped into classes. Where a large file abs
 
 ### Unit Tests
 
-**68 files, 1,153 tests.** Direct-call tests — no HTTP stack, no URL resolver, no template rendering.
+**69 files, 1,209 tests.** Direct-call tests — no HTTP stack, no URL resolver, no template rendering.
 
 | File | Count | Coverage |
 | --- | --- | --- |
@@ -6400,6 +6459,7 @@ Within each file, related tests are grouped into classes. Where a large file abs
 | [`unit/test_security_hardening.py`](project/tests/unit/test_security_hardening.py) | 66 | One regression test per finding of the v1.23.0 security review, each asserting behaviour that failed before the fix: the OAuth callback storing no token/refresh-token/client-secret in the session and failing closed on an empty allow-list or absent `email_verified`; `csv_safe` neutralising `=`/`+`/`-`/`@` in all four export paths while leaving a negative `Decimal` intact; `QAErrorEmailMiddleware` gated on `IS_TESTING_ENV` and redacting credentials from **both** urlencoded and multipart bodies; the rate limiter reading `X-Forwarded-For` from the right and throttling `/app/password-reset/`; 64-bit backup codes through `make_password` with the legacy sha256 digests still accepted; TOTP replay refused at or below `two_factor_last_counter`; the production start-up posture guard; CSP + Permissions-Policy headers; magic-byte screenshot validation; and the 12-character password minimum. v1.26.0 adds the nonce-based CSP `script-src` (fresh nonce per request, exposed to templates) and `core.utils.safe_int` (unparseable input and out-of-`date`-range years fall back instead of 500ing) |
 | [`unit/test_logging_utils.py`](project/tests/unit/test_logging_utils.py) | 44 | `core.logging_utils` (v1.29.7), the stdlib-only layer `dictConfig` builds before the app registry exists. `CloudLoggingFormatter` emits one JSON object per line with an explicit `severity` (the field Cloud Logging trusts over the stream, which is why an INFO written to stderr used to arrive as an error), `sourceLocation`, and a trace field only when `GOOGLE_CLOUD_PROJECT` makes it fully qualified — never a fabricated one. Plus `HumanFormatter`'s id prefix, the `RequestContextFilter` that stamps `request_id` on every record, `extra={...}` keys reaching the payload while reserved `LogRecord` attributes do not, exception text appended to `message` (a traceback in a collapsed field alone is one nobody reads mid-outage), and the header sanitizers replacing — not cleaning — anything unrecognised |
 | [`unit/test_models.py`](project/tests/unit/test_models.py) | 61 | Every model across `students`, `billing`, `core` — properties (`full_name`, `age`, `is_overdue`, `payment_totals`, `is_up_to_date`, `overdue_amount`), `__str__`, unique constraints, FK behavior, academic-year helpers (`current_academic_year`, `academic_year_start_date`, `academic_year_end_date`), SiteConfiguration singleton + its per-request memo (repeated calls cost one query, save invalidates, refresh bypasses), HistoryLog cap + debounce |
+| [`unit/test_email_policy.py`](project/tests/unit/test_email_policy.py) | 56 | `core.email_policy`, the only thing between a public form and the academy's inbox. Every refusal branch (blank, malformed, whitespace inside the address, non-ASCII, over-length, domain off the allowlist), and the length cap asserted to run BEFORE anything scans the string. `TestStricterThanDjango` asserts BOTH halves of each extra rule — that `EmailValidator` accepts a quoted local part hiding an `@`, an address literal and an unknown domain, and that this module does not — so it fails if a future Django tightens up and the justification quietly stops being true. One property check walks the whole allowlist and asserts every entry is actually reachable by the validator, because a typo there is invisible: the entry simply never matches and the family it was added for keeps being refused |
 | [`unit/test_expenses.py`](project/tests/unit/test_expenses.py) | 49 | `Expense` model + `ExpenseService` (v1.5): per-frequency `clean()` validation, monthly totals aggregation, `materialize_recurring` (monthly, 1st-of-month) and `materialize_recurring_for_date` (weekly `recurring_weekdays` CSV + yearly), idempotency on `generated_from` + exact `expense_date`, and `recurring_day` accepting the whole 1–31 range (29–31 clamp to the month's last day) |
 | [`unit/test_gcp_cost_service.py`](project/tests/unit/test_gcp_cost_service.py) | 30 | `GcpCostService` — real GCP spend from the BigQuery billing export: `month_cost` config gate, per-month caching (success TTLs + brief failure caching so a broken export can't slow every render), the credential chain (dedicated JSON/file → Sheets service account → ADC, malformed values falling through), `_query_month` table-id validation, named-parameter payload, response parsing (quantized, NULL sum ⇒ 0.00, incomplete job / transport error ⇒ None), `archive_month` (creates the `software` row on the month's last day, idempotent, zero/unavailable/unconfigured paths), `previous_month` year rollover, `qa_card_amounts` preferring the archived row, and the `archive_gcp_costs` command wrapper (defaults, backfill args, non-zero exit on an unreachable export) |
 | [`unit/test_payment_amounts_and_validation.py`](project/tests/unit/test_payment_amounts_and_validation.py) | 31 | What a payment is worth and what the write paths refuse to store. Each pins a defect verified broken against the running app: adult-student payments crashing search + CSV export, quarterly discounts (sibling, language cheque, June), completed payments with no `payment_date` vanishing from income, non-idempotent quick-complete rewriting financial history, payments attaching to a finished enrollment, unvalidated choice fields, `str(e)` leaking to the browser, cancelled payments inflating "esperado", query strings that used to 500, negative prices, singleton deletion, and the `enrollment_amount` fallback |
@@ -6467,7 +6527,7 @@ Within each file, related tests are grouped into classes. Where a large file abs
 
 ### Integration Tests
 
-**55 files, 1,589 tests.** Full HTTP stack through Django's test client.
+**55 files, 1,615 tests.** Full HTTP stack through Django's test client.
 
 | File | Count | Coverage |
 | --- | --- | --- |
@@ -6514,8 +6574,8 @@ Within each file, related tests are grouped into classes. Where a large file abs
 | [`integration/test_students_app_guards.py`](project/tests/integration/test_students_app_guards.py) | 40 | The students app's write paths and the admin's blind spots. `clean_group`'s waiting-list exemption was **dead code**: Django cleans `group` before `is_waiting`, so the key was never present and editing a waiting-list student whose preferred group was full — the normal state, since a full group is *why* they wait — was rejected outright. Also covers the group cap now reaching the admin form, `resend_portal_invitation` stamping rather than clearing the once-only guard (clearing it let a later sibling enrollment re-fire the invite and invalidate the temporary password the family was holding), the duplicate-portal-email rule being asymmetric on purpose (admin refuses, `ParentForm` warns so the same-DNI sibling path survives), DNI kept out of the audit label, `birth_date` genuinely optional, and `Group` occupancy preferring an annotation when one is present |
 | [`integration/test_enrollment_transitions.py`](project/tests/integration/test_enrollment_transitions.py) | 35 | Every way a cadence or plan change could bill a month twice or not at all — service-level, anchored to an elapsed course so the assertions are not date bombs. A modality flip used to re-bill months already **collected** under the old cadence, because billed-month idempotency is keyed on `payment_type` and the pending-only DB constraint cannot see a completed row of the other type. Pins the supersede shape (old enrollment finished on the cadence it billed, replacement anchored past every covered month of *either* cadence), `covered_months` expanding a quarterly row to its three months, the mid-month handover moving to the 1st so head days are neither double-billed nor dropped, and the refusal path leaving nothing written |
 | [`integration/test_mass_mail.py`](project/tests/integration/test_mass_mail.py) | 38 | Who actually receives a mass mail, and what the operator is told. **Waiting-list families were receiving everything** — every recipient query filtered on active children without excluding waiting entries. Also pins case-insensitive address de-duplication (`Parent.email` is legitimately not unique, so a couple sharing a mailbox got two copies), the counted set and the sent set being the same set, parents without an email no longer inflating the count, an SMTP connection failure reporting a tally instead of 500ing, the tax certificate deliberately keeping waiting-list families (the document attests money actually paid), and the PDF table widths that were overflowing a 174 mm frame |
-| [`integration/test_frontend_invariants.py`](project/tests/integration/test_frontend_invariants.py) | 31 | The server-observable half of the frontend pass: write controls gated on `is_admin_user`, the money on the student ficha hidden from a non-admin teacher, `<html lang="es">`, no misleading required asterisk on optional fields, and the `{{ x }} euros` / bare-number contract on the payment-reminder template. Two structural guards live here because nothing else can catch them: one asserts `tailwind-config.js` and `palette.css` declare the same palette (the inline copies had already drifted — `verify.html`'s was missing `fontFamily`), and one scans every inline `style=""` attribute by perceived lightness and fails on a light background hex outside `theme.css`'s matched set. That second test found four pre-existing dark-mode bugs on its first run. v1.30.4 makes the `lang` check allowlist-aware: `NON_SPANISH_TEMPLATES` carries the handful that are legitimately another language (the portfolio relay's email), checked against their **declared** language rather than skipped, with a companion test failing on a stale path |
-| [`integration/test_frontend_site.py`](project/tests/integration/test_frontend_site.py) | 40 | Django's half of serving the public React site. Parses `App.jsx` and fails if its routes disagree with `SPA_ROUTES` — drift there is silent in the direction that matters, because a route added in React but missing here works on every in-app click and 404s only on a refresh. Also: every public route returns the same shell, the shell is `no-cache` and sets a CSRF cookie (without which the contact form cannot POST at all), an unknown path is a real 404, and the contact endpoint's validation, honeypot, field-label whitelist and HTML escaping. One test asserts the contact email declares itself light-only and carries no `prefers-color-scheme` |
+| [`integration/test_frontend_invariants.py`](project/tests/integration/test_frontend_invariants.py) | 32 | The server-observable half of the frontend pass: write controls gated on `is_admin_user`, the money on the student ficha hidden from a non-admin teacher, `<html lang="es">`, no misleading required asterisk on optional fields, and the `{{ x }} euros` / bare-number contract on the payment-reminder template. Two structural guards live here because nothing else can catch them: one asserts `tailwind-config.js` and `palette.css` declare the same palette (the inline copies had already drifted — `verify.html`'s was missing `fontFamily`), and one scans every inline `style=""` attribute by perceived lightness and fails on a light background hex outside `theme.css`'s matched set. That second test found four pre-existing dark-mode bugs on its first run. v1.30.4 makes the `lang` check allowlist-aware: `NON_SPANISH_TEMPLATES` carries the handful that are legitimately another language (the portfolio relay's email), checked against their **declared** language rather than skipped, with a companion test failing on a stale path. v1.31.1 adds the app-mount-prefix guard: it reads every template and JS module and fails on a quoted `/api/…` or `/testing/…` literal that is neither `{% url %}`-derived nor `${window.APP_PREFIX}`-prefixed — the shape that 404'd the QA backlog buttons for a release and a half, reported only as a generic server error. It blanks comments first, since several legitimately quote an example path while explaining the rule |
+| [`integration/test_frontend_site.py`](project/tests/integration/test_frontend_site.py) | 65 | Django's half of serving the public React site. Parses `App.jsx` and fails if its routes disagree with `SPA_ROUTES` — drift there is silent in the direction that matters, because a route added in React but missing here works on every in-app click and 404s only on a refresh. Also: every public route returns the same shell, the shell is `no-cache` and sets a CSRF cookie (without which the contact form cannot POST at all), an unknown path is a real 404, and the contact endpoint's validation, honeypot, field-label whitelist and HTML escaping. One test asserts the contact email declares itself light-only and carries no `prefers-color-scheme`. v1.31.1 adds the three controls the form now depends on: the `<meta name="csrf-token">` Django injects into the shell, asserted end to end under `enforce_csrf_checks` because the cookie is HttpOnly outside development and a cookie reader 403s every submission; the `Reply-To` header, without which pressing Reply answers the academy's own inbox; and the cooldown — including the sequence that matters, a refused address followed by the corrected one, which must go through |
 | [`integration/test_portfolio_contact.py`](project/tests/integration/test_portfolio_contact.py) | 36 | The portfolio contact relay (v1.30.4), a second tenant sharing this deployment. Authentication: an unset token answers 503 rather than opening the relay, a missing / malformed / wrong bearer token all return the same 401 body so the header shape is not an oracle, and the rate limit applies to failed guesses as well as accepted calls. Payload: required fields, truncation at the caps, a JSON array or scalar body refused as a 400 rather than 500ing on `.get`, and `None` never rendered as the string "None". Delivery: the recipient comes from settings and never from the caller, `Reply-To` carries the writer's address, and the mail carries no academy branding or data-protection footer. Two regressions pinned: no Django template syntax survives into the sent body, and the message is rendered once |
 | [`integration/test_consistency_guards.py`](project/tests/integration/test_consistency_guards.py) | 7 | Rules the codebase deliberately writes down **twice**, pinned so the two halves cannot drift. A duplication that cannot be removed is legitimate — hand-written CSS cannot read a JS object, JavaScript cannot import a Python service — but one with nothing holding it together is the bug waiting to happen, and it is this project's dominant failure mode. Covers `student-create.js`'s mirror of `PaymentService.proration_fraction` (checked over every day of a year plus a leap February, because the preview an admin quotes and the invoice the family is billed must agree), `price_config` carrying a key for every `ENROLLMENT_PLAN_CHOICES` value (a missing one previews **0 euros** rather than erroring), `testing_tools`'s hand-typed `BacklogTask` choice sets against the model's own, and `QAErrorEmailMiddleware.REDACT_KEYS` against every `type="password"` input any template renders. Each guard was verified by mutation — the invariant broken, the test confirmed to fail |
 | [`integration/test_academic_year_and_billing_guards.py`](project/tests/integration/test_academic_year_and_billing_guards.py) | 18 | Which academic year an enrollment is stamped with — a wrong one is never billed at all — and the write-path guards found alongside it: the €0.00 matrícula that must not be written, the group cap enforced on write, and the modality switch cancelling superseded pending rows (rewritten in v1.27.1 — the switch now supersedes the enrollment, so the assertion is on the specific superseded row rather than the absence of every pending monthly row, because the handover legitimately gap-fills the taught month) |
@@ -6548,9 +6608,11 @@ Within each file, related tests are grouped into classes. Where a large file abs
 | `core/context_processors.py` | 46 | 1 | 98% | 88 |
 | `core/date_utils.py` | 6 | 1 | 83% | 23 |
 | `core/decorators.py` | 56 | 10 | 82% | 74-75, 107-110, 137-140 |
+| `core/email_policy.py` | 44 | 2 | 95% | 163-164 |
 | `core/logging_utils.py` | 82 | 4 | 95% | 212, 214, 246-247 |
 | `core/middleware.py` | 263 | 13 | 95% | 293, 339, 350-355, 415, 421, 740, 752, 795, 895-901, 977-979 |
 | `core/models.py` | 217 | 3 | 99% | 336, 369, 418 |
+| `core/rate_limit.py` | 93 | 5 | 95% | 149-151, 160-161 |
 | `core/services/capacity_service.py` | 11 | 1 | 91% | 30 |
 | `core/services/drive_service.py` | 183 | 2 | 99% | 525-526 |
 | `core/services/google_sheets_service.py` | 101 | 7 | 93% | 75-77, 132-135 |
@@ -6562,7 +6624,7 @@ Within each file, related tests are grouped into classes. Where a large file abs
 | `core/views/dashboard.py` | 159 | 4 | 97% | 212, 355-357 |
 | `core/views/expenses.py` | 135 | 11 | 92% | 30-31, 160, 183-184, 217-219, 252-254 |
 | `core/views/features.py` | 173 | 20 | 88% | 139, 163-164, 214-218, 276-282, 329-333 |
-| `core/views/frontend.py` | 58 | 9 | 84% | 115-122, 200-201, 223 |
+| `core/views/frontend.py` | 83 | 9 | 89% | 163-170, 318-319, 353 |
 | `core/views/google_drive.py` | 113 | 76 | 33% | 98-101, 109-125, 134-165, 174-239, 248-252 |
 | `core/views/management.py` | 156 | 5 | 97% | 363, 400, 434-436 |
 | `core/views/parent_portal.py` | 193 | 5 | 97% | 109, 394, 512, 567, 586 |
@@ -6577,7 +6639,7 @@ Within each file, related tests are grouped into classes. Where a large file abs
 | `students/forms.py` | 100 | 2 | 98% | 319-320 |
 | `students/models.py` | 338 | 9 | 97% | 190-191, 513, 597-598, 800-803 |
 
-**54 files** have 100% coverage (skipped above). Total coverage: **94.25%** across 7,942 statements. Coverage is **good**. Coverage is enforced at three levels: pre-commit hook (≥ 75%), CI hard floor (≥ 75%), and CI warning (< 90%).
+**53 files** have 100% coverage (skipped above). Total coverage: **94.22%** across 8,029 statements. Coverage is **good**. Coverage is enforced at three levels: pre-commit hook (≥ 75%), CI hard floor (≥ 75%), and CI warning (< 90%).
 
 ---
 
@@ -7245,7 +7307,7 @@ make up                        # Start Docker (PostgreSQL + Redis + Django + Cel
 1. Work on `development` (or a short-lived branch off `development`)
 2. Make changes following the conventions below
 3. Run `make pc-run` — Ruff + mypy + bandit all pass, offers to auto-bump the patch version on success, and auto-stages `uv.lock` if regenerated
-4. Run `make test` — all 2,742 tests must pass (PostgreSQL via Docker, parallel, with coverage) — and `make frontend-test` for the 132 Vitest ones if you touched `frontend/`
+4. Run `make test` — all 2,824 tests must pass (PostgreSQL via Docker, parallel, with coverage) — and `make frontend-test` for the 141 Vitest ones if you touched `frontend/`
 5. `git commit` with a message like `v1.14.7 — Short description` (version first, em dash — matches every other release commit in the project)
 6. `git push origin development`
 7. CI runs automatically on your push (see [CI/CD](#cicd--github-actions))

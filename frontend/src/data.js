@@ -409,6 +409,21 @@ export const contactForm = {
     "Rellena el formulario con tus datos personales y nos pondremos en contacto contigo lo antes posible.",
   successTitle: "¡Mensaje enviado correctamente!",
   successBody: "Hemos recibido tu formulario. Para una respuesta más rápida, también puedes contactarnos por WhatsApp.",
+  // Shown in the confirmation dialog under successBody. It answers the one
+  // question a family actually has after sending ("and now what?"), which the
+  // old inline panel left unanswered.
+  successFollowUp: "Te responderemos lo antes posible en el horario de atención.",
+  successWhatsappLabel: "Escríbenos por WhatsApp",
+  successCloseLabel: "Cerrar",
+  // Seconds the send button stays disabled after a message goes through. This
+  // MUST equal CONTACT_COOLDOWN_SECONDS in core/views/frontend.py — the server
+  // is what actually enforces it (a script never runs this countdown), and a
+  // button that re-enables early would invite a click answered with a 429.
+  // `tests/integration/test_frontend_site.py` fails if the two disagree.
+  cooldownSeconds: 60,
+  cooldownLabel: "Espera",
+  throttleMessage:
+    "Acabas de enviarnos un mensaje. Espera un momento antes de enviar otro, o escríbenos por WhatsApp.",
   legalLinkLabel: "Aviso legal",
   maintenanceActive: false,
   maintenanceTitle: "Formulario en Mantenimiento",

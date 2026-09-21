@@ -1,28 +1,60 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { contactForm, siteConfig } from "../data";
+import ContactSuccessDialog from "./ContactSuccessDialog";
 
 // Django serves this site now, so the form posts to our own endpoint instead
 // of to Netlify Forms (which handled a POST to "/" while the site was deployed
 // there, and which simply does not exist here). See core/views/frontend.py.
 const CONTACT_ENDPOINT = "/api/contact/";
 
-// Django's CsrfViewMiddleware protects this POST like any other. The token is
-// read from the cookie because this page is a static bundle with no Django
-// template to render a hidden input into — and it works precisely because the
-// public site sets no session: CSRF_COOKIE_HTTPONLY only hides the cookie from
-// JS when DEBUG is off, so the cookie is read here as a best effort and the
-// endpoint is additionally rate-limited and honeypotted.
-function getCookie(name) {
-  const match = document.cookie.match(new RegExp("(^| )" + name + "=([^;]+)"));
+// The CSRF token, from the <meta> tag Django injects into this document
+// (core/views/frontend.py::_inject_csrf_meta) — NOT from document.cookie.
+// `CSRF_COOKIE_HTTPONLY` is True whenever DEBUG is off, so a cookie reader
+// returns "" on the testing VM and in production and every submission is
+// refused with a 403 the handler below can only report as a generic failure.
+// It works in development, which is exactly why it reached production.
+// The cookie stays as a fallback for a stale cached shell served without the tag.
+function getCsrfToken() {
+  const meta = document.querySelector('meta[name="csrf-token"]');
+  if (meta?.content) return meta.content;
+  const match = document.cookie.match(/(^| )csrftoken=([^;]+)/);
   return match ? decodeURIComponent(match[2]) : "";
 }
 
 export default function ContactSection() {
   const [formData, setFormData] = useState({});
   const [submitted, setSubmitted] = useState(false);
+  // Mounted vs. animated-in, kept apart so the panel can transition FROM its
+  // hidden state: setting both in one render would paint it already open and
+  // there would be nothing to animate. Same split as WhatsAppPopup.
+  const [dialogVisible, setDialogVisible] = useState(false);
   const [error, setError] = useState("");
   const [sending, setSending] = useState(false);
+  // Seconds left before another message may be sent. The SERVER enforces this
+  // (core/views/frontend.py, CONTACT_COOLDOWN_SECONDS); the countdown exists so
+  // somebody who double-clicks sees why the button is inert instead of meeting
+  // a 429 they did not ask for.
+  const [cooldown, setCooldown] = useState(0);
+
+  useEffect(() => {
+    if (!submitted) return undefined;
+    const id = setTimeout(() => setDialogVisible(true), 20);
+    return () => clearTimeout(id);
+  }, [submitted]);
+
+  useEffect(() => {
+    if (cooldown <= 0) return undefined;
+    const id = setTimeout(() => setCooldown((left) => left - 1), 1000);
+    return () => clearTimeout(id);
+  }, [cooldown]);
+
+  const closeDialog = () => {
+    setDialogVisible(false);
+    // Unmount only once the fade-out has run; the duration matches the
+    // transition in styles.css (section 11).
+    setTimeout(() => setSubmitted(false), 250);
+  };
 
   const handleChange = (e) => {
     setFormData({ ...formData, [e.target.name]: e.target.value });
@@ -38,7 +70,7 @@ export default function ContactSection() {
         method: "POST",
         headers: {
           "Content-Type": "application/x-www-form-urlencoded",
-          "X-CSRFToken": getCookie("csrftoken"),
+          "X-CSRFToken": getCsrfToken(),
         },
         body: new URLSearchParams(payload).toString(),
       });
@@ -48,6 +80,15 @@ export default function ContactSection() {
       // because nobody follows up on a message they believe was delivered.
       const body = await response.json().catch(() => null);
       if (!response.ok || !body?.success) {
+        // A throttled request is answered by the rate limiter itself, which
+        // replies text/plain — so `body` is null and the generic message would
+        // blame the send rather than explain the wait. The status decides here,
+        // the same way base.js does it for the management app.
+        if (response.status === 429) {
+          setError(body?.error || contactForm.throttleMessage);
+          setCooldown(contactForm.cooldownSeconds);
+          return;
+        }
         setError(
           body?.error ||
             "No hemos podido enviar el mensaje. Inténtalo de nuevo o escríbenos por WhatsApp.",
@@ -55,6 +96,19 @@ export default function ContactSection() {
         return;
       }
       setSubmitted(true);
+      setCooldown(contactForm.cooldownSeconds);
+      // Clearing the state IS clearing the boxes, because the fields below are
+      // controlled. That mattered the moment success stopped unmounting the
+      // form: `formData` was written on every keystroke and never read, so the
+      // fields kept their text behind the dialog.
+      //
+      // The obvious fix — `form.reset()` — is WRONG here and fails in a way no
+      // amount of looking at the page reveals. React keeps its own tracker of
+      // each input's last value; a native reset changes the DOM without going
+      // through React, so the tracker still holds the old text and the next
+      // keystroke replays it: typing "Ana" into a visibly EMPTY box yields
+      // "AnaAna". Binding `value` keeps React the only writer and the question
+      // cannot arise.
       setFormData({});
     } catch {
       setError(
@@ -164,22 +218,6 @@ export default function ContactSection() {
                     Enviar WhatsApp
                   </a>
                 </div>
-              ) : submitted ? (
-                <div className="bg-accent-green/20 border-2 border-accent-green text-white p-8 rounded-lg text-center">
-                  <p className="text-lg font-heading font-semibold text-accent-green mb-3">{contactForm.successTitle}</p>
-                  <p className="text-white/90 mb-6">{contactForm.successBody}</p>
-                  <a
-                    href={siteConfig.whatsapp}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-flex items-center gap-2 bg-whatsapp hover:bg-whatsapp-dark text-white font-heading font-bold py-3 px-8 rounded-md transition-all duration-200 hover:-translate-y-0.5"
-                  >
-                    <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
-                      <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z" />
-                    </svg>
-                    Enviar WhatsApp
-                  </a>
-                </div>
               ) : (
                 <form name="contact" method="POST" onSubmit={handleSubmit} className="space-y-4">
                   {/* Honeypot: no human sees this, so anything in it is a bot.
@@ -213,7 +251,13 @@ export default function ContactSection() {
                             <label htmlFor={field.name} className="block text-sm font-medium text-white/70 mb-1">
                               {field.label}
                             </label>
-                            <select id={field.name} name={field.name} onChange={handleChange} className={inputClass}>
+                            <select
+                              id={field.name}
+                              name={field.name}
+                              value={formData[field.name] ?? ""}
+                              onChange={handleChange}
+                              className={inputClass}
+                            >
                               <option value="">Seleccionar...</option>
                               {field.options.map((opt) => (
                                 <option key={opt} value={opt} className="text-gray-900">{opt}</option>
@@ -232,6 +276,7 @@ export default function ContactSection() {
                             type={field.type}
                             name={field.name}
                             required={field.required}
+                            value={formData[field.name] ?? ""}
                             onChange={handleChange}
                             className={inputClass}
                           />
@@ -250,6 +295,7 @@ export default function ContactSection() {
                         name={field.name}
                         required={field.required}
                         rows={5}
+                        value={formData[field.name] ?? ""}
                         onChange={handleChange}
                         className={inputClass}
                       />
@@ -269,10 +315,14 @@ export default function ContactSection() {
                   <div className="flex justify-end pt-1">
                     <button
                       type="submit"
-                      disabled={sending}
+                      disabled={sending || cooldown > 0}
                       className="bg-linear-to-r from-accent-green to-accent-green-dark hover:-translate-y-0.5 hover:shadow-lg hover:shadow-accent-green/30 text-primary-darker font-heading font-bold py-3 px-10 rounded-md transition-all duration-200 text-base disabled:opacity-60 disabled:cursor-not-allowed disabled:hover:translate-y-0 disabled:hover:shadow-none"
                     >
-                      {sending ? "Enviando..." : contactForm.submitLabel}
+                      {sending
+                        ? "Enviando..."
+                        : cooldown > 0
+                          ? `${contactForm.cooldownLabel} ${cooldown}s`
+                          : contactForm.submitLabel}
                     </button>
                   </div>
 
@@ -306,6 +356,11 @@ export default function ContactSection() {
           </div>
         </div>
       </div>
+
+      {/* Rendered LAST and fixed-positioned, so it is not clipped by the
+          contact rectangle's `rounded-2xl` overflow or trapped in its stacking
+          context. */}
+      <ContactSuccessDialog open={submitted} visible={dialogVisible} onClose={closeDialog} />
     </section>
   );
 }

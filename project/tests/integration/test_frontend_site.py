@@ -9,14 +9,16 @@ itself.
 import json
 import re
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 from django.conf import settings
 from django.core import mail
+from django.core.cache import cache
 from django.test import Client
 from django.urls import reverse
 
-from core.views.frontend import CONTACT_FIELDS, SPA_ROUTES
+from core.views.frontend import CONTACT_COOLDOWN_SECONDS, CONTACT_FIELDS, CSRF_META_NAME, SPA_ROUTES
 
 pytestmark = pytest.mark.django_db
 
@@ -199,6 +201,220 @@ class TestSeoMetadataCoversEveryPage:
         assert site_url.group(1) == "https://fiveadayenglish.com"
 
 
+class TestTheEmailIsValidatedBeforeAnythingIsSent:
+    """The view's half of `core.email_policy` (which has its own unit tests).
+
+    What matters here is the WIRING: that a refused address stops the send, that
+    the two refusal reasons produce different messages, and that the domain
+    refusal offers a way round — the family it turns away is usually real.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _recipient(self, settings):
+        settings.CONTACT_FORM_RECIPIENT = "academia@example.com"
+
+    @staticmethod
+    def _payload(email):
+        return {
+            "nombre": "Ana",
+            "email": email,
+            "telefono": "600123456",
+            "mensaje": "Hola",
+        }
+
+    @pytest.mark.parametrize("email", ["ana@mailinator.com", "ana@no-existe-este-dominio.test"])
+    def test_a_domain_off_the_allowlist_sends_nothing(self, client, email):
+        response = client.post(reverse("submit_contact_form"), self._payload(email))
+        assert response.status_code == 400
+        assert response.json()["success"] is False
+        assert mail.outbox == []
+
+    def test_the_domain_refusal_names_a_channel_that_still_works(self):
+        """An allowlist WILL occasionally refuse a real family — a work address,
+        a small ISP. A dead end there is a lost enquiry, so the message has to
+        carry a route: another provider, WhatsApp, or the academy's address."""
+        client = Client()
+        response = client.post(reverse("submit_contact_form"), self._payload("ana@una-empresa.test"))
+        error = response.json()["error"]
+        assert "WhatsApp" in error
+        assert "hellofiveaday@gmail.com" in error
+
+    @pytest.mark.parametrize("email", ["ana", "ana@@gmail.com", "ana garcia@gmail.com", "ana@gmail"])
+    def test_a_malformed_address_sends_nothing(self, client, email):
+        response = client.post(reverse("submit_contact_form"), self._payload(email))
+        assert response.status_code == 400
+        assert mail.outbox == []
+
+    def test_a_malformed_address_is_not_told_to_change_provider(self):
+        """Two different problems, two different answers. Telling somebody who
+        mistyped their own address that their PROVIDER is unacceptable sends
+        them off to create an account they did not need."""
+        client = Client()
+        error = client.post(reverse("submit_contact_form"), self._payload("ana@@gmail.com")).json()["error"]
+        assert "WhatsApp" not in error
+
+    def test_the_address_is_normalised_before_it_reaches_the_reply_to(self):
+        client = Client()
+        response = client.post(reverse("submit_contact_form"), self._payload("  Ana@GMAIL.com  "))
+        assert response.status_code == 200
+        assert mail.outbox[0].reply_to == ["Ana@gmail.com"]
+
+    def test_a_refusal_logs_the_domain_and_never_the_address(self):
+        """This endpoint is public, so what arrives is a stranger's personal
+        data. The domain is the actionable half — it is what tells the academy
+        the allowlist needs widening.
+
+        Asserts on the logger rather than `caplog`: settings.LOGGING sets
+        `propagate: False` on the `core` logger, so its records never reach the
+        root handler caplog attaches to and `caplog.text` stays empty even
+        though the message is emitted (same reason as
+        `test_security_hardening.TestRateLimiterCacheOutage`).
+        """
+        client = Client()
+        with patch("core.views.frontend.logger") as mock_logger:
+            client.post(reverse("submit_contact_form"), self._payload("ana.garcia@mailinator.com"))
+
+        logged = " ".join(str(arg) for call in mock_logger.info.call_args_list for arg in call.args)
+        assert "mailinator.com" in logged
+        assert "ana.garcia" not in logged
+
+
+class TestTheCooldownCannotDriftFromTheForm:
+    """The server enforces the wait; the button counts the same number down.
+
+    Two copies of one number, so they are machine-checked — the direction that
+    fails quietly is the button re-enabling EARLY, which turns an honest second
+    click into a 429 the visitor did nothing to deserve.
+    """
+
+    def test_the_react_form_counts_down_the_server_s_own_cooldown(self):
+        source = _frontend_source("src", "data.js")
+        match = re.search(r"cooldownSeconds:\s*(\d+)", source)
+        assert match, "data.js no longer declares cooldownSeconds"
+        assert int(match.group(1)) == CONTACT_COOLDOWN_SECONDS
+
+
+class TestTheCooldownFollowsASentMessage:
+    """These run with the limiter switched ON, which the suite otherwise
+    disables — every test client is 127.0.0.1 and the cache is shared, so a
+    cooldown left set would throttle an unrelated test. Without the flag these
+    would all pass vacuously, proving only that the control is off.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _throttled(self, settings):
+        settings.RATELIMIT_ENABLE = True
+        settings.CONTACT_FORM_RECIPIENT = "academia@example.com"
+        cache.clear()
+        yield
+        cache.clear()
+
+    def test_a_refused_submission_does_not_start_the_cooldown(self, client):
+        """The commonest refusal here is a mistyped email.
+
+        A cooldown claimed by a decorator would be spent before the view ran, so
+        the family would be told to correct the address and then refused for a
+        minute when they did — the site appearing to break at the exact moment
+        they fixed their own mistake.
+        """
+        payload = {"nombre": "Ana", "telefono": "600123456", "mensaje": "Hola"}
+
+        refused = client.post(reverse("submit_contact_form"), {**payload, "email": "ana@gmial.commm"})
+        assert refused.status_code == 400
+
+        accepted = client.post(reverse("submit_contact_form"), {**payload, "email": "ana@gmail.com"})
+        assert accepted.status_code == 200, "correcting the address was refused by a cooldown"
+        assert len(mail.outbox) == 1
+
+    def test_a_sent_message_does_start_it(self, client):
+        payload = {"nombre": "Ana", "email": "ana@gmail.com", "telefono": "600123456", "mensaje": "Hola"}
+
+        assert client.post(reverse("submit_contact_form"), payload).status_code == 200
+        second = client.post(reverse("submit_contact_form"), payload)
+        assert second.status_code == 429
+        assert len(mail.outbox) == 1, "the cooldown let a second message through"
+
+    def test_the_cooldown_429_is_json_so_the_form_can_explain_it(self, client):
+        """The rate limiter's own 429 is text/plain, which the React handler
+        cannot parse — it would report the generic "no hemos podido enviar" and
+        blame the send for what is a wait."""
+        payload = {"nombre": "Ana", "email": "ana@gmail.com", "telefono": "600123456", "mensaje": "Hola"}
+        client.post(reverse("submit_contact_form"), payload)
+
+        second = client.post(reverse("submit_contact_form"), payload)
+        assert second["Content-Type"].startswith("application/json")
+        assert "WhatsApp" in second.json()["error"]
+
+
+class TestTheCsrfTokenReachesTheReactBundle:
+    """The public site is a BUILT file, so Django has to hand it the token.
+
+    Every other page takes the CSRF token from markup Django rendered — the
+    hidden `{% csrf_token %}` input in `base.html`, read by `base.js`. The
+    React site has no such input, and `CSRF_COOKIE_HTTPONLY` is True whenever
+    `DEBUG=False`, so the component's original `document.cookie` reader
+    returned "" on the testing VM and in production: every contact submission
+    was refused with a 403 whose HTML body the handler cannot parse, so it
+    reported its generic "no hemos podido enviar el mensaje" and the fault read
+    as a mail outage.
+
+    It worked in development — where the cookie is NOT HttpOnly — which is the
+    property that let it reach production. Both halves are pinned here because
+    either alone is useless: Django must publish the token, and React must read
+    the tag rather than the cookie.
+    """
+
+    def test_the_shell_carries_the_token_as_a_meta_tag(self, client, tmp_path, settings):
+        dist = tmp_path / "dist"
+        dist.mkdir()
+        (dist / "index.html").write_text("<html><head><title>x</title></head><body></body></html>", encoding="utf-8")
+        settings.FRONTEND_DIST_DIR = str(dist)
+
+        html = client.get("/").content.decode()
+        match = re.search(rf'<meta name="{CSRF_META_NAME}" content="([^"]+)">', html)
+        assert match, f"no {CSRF_META_NAME} meta tag in the served shell — every contact POST will 403"
+        assert match.group(1), "the meta tag is present but empty"
+
+    @pytest.mark.parametrize("route", SPA_ROUTES)
+    def test_every_public_route_carries_it_too(self, client, route):
+        """The form is in the shared layout, so it is reachable from any page."""
+        assert f'name="{CSRF_META_NAME}"' in client.get(f"/{route}").content.decode()
+
+    def test_the_token_is_accepted_by_a_real_post(self, client, tmp_path, settings):
+        """End to end: the published token must satisfy CsrfViewMiddleware.
+
+        `enforce_csrf_checks` because the test client disables CSRF by default,
+        which is exactly what would let this regress unnoticed.
+        """
+        dist = tmp_path / "dist"
+        dist.mkdir()
+        (dist / "index.html").write_text("<html><head></head><body></body></html>", encoding="utf-8")
+        settings.FRONTEND_DIST_DIR = str(dist)
+
+        checking = Client(enforce_csrf_checks=True)
+        html = checking.get("/").content.decode()
+        token = re.search(rf'<meta name="{CSRF_META_NAME}" content="([^"]+)">', html).group(1)
+
+        response = checking.post(
+            reverse("submit_contact_form"),
+            data={"nombre": "Ana", "email": "ana@gmail.com", "telefono": "600", "mensaje": "Hola"},
+            HTTP_X_CSRFTOKEN=token,
+        )
+        assert response.status_code == 200, "the published token was rejected — the two halves disagree"
+        assert response.json()["success"] is True
+
+    def test_the_react_form_reads_the_tag_and_not_the_cookie(self):
+        """The JS half. A cookie reader here is the bug, restated."""
+        source = _frontend_source("src", "components", "ContactSection.jsx")
+        meta_at = source.find(CSRF_META_NAME)
+        assert meta_at != -1, f"ContactSection.jsx does not read the {CSRF_META_NAME} meta tag"
+        cookie_at = source.find("csrftoken=")
+        assert cookie_at == -1 or cookie_at > meta_at, (
+            "ContactSection.jsx reads document.cookie before the meta tag; the cookie is "
+            "HttpOnly whenever DEBUG=False, so every submission 403s in testing and production"
+        )
+
+
 class TestContactForm:
     """Replaces Netlify Forms, which handled this while the site was deployed
     there and simply does not exist here.
@@ -227,7 +443,7 @@ class TestContactForm:
         data = {
             "nombre": "Ana",
             "apellidos": "García Ruiz",
-            "email": "ana@example.com",
+            "email": "ana@gmail.com",
             "telefono": "600123456",
             "horario": "17:40",
             "edad": "7",
@@ -260,9 +476,38 @@ class TestContactForm:
     def test_the_email_carries_every_submitted_field(self, client):
         client.post(reverse("submit_contact_form"), self._payload())
         body = self._html_body()
-        for value in ("Ana", "García Ruiz", "ana@example.com", "600123456", "17:40"):
+        for value in ("Ana", "García Ruiz", "ana@gmail.com", "600123456", "17:40"):
             assert value in body
         assert "quisiera información" in body
+
+    def test_reply_to_is_the_family_so_a_plain_reply_reaches_them(self, client):
+        """`From:` is the academy's own SMTP account and cannot be anything else.
+
+        Without this header, hitting Reply on an enquiry answers
+        hellofiveaday@gmail.com — the academy writing to itself — and the
+        prospective family never hears back. The template's mailto button is a
+        fallback for clients that ignore Reply-To, not a substitute: nobody
+        scrolls to a button before pressing Reply.
+
+        `submit_portfolio_contact` has had this since v1.30.4; the academy's own
+        form, which runs every day, was still passing the address as template
+        CONTEXT only.
+        """
+        client.post(reverse("submit_contact_form"), self._payload())
+        assert mail.outbox[0].reply_to == ["ana@gmail.com"]
+        assert mail.outbox[0].from_email == settings.DEFAULT_FROM_EMAIL
+        assert mail.outbox[0].to == [settings.CONTACT_FORM_RECIPIENT]
+
+    def test_the_visitor_is_never_a_recipient(self, client):
+        """Reply-To is a HEADER, not an address the academy's mail is sent to.
+
+        It also means `EMAIL_ALLOWED_RECIPIENTS` has nothing to filter here: the
+        enquiry goes to the academy and nowhere else, so a visitor cannot make
+        this endpoint deliver mail to an address of their choosing.
+        """
+        client.post(reverse("submit_contact_form"), self._payload())
+        message = mail.outbox[0]
+        assert "ana@gmail.com" not in (message.to + message.cc + message.bcc)
 
     def test_the_subject_names_the_sender(self, client):
         client.post(reverse("submit_contact_form"), self._payload())

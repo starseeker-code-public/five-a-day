@@ -12,13 +12,13 @@
  * message they believe was delivered. Several tests below exist only to keep
  * that from coming back.
  */
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import ContactSection from "../components/ContactSection";
-import { contactForm } from "../data";
+import { contactForm, siteConfig } from "../data";
 
 function renderForm() {
   return render(
@@ -107,6 +107,96 @@ describe("submitting successfully", () => {
     await user.click(screen.getByRole("button", { name: contactForm.submitLabel }));
 
     expect(await screen.findByText(contactForm.successTitle)).toBeInTheDocument();
+  });
+
+  it("confirms in a real dialog, not just styled text", async () => {
+    // A modal that only LOOKS modal tells a screen reader nothing happened.
+    const user = userEvent.setup();
+    mockFetch(ok());
+    renderForm();
+
+    await fillRequired(user);
+    await user.click(screen.getByRole("button", { name: contactForm.submitLabel }));
+
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog).toHaveAttribute("aria-modal", "true");
+    expect(dialog).toHaveAccessibleName(contactForm.successTitle);
+  });
+
+  it("clears the form so the next message starts from scratch", async () => {
+    // The success state used to REPLACE the form, so sending a correction or
+    // asking about a second child meant reloading the page. Now the form stays
+    // behind the dialog — which only helps if it is genuinely empty.
+    //
+    // Clearing it with `form.reset()` LOOKS right and is not: React keeps its
+    // own tracker of each input's last value, a native reset bypasses it, and
+    // the next keystroke replays the old text — typing "Ana" into a visibly
+    // empty box yields "AnaAna", and the doubled email then fails HTML
+    // validation so the next message is never sent at all. Emptiness alone
+    // does not prove the fix; retyping does. (The wait before that message can
+    // actually go is the cooldown, tested below.)
+    const user = userEvent.setup();
+    mockFetch(ok());
+    renderForm();
+
+    await fillRequired(user);
+    await user.click(screen.getByRole("button", { name: contactForm.submitLabel }));
+    await screen.findByRole("dialog");
+
+    expect(screen.getByLabelText(/^Nombre/)).toHaveValue("");
+    expect(screen.getByLabelText(/Déjanos un mensaje/)).toHaveValue("");
+
+    await user.click(screen.getByRole("button", { name: contactForm.successCloseLabel }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+
+    await user.type(screen.getByLabelText(/^Nombre/), "Ana");
+    expect(screen.getByLabelText(/^Nombre/)).toHaveValue("Ana");
+  });
+
+  it("closes on Escape", async () => {
+    const user = userEvent.setup();
+    mockFetch(ok());
+    renderForm();
+
+    await fillRequired(user);
+    await user.click(screen.getByRole("button", { name: contactForm.submitLabel }));
+    await screen.findByRole("dialog");
+
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  });
+
+  it("moves focus into the dialog and releases the page scroll on close", async () => {
+    // Focus left behind the modal means a keyboard user tabs through a form
+    // they can no longer see; a locked <body> left locked means the page never
+    // scrolls again.
+    const user = userEvent.setup();
+    mockFetch(ok());
+    renderForm();
+
+    await fillRequired(user);
+    await user.click(screen.getByRole("button", { name: contactForm.submitLabel }));
+    await screen.findByRole("dialog");
+
+    expect(screen.getByRole("button", { name: contactForm.successCloseLabel })).toHaveFocus();
+    expect(document.body.style.overflow).toBe("hidden");
+
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(document.body.style.overflow).not.toBe("hidden"));
+  });
+
+  it("offers WhatsApp as the faster channel", async () => {
+    const user = userEvent.setup();
+    mockFetch(ok());
+    renderForm();
+
+    await fillRequired(user);
+    await user.click(screen.getByRole("button", { name: contactForm.submitLabel }));
+
+    const dialog = await screen.findByRole("dialog");
+    const whatsapp = within(dialog).getByRole("link", { name: contactForm.successWhatsappLabel });
+    expect(whatsapp).toHaveAttribute("href", siteConfig.whatsapp);
+    expect(whatsapp).toHaveAttribute("rel", expect.stringContaining("noopener"));
   });
 
   it("does not reload the page", async () => {
@@ -236,6 +326,68 @@ describe("when the send fails", () => {
     await user.click(screen.getByRole("button", { name: contactForm.submitLabel }));
 
     await screen.findByRole("alert");
+    expect(screen.getByRole("button", { name: contactForm.submitLabel })).toBeEnabled();
+  });
+});
+
+describe("the cooldown between messages", () => {
+  it("disables the button and counts down after a send", async () => {
+    // The SERVER enforces the wait (two stacked rate_limit windows). This
+    // countdown exists so a second click is visibly refused here rather than
+    // answered with a 429 the visitor did nothing to earn.
+    const user = userEvent.setup();
+    mockFetch(ok());
+    renderForm();
+
+    await fillRequired(user);
+    await user.click(screen.getByRole("button", { name: contactForm.submitLabel }));
+    await screen.findByRole("dialog");
+    await user.click(screen.getByRole("button", { name: contactForm.successCloseLabel }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+
+    const button = screen.getByRole("button", { name: new RegExp(contactForm.cooldownLabel) });
+    expect(button).toBeDisabled();
+    expect(button).toHaveTextContent(new RegExp(`${contactForm.cooldownSeconds - 1}|${contactForm.cooldownSeconds}`));
+  });
+
+  it("explains a 429 instead of blaming the send", async () => {
+    // The rate limiter answers text/plain, so `response.json()` yields null and
+    // the generic "no hemos podido enviar" would tell a throttled visitor their
+    // message failed — which is both wrong and unactionable.
+    const user = userEvent.setup();
+    mockFetch({ ok: false, status: 429, json: async () => { throw new Error("not json"); } });
+    renderForm();
+
+    await fillRequired(user);
+    await user.click(screen.getByRole("button", { name: contactForm.submitLabel }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(contactForm.throttleMessage);
+  });
+
+  it("starts the countdown on a 429 too, so the retry is not refused again", async () => {
+    const user = userEvent.setup();
+    mockFetch({ ok: false, status: 429, json: async () => { throw new Error("not json"); } });
+    renderForm();
+
+    await fillRequired(user);
+    await user.click(screen.getByRole("button", { name: contactForm.submitLabel }));
+    await screen.findByRole("alert");
+
+    expect(screen.getByRole("button", { name: new RegExp(contactForm.cooldownLabel) })).toBeDisabled();
+  });
+
+  it("does not open the success dialog when the send was refused", async () => {
+    const user = userEvent.setup();
+    mockFetch({ ok: false, status: 400, json: async () => ({ success: false, error: "Revisa el email." }) });
+    renderForm();
+
+    await fillRequired(user);
+    await user.click(screen.getByRole("button", { name: contactForm.submitLabel }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Revisa el email.");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    // A refusal must NOT start a cooldown: the whole point is to fix the field
+    // and try again immediately.
     expect(screen.getByRole("button", { name: contactForm.submitLabel })).toBeEnabled();
   });
 });
