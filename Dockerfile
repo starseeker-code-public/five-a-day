@@ -13,7 +13,7 @@
 # `npm ci` — not `install` — so the image is built from package-lock.json
 # exactly, the same rule `uv sync --frozen` applies on the Python side.
 # Digest-pinned for the same reason as the Python base.
-FROM node:22-slim@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5 AS frontend
+FROM node:25-slim@sha256:81db02c4b671288a03915da9534dbd54f96d0e7c24d80ccc54f5b36b2e684370 AS frontend
 
 WORKDIR /build
 
