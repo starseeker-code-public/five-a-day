@@ -70,6 +70,14 @@ class Teacher(models.Model):
     phone = models.CharField(max_length=20, blank=True)
     active = models.BooleanField(default=True)
     admin = models.BooleanField(default=False)
+    tester = models.BooleanField(
+        default=False,
+        help_text=(
+            "Cuenta de PRUEBAS pública (solo en testing). No es administradora: "
+            "ve bastante más que una profesora normal, pero solo lo que "
+            "TESTER_ALLOWED_URL_NAMES permite, y nunca /admin/ ni el panel de QA."
+        ),
+    )
     user = models.OneToOneField(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
@@ -124,6 +132,26 @@ class Teacher(models.Model):
     def full_name(self):
         return f"{self.first_name} {self.last_name}"
 
+    @property
+    def grants_django_admin(self) -> bool:
+        """THE answer to "should the linked auth.User carry is_staff/is_superuser?".
+
+        `Teacher.admin` was mirrored onto both flags in THREE places — the two
+        branches of `ensure_user()` below and the `post_save` receiver — each
+        writing `self.admin` directly. One rule in three hand-synced copies is
+        how two of them end up disagreeing, so the rule lives here now and the
+        three writers read it.
+
+        For a tester the clause is BELT AND BRACES rather than the primary
+        control: a tester row is created with `admin=False`, so both flags are
+        already withheld by the ordinary path. What this adds is that they stay
+        withheld even if somebody later ticks "Administradora" on that row in
+        `/admin/` — a public, shared credential must not be one careless
+        checkbox away from a Django superuser. Everywhere else this property is
+        exactly `self.admin`, as before.
+        """
+        return self.admin and not self.tester
+
     def ensure_user(self, password=None):
         """
         Get-or-create the linked auth.User, keeping email/name and staff/superuser
@@ -149,11 +177,11 @@ class Teacher(models.Model):
             if user.last_name != self.last_name:
                 user.last_name = self.last_name
                 dirty = True
-            if user.is_staff != self.admin:
-                user.is_staff = self.admin
+            if user.is_staff != self.grants_django_admin:
+                user.is_staff = self.grants_django_admin
                 dirty = True
-            if user.is_superuser != self.admin:
-                user.is_superuser = self.admin
+            if user.is_superuser != self.grants_django_admin:
+                user.is_superuser = self.grants_django_admin
                 dirty = True
             if user.is_active != self.active:
                 # `active` is the offboarding switch (the admin fieldset is
@@ -175,8 +203,8 @@ class Teacher(models.Model):
                 "email": self.email,
                 "first_name": self.first_name,
                 "last_name": self.last_name,
-                "is_staff": self.admin,
-                "is_superuser": self.admin,
+                "is_staff": self.grants_django_admin,
+                "is_superuser": self.grants_django_admin,
                 "is_active": self.active,
             },
         )
@@ -185,8 +213,8 @@ class Teacher(models.Model):
             user.email = self.email
             user.first_name = self.first_name
             user.last_name = self.last_name
-            user.is_staff = self.admin
-            user.is_superuser = self.admin
+            user.is_staff = self.grants_django_admin
+            user.is_superuser = self.grants_django_admin
             user.is_active = self.active
 
         if password is not None:
@@ -208,11 +236,11 @@ def _sync_linked_user_flags(sender, instance, **kwargs):
         return
     user = instance.user
     dirty = False
-    if user.is_staff != instance.admin:
-        user.is_staff = instance.admin
+    if user.is_staff != instance.grants_django_admin:
+        user.is_staff = instance.grants_django_admin
         dirty = True
-    if user.is_superuser != instance.admin:
-        user.is_superuser = instance.admin
+    if user.is_superuser != instance.grants_django_admin:
+        user.is_superuser = instance.grants_django_admin
         dirty = True
     if user.is_active != instance.active:
         user.is_active = instance.active

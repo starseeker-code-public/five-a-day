@@ -43,7 +43,9 @@ export default function ImageGallery({ images }) {
             >
               <img
                 src={src}
-                alt={`Galería ${i + 1}`}
+                alt={`Instalaciones y actividades de Five a Day English Academy, Albacete (foto ${i + 1})`}
+                loading="lazy"
+                decoding="async"
                 className={`h-full w-full object-cover rounded-xl cursor-pointer transition-opacity duration-300 ${
                   offset === 0 ? "opacity-100" : "opacity-50 hover:opacity-70"
                 }`}

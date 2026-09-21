@@ -1,9 +1,11 @@
 """Core Celery tasks."""
 
 from datetime import timedelta
+from io import StringIO
 
 from celery import shared_task
 from celery.utils.log import get_task_logger
+from django.conf import settings
 from django.core.management import call_command
 from django.db import transaction
 from django.utils import timezone
@@ -42,6 +44,40 @@ def cleanup_done_backlog_tasks(days: int = 30):
     deleted, _ = BacklogTask.objects.filter(status="done", updated_at__lt=cutoff).delete()
     logger.info("Deleted %d completed backlog task(s) older than %d days", deleted, days)
     return {"status": "success", "deleted": deleted}
+
+
+@shared_task(name="core.tasks.reset_tester_environment_task")
+def reset_tester_environment_task():
+    """Nightly rebuild of the public tester sandbox. TESTING ONLY.
+
+    THE ENVIRONMENT GATE IS THE WHOLE POINT OF THIS WRAPPER. Celery Beat runs in
+    development too — `docker-compose.yml` starts `celery_beat` in every
+    environment that uses it — so an ungated entry in `beat_schedule` would wipe
+    every developer's local database at 07:30 each morning, silently, with the
+    only evidence being data that "went missing overnight". The command itself
+    refuses only PRODUCTION (it is a legitimate manual tool in development), so
+    the narrower "unattended runs happen on the QA VM and nowhere else" rule has
+    to live here, at the scheduled entry point.
+
+    Production has no Beat process at all, and this deliberately gets NO Cloud
+    Run Job / Cloud Scheduler entry, which is a knowing exception to the rule
+    that every Beat task needs a wrapper command provisioned in production. The
+    command exists for local and QA use; production must never be able to run it.
+
+    07:30 Europe/Madrid, chosen around three other things: the nightly testing
+    deploy owns 01:00-05:59 and a reset landing mid-migration would race it; the
+    06:00-07:00 Beat cluster (payments, expenses, backlog cleanup) should have
+    finished; and birthday emails go at 08:00, so the roll is rebuilt before
+    anything reads it.
+    """
+    if not settings.IS_TESTING_ENV:
+        logger.info("reset_tester_environment_task skipped: not the testing environment")
+        return {"status": "skipped", "reason": "not testing environment"}
+
+    out = StringIO()
+    call_command("reset_tester_environment", stdout=out)
+    logger.info("Tester sandbox rebuilt by the nightly task")
+    return {"status": "success", "output": out.getvalue()}
 
 
 @shared_task(name="core.tasks.prune_audit_log")

@@ -20,6 +20,46 @@ from comms.log_safe import safe_log
 
 logger = logging.getLogger(__name__)
 
+#: Set once the "allowlist is empty in a non-production environment" warning has
+#: been emitted, so it is said at most once per process instead of on every send.
+_ALLOWLIST_WARNED = False
+
+
+def filter_allowed_recipients(addresses: list[str]) -> list[str]:
+    """Drop every address `settings.EMAIL_ALLOWED_RECIPIENTS` does not permit.
+
+    An entry is either a full address (`qa@example.com`) or a domain suffix
+    beginning with `@` (`@example.com`). An EMPTY allowlist permits everything —
+    see the long note in `settings.py` for why that direction, and why the
+    containment therefore depends on the environment setting the variable.
+
+    Matched case-insensitively: addresses are typed by hand into `.env` files and
+    by admins into the app, and `QA@Example.com` failing to match an allowlisted
+    `qa@example.com` would look exactly like the mail silently vanishing.
+    """
+    global _ALLOWLIST_WARNED
+
+    allowed = getattr(settings, "EMAIL_ALLOWED_RECIPIENTS", None) or []
+    if not allowed:
+        if not _ALLOWLIST_WARNED and settings.ENVIRONMENT != "production":
+            _ALLOWLIST_WARNED = True
+            logger.warning(
+                "EMAIL_ALLOWED_RECIPIENTS is empty in environment '%s': mail will be "
+                "delivered to every address in this database, including seeded ones",
+                settings.ENVIRONMENT,
+            )
+        return list(addresses)
+
+    kept = []
+    for address in addresses:
+        candidate = (address or "").strip().lower()
+        if not candidate:
+            continue
+        domain = candidate[candidate.rfind("@") :] if "@" in candidate else ""
+        if candidate in allowed or (domain and domain in allowed):
+            kept.append(address)
+    return kept
+
 
 class EmailService:
     """
@@ -77,6 +117,7 @@ class EmailService:
         attachments: list | None = None,
         inline_images: dict[str, str] | None = None,
         connection=None,
+        reply_to: list[str] | None = None,
     ) -> bool:
         """
         Envia un email usando un template HTML
@@ -97,6 +138,12 @@ class EmailService:
                         session for every message in a mass send instead of one
                         per recipient — the difference between N handshakes and 1
                         on the payment-reminder / tax-certificate loops.
+            reply_to: Cabecera Reply-To. Por defecto None, que deja el mensaje
+                      exactamente como estaba: sin cabecera, y Responder va a
+                      `from_email`. Se anadio para el relay del portfolio, donde
+                      quien escribe NO es el remitente SMTP — sin esto, pulsar
+                      Responder contesta a la cuenta de la academia en vez de a
+                      la persona que rellena el formulario.
 
         Returns:
             True si se envio correctamente, False en caso contrario
@@ -105,6 +152,38 @@ class EmailService:
             # Convertir recipient a lista si es string
             if isinstance(recipients, str):
                 recipients = [recipients]
+
+            # CONTAINMENT (non-production). Applied HERE, at the single point
+            # every send funnels through — `send_bulk_emails` delegates to this
+            # method, and so does every convenience function and Celery task —
+            # because the sends that most need containing are the ones dispatched
+            # to a worker, where no request-scoped guard can reach them.
+            #
+            # Suppression is reported as SUCCESS (`True`). The caller's question
+            # is "did this fail?", and the answer is no: the message was handled
+            # exactly as configured. Returning False would make `_mass_send`
+            # count it as an error and show the operator a failure banner for a
+            # policy that is working, which is how a containment control gets
+            # switched off by someone debugging a phantom outage.
+            allowed = filter_allowed_recipients(list(recipients))
+            if not allowed:
+                logger.info(
+                    "Email suppressed by EMAIL_ALLOWED_RECIPIENTS: template=%s, %d recipient(s)",
+                    safe_log(template_name),
+                    len(recipients),
+                )
+                return True
+            if len(allowed) != len(recipients):
+                logger.info(
+                    "Email partially suppressed by EMAIL_ALLOWED_RECIPIENTS: template=%s, %d of %d kept",
+                    safe_log(template_name),
+                    len(allowed),
+                    len(recipients),
+                )
+            recipients = allowed
+            # cc/bcc carry real addresses too and are filtered by the same rule.
+            cc = filter_allowed_recipients(list(cc)) if cc else cc
+            bcc = filter_allowed_recipients(list(bcc)) if bcc else bcc
 
             # Preparar contexto
             if context is None:
@@ -133,6 +212,7 @@ class EmailService:
                 cc=cc,
                 bcc=bcc,
                 connection=connection,
+                reply_to=reply_to,
             )
             email.attach_alternative(html_content, "text/html")
 

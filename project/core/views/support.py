@@ -7,6 +7,8 @@ from django.http import JsonResponse
 from django.utils import timezone
 from django.views.decorators.http import require_http_methods
 
+from core.decorators import tester_forbidden
+
 logger = logging.getLogger(__name__)
 
 #: The four categories `support.js` can send (its `categoryMap` values), and the
@@ -26,6 +28,7 @@ _DEFAULT_CATEGORY = "exception"
 
 
 @require_http_methods(["POST"])
+@tester_forbidden
 def submit_support_ticket(request):
     """
     Endpoint API para recibir tickets de soporte.

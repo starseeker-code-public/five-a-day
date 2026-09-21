@@ -388,10 +388,31 @@
                    (e.g. parent/student creation) sat in the session and dumped out,
                    stale, on the next page that did.
                 {% endcomment %}
+                {% comment %}
+                   TESTER BANNER. Rendered for the public tester account and
+                   nobody else, from `is_tester_user` — the same predicate the
+                   middleware gates with, never a separate guess, because both
+                   failure directions are bad: a visitor told their data resets
+                   nightly when it does not, or a real teacher shown this over
+                   live academy data.
+
+                   It says the two things a stranger needs and cannot infer: the
+                   account is SHARED (so somebody else's edits appearing mid-
+                   session is normal, not a bug), and the data goes back every
+                   morning (so they should feel free to break things).
+                {% endcomment %}
+                {% if is_tester_user %}
+                <div class="mb-6 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900 tester-banner">
+                    <span class="font-semibold">Cuenta de pruebas.</span>
+                    Es una cuenta compartida sobre datos ficticios: puedes crear, editar y borrar
+                    lo que quieras. Todo se restablece cada d&iacute;a a las 7:30. La administraci&oacute;n
+                    de Django, el panel de QA y el env&iacute;o real de correos est&aacute;n desactivados.
+                </div>
+                {% endif %}
                 {% if messages %}
                 <div class="mb-6 space-y-2">
                     {% for message in messages %}
-                    <div class="p-4 rounded-lg {% if message.tags == 'success' %}bg-green-100 text-green-800 border border-green-200{% elif message.tags == 'error' %}bg-red-100 text-red-800 border border-red-200{% else %}bg-blue-100 text-blue-800 border border-blue-200{% endif %}">
+                    <div class="p-4 rounded-lg {% if message.tags == 'success' %}bg-green-100 text-green-800 border border-green-200{% elif message.tags == 'error' %}bg-red-100 text-red-800 border border-red-200{% elif message.tags == 'warning' %}bg-amber-100 text-amber-900 border border-amber-200{% else %}bg-blue-100 text-blue-800 border border-blue-200{% endif %}">
                         {{ message }}
                     </div>
                     {% endfor %}
