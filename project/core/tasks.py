@@ -16,8 +16,9 @@ from billing.services.pdf_service import generate_payment_receipt
 from comms.services.email_functions import send_fun_friday_email
 from comms.services.email_service import email_service
 from comms.tasks import send_payment_receipt_email_task
+from core.log_safe import safe_log
 from core.models import AuditLog, BacklogTask, FunFridayScheduledSend
-from core.services.drive_service import drive_uploads_allowed
+from core.services.drive_service import drive_uploads_allowed, receipt_filename
 from core.services.drive_service import get_service as get_drive_service
 
 logger = get_task_logger(__name__)
@@ -406,12 +407,29 @@ def upload_receipt_to_drive_task(self, payment_id: int):
         pdf_bytes = generate_payment_receipt(payment)
     except Exception:
         # Rendering failing is worth knowing about, but still must not blow up the
-        # completion flow — log and stop.
-        logger.exception("upload_receipt_to_drive_task: failed to render PDF for payment %s", payment_id)
+        # completion flow — log and stop. The student is named because a render
+        # failure is almost always about this row's own data (a `Paragraph`
+        # chewing on a name, a missing enrollment), so "which payment" alone
+        # leaves the next question unanswered.
+        logger.exception(
+            "upload_receipt_to_drive_task: failed to render PDF for payment %s (%s)",
+            payment_id,
+            safe_log(receipt_filename(payment)),
+        )
         return {"status": "error", "message": "pdf render failed", "payment_id": payment_id}
 
     result = drive.upload_receipt(payment, pdf_bytes)
     if not result.success and result.status == "error":
-        # result.error is one of the service's own fixed messages, not user input.
-        logger.warning("upload_receipt_to_drive_task: payment %s not archived (%s)", payment_id, result.error)
+        # result.error is one of the service's own fixed messages, not user input;
+        # file_name and folder_path are both built by the service from sanitised
+        # parts. Together they say which family and which month to repair — this
+        # line said only "payment N not archived", which is the id of a row
+        # nobody has open.
+        logger.warning(
+            "upload_receipt_to_drive_task: payment %s not archived as %s in %s (%s)",
+            payment_id,
+            safe_log(result.file_name),
+            safe_log(result.folder_path),
+            result.error,
+        )
     return {"payment_id": payment_id, **result.as_dict()}

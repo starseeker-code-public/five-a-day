@@ -15,11 +15,11 @@ Built to centralize student records, automate billing cycles, and streamline par
 ### Project Status
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v1.31.2-brightgreen?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-v1.31.3-brightgreen?style=flat-square" alt="Version">
   &nbsp;|&nbsp;
   <a href="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml?query=branch%3Amain"><img src="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml/badge.svg?branch=main&style=flat-square" alt="CI main"></a>
   &nbsp;|&nbsp;
-  <img src="https://img.shields.io/badge/coverage-94.23%25-brightgreen?style=flat-square" alt="Coverage">
+  <img src="https://img.shields.io/badge/coverage-94.26%25-brightgreen?style=flat-square" alt="Coverage">
   &nbsp;|&nbsp;
   <a href="https://github.com/starseeker-code-public/five-a-day/actions/workflows/scorecard.yml"><img src="https://img.shields.io/badge/OpenSSF%20Scorecard-monitored-blueviolet?style=flat-square" alt="OSSF Scorecard"></a>
   &nbsp;|&nbsp;
@@ -36,9 +36,9 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 | Version | Date | Description |
 |---------|------|-------------|
-| **v1.31.2** | 2026-09-21 | CI fixes: CodeQL pin coherence, CSRF test shell; login environment link |
+| **v1.31.3** | 2026-09-22 | Drive archive survives a dropped socket; CodeQL release blockers |
+| v1.31.2 | 2026-09-21 | CI fixes: CodeQL pin coherence, CSRF test shell; login environment link |
 | v1.31.1 | 2026-09-21 | Contact form hardening, QA links fixed after the `/app` move |
-| v1.31.0 | 2026-09-20 | Public tester role, per-page SEO for the public site |
 
 ---
 
@@ -140,8 +140,38 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 ## Version History
 
-<details id="v1312" open>
-<summary><strong>v1.31.2 — CI fixes: CodeQL pin coherence, CSRF test shell; login environment link (current)</strong></summary>
+<details id="v1313" open>
+<summary><strong>v1.31.3 — Drive archive survives a dropped socket; CodeQL release blockers (current)</strong></summary>
+
+**One broken pipe stopped the Drive archive until the instance was recycled**
+
+- Production logged `BrokenPipeError: [Errno 32] Broken pipe` from `core.services.drive_service` while refreshing the Google token — an idle socket Google had closed, which is routine. What was not routine is what followed: **httplib2 evicts a cached connection only for `socket.timeout`**, so every other transport failure leaves the dead socket in `Http.connections` with `conn.sock` still set and nothing ever reconnects.
+- The client is long-lived — `get_service()` is a module singleton for the life of the Cloud Run instance, and `backfill_drive_receipts` holds ONE instance for the whole archive — so a one-second network event became a lasting outage: **every receipt completed on that instance afterwards failed identically**, each one mailing the admins again. Verified against the real httplib2, including that a plain retry on the same client fails the same way, so `num_retries` would not have helped.
+- `_drop_poisoned_client()` discards and closes the client after a transport failure, and the upload takes exactly one retry on a rebuilt one. Safe to retry because the attempt re-checks for an existing receipt before creating: a create whose response was lost is found and reported `skipped_exists` rather than filed twice. No backoff sleep — a dead socket is cured by reconnecting, not by waiting, and production runs Celery eager so this sits inside the "marcar cobrado" request.
+- Same shape, same fix as `EmailService.send_bulk_emails` and `_mass_send`. That makes three; a shared connection is a pattern, and a new one needs the drop too.
+
+**The archive's logging named neither the payment nor the family**
+
+- The only record a failed archive produced was *"Drive receipt upload failed unexpectedly"* followed by thirty frames of httplib2 — no payment, no student, no month to go and repair.
+- Every line now carries the receipt: `payment 633 (633_Ana_Ruiz-Moreno.pdf) -> Curso 2026/27/Recibos/Septiembre 26`, built once and shared by the service, `_describe_error` and the task, so two records of one failure cannot describe it differently. `DriveUploadResult` gained `file_name`, populated on **every** outcome including `disabled` and `not_configured` — the two somebody reads while asking why nothing is being archived — and it rides out through `as_dict()` into the task result.
+- A dropped connection is now reported at **WARNING with no traceback**, like the HTTP 429/5xx branch beside it, because it is the same class of event. It was `logger.exception`, i.e. ERROR, which production wires to `mail_admins`: a socket Google closed while idle paged the academy with a stack that named no payment and pointed at nothing fixable.
+
+**CodeQL blockers on the v1.31.2 release PR**
+
+- `main-protection` gates merges on code scanning at `errors_and_warnings` / `medium_or_higher`, so seven alerts held PR #89 shut. All seven are fixed at the source rather than dismissed.
+- **`frontend_index` path handling.** `_index_path` joined its `route` argument onto `FRONTEND_DIST_DIR`, and the guarantee that the value is one of `SPA_ROUTES` lived in `project/urls.py` — a promise made in one file and relied on in another, which read to CodeQL (correctly, on the evidence available to it) as a path built from a view parameter. It now returns the element of `SPA_ROUTES` that **matched**, so the path is built from a constant this module owns and a traversal cannot reach the filesystem even if a future URL pattern starts capturing `route`. That also clears the two log-injection alerts downstream of it.
+- **Three test assertions that were genuinely weak.** `link["url"].startswith("http://qa.example")` also passes for `http://qa.example.evil.test/…`, and it never checked the half of the rule worth pinning — that the path comes from `reverse("login")` rather than a typed `/app/login/`. They now compare the whole URL. The contact-form log assertion matches the domain as its **own** logged argument instead of as a substring of the flattened record.
+- **`_ALLOWLIST_WARNED`** is a set that is only mutated, never rebound, so `filter_allowed_recipients` needs no `global` statement. It also stops the first environment a process sees from swallowing the warning for every other one — which the test suite does hit, since it flips `settings.ENVIRONMENT` between cases.
+
+**Testing**
+
+- Suite at **2,853 tests, 94.26 % coverage**. [`unit/test_drive_service.py`](project/tests/unit/test_drive_service.py) grows from 40 to 59: the poisoned client being dropped and closed, the retry landing on a fresh one, a non-transport failure *not* being retried, a successful upload keeping its client, and the regression itself — that the next payment does not inherit a dead connection.
+- The httplib2 behaviour the fix rests on was confirmed empirically before the fix was written, not inferred from the traceback.
+
+</details>
+
+<details id="v1312">
+<summary><strong>v1.31.2 — CI fixes: CodeQL pin coherence, CSRF test shell; login environment link</strong></summary>
 
 **CodeQL stopped analysing anything, and the rule that prevents it was documentation only**
 
@@ -6041,7 +6071,7 @@ five-a-day/
 │   │   └── management/commands/  send_email, test_all_emails, plus 4 Beat-task wrappers
 │   │                             (v1.14.2 — birthday, reminders, report, Fun Friday drain)
 │   │
-│   ├── tests/                    pytest suite (2,834 tests, 94.23 % coverage) — unit/ + integration/
+│   ├── tests/                    pytest suite (2,853 tests, 94.26 % coverage) — unit/ + integration/
 │   │   └── e2e/                  End-to-end journeys vs the REAL Google Drive (v1.29.10) — NOT
 │   │                         pytest (`make test` and CI skip them); `make e2e` / the `e2e`
 │   │                         pre-commit hook. run.py (entry point + safety refusal),
@@ -6440,9 +6470,9 @@ Public flow at `/app/password-reset/...` that lets a teacher recover access with
 
 | Metric | Value |
 |--------|-------|
-| **Total tests** | 2,834 (Python) + 141 (frontend, Vitest) |
+| **Total tests** | 2,853 (Python) + 141 (frontend, Vitest) |
 | **Test files** | 124 (69 unit + 55 integration) + 4 Vitest files |
-| **Coverage** | 94% (94.23% — 8,039 statements, 464 uncovered) |
+| **Coverage** | 94% (94.26% — 8,078 statements, 464 uncovered) |
 | **Coverage thresholds** | **≥ 90%** (target, no warning) / **75-89%** (CI warning, pre-commit still blocks below 75) / **< 75%** (CI fails, pre-commit rejects the commit) |
 | **Runtime** | ~220 seconds (parallel workers via `pytest-xdist -n auto`) |
 | **Database** | PostgreSQL (same as production) — **always use `make test`** |
@@ -6490,7 +6520,7 @@ Within each file, related tests are grouped into classes. Where a large file abs
 
 ### Unit Tests
 
-**70 files, 1,212 tests.** Direct-call tests — no HTTP stack, no URL resolver, no template rendering.
+**70 files, 1,231 tests.** Direct-call tests — no HTTP stack, no URL resolver, no template rendering.
 
 | File | Count | Coverage |
 | --- | --- | --- |
@@ -6559,7 +6589,7 @@ Within each file, related tests are grouped into classes. Where a large file abs
 | [`unit/test_audit_pruning.py`](project/tests/unit/test_audit_pruning.py) | 16 | `core.tasks.prune_audit_log` and its Cloud Scheduler command wrapper — the ONLY code path that deletes from `audit_logs`, a table the admin deliberately makes immutable (no add, no change, no delete). It had **zero test references for eight versions** while permanently destroying rows, and `*/admin.py` being coverage-omitted meant nothing else exercised the surrounding rules either. Pins the retention window and its boundary, the floor that refuses a window short enough to erase the course being taught (`--days 0` would have deleted every row, including the entries incriminating whoever ran it), `--dry-run` counting exactly what a real run deletes, and the floor surfacing as a `CommandError` so a Cloud Run Job reports a clean failure instead of a Celery traceback. Rows are backdated with `queryset.update()` because `created_at` is `auto_now_add` |
 | [`unit/test_detect_destructive_migrations.py`](project/tests/unit/test_detect_destructive_migrations.py) | 35 | `scripts/detect_destructive_migrations.py` (v1.29.6), the ONE definition of "destructive" read by five surfaces — the production preflight's Gate 3, the production deploy gate that enforces `ack_destructive`, the release PR body and merge email, the testing-deploy email and the `update-readme` skill. Each Django operation (`DeleteModel` / `RemoveField` / `RenameField` / `RenameModel`) and raw `DROP TABLE|COLUMN` / `TRUNCATE`, matched **case-insensitively** because the shell original was not and a `RunSQL("drop table …")` walked straight past the gate; additive operations staying clean; a missing path being skipped rather than fatal (`git diff --name-only` lists deleted files too). All four render formats, with the rule that **every one is empty when clean** — the workflows branch on `[ -n "$X" ]` — and that `files` alone prints nothing at all, since a friendly "nothing found" line there would mark every clean release destructive. HTML escaping of file content that reaches an inbox unparsed. The three exit codes (`0` clean / `1` found / **`2` the detector itself failed**, which every caller must treat as "assume the worst", because "no output" and "nothing found" are otherwise the same thing). The run-unique `$GITHUB_OUTPUT` delimiter, since the blocks carry text read out of migration files and a fixed delimiter is forgeable. And the tense split: `--applied` for the post-deploy mail, forward-looking wording everywhere else |
 | [`unit/test_detect_non_top_level_imports.py`](project/tests/unit/test_detect_non_top_level_imports.py) | 22 | `scripts/detect_non_top_level_imports.py` (v1.29.9), the ONE definition of "not at module top level" — read by the `update-readme` skill, which reports every hit in the staged files so a human rules on it before it ships. Each shape the detector names: `import-guard` (inside `try/except ImportError`, and `ModuleNotFoundError` too), `type-checking`, `sole-statement` (the import IS the conditional, so hoisting would empty the block), and `deferred` — everything else, the category that is nearly always an accident. The distinction that matters is a `try` which is **error handling** rather than an import guard: that one is `deferred`, because wrapping business logic is not a reason to hide a dependency. `--staged` reads the **index**, not the working tree, so the report describes what is about to be committed. All three render formats, with `files` printing nothing at all when clean (shells branch on `[ -n "$X" ]`, so a friendly "nothing found" line would mark every clean release as deferred). And the three exit codes (`0` clean / `1` found / **`2` the detector itself failed**, which callers must treat as "assume the worst") |
-| [`unit/test_drive_service.py`](project/tests/unit/test_drive_service.py) | 40 | `core.services.drive_service.DriveReceiptService` (v1.29.0) — the folder-path logic (`Curso YYYY/YYYY+1/Recibos/<Mes> YY/`, whose Curso rolls over in **August**, deliberately NOT the billing academic-year boundary), find-or-create at each level, idempotency by the `<paymentID>_` filename prefix so re-completion and `backfill_drive_receipts` never duplicate, and the **never-raises** guarantee: every failure path returns a `DriveUploadResult` with a status (`uploaded` / `skipped_exists` / `disabled` / `not_configured` / `error`) instead of propagating, because the Drive copy is a convenience on top of the `Payment` row and the emailed receipt — an unshared folder or a bad credential must leave payment completion untouched. The **environment gate** is now simply `_is_production()` (v1.29.10): the QA opt-in toggle and its `testing/` sandbox were removed, because the OAuth consent the archive now depends on cannot be completed on the QA VM at all, and it touches no database, so no row can switch the real archive on or off. `curso_folder_name` is pinned to the academy's two-digit `Curso YYYY/YY` — the four-digit form built a parallel tree beside the real one and reported success. The **credential route** is pinned too: the delegated account wins over both service-account routes, because a service account authenticates perfectly well and then fails the upload with `storageQuotaExceeded`, which reads like a Drive outage rather than a wiring mistake. An autouse fixture declares `ENVIRONMENT="production"` for the file, because the suite otherwise runs as development and every upload assertion would be testing the refusal |
+| [`unit/test_drive_service.py`](project/tests/unit/test_drive_service.py) | 59 | `core.services.drive_service.DriveReceiptService` (v1.29.0) — the folder-path logic (`Curso YYYY/YYYY+1/Recibos/<Mes> YY/`, whose Curso rolls over in **August**, deliberately NOT the billing academic-year boundary), find-or-create at each level, idempotency by the `<paymentID>_` filename prefix so re-completion and `backfill_drive_receipts` never duplicate, and the **never-raises** guarantee: every failure path returns a `DriveUploadResult` with a status (`uploaded` / `skipped_exists` / `disabled` / `not_configured` / `error`) instead of propagating, because the Drive copy is a convenience on top of the `Payment` row and the emailed receipt — an unshared folder or a bad credential must leave payment completion untouched. The **environment gate** is now simply `_is_production()` (v1.29.10): the QA opt-in toggle and its `testing/` sandbox were removed, because the OAuth consent the archive now depends on cannot be completed on the QA VM at all, and it touches no database, so no row can switch the real archive on or off. `curso_folder_name` is pinned to the academy's two-digit `Curso YYYY/YY` — the four-digit form built a parallel tree beside the real one and reported success. The **credential route** is pinned too: the delegated account wins over both service-account routes, because a service account authenticates perfectly well and then fails the upload with `storageQuotaExceeded`, which reads like a Drive outage rather than a wiring mistake. An autouse fixture declares `ENVIRONMENT="production"` for the file, because the suite otherwise runs as development and every upload assertion would be testing the refusal. **v1.31.3** adds the transport half: httplib2 evicts a cached connection only for `socket.timeout`, so a broken pipe leaves the dead socket in place and — because the service is a module singleton for the life of a Cloud Run instance, and `backfill_drive_receipts` holds one for the whole archive — every later receipt failed identically. Pins that the poisoned client is dropped AND closed, that closing an already-dead socket cannot raise out of it, that the retry lands on a fresh client, that a 403 is *not* retried (a sharing problem cannot be cured by a round trip inside a user request), that a successful upload keeps its client, and the regression itself: the next payment does not inherit the dead connection. Also that the log names the payment, the file and the folder, and that a newline in a student's name cannot forge a record |
 | [`unit/test_drive_oauth_connection.py`](project/tests/unit/test_drive_oauth_connection.py) | 28 | The delegated Google account the archive runs on (v1.29.10). A service account cannot file these receipts — it owns what it uploads and has no Drive storage on a consumer account — so the uploader is a real account connected once from `/app/management/`. Pins the parts that are easy to get wrong and impossible to notice: the refresh token is Fernet-encrypted with a key derived from `SECRET_KEY`, so the column never holds the plaintext and a database dump does not yield it; two encryptions of the same secret differ (the column must not leak equality); an undecryptable value reads as *absent* rather than raising, because the only realistic cause is a rotated `SECRET_KEY` and the honest consequence is "reconnect"; the delegated account beats both service-account routes; the whole control is absent on the QA VM — hidden in the template AND refused by the views, since a hidden button whose URL still works is the failure the whitelist/decorator pairing exists to prevent; and Home nags an admin on **every** visit while the archive is disconnected, never a teacher |
 | [`unit/test_part_time_child_modality.py`](project/tests/unit/test_part_time_child_modality.py) | 12 | The **infantil** band (v1.29.4): `part_time_child` present in `SCHEDULE_TYPE_CHOICES` and `monthly_part_child` in `ENROLLMENT_PLAN_CHOICES`, `monthly_fee_for` / `period_base_amount` / `quarterly_price_from_monthly` resolving it off `SiteConfiguration.part_time_child_monthly_fee`, `EnrollmentService._resolve_plan` returning the right `(amount, schedule_type, modality)` for both the standard and the hand-priced case, and every discount (hermano, cheque idioma, junio) layering on top of it exactly as on full time |
 | [`unit/test_codeql_action_pins.py`](project/tests/unit/test_codeql_action_pins.py) | 3 | Every `github/codeql-action/*` step across all three workflows must share ONE SHA (v1.31.2). The steps exchange a state file carrying their version, so a run whose `init` is v4.38.1 and whose `analyze` is v4.38.0 dies with a version-mismatch error and analyses nothing — silently, since the only symptom is a Security tab that stops updating. It has happened twice, both times because Dependabot bumps each step as a separate dependency in a separate PR. Also asserts each pin's comment names an **exact** version rather than a bare major, because Dependabot only rewrites pins it can resolve to one — a `# v4` comment freezes that line while its siblings advance, which is the mechanism behind both incidents. Cannot be enforced in the workflow: a mismatched pin breaks the very job that would do the checking. The fixture asserts it parsed something, so a `uses:` syntax change cannot make all three pass vacuously |
@@ -6640,7 +6670,7 @@ Within each file, related tests are grouped into classes. Where a large file abs
 | `billing/services/pdf_service.py` | 208 | 5 | 98% | 156, 321, 332, 376, 381 |
 | `billing/services/stripe_service.py` | 118 | 3 | 97% | 143-144, 180 |
 | `comms/services/email_functions.py` | 92 | 6 | 93% | 555, 580-584, 594-595 |
-| `comms/services/email_service.py` | 107 | 6 | 94% | 57, 261-270, 307-309 |
+| `comms/services/email_service.py` | 108 | 6 | 94% | 62, 266-275, 312-314 |
 | `comms/services/sms_service.py` | 50 | 3 | 94% | 58, 69-70 |
 | `comms/tasks.py` | 215 | 2 | 99% | 552, 660 |
 | `core/apps.py` | 12 | 2 | 83% | 33-34 |
@@ -6654,17 +6684,17 @@ Within each file, related tests are grouped into classes. Where a large file abs
 | `core/models.py` | 217 | 3 | 99% | 336, 369, 418 |
 | `core/rate_limit.py` | 93 | 5 | 95% | 149-151, 160-161 |
 | `core/services/capacity_service.py` | 11 | 1 | 91% | 30 |
-| `core/services/drive_service.py` | 183 | 2 | 99% | 525-526 |
+| `core/services/drive_service.py` | 217 | 2 | 99% | 660-661 |
 | `core/services/google_sheets_service.py` | 101 | 7 | 93% | 75-77, 132-135 |
 | `core/services/portal_access_service.py` | 37 | 1 | 97% | 100 |
-| `core/tasks.py` | 133 | 18 | 86% | 77-80, 181-183, 203-207, 211-212, 244, 365-366, 407-411, 416 |
+| `core/tasks.py` | 134 | 18 | 87% | 78-81, 182-184, 204-208, 212-213, 245, 366-367, 408-419, 428 |
 | `core/transactions.py` | 23 | 2 | 91% | 73, 78 |
 | `core/views/app_forms.py` | 593 | 36 | 94% | 254, 337-342, 371, 430-439, 479-480, 569, 660-662, 674-677, 683-684, 817-818, 838-839, 876-878, 1126, 1315, 1330-1334, 1462, 1654-1660, 1678-1681 |
 | `core/views/auth.py` | 210 | 11 | 95% | 124, 127-129, 316, 339, 386, 405, 460, 543-544 |
 | `core/views/dashboard.py` | 159 | 4 | 97% | 212, 355-357 |
 | `core/views/expenses.py` | 135 | 11 | 92% | 30-31, 160, 183-184, 217-219, 252-254 |
 | `core/views/features.py` | 173 | 20 | 88% | 139, 163-164, 214-218, 276-282, 329-333 |
-| `core/views/frontend.py` | 83 | 9 | 89% | 163-170, 316-317, 351 |
+| `core/views/frontend.py` | 86 | 9 | 90% | 173-180, 326-327, 361 |
 | `core/views/google_drive.py` | 113 | 76 | 33% | 98-101, 109-125, 134-165, 174-239, 248-252 |
 | `core/views/management.py` | 156 | 5 | 97% | 363, 400, 434-436 |
 | `core/views/parent_portal.py` | 193 | 5 | 97% | 109, 394, 512, 567, 586 |
@@ -6673,13 +6703,13 @@ Within each file, related tests are grouped into classes. Where a large file abs
 | `core/views/payments.py` | 375 | 22 | 94% | 292-293, 389-390, 402-411, 560, 633-634, 668, 676-684, 834-836, 1099 |
 | `core/views/portfolio.py` | 65 | 2 | 97% | 101, 213 |
 | `core/views/schedule.py` | 68 | 1 | 99% | 111 |
-| `core/views/students.py` | 436 | 41 | 91% | 303-305, 441-446, 593, 617, 642, 644, 655, 664, 669, 698, 710, 734, 767-773, 782, 961, 988-991, 1064-1065, 1079-1081, 1097-1099, 1109-1110, 1134-1135, 1153-1155, 1160, 1162 |
+| `core/views/students.py` | 436 | 41 | 91% | 303-305, 441-446, 593, 617, 642, 644, 655, 664, 669, 698, 710, 734, 767-773, 782, 961, 988-991, 1064-1065, 1079-1081, 1097-1099, 1109-1110, 1134-1135, … |
 | `core/views/testing_tools.py` | 232 | 20 | 91% | 79-80, 84-86, 251, 313, 320, 322, 340-342, 448-452, 464, 482-486 |
 | `core/views/two_factor.py` | 99 | 8 | 92% | 50, 61-62, 207-209, 214-215 |
 | `students/forms.py` | 100 | 2 | 98% | 319-320 |
 | `students/models.py` | 338 | 9 | 97% | 190-191, 513, 597-598, 800-803 |
 
-**53 files** have 100% coverage (skipped above). Total coverage: **94.23%** across 8,039 statements. Coverage is **good**. Coverage is enforced at three levels: pre-commit hook (≥ 75%), CI hard floor (≥ 75%), and CI warning (< 90%).
+**53 files** have 100% coverage (skipped above). Total coverage: **94.26%** across 8,078 statements. Coverage is **good**. Coverage is enforced at three levels: pre-commit hook (≥ 75%), CI hard floor (≥ 75%), and CI warning (< 90%).
 
 ---
 
@@ -7347,7 +7377,7 @@ make up                        # Start Docker (PostgreSQL + Redis + Django + Cel
 1. Work on `development` (or a short-lived branch off `development`)
 2. Make changes following the conventions below
 3. Run `make pc-run` — Ruff + mypy + bandit all pass, offers to auto-bump the patch version on success, and auto-stages `uv.lock` if regenerated
-4. Run `make test` — all 2,834 tests must pass (PostgreSQL via Docker, parallel, with coverage) — and `make frontend-test` for the 141 Vitest ones if you touched `frontend/`
+4. Run `make test` — all 2,853 tests must pass (PostgreSQL via Docker, parallel, with coverage) — and `make frontend-test` for the 141 Vitest ones if you touched `frontend/`
 5. `git commit` with a message like `v1.14.7 — Short description` (version first, em dash — matches every other release commit in the project)
 6. `git push origin development`
 7. CI runs automatically on your push (see [CI/CD](#cicd--github-actions))

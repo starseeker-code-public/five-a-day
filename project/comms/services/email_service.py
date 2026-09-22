@@ -20,9 +20,15 @@ from comms.log_safe import safe_log
 
 logger = logging.getLogger(__name__)
 
-#: Set once the "allowlist is empty in a non-production environment" warning has
-#: been emitted, so it is said at most once per process instead of on every send.
-_ALLOWLIST_WARNED = False
+#: Environments already warned that their allowlist is empty, so the warning is
+#: said at most once per process instead of on every send.
+#:
+#: A SET that is only ever mutated, never rebound — so the module needs no
+#: `global` statement, which is what CodeQL's `py/unused-global-variable` was
+#: reading as a write nothing consumes. It also stops the first environment a
+#: process sees from swallowing the warning for every other one, which the test
+#: suite does hit: it flips `settings.ENVIRONMENT` between cases.
+_ALLOWLIST_WARNED: set[str] = set()
 
 
 def filter_allowed_recipients(addresses: list[str]) -> list[str]:
@@ -37,12 +43,11 @@ def filter_allowed_recipients(addresses: list[str]) -> list[str]:
     by admins into the app, and `QA@Example.com` failing to match an allowlisted
     `qa@example.com` would look exactly like the mail silently vanishing.
     """
-    global _ALLOWLIST_WARNED
-
     allowed = getattr(settings, "EMAIL_ALLOWED_RECIPIENTS", None) or []
     if not allowed:
-        if not _ALLOWLIST_WARNED and settings.ENVIRONMENT != "production":
-            _ALLOWLIST_WARNED = True
+        environment = settings.ENVIRONMENT
+        if environment != "production" and environment not in _ALLOWLIST_WARNED:
+            _ALLOWLIST_WARNED.add(environment)
             logger.warning(
                 "EMAIL_ALLOWED_RECIPIENTS is empty in environment '%s': mail will be "
                 "delivered to every address in this database, including seeded ones",

@@ -32,8 +32,11 @@ import dataclasses
 import logging
 import os
 import re
+import socket
+import ssl
 from dataclasses import dataclass
 from datetime import date
+from typing import Any
 
 from django.conf import settings
 
@@ -73,6 +76,21 @@ _IMPERSONATION_LIFETIME_SECONDS = 600
 #: not the same as "never blocks", and an archive that is explicitly best-effort
 #: must fail fast rather than hold a request open.
 _DRIVE_TIMEOUT_SECONDS = 10
+
+#: Failures of the CONNECTION rather than of the request: the socket died, TLS
+#: failed, or the name did not resolve. Classified apart from every other
+#: exception because the cause decides both halves of the response — a dropped
+#: socket is a network event, not a code defect, so it is reported as one
+#: (`_describe_error`), and it POISONS the client that hit it, so that client
+#: has to be thrown away (`_drop_poisoned_client`).
+#:
+#: The members mirror what googleapiclient itself treats as retriable in
+#: `http._retry_request`: `ConnectionError` covers BrokenPipe / ConnectionReset
+#: / ConnectionAborted, `TimeoutError` IS `socket.timeout` from Python 3.10, and
+#: `ssl.SSLError` / `socket.gaierror` are both `OSError` subclasses that would
+#: otherwise read as unexpected. Bare `OSError` is deliberately NOT here: it
+#: would swallow genuine defects into the "transient, retry it" branch.
+_TRANSPORT_ERRORS = (ConnectionError, TimeoutError, ssl.SSLError, socket.gaierror)
 
 
 def _is_production() -> bool:
@@ -116,6 +134,12 @@ class DriveUploadResult:
     status: str  # uploaded | skipped_exists | disabled | not_configured | error
     folder_path: str = ""
     file_id: str = ""
+    #: `<paymentID>_<nombre>_<apellidos>.pdf` — the name the receipt was filed
+    #: under, or would have been. Populated on EVERY outcome, failures included:
+    #: it is the one string that names the payment and the family at once, so it
+    #: is what an operator needs to find the row behind a log line, and it rides
+    #: out through `as_dict()` into the task result.
+    file_name: str = ""
     error: str = ""
 
     def as_dict(self) -> dict:
@@ -186,7 +210,12 @@ class DriveReceiptService:
         self.base_folder_id = (
             base_folder_id if base_folder_id is not None else getattr(settings, "GOOGLE_DRIVE_RECEIPTS_FOLDER_ID", "")
         )
-        self._service = None
+        # `Any` rather than the real `googleapiclient.discovery.Resource`: that
+        # import is deliberately lazy (see `_get_service`), so there is no type
+        # to name here without undoing it. Annotated all the same, because an
+        # unannotated `= None` makes this attribute read as `None` forever and
+        # every assignment to it an error.
+        self._service: Any = None
         self._folder_cache: dict[tuple[str, str], str] = {}
         self._credentials = _UNSET
 
@@ -344,6 +373,40 @@ class DriveReceiptService:
         self._service = build("drive", "v3", http=http, cache_discovery=False)
         return self._service
 
+    def _drop_poisoned_client(self) -> None:
+        """Throw away the cached Drive client after a transport failure.
+
+        httplib2 keeps one connection per host on the `Http` object and evicts
+        it ONLY for `socket.timeout` (the `except` clause at the bottom of
+        `Http.request`). Every other transport failure — a broken pipe above
+        all — propagates with the dead connection still in `self.connections`
+        and `conn.sock` still set, so nothing reconnects: the next call writes
+        to the same closed socket and fails identically, for as long as that
+        client is held.
+
+        Which here is a long time. `get_service()` is a module-level singleton,
+        so the client lives for the life of the Cloud Run instance, and
+        `backfill_drive_receipts` holds ONE instance for the whole archive.
+        A single dropped socket therefore turned every subsequent receipt into
+        a guaranteed failure rather than a one-off — the same shape, and the
+        same fix, as `EmailService.send_bulk_emails`: drop the shared session
+        on the first failure and let the next caller open its own. A wasted
+        reconnect costs one handshake; guessing the other way costs the rest of
+        the run.
+
+        The folder-id cache is deliberately KEPT. Those ids are Drive state,
+        not connection state, and re-resolving them would cost a lookup per
+        level to learn what we already know.
+        """
+        service, self._service = self._service, None
+        close = getattr(getattr(service, "_http", None), "close", None)
+        if close is None:
+            return
+        try:
+            close()
+        except Exception:  # noqa: BLE001 — closing an already-dead socket must not raise
+            logger.debug("Drive: closing the poisoned client failed", exc_info=True)
+
     # ── Folder resolution ────────────────────────────────────────────────────
 
     def _list_folders(self, service, name: str, parent_id: str) -> list[dict]:
@@ -442,14 +505,92 @@ class DriveReceiptService:
     def upload_receipt(self, payment, pdf_bytes: bytes) -> DriveUploadResult:
         """Upload one receipt PDF, creating the Curso/Recibos/<Mes> path as needed.
 
-        Refuses outright (`status="disabled"`) unless `drive_uploads_allowed()`;
-        on the QA VM with the toggle on it files into the `testing/` sandbox
-        inside the month folder instead of beside the real receipts.
+        Refuses outright (`status="disabled"`) unless `drive_uploads_allowed()`,
+        i.e. anywhere but production. (The QA opt-in and its `testing/` sandbox
+        folder were removed in v1.29.10 — see `drive_uploads_allowed`.)
 
         Idempotent (skips if a receipt for this payment id is already in the month
         folder) and NEVER raises — returns a result describing the outcome. The
         distinct failure statuses matter operationally, so each is logged with a
-        message aimed at the actual cause (sharing vs. wrong id vs. transient).
+        message aimed at the actual cause (sharing vs. wrong id vs. transient),
+        and every line names WHICH receipt: the payment id, the file name and the
+        destination folder.
+
+        A transport failure gets exactly ONE retry, on a rebuilt client — see
+        `_drop_poisoned_client` for why the old client has to go, and the comment
+        on the second attempt for why retrying is safe.
+        """
+        # `Payment.receipt_date` — the same property that picks the YEAR of the
+        # receipt NUMBER, so a receipt cannot be numbered for one year and filed
+        # under another.
+        d = payment.receipt_date
+        # Reported path and created folders come from ONE expression, so what the
+        # result claims and what Drive received cannot disagree.
+        levels = [curso_folder_name(d), "Recibos", month_folder_name(d)]
+        folder_path = "/".join(levels)
+        file_name = receipt_filename(payment)
+        # ONE description of "which receipt", built once and handed to every log
+        # line and to `_describe_error`, so two records of a single failure cannot
+        # describe it differently. Already safe to log: `_sanitize` strips control
+        # characters out of the student's name, so it cannot forge a record.
+        what = f"payment {payment.id} ({file_name}) -> {folder_path}"
+
+        # The environment gate FIRST: outside production this must not touch the
+        # credentials, let alone Drive. See `drive_uploads_allowed`.
+        if not drive_uploads_allowed():
+            return DriveUploadResult(success=False, status="disabled", folder_path=folder_path, file_name=file_name)
+
+        if not self.is_configured():
+            return DriveUploadResult(
+                success=False, status="not_configured", folder_path=folder_path, file_name=file_name
+            )
+
+        def failed(exc: Exception) -> DriveUploadResult:
+            return DriveUploadResult(
+                success=False,
+                status="error",
+                folder_path=folder_path,
+                file_name=file_name,
+                error=_describe_error(exc, what=what),
+            )
+
+        try:
+            return self._attempt_upload(payment, pdf_bytes, levels, folder_path, file_name)
+        except _TRANSPORT_ERRORS as exc:
+            self._drop_poisoned_client()
+            logger.warning(
+                "Drive: connection lost archiving %s (%s); reconnecting and retrying once",
+                safe_log(what),
+                type(exc).__name__,
+            )
+        except Exception as exc:  # noqa: BLE001 — best-effort archive, never propagate
+            return failed(exc)
+
+        # Second and last attempt, on a client built from scratch. Deliberately
+        # with NO backoff sleep: what is being retried is a dead cached socket,
+        # which fails instantly and is cured by reconnecting rather than by
+        # waiting — and production runs Celery eager, so this sits inside the
+        # "marcar cobrado" request, where every attempt already costs up to
+        # `_DRIVE_TIMEOUT_SECONDS`. Retrying is safe because the attempt is
+        # idempotent: it re-checks for an existing receipt before creating one,
+        # so a create that succeeded and then lost its response is found and
+        # reported `skipped_exists` rather than filed a second time.
+        try:
+            return self._attempt_upload(payment, pdf_bytes, levels, folder_path, file_name)
+        except Exception as exc:  # noqa: BLE001 — best-effort archive, never propagate
+            if isinstance(exc, _TRANSPORT_ERRORS):
+                # Two dropped sockets running is not a stale connection any more,
+                # but the client is poisoned either way and must not be left for
+                # the next payment to inherit.
+                self._drop_poisoned_client()
+            return failed(exc)
+
+    def _attempt_upload(self, payment, pdf_bytes: bytes, levels, folder_path: str, file_name: str):
+        """One upload attempt, which RAISES on failure.
+
+        Split out so `upload_receipt` owns the whole policy — the environment
+        gate, the retry and the never-raises contract — in one place, rather than
+        that policy being spelled out around two copies of the Drive calls.
         """
         # Deliberately lazy. googleapiclient / google-auth-oauthlib /
         # google-auth-httplib2 / httplib2 are TRANSITIVE deps (via django-gsheets),
@@ -459,60 +600,54 @@ class DriveReceiptService:
         # requests never take.
         from googleapiclient.http import MediaInMemoryUpload
 
-        # `Payment.receipt_date` — the same property that picks the YEAR of the
-        # receipt NUMBER, so a receipt cannot be numbered for one year and filed
-        # under another.
-        d = payment.receipt_date
-        # Reported path and created folders come from ONE expression, so what the
-        # result claims and what Drive received cannot disagree.
-        levels = [curso_folder_name(d), "Recibos", month_folder_name(d)]
-        folder_path = "/".join(levels)
+        service = self._get_service()
+        dest_id = self.base_folder_id
+        for level in levels:
+            dest_id = self._find_or_create_folder(service, level, dest_id)
 
-        # The environment gate FIRST: outside production this must not touch the
-        # credentials, let alone Drive. See `drive_uploads_allowed`.
-        if not drive_uploads_allowed():
-            return DriveUploadResult(success=False, status="disabled", folder_path=folder_path)
-
-        if not self.is_configured():
-            return DriveUploadResult(success=False, status="not_configured", folder_path=folder_path)
-
-        try:
-            service = self._get_service()
-            dest_id = self.base_folder_id
-            for level in levels:
-                dest_id = self._find_or_create_folder(service, level, dest_id)
-
-            existing = self._existing_receipt(service, dest_id, payment.id)
-            if existing:
-                return DriveUploadResult(
-                    success=True, status="skipped_exists", folder_path=folder_path, file_id=existing
-                )
-
-            media = MediaInMemoryUpload(pdf_bytes, mimetype="application/pdf", resumable=False)
-            created = (
-                service.files()
-                .create(
-                    body={"name": receipt_filename(payment), "parents": [dest_id]},
-                    media_body=media,
-                    fields="id",
-                    supportsAllDrives=True,
-                )
-                .execute()
-            )
-            logger.info("Drive: uploaded receipt for payment %s to %s", payment.id, safe_log(folder_path))
-            return DriveUploadResult(success=True, status="uploaded", folder_path=folder_path, file_id=created["id"])
-        except Exception as exc:  # noqa: BLE001 — best-effort archive, never propagate
+        existing = self._existing_receipt(service, dest_id, payment.id)
+        if existing:
             return DriveUploadResult(
-                success=False,
-                status="error",
+                success=True,
+                status="skipped_exists",
                 folder_path=folder_path,
-                error=_describe_error(exc),
+                file_id=existing,
+                file_name=file_name,
             )
 
+        media = MediaInMemoryUpload(pdf_bytes, mimetype="application/pdf", resumable=False)
+        created = (
+            service.files()
+            .create(
+                body={"name": file_name, "parents": [dest_id]},
+                media_body=media,
+                fields="id",
+                supportsAllDrives=True,
+            )
+            .execute()
+        )
+        logger.info("Drive: archived payment %s as %s in %s", payment.id, safe_log(file_name), safe_log(folder_path))
+        return DriveUploadResult(
+            success=True,
+            status="uploaded",
+            folder_path=folder_path,
+            file_id=created["id"],
+            file_name=file_name,
+        )
 
-def _describe_error(exc: Exception) -> str:
+
+def _describe_error(exc: Exception, *, what: str = "") -> str:
     """A short, cause-oriented message for the log — no raw exception text to the
-    client, and the common Drive failures named so an operator knows what to fix."""
+    client, and the common Drive failures named so an operator knows what to fix.
+
+    `what` names the receipt being archived — payment id, file name, destination
+    folder. Every line below used to be written WITHOUT it, so the single record
+    an operator got for a failed archive read "Drive receipt upload failed
+    unexpectedly" and a 30-frame httplib2 traceback, naming neither the payment,
+    nor the family, nor the month to go and repair. The caller already builds
+    that string for its own logging, so passing it here keeps the two records of
+    one failure describing the same thing.
+    """
     # NOT a top-level import: here the import IS the condition. The `except`
     # binds `HttpError = ()` so the isinstance() below is simply False when
     # googleapiclient is unavailable — this module's contract is that a Drive
@@ -524,6 +659,12 @@ def _describe_error(exc: Exception) -> str:
         from googleapiclient.errors import HttpError
     except Exception:  # noqa: BLE001
         HttpError = ()  # type: ignore[assignment]
+
+    # Appended to every message below, so which receipt failed is recorded
+    # whichever branch is taken — including the `logger.exception` one, where an
+    # unexpected exception type is the case an operator can least afford to be
+    # told about in the abstract.
+    where = f" [{safe_log(what)}]" if what else ""
 
     if HttpError and isinstance(exc, HttpError):
         status = getattr(getattr(exc, "resp", None), "status", None)
@@ -538,11 +679,23 @@ def _describe_error(exc: Exception) -> str:
             msg = f"error transitorio de Drive (HTTP {status})"
         else:
             msg = f"error de Drive (HTTP {status})"
-        logger.warning("Drive receipt upload failed: %s", msg)
+        logger.warning("Drive receipt upload failed%s: %s", where, msg)
+        return msg
+
+    if isinstance(exc, _TRANSPORT_ERRORS):
+        # WARNING and no traceback, exactly like the HTTP 429/5xx branch above,
+        # because it is the same class of event: the network, not this code. It
+        # arrived here as `logger.exception` — i.e. at ERROR, which in production
+        # is wired to `mail_admins` — so a socket Google closed while idle paged
+        # the academy's admins with a stack of httplib2 frames that named no
+        # payment and pointed at no fixable thing. The frames are not the
+        # information here; the cause and the receipt are.
+        msg = f"error de conexión con Drive ({type(exc).__name__})"
+        logger.warning("Drive receipt upload failed%s: %s", where, msg)
         return msg
 
     msg = f"{type(exc).__name__}"
-    logger.exception("Drive receipt upload failed unexpectedly")
+    logger.exception("Drive receipt upload failed unexpectedly%s", where)
     return msg
 
 
