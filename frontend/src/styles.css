@@ -15,6 +15,7 @@
      8. Dividers           — decorative fade lines on founder page
      9. Social backgrounds — Instagram and Facebook brand colors
     10. WhatsApp popup     — slide-in animation classes
+    11. Success dialog     — contact form confirmation modal
    ═══════════════════════════════════════════════════════════════ */
 
 @theme {
@@ -171,4 +172,49 @@ body {
 .popup-visible {
   opacity: 1;
   transform: translateY(0);
+}
+
+/* ── 11. Success dialog ─────────────────────────────────────────
+   The confirmation modal shown after the contact form is sent.
+   Same two-class pattern as the WhatsApp popup above: the base
+   class is the hidden starting state and the `-visible` class
+   brings it in, so React only has to toggle a class and the
+   timing lives here with the rest of the design.
+
+   The panel scales rather than slides: it is centred, and a
+   vertical slide on a centred box reads as a jump on short
+   screens where the box is already near the top.
+
+   `prefers-reduced-motion` is honoured because this modal appears
+   without the user asking for it — it is the one animation on the
+   site that interrupts rather than decorates.                    */
+
+.modal-backdrop {
+  opacity: 0;
+  transition: opacity 0.25s ease;
+}
+
+.modal-backdrop-visible {
+  opacity: 1;
+}
+
+.modal-panel {
+  opacity: 0;
+  transform: scale(0.96) translateY(0.5rem);
+  transition: opacity 0.25s ease, transform 0.25s ease;
+}
+
+.modal-panel-visible {
+  opacity: 1;
+  transform: scale(1) translateY(0);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .modal-backdrop,
+  .modal-panel {
+    transition: none;
+  }
+  .modal-panel {
+    transform: none;
+  }
 }

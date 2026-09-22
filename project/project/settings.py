@@ -868,6 +868,36 @@ EMAIL_ALLOWED_RECIPIENTS = [
 # this login form and are not the audience for the notice.
 TESTER_LOGIN_NOTICE = os.getenv("TESTER_LOGIN_NOTICE", "").strip()
 
+# ---------------------------------------------------------------------------
+# SIBLING ENVIRONMENT (the login page's cross-environment link)
+# ---------------------------------------------------------------------------
+# The origin of the OTHER live deployment. `login_view` turns whichever of these
+# is not the current environment into a small link at the foot of `/app/login/`,
+# so an admin standing in front of production can reach the QA VM (and back)
+# without keeping an IP address in a bookmark bar.
+#
+# DEVELOPMENT RENDERS NEITHER, and that is the only interesting part of the
+# rule: a developer's machine is not one of the two deployments, so neither
+# direction is "the other one" — offering both would make the link mean
+# something different locally from what it means anywhere it actually ships.
+# `core.views.auth.sibling_environment_link` owns that choice; see it for why it
+# keys on ENVIRONMENT rather than IS_TESTING_ENV.
+#
+# ORIGINS ONLY — no path. The link's path comes from `reverse("login")`, so it
+# derives from APP_URL_PREFIX like every other app URL and cannot become the
+# hand-written `/app/...` the frontend-invariants test exists to catch. A
+# trailing slash is stripped here so the join cannot produce `//app/login/`.
+#
+# Defaulted rather than required, so the feature needs no new variable on the
+# Cloud Run service — which matters more than it sounds: `--set-env-vars`
+# replaces the entire env set, and every var added to that line is another
+# chance to drop the ~30 that are already there. Override per environment only
+# if an address changes.
+TESTING_SITE_URL = os.getenv("TESTING_SITE_URL", "http://34.26.130.187:8000").strip().rstrip("/")
+PRODUCTION_SITE_URL = (
+    os.getenv("PRODUCTION_SITE_URL", "https://fiveaday-332600671945.europe-southwest1.run.app").strip().rstrip("/")
+)
+
 # Where the public site's "Contacta con nosotras" form delivers. It is the
 # ACADEMY's own inbox, not SUPPORT_EMAIL: these are prospective families
 # asking about classes, which is the academy's business, while SUPPORT_EMAIL

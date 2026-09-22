@@ -30,7 +30,7 @@
 {% csrf_token %}
 <div class="px-4 py-6" id="features-page"
      data-create-url="{% url 'api_create_feature' %}"
-     data-detail-url-base="/testing/features/">
+     data-detail-url-template="{% url 'feature_detail' 0 %}">
 
     <div class="mb-8">
         <div class="flex items-center gap-3 mb-2">
@@ -187,7 +187,11 @@
                 // user-supplied text.
                 const row = document.createElement('a');
                 row.className = 'feature-item';
-                row.href = page.dataset.detailUrlBase + f.id + '/';
+                // Django reverses the route with a 0 placeholder; JS only swaps
+                // the id in. A hand-written "/testing/features/" misses the
+                // app's "/app" mount prefix and every row links to a 404.
+                row.href = (page.dataset.detailUrlTemplate || '')
+                    .replace('/features/0/', '/features/' + f.id + '/');
                 row.dataset.featureId = f.id;
 
                 const icon = document.createElement('span');

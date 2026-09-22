@@ -64,6 +64,7 @@
 <div class="px-4 py-6" id="testing-page"
      data-seed-url="{% url 'api_seed_database' %}"
      data-backlog-create-url="{% url 'api_create_backlog_task' %}"
+     data-backlog-update-url-template="{% url 'api_update_backlog_task' 0 %}"
      data-toggle-error-url="{% url 'api_toggle_error_email' %}"
      data-ready-url="{% url 'api_mark_ready' %}">
 
@@ -417,6 +418,18 @@
         return window.apiFetch(url, { method: 'POST', body: JSON.stringify(body) });
     }
 
+    // Django reverses the route with a 0 placeholder and JS only swaps the id
+    // in. NEVER hand-write this path: the app is mounted under a prefix
+    // ("/app"), so a literal "/api/testing/backlog/<id>/update/" 404s — and a
+    // 404 is HTML, which apiFetch can only report as the generic "El servidor
+    // ha devuelto un error", pointing every investigation at the server
+    // instead of at the URL. Same rule as data-update-url-template in
+    // expenses.html; see CLAUDE.md.
+    const backlogUpdateTemplate = page.dataset.backlogUpdateUrlTemplate || '';
+    function backlogUpdateUrl(taskId) {
+        return backlogUpdateTemplate.replace('/0/update/', '/' + taskId + '/update/');
+    }
+
     // ── Interruptores de QA ─────────────────────────
     // One handler for both switches: each reverts itself on failure, so a
     // checkbox can never sit on "Activo" against a flag the server refused.
@@ -580,7 +593,7 @@
         const taskId = btn.dataset.taskId;
         const next = !btn.classList.contains('is-verified');
         btn.disabled = true;
-        post(`/api/testing/backlog/${taskId}/update/`, {verified: next})
+        post(backlogUpdateUrl(taskId), {verified: next})
             .then(data => {
                 if (data.success) {
                     btn.classList.toggle('is-verified', data.verified);
@@ -601,7 +614,7 @@
         if (!btn) return;
         const taskId = btn.dataset.taskId;
         const item = btn.closest('.backlog-item');
-        post(`/api/testing/backlog/${taskId}/update/`, {status: 'done'})
+        post(backlogUpdateUrl(taskId), {status: 'done'})
             .then(data => {
                 if (data.success) {
                     const badge = item.querySelector('.status-badge');
