@@ -27,7 +27,9 @@ export default function LosODS() {
           <Reveal>
             <img
               src={odsPage.sdgImage}
-              alt="Objetivos de Desarrollo Sostenible"
+              alt="Los 17 Objetivos de Desarrollo Sostenible de la Agenda 2030"
+              loading="lazy"
+              decoding="async"
               className="mx-auto max-w-full rounded-lg shadow-md mb-4 transition-transform duration-500 hover:scale-[1.01]"
             />
             <p className="text-sm text-primary-dark/60 text-center">

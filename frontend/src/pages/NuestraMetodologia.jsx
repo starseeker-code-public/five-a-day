@@ -54,7 +54,9 @@ export default function NuestraMetodologia() {
                 <div className="overflow-hidden rounded-xl shadow-md w-full h-56">
                   <img
                     src={routine.image}
-                    alt={routine.title}
+                    alt={`Rutina ${routine.title} del método 5 a Day en Five a Day English Academy, Albacete`}
+                    loading="lazy"
+                    decoding="async"
                     className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
                   />
                 </div>
@@ -93,7 +95,9 @@ export default function NuestraMetodologia() {
               <div className="flex-1 overflow-hidden rounded-xl shadow-lg group">
                 <img
                   src={metodologiaPage.funFridays.image}
-                  alt="Fun Fridays"
+                  alt="Sesión gratuita Fun Fridays de Five a Day English Academy, Albacete"
+                  loading="lazy"
+                  decoding="async"
                   className="w-full object-cover max-h-72 transition-transform duration-500 group-hover:scale-105"
                 />
               </div>

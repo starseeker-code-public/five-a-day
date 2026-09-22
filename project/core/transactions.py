@@ -2,7 +2,7 @@ from django.db.models import Prefetch, Q
 
 from billing.models import Enrollment, Payment, relevant_academic_years
 from core.decorators import _request_teacher
-from core.middleware import _is_non_admin_teacher
+from core.middleware import _is_non_admin_teacher, _is_tester_teacher
 from students.models import Student
 
 
@@ -49,6 +49,12 @@ def visible_students_for(request, queryset=None):
     and the drift is silent: it is invisible to admin testing, because admins
     take the early return.
 
+    The TESTER account is unscoped like an admin, and has to be: it is
+    `admin=False`, so it reaches this branch, but it teaches no groups — the
+    filter below would match nothing and the demonstration would be an empty
+    roll on every page. It is a shared public login over synthetic seed data, so
+    there is no family whose privacy the scoping would be protecting.
+
     Two deliberate edges:
 
     * **Waiting-list placeholders stay visible.** A waiting entry is nobody's
@@ -65,7 +71,7 @@ def visible_students_for(request, queryset=None):
 
     if queryset is None:
         queryset = students_on_the_roll()
-    if not _is_non_admin_teacher(request):
+    if not _is_non_admin_teacher(request) or _is_tester_teacher(request):
         return queryset
     teacher = _request_teacher(request)
     if teacher is None:

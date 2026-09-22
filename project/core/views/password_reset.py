@@ -34,6 +34,7 @@ from django.utils.decorators import method_decorator
 from django.views.decorators.http import require_http_methods
 
 from core.audit_models import AuditLog
+from core.decorators import tester_forbidden
 from core.rate_limit import rate_limit
 
 logger = logging.getLogger(__name__)
@@ -186,6 +187,10 @@ def can_change_own_password(request) -> bool:
 # 5 attempts / 5 min / IP. The endpoint takes the CURRENT password, so an
 # unthrottled version is an online password oracle against a live session.
 @require_http_methods(["POST"])
+# ABOVE the throttle on purpose: a tester refusal must not consume one of the
+# five slots, or a visitor clicking the disabled control would lock the real
+# teachers out of their own password change for five minutes from that IP.
+@tester_forbidden
 @rate_limit("password_change", limit=5, window_seconds=300)
 def change_password(request):
     """API: change the logged-in user's own password."""

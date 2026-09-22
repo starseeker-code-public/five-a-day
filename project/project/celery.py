@@ -96,6 +96,23 @@ app.conf.beat_schedule = {
         "schedule": crontab(hour=3, minute=0, day_of_week=0),
         "options": {"queue": "celery"},
     },
+    # Public tester sandbox rebuild — daily 07:30, TESTING ONLY (the task itself
+    # returns early anywhere else; Beat also runs in development, where an
+    # ungated entry would wipe the developer's own database every morning).
+    #
+    # 07:30 sits deliberately between three things: the nightly testing deploy
+    # owns 01:00-05:59 and a reset landing mid-migration would race it; the
+    # 06:00-07:00 cluster above should have finished; and birthday emails go at
+    # 08:00, so the roll is rebuilt before anything reads it.
+    #
+    # There is NO Cloud Scheduler counterpart, unlike every other entry here.
+    # That is deliberate, not an omission — production must not be able to run
+    # this. See core.tasks.reset_tester_environment_task.
+    "reset-tester-environment": {
+        "task": "core.tasks.reset_tester_environment_task",
+        "schedule": crontab(hour=7, minute=30),
+        "options": {"queue": "celery"},
+    },
     # Expired sessions + spent parent magic-link tokens, daily 03:30. Both
     # tables hold authentication material and nothing purged either of them
     # before v1.23.0 (see core.tasks.purge_expired_sessions).

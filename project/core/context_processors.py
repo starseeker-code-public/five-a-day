@@ -4,7 +4,7 @@ from datetime import date
 from django.conf import settings
 
 from core.decorators import may_use_qa_tools
-from core.middleware import _is_non_admin_teacher
+from core.middleware import _is_non_admin_teacher, _is_tester_teacher
 
 from .constants import SCHEDULED_APPS
 from .models import HistoryLog, TodoItem
@@ -34,7 +34,20 @@ def today_notifications(request):
     # non-admin teacher" — which the template then read as "is an admin" and
     # rendered the admin UI to nobody in particular. Admin is a POSITIVE grant:
     # it now requires an authenticated session first.
-    is_admin_user = session_authenticated and not is_non_admin_teacher
+    is_tester_user = _is_tester_teacher(request)
+    # `is_admin_user` gates the UI, not the enforcement: the sidebar's Pagos /
+    # Gastos / Aplicaciones / Informes / Base de Datos links, the notifications
+    # bell, the actions-history dropdown and the per-view help. A tester is
+    # `admin=False`, so without the second clause it would be allowed through to
+    # every one of those URLs by `TESTER_ALLOWED_URL_NAMES` while the navigation
+    # to them stayed hidden — reachable only by typing the address, which is not
+    # a demonstration of anything.
+    #
+    # The name is now slightly wider than it reads, so: this variable means
+    # "render the full interface". What a session may actually DO is decided by
+    # the middleware allowlist and `@admin_required`, never here, and the tester
+    # allowlist is chosen to cover exactly what these links point at.
+    is_admin_user = session_authenticated and (not is_non_admin_teacher or is_tester_user)
 
     # QA testing tools visibility — the SAME predicate `qa_access_required`
     # enforces (testing env + active admin Teacher), so the icon and the gate
@@ -43,7 +56,7 @@ def today_notifications(request):
 
     # The header bell and the actions-history feed are admin-only, so a
     # non-admin teacher never renders either one — don't spend the queries.
-    if is_non_admin_teacher:
+    if is_non_admin_teacher and not is_tester_user:
         return {
             "notifications_today_todos": [],
             "notifications_today_apps": [],
@@ -53,6 +66,8 @@ def today_notifications(request):
             "show_testing_tools": show_testing_tools,
             "is_admin_user": is_admin_user,
             "is_non_admin_teacher": is_non_admin_teacher,
+            "is_tester_user": is_tester_user,
+            "tester_login_notice": getattr(settings, "TESTER_LOGIN_NOTICE", ""),
             "drive_receipts_url": getattr(settings, "GOOGLE_DRIVE_RECEIPTS_URL", ""),
         }
 
@@ -94,6 +109,8 @@ def today_notifications(request):
         "show_testing_tools": show_testing_tools,
         "is_admin_user": is_admin_user,
         "is_non_admin_teacher": is_non_admin_teacher,
+        "is_tester_user": is_tester_user,
+        "tester_login_notice": getattr(settings, "TESTER_LOGIN_NOTICE", ""),
         "drive_receipts_url": getattr(settings, "GOOGLE_DRIVE_RECEIPTS_URL", ""),
     }
 

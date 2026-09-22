@@ -43,7 +43,7 @@ export default function PreguntasFrecuentes() {
       <section className="relative">
         <img
           src={faqPage.image}
-          alt="Preguntas frecuentes"
+          alt="Preguntas frecuentes sobre las clases de inglés en Five a Day English Academy, Albacete"
           className="w-full h-48 md:h-72 object-cover"
         />
         <div className="absolute inset-0 flex items-center justify-center">

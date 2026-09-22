@@ -28,6 +28,8 @@ logger = logging.getLogger(__name__)
 DEFAULT_WINDOW_SECONDS = 60
 DEFAULT_LIMIT = 5
 
+__all__ = ["begin_cooldown", "cooldown_active", "rate_limit"]
+
 
 def _client_ip(request) -> str:
     """Best-effort client IP, validated to a literal address.
@@ -113,6 +115,50 @@ def _claim_slot(scope: str, ip: str, limit: int, window_seconds: int) -> bool | 
         return False
     except Exception:  # noqa: BLE001 — any cache failure fails OPEN; the caller logs it at ERROR
         return None
+
+
+def _cooldown_key(scope: str, ip: str) -> str:
+    return f"cooldown:{scope}:{ip}"
+
+
+def cooldown_active(scope: str, request) -> bool:
+    """True while this client is still inside a cooldown started earlier.
+
+    A COOLDOWN is not the same control as `rate_limit`, and the difference is
+    the whole reason this exists. The decorator throttles REQUESTS: it claims a
+    slot before the view runs, so a request the view then refuses has still
+    spent one. That is right for bounding abuse and wrong for a wait imposed
+    after a successful action — a family who mistypes their email would be told
+    to correct it and then refused for a minute when they did, which reads as
+    the site being broken.
+
+    So: `rate_limit` for the sustained window (every attempt counts), this pair
+    for "you have just sent one, wait before sending another".
+
+    FAILS OPEN on a cache failure, like the limiter and for the same reason: a
+    cooldown is a courtesy control and the sustained window is still in force.
+    """
+    # Same opt-out as the decorator, for the same reason: the cache is shared
+    # across the suite and every test client is 127.0.0.1, so one test sending a
+    # message would throttle an unrelated one. A test that wants this on sets
+    # RATELIMIT_ENABLE=True and clears the cache.
+    if not getattr(settings, "RATELIMIT_ENABLE", True):
+        return False
+    try:
+        return cache.get(_cooldown_key(scope, _client_ip(request))) is not None
+    except Exception:  # logged below; a dead cache must not refuse a real visitor
+        logger.error("Cooldown cache unavailable — scope=%s is UNTHROTTLED for this request", scope, exc_info=True)
+        return False
+
+
+def begin_cooldown(scope: str, request, seconds: int) -> None:
+    """Start the cooldown for this client. Call it AFTER the action succeeded."""
+    if not getattr(settings, "RATELIMIT_ENABLE", True):
+        return
+    try:
+        cache.set(_cooldown_key(scope, _client_ip(request)), 1, timeout=seconds)
+    except Exception:  # the action already succeeded; losing the cooldown must not undo it
+        logger.error("Could not start cooldown scope=%s", scope, exc_info=True)
 
 
 def rate_limit(

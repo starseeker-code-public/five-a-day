@@ -1,9 +1,11 @@
 """Core Celery tasks."""
 
 from datetime import timedelta
+from io import StringIO
 
 from celery import shared_task
 from celery.utils.log import get_task_logger
+from django.conf import settings
 from django.core.management import call_command
 from django.db import transaction
 from django.utils import timezone
@@ -14,8 +16,9 @@ from billing.services.pdf_service import generate_payment_receipt
 from comms.services.email_functions import send_fun_friday_email
 from comms.services.email_service import email_service
 from comms.tasks import send_payment_receipt_email_task
+from core.log_safe import safe_log
 from core.models import AuditLog, BacklogTask, FunFridayScheduledSend
-from core.services.drive_service import drive_uploads_allowed
+from core.services.drive_service import drive_uploads_allowed, receipt_filename
 from core.services.drive_service import get_service as get_drive_service
 
 logger = get_task_logger(__name__)
@@ -42,6 +45,40 @@ def cleanup_done_backlog_tasks(days: int = 30):
     deleted, _ = BacklogTask.objects.filter(status="done", updated_at__lt=cutoff).delete()
     logger.info("Deleted %d completed backlog task(s) older than %d days", deleted, days)
     return {"status": "success", "deleted": deleted}
+
+
+@shared_task(name="core.tasks.reset_tester_environment_task")
+def reset_tester_environment_task():
+    """Nightly rebuild of the public tester sandbox. TESTING ONLY.
+
+    THE ENVIRONMENT GATE IS THE WHOLE POINT OF THIS WRAPPER. Celery Beat runs in
+    development too — `docker-compose.yml` starts `celery_beat` in every
+    environment that uses it — so an ungated entry in `beat_schedule` would wipe
+    every developer's local database at 07:30 each morning, silently, with the
+    only evidence being data that "went missing overnight". The command itself
+    refuses only PRODUCTION (it is a legitimate manual tool in development), so
+    the narrower "unattended runs happen on the QA VM and nowhere else" rule has
+    to live here, at the scheduled entry point.
+
+    Production has no Beat process at all, and this deliberately gets NO Cloud
+    Run Job / Cloud Scheduler entry, which is a knowing exception to the rule
+    that every Beat task needs a wrapper command provisioned in production. The
+    command exists for local and QA use; production must never be able to run it.
+
+    07:30 Europe/Madrid, chosen around three other things: the nightly testing
+    deploy owns 01:00-05:59 and a reset landing mid-migration would race it; the
+    06:00-07:00 Beat cluster (payments, expenses, backlog cleanup) should have
+    finished; and birthday emails go at 08:00, so the roll is rebuilt before
+    anything reads it.
+    """
+    if not settings.IS_TESTING_ENV:
+        logger.info("reset_tester_environment_task skipped: not the testing environment")
+        return {"status": "skipped", "reason": "not testing environment"}
+
+    out = StringIO()
+    call_command("reset_tester_environment", stdout=out)
+    logger.info("Tester sandbox rebuilt by the nightly task")
+    return {"status": "success", "output": out.getvalue()}
 
 
 @shared_task(name="core.tasks.prune_audit_log")
@@ -370,12 +407,29 @@ def upload_receipt_to_drive_task(self, payment_id: int):
         pdf_bytes = generate_payment_receipt(payment)
     except Exception:
         # Rendering failing is worth knowing about, but still must not blow up the
-        # completion flow — log and stop.
-        logger.exception("upload_receipt_to_drive_task: failed to render PDF for payment %s", payment_id)
+        # completion flow — log and stop. The student is named because a render
+        # failure is almost always about this row's own data (a `Paragraph`
+        # chewing on a name, a missing enrollment), so "which payment" alone
+        # leaves the next question unanswered.
+        logger.exception(
+            "upload_receipt_to_drive_task: failed to render PDF for payment %s (%s)",
+            payment_id,
+            safe_log(receipt_filename(payment)),
+        )
         return {"status": "error", "message": "pdf render failed", "payment_id": payment_id}
 
     result = drive.upload_receipt(payment, pdf_bytes)
     if not result.success and result.status == "error":
-        # result.error is one of the service's own fixed messages, not user input.
-        logger.warning("upload_receipt_to_drive_task: payment %s not archived (%s)", payment_id, result.error)
+        # result.error is one of the service's own fixed messages, not user input;
+        # file_name and folder_path are both built by the service from sanitised
+        # parts. Together they say which family and which month to repair — this
+        # line said only "payment N not archived", which is the id of a row
+        # nobody has open.
+        logger.warning(
+            "upload_receipt_to_drive_task: payment %s not archived as %s in %s (%s)",
+            payment_id,
+            safe_log(result.file_name),
+            safe_log(result.folder_path),
+            result.error,
+        )
     return {"payment_id": payment_id, **result.as_dict()}

@@ -6,7 +6,9 @@ site). It used to deploy to Netlify on its own domain; it is now built into
 marketing site at "/" and the management app under `settings.APP_URL_PREFIX`.
 
 HOW THE TWO PIECES ARE SERVED
-    index.html   this module, for "/" and for every route in SPA_ROUTES.
+    index.html   this module, for "/" and for every route in SPA_ROUTES —
+                 the per-route file from `frontend/scripts/generate-seo.mjs`
+                 when it exists, otherwise the shared shell.
     everything   WhiteNoise, straight from `settings.WHITENOISE_ROOT`
     else         (= frontend/dist), so /assets/…, /images/… and /videos/…
                  resolve at the same absolute paths the sources already use.
@@ -26,11 +28,14 @@ from pathlib import Path
 
 from django.conf import settings
 from django.http import Http404, HttpResponse, JsonResponse
+from django.middleware.csrf import get_token
+from django.utils.html import escape
 from django.views.decorators.csrf import ensure_csrf_cookie
 from django.views.decorators.http import require_http_methods
 
 from comms.services.email_service import email_service
-from core.rate_limit import rate_limit
+from core.email_policy import ERROR_DOMAIN_NOT_ALLOWED, ERROR_TOO_LONG, check_email, domain_of
+from core.rate_limit import begin_cooldown, cooldown_active, rate_limit
 
 logger = logging.getLogger(__name__)
 
@@ -50,26 +55,102 @@ SPA_ROUTES = (
 )
 
 
-def _index_path() -> Path:
-    return Path(settings.FRONTEND_DIST_DIR) / "index.html"
+def _index_path(route: str = "") -> Path:
+    """The built HTML for one route, or the shared shell when `route` is empty.
+
+    `frontend/scripts/generate-seo.mjs` writes one real file per page —
+    `dist/faq/index.html` and so on — each carrying its own `<title>`,
+    description, canonical URL and JSON-LD. Before that every route was served
+    the identical document, so Google saw seven pages with one title between
+    them and could rank none of them for its own subject.
+
+    On Netlify the static server picked those files up for free. Django has to
+    go looking, which is why this function exists and why the lookup is by
+    ROUTE NAME rather than by `request.path`.
+
+    The segment joined below is the element of `SPA_ROUTES` that MATCHED, never
+    the string handed in, so the path is built from a constant this module owns
+    and a traversal attempt cannot reach the filesystem even if a future URL
+    pattern starts capturing `route` from the request. That used to be true only
+    by convention — `project/urls.py` passes a literal — which is a promise made
+    in one file and relied on in another, and it read to CodeQL (correctly, on
+    the evidence available to it) as a path built from a view parameter. An
+    unknown route falls back to the shared shell, which is what `frontend_index`
+    did with the result anyway.
+    """
+    base = Path(settings.FRONTEND_DIST_DIR)
+    for known in SPA_ROUTES:
+        if known == route:
+            return base / known / "index.html"
+    return base / "index.html"
+
+
+#: Where the CSRF token is published to the React bundle. The site is a BUILT
+#: file, so it has no `{% csrf_token %}` input; this meta tag is its
+#: equivalent, and `ContactSection.jsx` reads it.
+CSRF_META_NAME = "csrf-token"
+
+
+def _inject_csrf_meta(html: str, token: str) -> str:
+    """Publish the CSRF token into the served HTML as a `<meta>` tag.
+
+    WHY THIS EXISTS. `CSRF_COOKIE_HTTPONLY` is True whenever `DEBUG=False`, so
+    on the testing VM and in production JS cannot read `document.cookie` — the
+    React form read the cookie, sent an EMPTY `X-CSRFToken`, and every
+    submission was refused with a 403 whose body is HTML. The component cannot
+    parse that, so it fell through to its generic "no hemos podido enviar el
+    mensaje", which reads as a mail outage and sends the investigation to the
+    SMTP layer. It worked in development for the one reason that makes this
+    class of bug survive to production: with `DEBUG=True` the cookie is not
+    HttpOnly.
+
+    The fix keeps the app's existing rule rather than inventing a second one:
+    every other page takes the token from markup Django rendered (the hidden
+    input in `base.html`, read by `base.js`), never from the cookie. A built
+    file has no `{% csrf_token %}` tag, so Django writes the equivalent here.
+
+    The alternatives were worse. Turning off `CSRF_COOKIE_HTTPONLY` weakens
+    every page in the app to fix one form; `@csrf_exempt` would be the fourth
+    such view, and the three that exist each justify it the same way — the
+    caller is a SERVER carrying its own credential — which a public browser
+    POST cannot claim.
+
+    Injection is a plain replace on `</head>`, and a document without one is
+    logged rather than silently served token-less: that failure would look
+    exactly like the bug this replaces.
+    """
+    tag = f'<meta name="{CSRF_META_NAME}" content="{escape(token)}">'
+    head_close = "</head>"
+    if head_close not in html:
+        logger.error("No </head> in the frontend shell; the CSRF token was not published to the page.")
+        return html
+    return html.replace(head_close, f"{tag}{head_close}", 1)
 
 
 @require_http_methods(["GET", "HEAD"])
 @ensure_csrf_cookie
-def frontend_index(request):
-    """Return the built SPA shell for "/" and every route in SPA_ROUTES.
+def frontend_index(request, route: str = ""):
+    """Return the built HTML for "/" and every route in SPA_ROUTES.
 
-    React Router reads the path from the URL bar, so all of them are served the
-    same document and the client picks the page — the same rewrite Netlify did
-    with `/* -> /index.html`.
+    `route` is supplied by the URL conf as a static extra kwarg, never parsed
+    from the request — see `_index_path`.
 
-    `ensure_csrf_cookie` is what lets the contact form POST at all. This view
-    returns a FILE, not a rendered template, so nothing here would otherwise
-    emit a `csrftoken` cookie and every submission would be refused by
-    `CsrfViewMiddleware` with a 403. The alternative — exempting the contact
-    endpoint — would make it the third `@csrf_exempt` view in the app, and the
-    two that exist are each authenticated by something else (a Stripe
-    signature; nothing, for the health probe). This one is a plain public POST.
+    Each route is served its OWN built document when one exists, carrying that
+    page's title, description, canonical URL and structured data; React Router
+    then reads the path from the URL bar and renders the matching page. Before
+    the SEO generator these were all the identical file, which is what made
+    every page of the site compete for one title in Google.
+
+    CSRF takes BOTH halves here, and each is useless without the other.
+    `ensure_csrf_cookie` sets the cookie — this view returns a FILE, not a
+    rendered template, so nothing else would emit one — and `_inject_csrf_meta`
+    publishes the matching token into the markup, because a built file has no
+    `{% csrf_token %}` input and the cookie is HttpOnly outside development.
+    Shipping only the cookie is what made every contact submission 403 on the
+    testing VM while working locally. Exempting the endpoint instead would make
+    it the fourth `@csrf_exempt` view, and the three that exist each justify it
+    the same way — the caller is a server carrying its own credential — which a
+    public browser POST cannot.
 
     A missing build is a 404 with an explanation rather than a 500: in
     development the tree is only there once somebody has run `make
@@ -77,7 +158,16 @@ def frontend_index(request):
     missing step. In production the image cannot be built without it, so this
     branch means the Docker build skipped the node stage — worth an ERROR.
     """
-    index = _index_path()
+    # The per-route file when the SEO generator produced one, else the shared
+    # shell. The FALLBACK is not a nicety: `frontend/dist` is gitignored, the
+    # test suite stubs a bare `index.html` (conftest's `spa_shell`), and a
+    # developer who has run `vite build` without the generator has no per-route
+    # files either. In all three cases the site must still serve every route —
+    # just with the homepage's metadata, which costs SEO and breaks nothing.
+    index = _index_path(route)
+    if route and not index.is_file():
+        index = _index_path()
+
     try:
         html = index.read_text(encoding="utf-8")
     except OSError:
@@ -88,6 +178,12 @@ def frontend_index(request):
             ) from None
         logger.error("Frontend build missing at %s in a non-DEBUG environment.", index)
         raise Http404("Frontend no disponible.") from None
+
+    # `get_token` both returns the value and marks the cookie for sending, so
+    # the header the form posts and the cookie it is compared against are
+    # minted together. Safe to do per request: NoHtmlCacheMiddleware marks this
+    # response no-cache, so no shared cache can pin one visitor's token.
+    html = _inject_csrf_meta(html, get_token(request))
 
     # Content-Type set explicitly: this is a file read, not a template render,
     # so nothing else would label it — and NoHtmlCacheMiddleware keys its
@@ -125,8 +221,48 @@ HONEYPOT_FIELD = "bot-field"
 #: tight enough that the academy's inbox cannot be flooded from one address.
 MAX_FIELD_LENGTH = 2000
 
+#: Seconds one client must wait between two messages. The React form counts the
+#: same number down on the button, but THIS is the control — the countdown is a
+#: courtesy to somebody who double-clicked, and a script never runs it at all.
+CONTACT_COOLDOWN_SECONDS = 60
+
+_COOLDOWN_SCOPE = "public_contact_form"
+
+#: Answered as JSON, unlike the rate limiter's own text/plain 429 — so the React
+#: form can show the academy's own wording instead of falling back to a generic
+#: "no hemos podido enviar", which blames the send for a wait.
+_COOLDOWN_MESSAGE = "Acabas de enviarnos un mensaje. Espera un momento antes de enviar otro, o escríbenos por WhatsApp."
+
+#: What a refused address is told. Every one of these names a channel that still
+#: works: a rejection must not be the end of the enquiry, because the person
+#: being refused is usually a family the academy wants to hear from, not an
+#: abuser. The domain message is the one that matters — an allowlist WILL
+#: occasionally turn away somebody real (a work address, a small ISP), and the
+#: only acceptable version of that is one they can route around in a tap.
+_EMAIL_ERRORS = {
+    ERROR_TOO_LONG: "Ese email es demasiado largo. Revísalo, por favor.",
+    ERROR_DOMAIN_NOT_ALLOWED: (
+        "No podemos aceptar mensajes de ese dominio de correo. Escríbenos desde otra dirección "
+        "(Gmail, Outlook, Hotmail, iCloud…), por WhatsApp, o a hellofiveaday@gmail.com."
+    ),
+}
+_EMAIL_ERROR_DEFAULT = "Revisa la dirección de email: no parece válida."
+
 
 @require_http_methods(["POST"])
+# TWO controls, answering two different questions.
+#
+#   rate_limit   bounds ABUSE: five POSTs per ten minutes per client, counted
+#                whether or not the view accepts them, so probing the validator
+#                costs the same as sending.
+#   the cooldown bounds VOLUME after a message actually goes through, and is
+#                started at the bottom of this view rather than by a second
+#                decorator. A decorator claims its slot BEFORE the view runs,
+#                so a submission the view then refuses would still spend it —
+#                and the commonest refusal here is a mistyped email. The family
+#                would be told to correct it and then refused for a minute when
+#                they did, which reads as the site being broken by the very act
+#                of fixing the mistake.
 @rate_limit("public_contact_form", limit=5, window_seconds=600)
 def submit_contact_form(request):
     """Email the academy a message from the public site's contact form.
@@ -142,6 +278,11 @@ def submit_contact_form(request):
     account. That is why it is rate-limited, length-capped and honeypotted, and
     why every value is escaped by the template rather than trusted.
     """
+    # Checked before anything else: it is the cheapest possible refusal, and it
+    # only ever fires for somebody who has already had a message delivered.
+    if cooldown_active(_COOLDOWN_SCOPE, request):
+        return JsonResponse({"success": False, "error": _COOLDOWN_MESSAGE}, status=429)
+
     if request.POST.get(HONEYPOT_FIELD, "").strip():
         logger.info("Contact form honeypot tripped; discarding silently")
         return JsonResponse({"success": True})
@@ -159,6 +300,23 @@ def submit_contact_form(request):
             {"success": False, "error": f"Faltan campos obligatorios: {', '.join(missing)}."},
             status=400,
         )
+
+    # The address gets its own pass, well beyond `type="email"` in the markup —
+    # which the browser enforces and a script simply does not send. It is the
+    # one field the academy will REPLY to, so an address that is merely
+    # well-formed is not enough: see core/email_policy.py.
+    email, email_error = check_email(values["email"])
+    if email_error:
+        # The DOMAIN, never the address: this endpoint is public and
+        # unauthenticated, so what arrives is a stranger's personal data. The
+        # domain is also the only part that is actionable — it is what says
+        # whether the allowlist is refusing real families and needs widening.
+        logger.info("Contact form refused an email: reason=%s domain=%s", email_error, domain_of(values["email"]))
+        return JsonResponse(
+            {"success": False, "error": _EMAIL_ERRORS.get(email_error, _EMAIL_ERROR_DEFAULT)},
+            status=400,
+        )
+    values["email"] = email
 
     recipient = getattr(settings, "CONTACT_FORM_RECIPIENT", None)
     if not recipient:
@@ -184,6 +342,18 @@ def submit_contact_form(request):
             "reply_to": values["email"],
             "message": values["mensaje"],
         },
+        # The SMTP account belongs to the academy, so `From:` is its own address
+        # and cannot be the family's. Without this header, hitting Reply on an
+        # enquiry answers hellofiveaday@gmail.com — the academy writing to
+        # itself — and the prospective family never hears back. The template's
+        # mailto button says the same thing and stays as the fallback for
+        # clients that ignore Reply-To, but a button is not where anybody looks
+        # before pressing Reply. `submit_portfolio_contact` got this in v1.30.4;
+        # the academy's own form, which runs every day, did not.
+        #
+        # NOTE it is a header, not a recipient: `filter_allowed_recipients` does
+        # not touch it, and no mail is ever sent TO the visitor.
+        reply_to=[values["email"]],
     )
     if not sent:
         # send_email already logged the cause. The family gets a fallback that
@@ -193,8 +363,17 @@ def submit_contact_form(request):
             status=502,
         )
 
+    # AFTER the send, never before: see the decorator note above.
+    begin_cooldown(_COOLDOWN_SCOPE, request, CONTACT_COOLDOWN_SECONDS)
     logger.info("Contact form delivered to the academy")
     return JsonResponse({"success": True})
 
 
-__all__ = ["CONTACT_FIELDS", "SPA_ROUTES", "frontend_index", "submit_contact_form"]
+__all__ = [
+    "CONTACT_COOLDOWN_SECONDS",
+    "CONTACT_FIELDS",
+    "CSRF_META_NAME",
+    "SPA_ROUTES",
+    "frontend_index",
+    "submit_contact_form",
+]

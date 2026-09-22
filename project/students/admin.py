@@ -39,8 +39,8 @@ class TeacherAdmin(admin.ModelAdmin):
     re-issues codes properly.
     """
 
-    list_display = ["full_name", "email", "phone", "admin", "active", "two_factor_enabled", "login_account"]
-    list_filter = ["active", "admin", "two_factor_enabled"]
+    list_display = ["full_name", "email", "phone", "admin", "tester", "active", "two_factor_enabled", "login_account"]
+    list_filter = ["active", "admin", "tester", "two_factor_enabled"]
     search_fields = ["first_name", "last_name", "email"]
     readonly_fields = ["two_factor_enabled", "login_account", "created_at", "updated_at"]
     # Never rendered, not even disabled: a read-only field still prints its value.
@@ -48,7 +48,20 @@ class TeacherAdmin(admin.ModelAdmin):
 
     fieldsets = (
         ("Datos personales", {"fields": ("first_name", "last_name", "email", "phone")}),
-        ("Acceso", {"fields": ("active", "admin", "user", "login_account")}),
+        (
+            "Acceso",
+            {
+                "fields": ("active", "admin", "tester", "user", "login_account"),
+                "description": (
+                    "<strong>Pruebas</strong>: cuenta pública de demostración, solo para "
+                    "el entorno de testing. Debe ir con <em>Administradora</em> "
+                    "DESMARCADO: ve bastante más que una profesora normal (lo que "
+                    "permite <code>TESTER_ALLOWED_URL_NAMES</code>), pero nunca entra "
+                    "aquí ni en el panel de QA. Sus datos se restablecen cada noche "
+                    "(<code>manage.py reset_tester_environment</code>)."
+                ),
+            },
+        ),
         (
             "Segundo factor",
             {

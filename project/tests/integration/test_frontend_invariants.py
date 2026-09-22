@@ -138,22 +138,55 @@ def test_messages_are_rendered_once():
 # ───────────────────────────────────────────────────────────────────────────────
 
 
+# Templates that are deliberately NOT Spanish, with the language each must
+# declare. Everything the ACADEMY renders is Spanish and stays under the rule
+# below; this list exists because the deployment gained a second tenant whose
+# output is not the academy's.
+#
+# An entry here is not an exemption from declaring a language — it still has to
+# declare one, just a different one. Getting that wrong is the same bug in the
+# other direction: a screen reader reading English with Spanish phonetics, and a
+# translate banner over mail that is already in the reader's language.
+NON_SPANISH_TEMPLATES = {
+    # The portfolio contact relay (core/views/portfolio.py). English site,
+    # English sender, English reader — and no academy branding either.
+    "core/templates/emails/portfolio_contact.html": "en",
+}
+
+
 def test_every_html_element_declares_spanish():
-    """The whole UI (and every email) is Spanish, so `lang` must say so.
+    """Everything the academy renders is Spanish, so `lang` must say so.
 
     base.html and emails/base_email.html — the two widest-cascading templates in
     the project — both shipped `lang="en"`, which makes a screen reader
     pronounce every page with English phonetics and makes the browser offer to
     translate the academy's own mail.
+
+    `NON_SPANISH_TEMPLATES` above carries the handful that are legitimately
+    another language, and they are checked against their declared one rather
+    than skipped — an allowlist that stops checking is how a file ends up with
+    no `lang` at all.
     """
     offenders = []
     for path in _templates():
+        expected = NON_SPANISH_TEMPLATES.get(_rel(path).replace("\\", "/"), "es")
         for match in re.finditer(r"<html\b[^>]*>", _read(path)):
             tag = match.group(0)
             lang = re.search(r'lang="([^"]*)"', tag)
-            if lang is None or not lang.group(1).lower().startswith("es"):
-                offenders.append(f"{_rel(path)} -> {tag}")
-    assert not offenders, f'<html> without lang="es": {offenders}'
+            if lang is None or not lang.group(1).lower().startswith(expected):
+                offenders.append(f'{_rel(path)} -> {tag} (expected lang="{expected}")')
+    assert not offenders, f"<html> with the wrong lang: {offenders}"
+
+
+def test_the_non_spanish_allowlist_has_no_stale_entries():
+    """A path that no longer exists silently stops meaning anything.
+
+    Worse than useless: the entry reads as "this file is deliberately English"
+    long after the file was renamed and the real one fell back to the Spanish
+    default without anybody noticing.
+    """
+    known = {_rel(path).replace("\\", "/") for path in _templates()}
+    assert set(NON_SPANISH_TEMPLATES) <= known, f"stale: {set(NON_SPANISH_TEMPLATES) - known}"
 
 
 # ───────────────────────────────────────────────────────────────────────────────
@@ -202,6 +235,78 @@ def test_csrf_token_is_read_from_the_hidden_input_not_the_cookie():
         f"empty whenever DEBUG=False: {cookie_readers}"
     )
     assert not inverted, f"cookie read BEFORE the hidden input (403s in testing/prod): {inverted}"
+
+
+#: Path segments that belong to the APP and therefore live under
+#: `settings.APP_URL_PREFIX`. A literal "/students/…" or "/api/…" in a template
+#: or a JS module is a 404 — see the test below.
+APP_OWNED_SEGMENTS = (
+    "api",
+    "apps",
+    "database",
+    "expenses",
+    "management",
+    "parents",
+    "payments",
+    "reports",
+    "schedule",
+    "students",
+    "testing",
+    "two-factor",
+)
+
+#: `/api/contact/` and `/api/portfolio/contact/` are mounted at the ORIGIN ROOT,
+#: not under the app prefix: the first is called by the public React site and
+#: the second by a server holding a bearer token, and a redirect to the staff
+#: login is the wrong answer to both. Written as full paths so a new
+#: `/api/<something>/` cannot inherit the exemption by accident.
+ROOT_MOUNTED_PATHS = ("/api/contact/", "/api/portfolio/contact/")
+
+
+def test_no_hand_written_url_misses_the_app_mount_prefix():
+    """The app is served under `settings.APP_URL_PREFIX`; "/" is the public site.
+
+    v1.30.0 moved every staff URL under "/app/", and a hand-written
+    "/api/testing/backlog/<id>/update/" in testing_tools.html was left behind.
+    It 404s — and a 404 body is HTML, which `apiFetch` can only report as the
+    generic "El servidor ha devuelto un error", so the QA dashboard's two
+    backlog buttons looked like a SERVER fault for a release and a half.
+    features.html had the same thing in a link base, sending every row to a 404.
+
+    The failure is silent in the direction that matters: nothing raises, the
+    server is healthy, and the only symptom is a message blaming the server.
+    Hence static analysis over the whole tree rather than a test per page.
+
+    Two legal ways to write such a URL, both of which this permits:
+      * `{% url %}` (directly, or into a `data-*` attribute) — Django owns the
+        whole path, prefix included;
+      * `${window.APP_PREFIX}/api/…` in a JS module, reading the prefix from
+        the one place the template renders it.
+
+    Comments are blanked first, through the module's shared `_without_comments`
+    — three of them quote an example path while explaining this very rule, so a
+    raw scan reports the documentation as the defect.
+    """
+    segments = "|".join(APP_OWNED_SEGMENTS)
+    pattern = re.compile(rf"""["'`](/(?:{segments})/[^"'`\s]*)["'`]""")
+    offenders = []
+    for path in _app_js() + _templates():
+        rel = _rel(path)
+        for line_no, line in enumerate(_without_comments(_read(path)).splitlines(), start=1):
+            for match in pattern.finditer(line):
+                url = match.group(1)
+                if any(url.startswith(allowed) for allowed in ROOT_MOUNTED_PATHS):
+                    continue
+                # `${window.APP_PREFIX}/api/…` — the prefix is prepended just
+                # outside the quote, which is the documented way to write it.
+                if "APP_PREFIX}" in line[: match.start() + 1]:
+                    continue
+                offenders.append(f"{rel}:{line_no} -> {url}")
+
+    assert not offenders, (
+        "these hand-written paths are missing the app mount prefix and will 404 "
+        "(use {% url %} or ${window.APP_PREFIX}): " + "; ".join(offenders)
+    )
 
 
 # ───────────────────────────────────────────────────────────────────────────────
