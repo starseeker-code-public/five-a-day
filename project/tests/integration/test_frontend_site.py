@@ -293,11 +293,17 @@ class TestTheEmailIsValidatedBeforeAnythingIsSent:
             client.post(reverse("submit_contact_form"), self._payload("ana.garcia@mailinator.com"))
 
         logged = [str(arg) for call in mock_logger.info.call_args_list for arg in call.args]
-        # The domain is passed as its OWN `%s` argument, so this is an exact
-        # match on one of them rather than a substring of the flattened record —
-        # which is both the stronger assertion and what stops CodeQL reading
-        # `"mailinator.com" in <string>` as a half-done URL host check.
-        assert "mailinator.com" in logged
+        # EQUALITY against one whole argument, not `"mailinator.com" in logged`.
+        # The domain is passed as its own `%s` argument, so this is the same
+        # assertion expressed exactly — and the `in` form is what CodeQL reads as
+        # a half-done URL host check (`py/incomplete-url-substring-sanitization`),
+        # which blocks the release PR: `main-protection` gates merges on code
+        # scanning at medium-or-higher. It flags the shape on the literal, so
+        # putting a list on the right-hand side is not enough; the comparison has
+        # to stop being a containment test.
+        assert any(arg == "mailinator.com" for arg in logged)
+        # This one stays a substring test on purpose: the local part must not
+        # appear ANYWHERE inside any argument, which equality cannot express.
         assert not any("ana.garcia" in arg for arg in logged)
 
 
