@@ -292,9 +292,13 @@ class TestTheEmailIsValidatedBeforeAnythingIsSent:
         with patch("core.views.frontend.logger") as mock_logger:
             client.post(reverse("submit_contact_form"), self._payload("ana.garcia@mailinator.com"))
 
-        logged = " ".join(str(arg) for call in mock_logger.info.call_args_list for arg in call.args)
+        logged = [str(arg) for call in mock_logger.info.call_args_list for arg in call.args]
+        # The domain is passed as its OWN `%s` argument, so this is an exact
+        # match on one of them rather than a substring of the flattened record —
+        # which is both the stronger assertion and what stops CodeQL reading
+        # `"mailinator.com" in <string>` as a half-done URL host check.
         assert "mailinator.com" in logged
-        assert "ana.garcia" not in logged
+        assert not any("ana.garcia" in arg for arg in logged)
 
 
 class TestTheCooldownCannotDriftFromTheForm:

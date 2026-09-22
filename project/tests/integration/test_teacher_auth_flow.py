@@ -109,7 +109,12 @@ class TestTheLoginPageLinksToTheOtherEnvironment:
         settings.TESTING_SITE_URL = "http://qa.example"
 
         link = self._link(client)
-        assert link["url"].startswith("http://qa.example")
+        # The WHOLE url, not a prefix. `startswith` would pass for
+        # `http://qa.example.evil.test/...` (which is CodeQL's complaint) and,
+        # more to the point here, it never checked the half of the rule worth
+        # pinning: that the path comes from `reverse("login")` rather than a
+        # typed `/app/login/`.
+        assert link["url"] == "http://qa.example" + reverse("login")
         assert link["icon"] == "science"
 
     def test_testing_offers_production(self, client, settings):
@@ -117,7 +122,7 @@ class TestTheLoginPageLinksToTheOtherEnvironment:
         settings.PRODUCTION_SITE_URL = "https://prod.example"
 
         link = self._link(client)
-        assert link["url"].startswith("https://prod.example")
+        assert link["url"] == "https://prod.example" + reverse("login")
         assert link["icon"] == "rocket_launch"
 
     def test_development_offers_neither(self, client, settings):

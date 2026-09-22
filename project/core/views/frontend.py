@@ -66,13 +66,23 @@ def _index_path(route: str = "") -> Path:
 
     On Netlify the static server picked those files up for free. Django has to
     go looking, which is why this function exists and why the lookup is by
-    ROUTE NAME rather than by `request.path`: the caller has already matched a
-    URL pattern, so the value is one of `SPA_ROUTES` and never user input. A
-    path joined from the request would be a directory-traversal question; this
-    is not one.
+    ROUTE NAME rather than by `request.path`.
+
+    The segment joined below is the element of `SPA_ROUTES` that MATCHED, never
+    the string handed in, so the path is built from a constant this module owns
+    and a traversal attempt cannot reach the filesystem even if a future URL
+    pattern starts capturing `route` from the request. That used to be true only
+    by convention — `project/urls.py` passes a literal — which is a promise made
+    in one file and relied on in another, and it read to CodeQL (correctly, on
+    the evidence available to it) as a path built from a view parameter. An
+    unknown route falls back to the shared shell, which is what `frontend_index`
+    did with the result anyway.
     """
     base = Path(settings.FRONTEND_DIST_DIR)
-    return base / route / "index.html" if route else base / "index.html"
+    for known in SPA_ROUTES:
+        if known == route:
+            return base / known / "index.html"
+    return base / "index.html"
 
 
 #: Where the CSRF token is published to the React bundle. The site is a BUILT
