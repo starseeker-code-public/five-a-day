@@ -330,6 +330,88 @@ describe("when the send fails", () => {
   });
 });
 
+describe("a connection dropped mid-submit", () => {
+  /**
+   * THE REGRESSION. The QA VM runs Gunicorn's sync worker with nothing in
+   * front of it, so it answers `Connection: close` and every request is a new
+   * TCP connection. A POST that loses the race with that teardown comes back
+   * as a reset: `fetch` REJECTS, no response is ever received, and a browser
+   * re-drives an idempotent GET on its own but never a POST. So a healthy site
+   * told the family "comprueba tu conexión" and the enquiry was lost with no
+   * trace on EITHER side — nothing reached Django, so the academy never learnt
+   * that anybody had tried.
+   */
+  it("tries again and delivers, instead of blaming the family's connection", async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi
+      .fn()
+      .mockRejectedValueOnce(new TypeError("Failed to fetch"))
+      .mockResolvedValueOnce(ok());
+    vi.stubGlobal("fetch", fetchMock);
+    renderForm();
+
+    await fillRequired(user);
+    await user.click(screen.getByRole("button", { name: contactForm.submitLabel }));
+
+    expect(await screen.findByText(contactForm.successTitle)).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("stops after the retry rather than hammering a server that is really down", async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.fn().mockRejectedValue(new TypeError("Failed to fetch"));
+    vi.stubGlobal("fetch", fetchMock);
+    renderForm();
+
+    await fillRequired(user);
+    await user.click(screen.getByRole("button", { name: contactForm.submitLabel }));
+
+    await screen.findByRole("alert");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  /**
+   * THE GUARD THAT MATTERS, and the reason the retry is scoped to a rejection
+   * rather than to failure in general. A POST is not idempotent. The endpoint
+   * opens its 60-second de-duplication cooldown only once mail has gone OUT,
+   * so a 502 — which is exactly the case where the SMTP send failed — is the
+   * one answer that could deliver the same enquiry twice if it were retried.
+   * An answered request is a DECISION; only an unanswered one is an accident.
+   */
+  const answered = [
+    {
+      name: "a 502 whose send failed",
+      response: { ok: false, status: 502, json: async () => ({ success: false }) },
+    },
+    {
+      name: "a 403 CSRF rejection",
+      response: {
+        ok: false,
+        status: 403,
+        json: async () => {
+          throw new SyntaxError("Unexpected token <");
+        },
+      },
+    },
+    {
+      name: "a 400 validation refusal",
+      response: { ok: false, status: 400, json: async () => ({ success: false, error: "Revisa el email." }) },
+    },
+  ];
+
+  it.each(answered)("never retries $name — the server answered", async ({ response }) => {
+    const user = userEvent.setup();
+    const fetchMock = mockFetch(response);
+    renderForm();
+
+    await fillRequired(user);
+    await user.click(screen.getByRole("button", { name: contactForm.submitLabel }));
+
+    await screen.findByRole("alert");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("the cooldown between messages", () => {
   it("disables the button and counts down after a send", async () => {
     // The SERVER enforces the wait (two stacked rate_limit windows). This

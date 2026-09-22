@@ -15,7 +15,7 @@ Built to centralize student records, automate billing cycles, and streamline par
 ### Project Status
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v1.31.3-brightgreen?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-v1.31.4-brightgreen?style=flat-square" alt="Version">
   &nbsp;|&nbsp;
   <a href="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml?query=branch%3Amain"><img src="https://github.com/starseeker-code-public/five-a-day/actions/workflows/ci.yml/badge.svg?branch=main&style=flat-square" alt="CI main"></a>
   &nbsp;|&nbsp;
@@ -36,9 +36,9 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 | Version | Date | Description |
 |---------|------|-------------|
-| **v1.31.3** | 2026-09-22 | Drive archive survives a dropped socket; CodeQL release blockers |
+| **v1.31.4** | 2026-09-22 | Contact form retries a dropped connection instead of blaming it |
+| v1.31.3 | 2026-09-22 | Drive archive survives a dropped socket; CodeQL release blockers |
 | v1.31.2 | 2026-09-21 | CI fixes: CodeQL pin coherence, CSRF test shell; login environment link |
-| v1.31.1 | 2026-09-21 | Contact form hardening, QA links fixed after the `/app` move |
 
 ---
 
@@ -140,8 +140,30 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 ## Version History
 
-<details id="v1313" open>
-<summary><strong>v1.31.3 — Drive archive survives a dropped socket; CodeQL release blockers (current)</strong></summary>
+<details id="v1314" open>
+<summary><strong>v1.31.4 — Contact form retries a dropped connection instead of blaming it (current)</strong></summary>
+
+**A healthy site told families to check their own connection, and lost the enquiry**
+
+- The QA VM runs Gunicorn's sync worker with nothing in front of it, so it answers `Connection: close` and every request is a fresh TCP connection. A POST that loses the race with that teardown comes back as a reset: `fetch` **rejects**, no response is ever received, and a browser will silently re-drive an idempotent GET but never a POST.
+- So the family read *"comprueba tu conexión"* on a site that was up, healthy and answering everything else — and the enquiry was lost with **no trace on either side**, because nothing reached Django and the academy never learnt anybody had tried. Same shape as the bug v1.30.0 closed, where the form reported success regardless of the response: a form that delivers nothing while looking to the family like it behaved.
+- `postContact()` now retries **once, immediately**. No delay: the failure is a teardown race and a brand-new connection is exactly what settles it, while the restarts a delay *would* cover (the nightly testing deploy) last minutes, which no client-side retry can sit through.
+
+**Only an unanswered request is retried — an answered one is a decision**
+
+- The retry is scoped to a `fetch` **rejection**. Anything the server actually answered — 400, 403, 502 — is returned untouched, and three tests pin that. Repeating a 400 or a 403 just replays a refusal the server has already made; repeating a **502** is the one that could deliver twice, because a 502 here means the SMTP send itself failed and the de-duplication cooldown is therefore not yet set.
+- **Retrying a POST is safe here only because the server makes it so.** `submit_contact_form` opens its 60-second per-client cooldown *after* the mail goes out, so the one case that could deliver the same enquiry twice — the first attempt reached the view and only its response was lost — meets that cooldown and is answered 429. The message the family then reads is "Acabas de enviarnos un mensaje", which is literally true. The de-duplication window is not something this retry adds; it is something it leans on, so the cooldown cannot be removed without revisiting it.
+- The body is serialised **once, outside the loop**, so a second attempt cannot pick up text the visitor started editing between the two. The CSRF token is re-read per attempt, which costs nothing and keeps the token and the request carrying it minted together.
+
+**Testing**
+
+- 146 Vitest cases (was 141). The five new ones cover the retry delivering on the second attempt, stopping at exactly two so a server that is really down is not hammered, and the guard that matters: 502, 403 and 400 are each answered once and never repeated.
+- The Python suite is unchanged at **2,853 tests, 94.26 % coverage** — this release touches `frontend/` only.
+
+</details>
+
+<details id="v1313">
+<summary><strong>v1.31.3 — Drive archive survives a dropped socket; CodeQL release blockers</strong></summary>
 
 **One broken pipe stopped the Drive archive until the instance was recycled**
 
@@ -422,7 +444,7 @@ Built to centralize student records, automate billing cycles, and streamline par
 
 **Frontend testing**
 
-- **Vitest + React Testing Library in jsdom** (`frontend/src/test/`, 141 tests): every route
+- **Vitest + React Testing Library in jsdom** (`frontend/src/test/`, 146 tests): every route
   renders, one `<h1>` per page, alt text, root-absolute `src`, `rel=noopener`; the contact form's
   success and failure paths; the navbar; and `data.js` integrity — every asset path must exist on
   disk and every internal link must be a real route.
@@ -4889,7 +4911,7 @@ All tools configured in `pyproject.toml` — single source of truth.
 | Vanilla JavaScript | 18 static modules for the **management app** — zero build tools, no framework |
 | [React](https://react.dev/) 19 + [React Router](https://reactrouter.com/) 7 | The **public site** at `/` (`frontend/`). A separate stack from the app, which stays server-rendered Django templates |
 | [Vite](https://vite.dev/) 8 + [Tailwind CSS](https://tailwindcss.com/) 4 | Public-site build. Content-hashed output in `frontend/dist`, served by Django + WhiteNoise — `base: '/'`, because the sources reference `/images/...` as absolute paths |
-| [Vitest](https://vitest.dev/) 5 + React Testing Library + jsdom | 141 component tests (`make frontend-test`) |
+| [Vitest](https://vitest.dev/) 5 + React Testing Library + jsdom | 146 component tests (`make frontend-test`) |
 
 ### Infrastructure & Deployment
 
@@ -5703,7 +5725,7 @@ Run `make` or `make help` for the full list. Key commands:
 | `make e2e` | Every end-to-end journey in `project/tests/e2e/` against the **real** Google Drive (v1.29.10) — enrol → bill → collect over HTTP → receipt email → a genuine upload → cleanup. Discovery is by filename (`*_journey.py`), so adding a journey is adding a file. `ARGS=--list` names them, `ARGS='--only payment'` runs one, `ARGS=--keep` leaves the evidence behind. Deliberately NOT part of `make test`: these are not pytest tests, they run against the DEV database rather than a throwaway one, and CI cannot run them because it has no Drive credential — the CI-safe half is `project/tests/integration/test_payment_journey.py`. The runner exits `0` all passed / `1` a check failed / `2` nothing could be verified; Make collapses both failures to its own exit 2, so read the SUMMARY block to tell a regression from an unconfigured box |
 | **Frontend** (public React site) | |
 | `make frontend-build` | Build `frontend/` into `frontend/dist`. Django serves it at `/`; until this has run once, `/` answers 404 with a message saying so |
-| `make frontend-test` | Vitest component tests in jsdom (141). Covers what `make test` structurally cannot - Django returning 200 for `/faq` only proves it served the SHELL |
+| `make frontend-test` | Vitest component tests in jsdom (146). Covers what `make test` structurally cannot - Django returning 200 for `/faq` only proves it served the SHELL |
 | `make frontend-dev` | Vite dev server on `:6001` with HMR, proxying `/app`, `/static`, `/media`, `/api` and `/health` to Django, so both halves are reachable from the ONE origin they share in production |
 | `make frontend-lint` | ESLint over the React sources |
 | `make frontend-install` | `npm ci` (the three above run it for you when `node_modules` is missing) |
@@ -6088,7 +6110,7 @@ five-a-day/
 │   ├── index.html                SPA shell (served by core.views.frontend, not WhiteNoise,
 │   │                             so NoHtmlCacheMiddleware can mark it no-cache). Carries the
 │   │                             SEO:START / SEO:END markers the generator rewrites between
-│   ├── src/                      pages/ components/ hooks/ data.js + test/ (Vitest, 141 tests)
+│   ├── src/                      pages/ components/ hooks/ data.js + test/ (Vitest, 146 tests)
 │   │   ├── seo.js                v1.31.0 — THE single source for every page title,
 │   │   │                         description, canonical URL and JSON-LD schema. Read by
 │   │   │                         both the build generator and the useSeo() hook
@@ -6470,7 +6492,7 @@ Public flow at `/app/password-reset/...` that lets a teacher recover access with
 
 | Metric | Value |
 |--------|-------|
-| **Total tests** | 2,853 (Python) + 141 (frontend, Vitest) |
+| **Total tests** | 2,853 (Python) + 146 (frontend, Vitest) |
 | **Test files** | 124 (69 unit + 55 integration) + 4 Vitest files |
 | **Coverage** | 94% (94.26% — 8,078 statements, 464 uncovered) |
 | **Coverage thresholds** | **≥ 90%** (target, no warning) / **75-89%** (CI warning, pre-commit still blocks below 75) / **< 75%** (CI fails, pre-commit rejects the commit) |
@@ -7377,7 +7399,7 @@ make up                        # Start Docker (PostgreSQL + Redis + Django + Cel
 1. Work on `development` (or a short-lived branch off `development`)
 2. Make changes following the conventions below
 3. Run `make pc-run` — Ruff + mypy + bandit all pass, offers to auto-bump the patch version on success, and auto-stages `uv.lock` if regenerated
-4. Run `make test` — all 2,853 tests must pass (PostgreSQL via Docker, parallel, with coverage) — and `make frontend-test` for the 141 Vitest ones if you touched `frontend/`
+4. Run `make test` — all 2,853 tests must pass (PostgreSQL via Docker, parallel, with coverage) — and `make frontend-test` for the 146 Vitest ones if you touched `frontend/`
 5. `git commit` with a message like `v1.14.7 — Short description` (version first, em dash — matches every other release commit in the project)
 6. `git push origin development`
 7. CI runs automatically on your push (see [CI/CD](#cicd--github-actions))

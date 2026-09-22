@@ -22,6 +22,65 @@ function getCsrfToken() {
   return match ? decodeURIComponent(match[2]) : "";
 }
 
+// How many times a REJECTED fetch is tried again. A rejection means no HTTP
+// response arrived at all — the request died in transport — which is a
+// different thing from the server refusing it, and the only one worth
+// repeating.
+//
+// WHY THIS EXISTS. The QA VM runs Gunicorn's sync worker with nothing in front
+// of it, so it answers `Connection: close` and every request is a fresh TCP
+// connection. A POST that loses the race with that teardown comes back as a
+// reset, and a browser will silently re-drive an idempotent GET but never a
+// POST — so it reached the family as "comprueba tu conexión" on a site that
+// was up, healthy, and answering everything else. The enquiry is then lost
+// with no trace on EITHER side: nothing reached Django, so the academy never
+// learns that anybody tried. That is the failure this exists to close, and it
+// is the same shape as the one the response check above closed — a form that
+// delivers nothing while looking to the family like it behaved.
+//
+// WHY RETRYING A POST IS SAFE HERE, though a POST is not idempotent. The
+// endpoint opens a 60-second per-client cooldown AFTER the mail goes out
+// (`begin_cooldown`, at the bottom of submit_contact_form). So the one case
+// that could deliver twice — the first attempt DID reach the view and only its
+// response was lost — meets that cooldown and is answered 429, which the
+// handler below already explains in the academy's own words. The
+// de-duplication window is not something this retry adds; it is something it
+// leans on, so do not remove the cooldown without revisiting this.
+//
+// Tried again IMMEDIATELY, and only once. The failure is a teardown race and a
+// brand-new connection is exactly what settles it, so a delay buys nothing —
+// while the restarts a delay WOULD cover (the nightly testing deploy) last
+// minutes, which no client-side retry can sit through.
+const TRANSPORT_RETRIES = 1;
+
+async function postContact(body) {
+  let lastError;
+  for (let attempt = 0; attempt <= TRANSPORT_RETRIES; attempt += 1) {
+    try {
+      return await fetch(CONTACT_ENDPOINT, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+          // Re-read per attempt rather than captured once: it costs nothing,
+          // and it keeps the token and the request carrying it minted together.
+          "X-CSRFToken": getCsrfToken(),
+        },
+        body,
+      });
+    } catch (err) {
+      // Only a transport rejection lands here. Anything the server actually
+      // ANSWERED — 400, 403, 502 — is returned above and never retried: those
+      // are decisions, and repeating one either replays a refusal the server
+      // has already made or, for the 502 that means the SMTP send failed,
+      // attempts a second delivery with no cooldown yet set to stop it.
+      lastError = err;
+    }
+  }
+  // Budget exhausted. Re-thrown so handleSubmit's catch still owns the message
+  // the family reads, and there is exactly one place that wording lives.
+  throw lastError;
+}
+
 export default function ContactSection() {
   const [formData, setFormData] = useState({});
   const [submitted, setSubmitted] = useState(false);
@@ -66,14 +125,9 @@ export default function ContactSection() {
     setSending(true);
     try {
       const payload = new FormData(e.target);
-      const response = await fetch(CONTACT_ENDPOINT, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/x-www-form-urlencoded",
-          "X-CSRFToken": getCsrfToken(),
-        },
-        body: new URLSearchParams(payload).toString(),
-      });
+      // Serialised ONCE, outside the retry: the body must not be re-read from
+      // a form the visitor may have started editing between two attempts.
+      const response = await postContact(new URLSearchParams(payload).toString());
       // The status is CHECKED. The previous version set `submitted` inside the
       // try regardless, so any failure still told the family "mensaje enviado"
       // while the academy received nothing — the worst of both outcomes,
